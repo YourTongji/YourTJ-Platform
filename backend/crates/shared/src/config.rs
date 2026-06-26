@@ -8,6 +8,9 @@ pub struct Config {
     pub database_replica_url: Option<String>,
     pub redis_url: String,
     pub meili_url: String,
+    pub jwt_secret: String,
+    pub jwt_ttl: u64,
+    pub refresh_ttl: u64,
 }
 
 impl Config {
@@ -25,6 +28,9 @@ impl Config {
             database_replica_url: non_empty(std::env::var("DATABASE_REPLICA_URL").ok()),
             redis_url: env_or_default("REDIS_URL", "redis://localhost:6379"),
             meili_url: env_or_default("MEILI_URL", "http://localhost:7700"),
+            jwt_secret: env_or_default("JWT_SECRET", ""),
+            jwt_ttl: env_or_default_u64("JWT_TTL", 900),
+            refresh_ttl: env_or_default_u64("REFRESH_TTL", 604800),
         })
     }
 
@@ -36,6 +42,13 @@ impl Config {
 
 fn env_or_default(key: &str, default: &str) -> String {
     std::env::var(key).unwrap_or_else(|_| default.to_string())
+}
+
+fn env_or_default_u64(key: &str, default: u64) -> u64 {
+    std::env::var(key)
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(default)
 }
 
 fn non_empty(value: Option<String>) -> Option<String> {
