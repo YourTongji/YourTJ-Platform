@@ -405,7 +405,7 @@ pub async fn action_task(
                 .await?;
             }
 
-            let new_status = if body.action == "cancel" { "cancelled" } else { "cancelled" };
+            let new_status = "cancelled";
             repo::update_task_status(&state.db, id, new_status, auth.id).await?;
             repo::clear_task_hold(&state.db, id).await?;
         }

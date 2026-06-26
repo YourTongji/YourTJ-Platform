@@ -13,8 +13,6 @@ use crate::error::CreditError;
 use crate::ledger::{canonicalize, compute_hash};
 use crate::models::{LedgerEntryRow, ProductRow, PurchaseRow, TaskRow};
 
-/// Alias for the public sequence of `credential.ledger.type` values that
-/// represent tip / mint / escrow actions.
 const GENESIS_HASH: &str = "0000000000000000000000000000000000000000000000000000000000000000";
 
 // ---------------------------------------------------------------------------
@@ -23,6 +21,7 @@ const GENESIS_HASH: &str = "0000000000000000000000000000000000000000000000000000
 
 /// Append a ledger entry inside a transaction that takes an advisory lock.
 /// Updates the wallet balance cache for both sides. Returns the inserted row.
+#[allow(clippy::too_many_arguments)]
 #[tracing::instrument(skip(pool))]
 pub async fn append_ledger_entry(
     pool: &PgPool,
@@ -38,11 +37,8 @@ pub async fn append_ledger_entry(
 ) -> AppResult<LedgerEntryRow> {
     let mut tx = pool.begin().await?;
 
-    // Serialize all credit appends under a single advisory lock so the hash
-    // chain stays linear regardless of connection pool distribution.
     sqlx::query("SELECT pg_advisory_xact_lock(42)").execute(&mut *tx).await?;
 
-    // Find the latest hash in the ledger — used as prev_hash.
     let prev_hash: Option<String> =
         sqlx::query_scalar("SELECT hash FROM credit.ledger ORDER BY seq DESC LIMIT 1")
             .fetch_optional(&mut *tx)
@@ -50,7 +46,6 @@ pub async fn append_ledger_entry(
 
     let prev_hash = prev_hash.unwrap_or_else(|| GENESIS_HASH.to_string());
 
-    // Build the canonical payload and compute the entry hash.
     let payload = serde_json::json!({
         "tx_id": tx_id,
         "type": type_,
@@ -89,7 +84,7 @@ pub async fn append_ledger_entry(
 
     // Update wallets — increment recipient, decrement sender.
     if let Some(to) = to_account {
-        ensure_wallet_exists_tx(&mut *tx, to).await?;
+        ensure_wallet_exists_tx(&mut tx, to).await?;
         sqlx::query(
             "UPDATE credit.wallets SET balance = balance + $1, last_seq = $2 WHERE account_id = $3",
         )
@@ -101,7 +96,7 @@ pub async fn append_ledger_entry(
     }
 
     if let Some(from) = from_account {
-        ensure_wallet_exists_tx(&mut *tx, from).await?;
+        ensure_wallet_exists_tx(&mut tx, from).await?;
         sqlx::query(
             "UPDATE credit.wallets SET balance = balance - $1, last_seq = $2 WHERE account_id = $3",
         )
@@ -159,9 +154,7 @@ pub async fn list_ledger(
     Ok(Page::new(items, next_cursor))
 }
 
-/// Recompute the hash chain and verify every Ed25519 signature for all
-/// ledger entries. Only `signer == "system"` entries are treated as
-/// self-consistent (their signatures are not user-verifiable).
+/// Recompute the hash chain and verify every Ed25519 signature for all ledger entries.
 pub async fn verify_full_ledger(pool: &PgPool) -> AppResult<LedgerVerify> {
     let rows: Vec<LedgerEntryRow> = sqlx::query_as(
         "SELECT seq, tx_id, type, from_account, to_account, amount, nonce, \
@@ -177,7 +170,6 @@ pub async fn verify_full_ledger(pool: &PgPool) -> AppResult<LedgerVerify> {
 
     let mut expected_prev = GENESIS_HASH.to_string();
     for row in &rows {
-        // Verify prev_hash links correctly.
         if row.prev_hash != expected_prev {
             return Ok(LedgerVerify {
                 ok: false,
@@ -186,7 +178,6 @@ pub async fn verify_full_ledger(pool: &PgPool) -> AppResult<LedgerVerify> {
             });
         }
 
-        // Build canonical payload and verify hash.
         let payload = serde_json::json!({
             "tx_id": row.tx_id,
             "type": row.type_,
@@ -209,8 +200,6 @@ pub async fn verify_full_ledger(pool: &PgPool) -> AppResult<LedgerVerify> {
             });
         }
 
-        // For non-system entries, verify the signature against the signer's
-        // public key. System entries carry a placeholder signature.
         if row.signer != "system" {
             let pk_row: Option<(String,)> = sqlx::query_as(
                 "SELECT public_key FROM identity.account_keys \
@@ -230,8 +219,6 @@ pub async fn verify_full_ledger(pool: &PgPool) -> AppResult<LedgerVerify> {
                     });
                 }
             }
-            // If no public key found for signer, we skip signature check
-            // (this can happen for historical entries).
         }
 
         expected_prev = row.hash.clone();
@@ -282,7 +269,6 @@ async fn ensure_wallet_exists_tx(tx: &mut sqlx::PgConnection, account_id: i64) -
 }
 
 /// System-signed mint: creates a ledger entry with `type = "mint"`.
-/// The signature is a placeholder — in production a real system key would be used.
 #[tracing::instrument(skip(pool))]
 pub async fn mint_points(
     pool: &PgPool,
@@ -418,11 +404,7 @@ pub async fn update_task_status(
     new_status: &str,
     caller_id: i64,
 ) -> AppResult<()> {
-    let valid = match new_status {
-        "submit" | "confirm" | "cancel" | "reject" | "delete" => true,
-        _ => false,
-    };
-    if !valid {
+    if !matches!(new_status, "submit" | "confirm" | "cancel" | "reject" | "delete") {
         return Err(CreditError::InvalidAction(format!("unknown task action: {new_status}")).into());
     }
 
