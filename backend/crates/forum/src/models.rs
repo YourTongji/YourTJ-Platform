@@ -12,6 +12,7 @@ pub struct BoardRow {
 }
 
 /// A row from `forum.threads`.
+#[allow(dead_code)]
 #[derive(Debug, Clone, FromRow)]
 pub struct ThreadRow {
     pub id: i64,
@@ -28,6 +29,7 @@ pub struct ThreadRow {
 }
 
 /// A row from `forum.comments`.
+#[allow(dead_code)]
 #[derive(Debug, Clone, FromRow)]
 pub struct CommentRow {
     pub id: i64,

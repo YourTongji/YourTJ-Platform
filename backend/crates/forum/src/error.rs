@@ -5,24 +5,25 @@
 
 use shared::AppError;
 
+#[allow(clippy::enum_variant_names)]
 #[derive(Debug, thiserror::Error)]
 pub enum ForumError {
     #[error("board not found")]
-    BoardNotFound,
+    BoardMissing,
 
     #[error("thread not found")]
-    ThreadNotFound,
+    ThreadMissing,
 
     #[error("comment not found")]
-    CommentNotFound,
+    CommentMissing,
 }
 
 impl From<ForumError> for AppError {
     fn from(err: ForumError) -> Self {
         match err {
-            ForumError::BoardNotFound
-            | ForumError::ThreadNotFound
-            | ForumError::CommentNotFound => AppError::NotFound,
+            ForumError::BoardMissing | ForumError::ThreadMissing | ForumError::CommentMissing => {
+                AppError::NotFound
+            }
         }
     }
 }

@@ -3,8 +3,8 @@
 //! Every function takes `&PgPool` and returns `Result` so the caller
 //! (typically a handler) can use `?` and let Axum render errors.
 
-use sqlx::PgPool;
 use shared::AppResult;
+use sqlx::PgPool;
 
 use crate::dto::ThreadInput;
 use crate::models::{BoardRow, CommentRowJoined, ThreadRowJoined};
@@ -50,7 +50,7 @@ async fn list_threads_new(
     limit: i64,
 ) -> AppResult<(Vec<ThreadRowJoined>, Option<String>)> {
     let cursor_id: Option<i64> = cursor
-        .map(|c| base64_decode_i64(c))
+        .map(base64_decode_i64)
         .transpose()
         .map_err(|_| shared::AppError::BadRequest("invalid cursor".into()))?;
 
@@ -91,11 +91,7 @@ async fn list_threads_new(
 
     let has_more = rows.len() > limit as usize;
     let items = if has_more { rows[..limit as usize].to_vec() } else { rows };
-    let next_cursor = if has_more {
-        items.last().map(|r| base64_encode_i64(r.id))
-    } else {
-        None
-    };
+    let next_cursor = if has_more { items.last().map(|r| base64_encode_i64(r.id)) } else { None };
 
     Ok((items, next_cursor))
 }
@@ -223,7 +219,7 @@ pub async fn list_comments(
     limit: i64,
 ) -> AppResult<(Vec<CommentRowJoined>, Option<String>)> {
     let cursor_path: Option<String> = cursor
-        .map(|c| base64_decode_str(c))
+        .map(base64_decode_str)
         .transpose()
         .map_err(|_| shared::AppError::BadRequest("invalid cursor".into()))?;
 
@@ -284,16 +280,15 @@ pub async fn create_comment(
 ) -> AppResult<CommentRowJoined> {
     let path = if let Some(pid) = parent_id {
         // Find parent's path.
-        let parent_path: Option<String> = sqlx::query_scalar(
-            "SELECT path FROM forum.comments WHERE id = $1 AND thread_id = $2",
-        )
-        .bind(pid)
-        .bind(thread_id)
-        .fetch_optional(pool)
-        .await?
-        .flatten();
+        let parent_path: Option<String> =
+            sqlx::query_scalar("SELECT path FROM forum.comments WHERE id = $1 AND thread_id = $2")
+                .bind(pid)
+                .bind(thread_id)
+                .fetch_optional(pool)
+                .await?
+                .flatten();
 
-        let parent_path = parent_path.ok_or(crate::error::ForumError::CommentNotFound)?;
+        let parent_path = parent_path.ok_or(crate::error::ForumError::CommentMissing)?;
 
         // Find max child path under this parent.
         let max_child: Option<String> = sqlx::query_scalar(
@@ -363,14 +358,9 @@ fn next_sibling_index(max_child_path: &str, parent_path: &str) -> u32 {
     if max_child_path.is_empty() || max_child_path == parent_path {
         1
     } else {
-        let parent_prefix = if parent_path.is_empty() {
-            String::new()
-        } else {
-            format!("{parent_path}.")
-        };
-        let suffix = max_child_path
-            .strip_prefix(&parent_prefix)
-            .unwrap_or(max_child_path);
+        let parent_prefix =
+            if parent_path.is_empty() { String::new() } else { format!("{parent_path}.") };
+        let suffix = max_child_path.strip_prefix(&parent_prefix).unwrap_or(max_child_path);
         let last = suffix.split('.').next().unwrap_or("0");
         u32::from_str_radix(last, 16).unwrap_or(0).saturating_add(1)
     }
@@ -391,28 +381,26 @@ pub async fn vote_post(pool: &PgPool, post_id: i64, value: &str) -> AppResult<bo
     };
 
     // Try threads first.
-    let affected = sqlx::query(
-        "UPDATE forum.threads SET vote_count = vote_count + $1 WHERE id = $2",
-    )
-    .bind(delta)
-    .bind(post_id)
-    .execute(pool)
-    .await?
-    .rows_affected();
+    let affected =
+        sqlx::query("UPDATE forum.threads SET vote_count = vote_count + $1 WHERE id = $2")
+            .bind(delta)
+            .bind(post_id)
+            .execute(pool)
+            .await?
+            .rows_affected();
 
     if affected > 0 {
         return Ok(true);
     }
 
     // Try comments.
-    let affected = sqlx::query(
-        "UPDATE forum.comments SET vote_count = vote_count + $1 WHERE id = $2",
-    )
-    .bind(delta)
-    .bind(post_id)
-    .execute(pool)
-    .await?
-    .rows_affected();
+    let affected =
+        sqlx::query("UPDATE forum.comments SET vote_count = vote_count + $1 WHERE id = $2")
+            .bind(delta)
+            .bind(post_id)
+            .execute(pool)
+            .await?
+            .rows_affected();
 
     Ok(affected > 0)
 }
@@ -428,9 +416,8 @@ fn base64_encode_i64(val: i64) -> String {
 
 fn base64_decode_i64(s: &str) -> Result<i64, String> {
     use base64::Engine;
-    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .decode(s)
-        .map_err(|e| e.to_string())?;
+    let bytes =
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(s).map_err(|e| e.to_string())?;
     let s = String::from_utf8(bytes).map_err(|e| e.to_string())?;
     s.parse::<i64>().map_err(|e| e.to_string())
 }
@@ -442,9 +429,8 @@ fn base64_encode_str(s: &str) -> String {
 
 fn base64_decode_str(s: &str) -> Result<String, String> {
     use base64::Engine;
-    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .decode(s)
-        .map_err(|e| e.to_string())?;
+    let bytes =
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(s).map_err(|e| e.to_string())?;
     String::from_utf8(bytes).map_err(|e| e.to_string())
 }
 
