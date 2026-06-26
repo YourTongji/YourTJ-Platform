@@ -9,9 +9,10 @@
 use axum::routing::get;
 use axum::{Json, Router};
 use serde_json::{json, Value};
+use shared::AppState;
 
 /// All routes owned by the identity domain.
-pub fn routes() -> Router {
+pub fn routes(_state: AppState) -> Router {
     Router::new().route("/api/v2/me", get(me))
 }
 

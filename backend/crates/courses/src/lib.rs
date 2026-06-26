@@ -8,9 +8,10 @@
 use axum::routing::get;
 use axum::{Json, Router};
 use serde_json::{json, Value};
+use shared::AppState;
 
 /// All routes owned by the courses domain.
-pub fn routes() -> Router {
+pub fn routes(_state: AppState) -> Router {
     Router::new()
         .route("/api/v2/courses", get(list))
         .route("/api/v2/search", get(search))

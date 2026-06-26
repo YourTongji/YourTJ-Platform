@@ -7,16 +7,26 @@ use std::net::SocketAddr;
 use axum::routing::get;
 use axum::{Json, Router};
 use serde_json::{json, Value};
-use shared::Config;
+use shared::AppState;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     init_tracing();
-    let config = Config::from_env()?;
+    let config = shared::Config::from_env()?;
 
-    let app = build_router();
+    let db = sqlx::PgPool::connect(&config.database_url).await?;
+    tracing::info!("connected to database");
+
+    let state = AppState {
+        db,
+        jwt_secret: config.jwt_secret.clone(),
+        jwt_ttl: config.jwt_ttl,
+        refresh_ttl: config.refresh_ttl,
+    };
+
+    let app = build_router(state);
     let addr = SocketAddr::from(([0, 0, 0, 0], config.port));
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!(%addr, "yourtj-platform api listening");
@@ -26,14 +36,14 @@ async fn main() -> anyhow::Result<()> {
 }
 
 /// Compose the full application router from per-domain routers.
-fn build_router() -> Router {
+fn build_router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health))
-        .merge(identity::routes())
-        .merge(courses::routes())
-        .merge(reviews::routes())
-        .merge(credit::routes())
-        .merge(forum::routes())
+        .merge(identity::routes(state.clone()))
+        .merge(courses::routes(state.clone()))
+        .merge(reviews::routes(state.clone()))
+        .merge(credit::routes(state.clone()))
+        .merge(forum::routes(state.clone()))
         .layer(TraceLayer::new_for_http())
 }
 

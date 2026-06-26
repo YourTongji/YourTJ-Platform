@@ -8,9 +8,10 @@
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde_json::{json, Value};
+use shared::AppState;
 
 /// All routes owned by the reviews domain.
-pub fn routes() -> Router {
+pub fn routes(_state: AppState) -> Router {
     Router::new()
         .route("/api/v2/courses/{id}/reviews", get(list).post(create))
         .route("/api/v2/reviews/{id}/report", post(report))
