@@ -285,6 +285,7 @@ dependencies = [
  "base64",
  "chrono",
  "hex",
+ "identity",
  "ring",
  "serde",
  "serde_json",
@@ -292,6 +293,8 @@ dependencies = [
  "shared",
  "sqlx",
  "thiserror",
+ "tokio",
+ "tower",
  "tracing",
  "uuid",
 ]
@@ -453,11 +456,16 @@ dependencies = [
  "axum",
  "base64",
  "chrono",
+ "hex",
+ "identity",
  "serde",
  "serde_json",
+ "sha2",
  "shared",
  "sqlx",
  "thiserror",
+ "tokio",
+ "tower",
  "uuid",
 ]
 

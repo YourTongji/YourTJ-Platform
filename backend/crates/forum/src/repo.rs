@@ -354,7 +354,7 @@ pub async fn create_comment(
 /// Compute the next sibling index from the max child path.
 ///
 /// Given a max child path like "0003.0007" and parent path "0003", returns 8.
-fn next_sibling_index(max_child_path: &str, parent_path: &str) -> u32 {
+pub fn next_sibling_index(max_child_path: &str, parent_path: &str) -> u32 {
     if max_child_path.is_empty() || max_child_path == parent_path {
         1
     } else {
