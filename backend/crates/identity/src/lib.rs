@@ -14,6 +14,8 @@ mod repo;
 mod dto;
 mod error;
 mod models;
+pub mod notification_hooks;
+mod notifications;
 
 use axum::routing::{get, post};
 use axum::Router;
@@ -32,5 +34,14 @@ pub fn routes(state: AppState) -> Router {
         // Wallet
         .route("/api/v2/wallet", get(handlers::get_wallet))
         .route("/api/v2/wallet/bind", post(handlers::bind_key))
+        // Notifications
+        .route(
+            "/api/v2/notifications",
+            get(notifications::list_notifications_handler),
+        )
+        .route(
+            "/api/v2/notifications/read",
+            post(notifications::mark_read_handler),
+        )
         .with_state(state)
 }

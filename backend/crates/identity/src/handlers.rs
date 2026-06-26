@@ -17,8 +17,8 @@ use shared::{AppResult, AppState, AuthAccount};
 
 use crate::auth::{create_access_token, generate_refresh_token};
 use crate::dto::{
-    AccountDto, AuthTokensOutput, BindKeyInput, RefreshInput, RequestCodeInput,
-    UpdateMeInput, VerifyEmailInput, WalletOutput,
+    AccountDto, AuthTokensOutput, BindKeyInput, RefreshInput, RequestCodeInput, UpdateMeInput,
+    VerifyEmailInput, WalletOutput,
 };
 use crate::email_code::{generate_code, hash_code, verify_code};
 use crate::error::IdentityError;
@@ -37,9 +37,7 @@ static LAST_CODE_REQUEST: LazyLock<Mutex<HashMap<String, Instant>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
 fn check_rate_limit(email: &str) -> Result<(), IdentityError> {
-    let mut map = LAST_CODE_REQUEST
-        .lock()
-        .expect("rate-limit lock poisoned");
+    let mut map = LAST_CODE_REQUEST.lock().expect("rate-limit lock poisoned");
     let now = Instant::now();
     if let Some(last) = map.get(email) {
         if now.duration_since(*last) < CODE_RATE_LIMIT {
@@ -121,9 +119,8 @@ pub async fn verify_email(
     }
 
     // Look up the live code row.
-    let code_row = repo::find_email_code(&state.db, &email)
-        .await?
-        .ok_or(IdentityError::CodeExpired)?;
+    let code_row =
+        repo::find_email_code(&state.db, &email).await?.ok_or(IdentityError::CodeExpired)?;
 
     if code_row.attempts >= 5 {
         return Err(IdentityError::CodeExhausted.into());
@@ -156,8 +153,8 @@ pub async fn verify_email(
     let (refresh_plain, refresh_hash) = generate_refresh_token();
     let refresh_expires = Utc::now() + chrono::Duration::seconds(state.refresh_ttl as i64);
 
-    let session_id = repo::insert_session(&state.db, account.id, &refresh_hash, refresh_expires)
-        .await?;
+    let session_id =
+        repo::insert_session(&state.db, account.id, &refresh_hash, refresh_expires).await?;
 
     // Embed session_id so the refresh handler can look it up efficiently.
     let combined_refresh = format!("{session_id:x}:{refresh_plain}");
@@ -180,12 +177,10 @@ pub async fn refresh(
     let refresh_plain = body.refresh_token;
 
     // Parse session_id:random_hex
-    let (sid_hex, random_part) = refresh_plain
-        .split_once(':')
-        .ok_or(shared::AppError::Unauthorized)?;
+    let (sid_hex, random_part) =
+        refresh_plain.split_once(':').ok_or(shared::AppError::Unauthorized)?;
 
-    let sid = i64::from_str_radix(sid_hex, 16)
-        .map_err(|_| shared::AppError::Unauthorized)?;
+    let sid = i64::from_str_radix(sid_hex, 16).map_err(|_| shared::AppError::Unauthorized)?;
 
     let refresh_hash = hex::encode(sha2::Sha256::digest(random_part.as_bytes()));
 
@@ -207,13 +202,8 @@ pub async fn refresh(
     let (new_refresh_plain, new_refresh_hash) = generate_refresh_token();
     let refresh_expires = Utc::now() + chrono::Duration::seconds(state.refresh_ttl as i64);
 
-    let new_sid = repo::insert_session(
-        &state.db,
-        account.id,
-        &new_refresh_hash,
-        refresh_expires,
-    )
-    .await?;
+    let new_sid =
+        repo::insert_session(&state.db, account.id, &new_refresh_hash, refresh_expires).await?;
 
     let combined_refresh = format!("{new_sid:x}:{new_refresh_plain}");
 
@@ -227,10 +217,7 @@ pub async fn refresh(
 /// POST /auth/logout
 ///
 /// Revokes every active session for the authenticated account.
-pub async fn logout(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> AppResult<StatusCode> {
+pub async fn logout(State(state): State<AppState>, headers: HeaderMap) -> AppResult<StatusCode> {
     let auth = AuthAccount::from_headers(&headers, &state.db, &state.jwt_secret)
         .await
         .map_err(|_r| shared::AppError::Unauthorized)?;
@@ -246,9 +233,8 @@ pub async fn get_me(
     let auth = AuthAccount::from_headers(&headers, &state.db, &state.jwt_secret)
         .await
         .map_err(|_r| shared::AppError::Unauthorized)?;
-    let account = repo::find_account_by_id(&state.db, auth.id)
-        .await?
-        .ok_or(shared::AppError::NotFound)?;
+    let account =
+        repo::find_account_by_id(&state.db, auth.id).await?.ok_or(shared::AppError::NotFound)?;
     Ok(Json(row_to_dto(&account)))
 }
 
@@ -300,15 +286,9 @@ pub async fn get_wallet(
 
     let wallet = repo::find_wallet(&state.db, auth.id)
         .await?
-        .unwrap_or(crate::models::WalletRow {
-            account_id: auth.id,
-            balance: 0,
-        });
+        .unwrap_or(crate::models::WalletRow { account_id: auth.id, balance: 0 });
 
-    Ok(Json(WalletOutput {
-        account_id: wallet.account_id.to_string(),
-        balance: wallet.balance,
-    }))
+    Ok(Json(WalletOutput { account_id: wallet.account_id.to_string(), balance: wallet.balance }))
 }
 
 /// POST /wallet/bind

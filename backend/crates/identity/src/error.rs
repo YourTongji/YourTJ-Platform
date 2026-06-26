@@ -45,9 +45,9 @@ impl From<IdentityError> for AppError {
             | IdentityError::CodeExpired
             | IdentityError::CodeExhausted
             | IdentityError::InvalidEmailDomain => AppError::BadRequest(err.to_string()),
-            IdentityError::EmailAlreadyUsed | IdentityError::HandleTaken | IdentityError::KeyAlreadyBound => {
-                AppError::Conflict(err.to_string())
-            }
+            IdentityError::EmailAlreadyUsed
+            | IdentityError::HandleTaken
+            | IdentityError::KeyAlreadyBound => AppError::Conflict(err.to_string()),
             IdentityError::RateLimited => AppError::RateLimited,
             IdentityError::InvalidHandle | IdentityError::InvalidPublicKey => {
                 AppError::BadRequest(err.to_string())

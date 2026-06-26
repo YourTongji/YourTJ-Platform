@@ -45,10 +45,7 @@ fn env_or_default(key: &str, default: &str) -> String {
 }
 
 fn env_or_default_u64(key: &str, default: u64) -> u64 {
-    std::env::var(key)
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(default)
+    std::env::var(key).ok().and_then(|v| v.parse().ok()).unwrap_or(default)
 }
 
 fn non_empty(value: Option<String>) -> Option<String> {

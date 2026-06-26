@@ -74,7 +74,11 @@ pub async fn increment_code_attempts(pool: &PgPool, email: &str) -> AppResult<()
 /// Insert a new account row.  If `handle` is `None` it is derived from the
 /// email prefix; if the handle collides a random 4-digit suffix is appended
 /// (up to 3 retries).
-pub async fn insert_account(pool: &PgPool, email: &str, handle: Option<&str>) -> AppResult<AccountRow> {
+pub async fn insert_account(
+    pool: &PgPool,
+    email: &str,
+    handle: Option<&str>,
+) -> AppResult<AccountRow> {
     let base = handle
         .map(|h| h.to_string())
         .unwrap_or_else(|| email.split('@').next().unwrap_or("user").to_string());

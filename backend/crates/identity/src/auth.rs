@@ -21,11 +21,7 @@ pub struct JwtClaims {
 /// Create a HS256-signed access token valid for `ttl_secs`.
 pub fn create_access_token(account_id: i64, secret: &str, ttl_secs: u64) -> Result<String, String> {
     let now = Utc::now().timestamp() as usize;
-    let claims = JwtClaims {
-        sub: account_id.to_string(),
-        exp: now + ttl_secs as usize,
-        iat: now,
-    };
+    let claims = JwtClaims { sub: account_id.to_string(), exp: now + ttl_secs as usize, iat: now };
     let key = EncodingKey::from_secret(secret.as_bytes());
     encode(&Header::default(), &claims, &key).map_err(|e| format!("JWT encode: {e}"))
 }
@@ -36,10 +32,7 @@ pub fn verify_access_token(token: &str, secret: &str) -> Result<i64, String> {
     v.validate_exp = true;
     let key = DecodingKey::from_secret(secret.as_bytes());
     let data = decode::<JwtClaims>(token, &key, &v).map_err(|e| format!("JWT decode: {e}"))?;
-    data.claims
-        .sub
-        .parse::<i64>()
-        .map_err(|e| format!("invalid sub claim: {e}"))
+    data.claims.sub.parse::<i64>().map_err(|e| format!("invalid sub claim: {e}"))
 }
 
 /// Generate a secure random refresh token returning (plaintext, SHA-256 hash).
