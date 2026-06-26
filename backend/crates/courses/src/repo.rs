@@ -9,7 +9,7 @@ use crate::models::{DepartmentRow, TeacherRow};
 
 /// A virtual row product of the JOIN query used by `find_course_by_id` and `find_course_by_code`.
 #[derive(Debug, Clone, sqlx::FromRow)]
-pub(crate) struct CourseWithTeacherRow {
+pub struct CourseWithTeacherRow {
     pub id: i64,
     pub code: String,
     pub name: String,

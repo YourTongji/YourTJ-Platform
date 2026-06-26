@@ -1,12 +1,11 @@
 //! Database row structs for the courses domain. Every struct derives `sqlx::FromRow`
-//! so it can be materialised directly from a query. Keep these private to the crate;
-//! external callers see DTOs instead.
+//! so it can be materialised directly from a query.
 
 use sqlx::FromRow;
 
 /// A row from `courses.teachers`.
 #[derive(Debug, Clone, FromRow)]
-pub(crate) struct TeacherRow {
+pub struct TeacherRow {
     pub id: i64,
     pub name: String,
     pub title: Option<String>,
@@ -17,7 +16,7 @@ pub(crate) struct TeacherRow {
 
 /// A row from `courses.courses`.
 #[derive(Debug, Clone, FromRow)]
-pub(crate) struct CourseRow {
+pub struct CourseRow {
     pub id: i64,
     pub code: String,
     pub name: String,
@@ -33,13 +32,13 @@ pub(crate) struct CourseRow {
 
 /// A row from `courses.course_aliases`.
 #[derive(Debug, Clone, FromRow)]
-pub(crate) struct CourseAliasRow {
+pub struct CourseAliasRow {
     pub course_id: i64,
     pub alias: String,
 }
 
 /// Virtual row — materialised from `SELECT DISTINCT department FROM courses.courses`.
 #[derive(Debug, Clone, FromRow)]
-pub(crate) struct DepartmentRow {
+pub struct DepartmentRow {
     pub department: Option<String>,
 }

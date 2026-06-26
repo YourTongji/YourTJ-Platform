@@ -8,11 +8,11 @@
 pub mod dto;
 pub mod error;
 pub(crate) mod handlers;
-pub(crate) mod models;
-pub(crate) mod repo;
+pub mod models;
+pub mod repo;
 pub mod selection;
 pub(crate) mod selection_handlers;
-pub(crate) mod selection_repo;
+pub mod selection_repo;
 
 use axum::routing::get;
 use axum::Router;

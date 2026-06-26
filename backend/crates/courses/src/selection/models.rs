@@ -1,12 +1,11 @@
 //! Database row structs for the selection (选课) mirror tables. All tables live
-//! in the `selection` PostgreSQL schema. These are crate-private; handlers expose
-//! only the DTOs.
+//! in the `selection` PostgreSQL schema.
 
 use sqlx::FromRow;
 
 /// A row from `selection.calendars`.
 #[derive(Debug, Clone, FromRow)]
-pub(crate) struct CalendarRow {
+pub struct CalendarRow {
     pub id: i64,
     pub name: String,
     pub is_current: bool,
@@ -14,14 +13,14 @@ pub(crate) struct CalendarRow {
 
 /// A row from `selection.campuses`.
 #[derive(Debug, Clone, FromRow)]
-pub(crate) struct CampusRow {
+pub struct CampusRow {
     pub id: i64,
     pub name: String,
 }
 
 /// A row from `selection.faculties`.
 #[derive(Debug, Clone, FromRow)]
-pub(crate) struct FacultyRow {
+pub struct FacultyRow {
     pub id: i64,
     pub name: String,
     pub campus_id: Option<i64>,
@@ -29,7 +28,7 @@ pub(crate) struct FacultyRow {
 
 /// A row from `selection.majors`.
 #[derive(Debug, Clone, FromRow)]
-pub(crate) struct MajorRow {
+pub struct MajorRow {
     pub id: i64,
     pub name: String,
     pub faculty_id: Option<i64>,
@@ -38,14 +37,14 @@ pub(crate) struct MajorRow {
 
 /// A row from `selection.course_natures`.
 #[derive(Debug, Clone, FromRow)]
-pub(crate) struct CourseNatureRow {
+pub struct CourseNatureRow {
     pub id: i64,
     pub name: String,
 }
 
 /// A row from `selection.courses`.
 #[derive(Debug, Clone, FromRow)]
-pub(crate) struct SelectionCourseRow {
+pub struct SelectionCourseRow {
     pub id: i64,
     pub code: String,
     pub name: String,
@@ -57,7 +56,7 @@ pub(crate) struct SelectionCourseRow {
 
 /// A row from `selection.timeslots`.
 #[derive(Debug, Clone, FromRow)]
-pub(crate) struct TimeslotRow {
+pub struct TimeslotRow {
     pub course_id: i64,
     pub teacher_name: Option<String>,
     pub weekday: i32,

@@ -3,5 +3,5 @@
 //! module lives inside the courses crate because selection is a sub-domain of
 //! the course catalogue.
 
-pub(crate) mod models;
 pub mod dto;
+pub mod models;
