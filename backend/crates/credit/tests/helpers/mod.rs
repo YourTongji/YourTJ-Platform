@@ -49,6 +49,7 @@ async fn run_migrations(pool: &PgPool) {
 }
 
 /// Read the JSON body from a response.
+#[allow(dead_code)]
 pub async fn read_json(resp: Response<Body>) -> Value {
     let bytes =
         to_bytes(resp.into_body(), 10 * 1024 * 1024).await.expect("failed to read response body");
@@ -107,6 +108,8 @@ pub async fn mint_to_account(pool: &PgPool, account_id: i64, amount: i64) {
     });
     let hash = credit::ledger::compute_hash(&canonical, &prev_hash);
 
+    let metadata = serde_json::json!({"reason": "test mint"});
+
     sqlx::query(
         "INSERT INTO credit.ledger \
          (tx_id, type, from_account, to_account, amount, nonce, metadata, \
@@ -118,7 +121,7 @@ pub async fn mint_to_account(pool: &PgPool, account_id: i64, amount: i64) {
     .bind(account_id)
     .bind(amount)
     .bind(&nonce)
-    .bind(&serde_json::json!({"reason": "test mint"}))
+    .bind(&metadata)
     .bind("system")
     .bind("system-signed")
     .bind(&prev_hash)

@@ -3,6 +3,7 @@
 use axum::body::{to_bytes, Body};
 use axum::http::Response;
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use shared::AppState;
 use sqlx::PgPool;
 
@@ -70,8 +71,8 @@ pub async fn read_json(resp: Response<Body>) -> Value {
 
 /// Brute-force a 6-digit code that matches the given SHA-256 hex hash.
 /// For testing only — iterates 000000..999999.
+#[allow(dead_code)]
 pub fn brute_force_code(code_hash: &str) -> String {
-    use sha2::{Digest, Sha256};
     for n in 0..1_000_000 {
         let candidate = format!("{n:06}");
         let h = hex::encode(Sha256::digest(candidate.as_bytes()));
@@ -83,8 +84,8 @@ pub fn brute_force_code(code_hash: &str) -> String {
 }
 
 /// Insert a valid verification code for an email into the test DB.
+#[allow(dead_code)]
 pub async fn insert_valid_code(pool: &PgPool, email: &str, code: &str) {
-    use sha2::{Digest, Sha256};
     let code_hash = hex::encode(Sha256::digest(code));
     sqlx::query(
         "INSERT INTO identity.email_codes (email, code_hash, expires_at) \
@@ -98,15 +99,16 @@ pub async fn insert_valid_code(pool: &PgPool, email: &str, code: &str) {
 }
 
 /// Create a JWT access token for a given email, returning (token, account_id).
+#[allow(dead_code)]
 pub async fn create_access_token_for(email: &str, pool: &PgPool) -> (String, i64) {
-    use identity::auth::create_access_token;
     let account_id: i64 = sqlx::query_scalar("SELECT id FROM identity.accounts WHERE email = $1")
         .bind(email)
         .fetch_one(pool)
         .await
         .expect("find test account");
 
-    let token = create_access_token(account_id, "integration-test-secret-32bytes!", 3600)
-        .expect("create test access token");
+    let token =
+        identity::auth::create_access_token(account_id, "integration-test-secret-32bytes!", 3600)
+            .expect("create test access token");
     (token, account_id)
 }

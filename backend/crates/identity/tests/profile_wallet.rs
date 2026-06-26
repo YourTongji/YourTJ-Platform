@@ -5,6 +5,7 @@ mod helpers;
 
 use axum::body::Body;
 use axum::http::{header, Method, Request, StatusCode};
+use base64::Engine;
 use helpers::{create_test_app, create_test_app_with_pool};
 use ring::signature::KeyPair;
 use serde_json::{json, Value};
@@ -252,8 +253,7 @@ async fn test_bind_key_valid_ed25519_succeeds() {
     let key_pair =
         ring::signature::Ed25519KeyPair::from_pkcs8(pkcs8_bytes.as_ref()).expect("parse key pair");
     let public_key_bytes = key_pair.public_key().as_ref();
-    let public_key_b64 =
-        base64::Engine::encode(&base64::engine::general_purpose::STANDARD, public_key_bytes);
+    let public_key_b64 = base64::engine::general_purpose::STANDARD.encode(public_key_bytes);
 
     let resp = app
         .oneshot(
@@ -323,7 +323,7 @@ async fn test_bind_key_wrong_length_rejects() {
     let (token, _) = helpers::create_access_token_for("wendy@tongji.edu.cn", &pool).await;
     let app = create_test_app_with_pool(pool).await;
 
-    let short_key = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &[0u8; 16]);
+    let short_key = base64::engine::general_purpose::STANDARD.encode([0u8; 16]);
 
     let resp = app
         .oneshot(

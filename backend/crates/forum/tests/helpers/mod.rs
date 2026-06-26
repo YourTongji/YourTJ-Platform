@@ -53,6 +53,7 @@ async fn run_migrations(pool: &PgPool) {
 }
 
 /// Read the JSON body from a response.
+#[allow(dead_code)]
 pub async fn read_json(resp: Response<Body>) -> Value {
     let bytes =
         to_bytes(resp.into_body(), 10 * 1024 * 1024).await.expect("failed to read response body");

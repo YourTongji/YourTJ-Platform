@@ -149,7 +149,7 @@ async fn task_accept_and_submit_flow() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri(&format!("/api/v2/credit/tasks/{task_id}/accept"))
+                .uri(format!("/api/v2/credit/tasks/{task_id}/accept"))
                 .method("POST")
                 .header("Authorization", format!("Bearer {acceptor_token}"))
                 .body(Body::empty())
@@ -165,7 +165,7 @@ async fn task_accept_and_submit_flow() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri(&format!("/api/v2/credit/tasks/{task_id}/action"))
+                .uri(format!("/api/v2/credit/tasks/{task_id}/action"))
                 .method("POST")
                 .header("Authorization", format!("Bearer {acceptor_token}"))
                 .header("Content-Type", "application/json")
@@ -181,7 +181,7 @@ async fn task_accept_and_submit_flow() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri(&format!("/api/v2/credit/tasks/{task_id}/action"))
+                .uri(format!("/api/v2/credit/tasks/{task_id}/action"))
                 .method("POST")
                 .header("Authorization", format!("Bearer {token}"))
                 .header("Content-Type", "application/json")
@@ -295,7 +295,7 @@ async fn purchase_flow_releases_escrow() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri(&format!("/api/v2/credit/products/{product_id}/purchase"))
+                .uri(format!("/api/v2/credit/products/{product_id}/purchase"))
                 .method("POST")
                 .header("Authorization", format!("Bearer {buyer_token}"))
                 .body(Body::empty())
@@ -323,7 +323,7 @@ async fn purchase_flow_releases_escrow() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri(&format!("/api/v2/credit/purchases/{purchase_id}/action"))
+                .uri(format!("/api/v2/credit/purchases/{purchase_id}/action"))
                 .method("POST")
                 .header("Authorization", format!("Bearer {seller_token}"))
                 .header("Content-Type", "application/json")
@@ -338,7 +338,7 @@ async fn purchase_flow_releases_escrow() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri(&format!("/api/v2/credit/purchases/{purchase_id}/action"))
+                .uri(format!("/api/v2/credit/purchases/{purchase_id}/action"))
                 .method("POST")
                 .header("Authorization", format!("Bearer {seller_token}"))
                 .header("Content-Type", "application/json")
@@ -352,7 +352,7 @@ async fn purchase_flow_releases_escrow() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri(&format!("/api/v2/credit/purchases/{purchase_id}/action"))
+                .uri(format!("/api/v2/credit/purchases/{purchase_id}/action"))
                 .method("POST")
                 .header("Authorization", format!("Bearer {buyer_token}"))
                 .header("Content-Type", "application/json")

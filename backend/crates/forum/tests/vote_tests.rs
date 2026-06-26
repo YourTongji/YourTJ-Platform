@@ -50,7 +50,7 @@ async fn test_vote_thread_up() {
         .oneshot(
             Request::builder()
                 .method(Method::POST)
-                .uri(&format!("/api/v2/forum/posts/{thread_id}/vote"))
+                .uri(format!("/api/v2/forum/posts/{thread_id}/vote"))
                 .header(header::CONTENT_TYPE, "application/json")
                 .header(header::AUTHORIZATION, format!("Bearer {token}"))
                 .body(Body::from(json!({"value": "up"}).to_string()))
@@ -81,7 +81,7 @@ async fn test_vote_thread_down() {
         .oneshot(
             Request::builder()
                 .method(Method::POST)
-                .uri(&format!("/api/v2/forum/posts/{thread_id}/vote"))
+                .uri(format!("/api/v2/forum/posts/{thread_id}/vote"))
                 .header(header::CONTENT_TYPE, "application/json")
                 .header(header::AUTHORIZATION, format!("Bearer {token}"))
                 .body(Body::from(json!({"value": "up"}).to_string()))
@@ -94,7 +94,7 @@ async fn test_vote_thread_down() {
         .oneshot(
             Request::builder()
                 .method(Method::POST)
-                .uri(&format!("/api/v2/forum/posts/{thread_id}/vote"))
+                .uri(format!("/api/v2/forum/posts/{thread_id}/vote"))
                 .header(header::CONTENT_TYPE, "application/json")
                 .header(header::AUTHORIZATION, format!("Bearer {token}"))
                 .body(Body::from(json!({"value": "down"}).to_string()))
@@ -126,7 +126,7 @@ async fn test_vote_comment_up() {
         .oneshot(
             Request::builder()
                 .method(Method::POST)
-                .uri(&format!("/api/v2/forum/posts/{comment_id}/vote"))
+                .uri(format!("/api/v2/forum/posts/{comment_id}/vote"))
                 .header(header::CONTENT_TYPE, "application/json")
                 .header(header::AUTHORIZATION, format!("Bearer {token}"))
                 .body(Body::from(json!({"value": "up"}).to_string()))

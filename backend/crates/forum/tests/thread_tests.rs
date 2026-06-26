@@ -108,7 +108,7 @@ async fn test_get_thread_returns_detail() {
         .oneshot(
             Request::builder()
                 .method(Method::GET)
-                .uri(&format!("/api/v2/forum/threads/{thread_id}"))
+                .uri(format!("/api/v2/forum/threads/{thread_id}"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -182,7 +182,7 @@ async fn test_list_threads_pagination() {
         .oneshot(
             Request::builder()
                 .method(Method::GET)
-                .uri(&format!("/api/v2/forum/boards/1/threads?limit=2&cursor={cursor}"))
+                .uri(format!("/api/v2/forum/boards/1/threads?limit=2&cursor={cursor}"))
                 .body(Body::empty())
                 .unwrap(),
         )

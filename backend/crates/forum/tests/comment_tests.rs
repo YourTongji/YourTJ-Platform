@@ -108,7 +108,7 @@ async fn test_create_top_level_comment() {
         .oneshot(
             Request::builder()
                 .method(Method::POST)
-                .uri(&format!("/api/v2/forum/threads/{thread_id}/comments"))
+                .uri(format!("/api/v2/forum/threads/{thread_id}/comments"))
                 .header(header::CONTENT_TYPE, "application/json")
                 .header(header::AUTHORIZATION, format!("Bearer {token}"))
                 .body(Body::from(json!({"body": "First comment"}).to_string()))
@@ -151,7 +151,7 @@ async fn test_create_nested_comment() {
         .oneshot(
             Request::builder()
                 .method(Method::POST)
-                .uri(&format!("/api/v2/forum/threads/{thread_id}/comments"))
+                .uri(format!("/api/v2/forum/threads/{thread_id}/comments"))
                 .header(header::CONTENT_TYPE, "application/json")
                 .header(header::AUTHORIZATION, format!("Bearer {token}"))
                 .body(Body::from(
@@ -183,7 +183,7 @@ async fn test_list_comments_empty() {
         .oneshot(
             Request::builder()
                 .method(Method::GET)
-                .uri(&format!("/api/v2/forum/threads/{thread_id}/comments"))
+                .uri(format!("/api/v2/forum/threads/{thread_id}/comments"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -210,7 +210,7 @@ async fn test_list_comments_path_ordering() {
         .oneshot(
             Request::builder()
                 .method(Method::GET)
-                .uri(&format!("/api/v2/forum/threads/{thread_id}/comments?limit=10"))
+                .uri(format!("/api/v2/forum/threads/{thread_id}/comments?limit=10"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -243,7 +243,7 @@ async fn test_list_comments_pagination() {
         .oneshot(
             Request::builder()
                 .method(Method::GET)
-                .uri(&format!("/api/v2/forum/threads/{thread_id}/comments?limit=2"))
+                .uri(format!("/api/v2/forum/threads/{thread_id}/comments?limit=2"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -261,7 +261,7 @@ async fn test_list_comments_pagination() {
         .oneshot(
             Request::builder()
                 .method(Method::GET)
-                .uri(&format!("/api/v2/forum/threads/{thread_id}/comments?limit=2&cursor={cursor}"))
+                .uri(format!("/api/v2/forum/threads/{thread_id}/comments?limit=2&cursor={cursor}"))
                 .body(Body::empty())
                 .unwrap(),
         )
