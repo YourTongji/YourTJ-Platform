@@ -1,0 +1,22 @@
+# Rust
+/backend/target
+target/
+**/*.rs.bk
+Cargo.lock.orig
+
+# Env / secrets
+.env
+.env.local
+*.pem
+*.key
+
+# Web
+/web/node_modules
+/web/dist
+/web/.vite
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp

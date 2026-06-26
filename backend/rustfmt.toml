@@ -1,0 +1,5 @@
+edition = "2021"
+max_width = 100
+use_small_heuristics = "Max"
+# Note: imports_granularity / group_imports are nightly-only; we keep import
+# grouping as a convention (see AGENTS.md §4.4) rather than enforcing it on stable.

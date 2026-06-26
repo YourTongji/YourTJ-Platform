@@ -1,0 +1,897 @@
+openapi: 3.0.3
+info:
+  title: YourTJ v2 API
+  version: 2.0.0
+  description: >
+    The single source of truth for the v2 HTTP contract. Client type bindings
+    (TS / Swift / Dart) are generated from this file — change the API here first,
+    then implement and regenerate. Conventions: bearer JWT auth; money/escrow
+    writes additionally require `X-Wallet-Sig` (Ed25519); cursor pagination on
+    public lists; the error envelope `{ error: { code, message } }`; timestamps
+    are Unix seconds.
+servers:
+  - url: https://api.yourtj.de/api/v2
+
+tags:
+  - { name: auth }
+  - { name: identity }
+  - { name: wallet }
+  - { name: credit }
+  - { name: search }
+  - { name: courses }
+  - { name: selection, description: 选课 (PK) catalogue mirrored from 一系统 }
+  - { name: reviews }
+  - { name: forum }
+  - { name: notifications }
+  - { name: platform }
+  - { name: admin }
+
+security:
+  - bearer: []
+
+components:
+  securitySchemes:
+    bearer: { type: http, scheme: bearer, bearerFormat: JWT }
+
+  parameters:
+    Cursor: { name: cursor, in: query, schema: { type: string }, description: Opaque pagination cursor }
+    Limit: { name: limit, in: query, schema: { type: integer, default: 20, maximum: 100 } }
+    WalletSig:
+      name: X-Wallet-Sig
+      in: header
+      required: true
+      schema: { type: string }
+      description: Base64 Ed25519 signature over canonical(payload)+timestamp+nonce
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      schema: { type: string }
+
+  responses:
+    BadRequest:   { description: Bad request, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+    Unauthorized: { description: Unauthorized, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+    Forbidden:    { description: Forbidden, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+    NotFound:     { description: Not found, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+    Conflict:     { description: Conflict, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+    RateLimited:  { description: Too many requests, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { type: string }
+            message: { type: string }
+            details: { type: object }
+    Page:
+      type: object
+      description: Base cursor-pagination envelope; typed lists override `items`.
+      properties:
+        items: { type: array, items: { type: object } }
+        nextCursor: { type: string, nullable: true }
+        hasMore: { type: boolean }
+
+    # ---- identity ----
+    Account:
+      type: object
+      properties:
+        id: { type: string }
+        handle: { type: string }
+        avatarUrl: { type: string, nullable: true }
+        role: { type: string, enum: [user, mod, admin] }
+        createdAt: { type: integer }
+    AuthTokens:
+      type: object
+      properties:
+        accessToken: { type: string }
+        refreshToken: { type: string }
+        account: { $ref: "#/components/schemas/Account" }
+
+    # ---- courses / reviews ----
+    Department: { type: object, properties: { id: { type: string }, name: { type: string } } }
+    Teacher:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        title: { type: string, nullable: true }
+        department: { type: string, nullable: true }
+    Course:
+      type: object
+      properties:
+        id: { type: string }
+        code: { type: string }
+        name: { type: string }
+        credit: { type: number }
+        department: { type: string, nullable: true }
+        teacherName: { type: string, nullable: true }
+        reviewCount: { type: integer }
+        reviewAvg: { type: number }
+    CourseDetail:
+      allOf:
+        - $ref: "#/components/schemas/Course"
+        - type: object
+          properties:
+            teachers: { type: array, items: { $ref: "#/components/schemas/Teacher" } }
+            aliases: { type: array, items: { type: string } }
+    Review:
+      type: object
+      properties:
+        id: { type: string }
+        courseId: { type: string }
+        rating: { type: integer }
+        comment: { type: string, nullable: true }
+        score: { type: string, nullable: true }
+        semester: { type: string, nullable: true }
+        authorHandle: { type: string }
+        authorAvatar: { type: string, nullable: true }
+        approveCount: { type: integer }
+        status: { type: string, enum: [visible, hidden, pending] }
+        createdAt: { type: integer }
+    ReviewInput:
+      type: object
+      required: [rating]
+      properties:
+        rating: { type: integer, minimum: 0, maximum: 5 }
+        comment: { type: string }
+        semester: { type: string }
+        score: { type: string }
+    AiSummary:
+      type: object
+      properties:
+        courseId: { type: string }
+        summary: { type: string }
+        model: { type: string }
+        updatedAt: { type: integer }
+    Report:
+      type: object
+      properties:
+        id: { type: string }
+        reviewId: { type: string }
+        reason: { type: string }
+        status: { type: string, enum: [open, resolved] }
+        createdAt: { type: integer }
+
+    # ---- wallet / credit (Web2.5) ----
+    Wallet: { type: object, properties: { accountId: { type: string }, balance: { type: integer } } }
+    LedgerEntry:
+      type: object
+      properties:
+        seq: { type: integer }
+        txId: { type: string }
+        type: { type: string, enum: [mint, tip, escrow_hold, escrow_release, admin_adjust] }
+        fromAccount: { type: string, nullable: true }
+        toAccount: { type: string, nullable: true }
+        amount: { type: integer }
+        hash: { type: string }
+        createdAt: { type: integer }
+    LedgerVerify:
+      type: object
+      properties:
+        ok: { type: boolean }
+        latestSeq: { type: integer }
+        latestHash: { type: string }
+    TipInput:
+      type: object
+      required: [toAccountId, amount, targetType, targetId]
+      properties:
+        toAccountId: { type: string }
+        amount: { type: integer, minimum: 1 }
+        targetType: { type: string, enum: [review, thread, comment] }
+        targetId: { type: string }
+    Task:
+      type: object
+      properties:
+        id: { type: string }
+        creatorId: { type: string }
+        acceptorId: { type: string, nullable: true }
+        title: { type: string }
+        description: { type: string, nullable: true }
+        rewardAmount: { type: integer }
+        contactInfo: { type: string, nullable: true, description: Visible only to controlled parties }
+        status: { type: string, enum: [open, in_progress, submitted, completed, cancelled] }
+        createdAt: { type: integer }
+    TaskInput:
+      type: object
+      required: [title, rewardAmount]
+      properties:
+        title: { type: string }
+        description: { type: string }
+        rewardAmount: { type: integer, minimum: 1 }
+        contactInfo: { type: string }
+    TaskAction:
+      type: object
+      required: [action]
+      properties:
+        action: { type: string, enum: [submit, confirm, cancel, reject, delete] }
+    Product:
+      type: object
+      properties:
+        id: { type: string }
+        sellerId: { type: string }
+        title: { type: string }
+        description: { type: string, nullable: true }
+        price: { type: integer }
+        stock: { type: integer }
+        status: { type: string, enum: [on_sale, off_sale, sold_out] }
+        createdAt: { type: integer }
+    ProductInput:
+      type: object
+      required: [title, price, stock]
+      properties:
+        title: { type: string }
+        description: { type: string }
+        price: { type: integer, minimum: 1 }
+        stock: { type: integer, minimum: 0 }
+        deliveryInfo: { type: string }
+    Purchase:
+      type: object
+      properties:
+        id: { type: string }
+        productId: { type: string }
+        buyerId: { type: string }
+        sellerId: { type: string }
+        amount: { type: integer }
+        status: { type: string, enum: [pending, accepted, delivered, completed, cancelled] }
+        createdAt: { type: integer }
+    PurchaseAction:
+      type: object
+      required: [action]
+      properties:
+        action: { type: string, enum: [accept, deliver, confirm] }
+
+    # ---- search ----
+    SearchResult:
+      type: object
+      properties:
+        courses: { type: array, items: { $ref: "#/components/schemas/Course" } }
+        reviews: { type: array, items: { $ref: "#/components/schemas/Review" } }
+
+    # ---- selection (选课/PK) ----
+    Calendar: { type: object, properties: { id: { type: string }, name: { type: string }, isCurrent: { type: boolean } } }
+    Campus: { type: object, properties: { id: { type: string }, name: { type: string } } }
+    Faculty: { type: object, properties: { id: { type: string }, name: { type: string }, campusId: { type: string, nullable: true } } }
+    Major:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        facultyId: { type: string, nullable: true }
+        grade: { type: string, nullable: true }
+    CourseNature: { type: object, properties: { id: { type: string }, name: { type: string } } }
+    SelectionCourse:
+      type: object
+      properties:
+        id: { type: string }
+        code: { type: string }
+        name: { type: string }
+        credit: { type: number }
+        natureId: { type: string, nullable: true }
+        campus: { type: string, nullable: true }
+        teacherName: { type: string, nullable: true }
+    TimeSlot:
+      type: object
+      properties:
+        courseId: { type: string }
+        teacherName: { type: string, nullable: true }
+        weekday: { type: integer }
+        startSlot: { type: integer }
+        endSlot: { type: integer }
+        weeks: { type: string }
+        location: { type: string, nullable: true }
+    LatestUpdate: { type: object, properties: { source: { type: string }, fetchedAt: { type: integer } } }
+
+    # ---- forum ----
+    Board: { type: object, properties: { id: { type: string }, slug: { type: string }, name: { type: string } } }
+    Thread:
+      type: object
+      properties:
+        id: { type: string }
+        boardId: { type: string }
+        authorHandle: { type: string }
+        title: { type: string }
+        replyCount: { type: integer }
+        voteCount: { type: integer }
+        hotScore: { type: number }
+        createdAt: { type: integer }
+        lastActivityAt: { type: integer }
+    ThreadDetail:
+      allOf:
+        - $ref: "#/components/schemas/Thread"
+        - type: object
+          properties: { body: { type: string } }
+    ThreadInput:
+      type: object
+      required: [boardId, title]
+      properties:
+        boardId: { type: string }
+        title: { type: string }
+        body: { type: string }
+    Comment:
+      type: object
+      properties:
+        id: { type: string }
+        threadId: { type: string }
+        parentId: { type: string, nullable: true }
+        path: { type: string }
+        authorHandle: { type: string }
+        body: { type: string }
+        voteCount: { type: integer }
+        createdAt: { type: integer }
+    CommentInput:
+      type: object
+      required: [body]
+      properties:
+        parentId: { type: string }
+        body: { type: string }
+    VoteInput:
+      type: object
+      required: [value]
+      properties:
+        value: { type: string, enum: [up, down] }
+    Notification:
+      type: object
+      properties:
+        id: { type: string }
+        type: { type: string }
+        payload: { type: object }
+        readAt: { type: integer, nullable: true }
+        createdAt: { type: integer }
+
+    # ---- platform / admin ----
+    Setting: { type: object, properties: { key: { type: string }, value: { type: string } } }
+    Announcement:
+      type: object
+      properties:
+        id: { type: string }
+        title: { type: string }
+        body: { type: string }
+        createdAt: { type: integer }
+
+    # ---- typed pages ----
+    CoursePage:
+      allOf:
+        - $ref: "#/components/schemas/Page"
+        - { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/Course" } } } }
+    ReviewPage:
+      allOf:
+        - $ref: "#/components/schemas/Page"
+        - { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/Review" } } } }
+    ThreadPage:
+      allOf:
+        - $ref: "#/components/schemas/Page"
+        - { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/Thread" } } } }
+    CommentPage:
+      allOf:
+        - $ref: "#/components/schemas/Page"
+        - { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/Comment" } } } }
+    NotificationPage:
+      allOf:
+        - $ref: "#/components/schemas/Page"
+        - { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/Notification" } } } }
+    TaskPage:
+      allOf:
+        - $ref: "#/components/schemas/Page"
+        - { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/Task" } } } }
+    ProductPage:
+      allOf:
+        - $ref: "#/components/schemas/Page"
+        - { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/Product" } } } }
+    PurchasePage:
+      allOf:
+        - $ref: "#/components/schemas/Page"
+        - { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/Purchase" } } } }
+    LedgerPage:
+      allOf:
+        - $ref: "#/components/schemas/Page"
+        - { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/LedgerEntry" } } } }
+    ReportPage:
+      allOf:
+        - $ref: "#/components/schemas/Page"
+        - { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/Report" } } } }
+
+paths:
+  # ============ auth & identity ============
+  /auth/email/request-code:
+    post:
+      tags: [auth]
+      security: []
+      summary: Send a verification code to a @tongji.edu.cn address
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [email], properties: { email: { type: string, format: email } } } } }
+      responses:
+        "204": { description: sent }
+        "429": { $ref: "#/components/responses/RateLimited" }
+  /auth/email/verify:
+    post:
+      tags: [auth]
+      security: []
+      summary: Verify a code and log in / register
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [email, code], properties: { email: { type: string }, code: { type: string }, handle: { type: string } } } } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/AuthTokens" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+  /auth/refresh:
+    post:
+      tags: [auth]
+      security: []
+      summary: Exchange a refresh token for new tokens
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/AuthTokens" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /auth/logout:
+    post:
+      tags: [auth]
+      summary: Revoke the current session
+      responses: { "204": { description: ok } }
+  /me:
+    get:
+      tags: [identity]
+      summary: Current account
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Account" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    patch:
+      tags: [identity]
+      summary: Update handle / avatar
+      requestBody:
+        content: { application/json: { schema: { type: object, properties: { handle: { type: string }, avatarUrl: { type: string } } } } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Account" } } } }
+
+  # ============ wallet (bind / claim / ledger) ============
+  /wallet:
+    get:
+      tags: [wallet]
+      summary: Balance
+      responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Wallet" } } } } }
+  /wallet/bind:
+    post:
+      tags: [wallet]
+      summary: Bind a client-generated Ed25519 public key
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [publicKey], properties: { publicKey: { type: string } } } } }
+      responses: { "204": { description: ok } }
+  /wallet/claim-challenge:
+    get:
+      tags: [wallet]
+      summary: Get a one-time claim challenge
+      responses: { "200": { description: ok, content: { application/json: { schema: { type: object, properties: { challengeId: { type: string }, nonce: { type: string } } } } } } }
+  /wallet/claim:
+    post:
+      tags: [wallet]
+      summary: Claim a legacy wallet by signing the challenge (re-derive userHash from 学号+PIN)
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [legacyUserHash, challengeId, signature], properties: { legacyUserHash: { type: string }, challengeId: { type: string }, signature: { type: string } } } } }
+      responses:
+        "200": { description: merged, content: { application/json: { schema: { $ref: "#/components/schemas/Wallet" } } } }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /wallet/ledger:
+    get:
+      tags: [wallet]
+      summary: My ledger history (cursor)
+      parameters: [{ $ref: "#/components/parameters/Cursor" }, { $ref: "#/components/parameters/Limit" }]
+      responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/LedgerPage" } } } } }
+  /wallet/ledger/verify:
+    get:
+      tags: [wallet]
+      security: []
+      summary: Recompute the ledger hash chain and verify signatures
+      responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/LedgerVerify" } } } } }
+
+  # ============ credit: controlled money ops (NO free transfer — design §6.3) ============
+  /credit/tip:
+    post:
+      tags: [credit]
+      summary: Tip — controlled transfer bound to a specific piece of content
+      parameters: [{ $ref: "#/components/parameters/WalletSig" }, { $ref: "#/components/parameters/IdempotencyKey" }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/TipInput" } } } }
+      responses:
+        "200": { description: ok }
+        "402": { description: insufficient balance, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+  /credit/bounty:
+    post:
+      tags: [credit]
+      summary: Post a bounty (escrow_hold)
+      parameters: [{ $ref: "#/components/parameters/WalletSig" }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/TaskInput" } } } }
+      responses:
+        "201": { description: created, content: { application/json: { schema: { $ref: "#/components/schemas/Task" } } } }
+        "402": { description: insufficient balance, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+  /credit/bounty/{id}/confirm:
+    post:
+      tags: [credit]
+      summary: Confirm completion and release (escrow_release)
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }, { $ref: "#/components/parameters/WalletSig" }]
+      responses: { "200": { description: released } }
+
+  # ---- escrow market: tasks ----
+  /credit/tasks:
+    get:
+      tags: [credit]
+      summary: Task square / my tasks
+      parameters:
+        - { name: status, in: query, schema: { type: string, enum: [open, in_progress, submitted, completed, all] } }
+        - { $ref: "#/components/parameters/Cursor" }
+        - { $ref: "#/components/parameters/Limit" }
+      responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/TaskPage" } } } } }
+    post:
+      tags: [credit]
+      summary: Publish a task (escrow_hold of the reward)
+      parameters: [{ $ref: "#/components/parameters/WalletSig" }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/TaskInput" } } } }
+      responses:
+        "201": { description: created, content: { application/json: { schema: { $ref: "#/components/schemas/Task" } } } }
+        "402": { description: insufficient balance, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+  /credit/tasks/{id}/accept:
+    post:
+      tags: [credit]
+      summary: Accept a task
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Task" } } } } }
+  /credit/tasks/{id}/action:
+    post:
+      tags: [credit]
+      summary: Two-phase confirm — submit / confirm(release) / cancel / reject / delete
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }, { $ref: "#/components/parameters/WalletSig" }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/TaskAction" } } } }
+      responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Task" } } } } }
+
+  # ---- escrow market: products / purchases ----
+  /credit/products:
+    get:
+      tags: [credit]
+      summary: Product listings
+      parameters: [{ $ref: "#/components/parameters/Cursor" }, { $ref: "#/components/parameters/Limit" }]
+      responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/ProductPage" } } } } }
+    post:
+      tags: [credit]
+      summary: List a product
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/ProductInput" } } } }
+      responses: { "201": { description: created, content: { application/json: { schema: { $ref: "#/components/schemas/Product" } } } } }
+  /credit/products/{id}/purchase:
+    post:
+      tags: [credit]
+      summary: Buy a product (escrow_hold of the price)
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }, { $ref: "#/components/parameters/WalletSig" }]
+      responses:
+        "201": { description: created, content: { application/json: { schema: { $ref: "#/components/schemas/Purchase" } } } }
+        "402": { description: insufficient balance, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+  /credit/purchases:
+    get:
+      tags: [credit]
+      summary: My orders (as buyer or seller)
+      parameters: [{ $ref: "#/components/parameters/Cursor" }, { $ref: "#/components/parameters/Limit" }]
+      responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/PurchasePage" } } } } }
+  /credit/purchases/{id}/action:
+    post:
+      tags: [credit]
+      summary: Escrow steps — accept / deliver / confirm(release)
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }, { $ref: "#/components/parameters/WalletSig" }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/PurchaseAction" } } } }
+      responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Purchase" } } } } }
+
+  # ============ search ============
+  /search:
+    get:
+      tags: [search]
+      security: []
+      summary: Realtime search (course / teacher / location / alias / pinyin / review text)
+      parameters:
+        - { name: q, in: query, required: true, schema: { type: string } }
+        - { name: type, in: query, schema: { type: string, enum: [course, teacher, review, all], default: all } }
+        - { name: limit, in: query, schema: { type: integer, default: 10, maximum: 30 } }
+      responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/SearchResult" } } } } }
+
+  # ============ courses ============
+  /departments:
+    get:
+      tags: [courses]
+      security: []
+      summary: Departments
+      responses: { "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Department" } } } } } }
+  /courses:
+    get:
+      tags: [courses]
+      security: []
+      summary: Browse / filter courses (cached; non-realtime)
+      parameters:
+        - { name: dept, in: query, schema: { type: string } }
+        - { name: sort, in: query, schema: { type: string, enum: [hot, rating, new] } }
+        - { $ref: "#/components/parameters/Cursor" }
+        - { $ref: "#/components/parameters/Limit" }
+      responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/CoursePage" } } } } }
+  /courses/{id}:
+    get:
+      tags: [courses]
+      security: []
+      summary: Course detail
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/CourseDetail" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /courses/{id}/related:
+    get:
+      tags: [courses]
+      security: []
+      summary: Related courses
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses: { "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Course" } } } } } }
+  /courses/by-code/{code}:
+    get:
+      tags: [courses]
+      security: []
+      summary: Lookup by code
+      parameters: [{ name: code, in: path, required: true, schema: { type: string } }]
+      responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/CourseDetail" } } } } }
+  /courses/{id}/ai-summary:
+    get:
+      tags: [courses]
+      security: []
+      summary: AI-generated review summary for a course
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/AiSummary" } } } } }
+
+  # ============ selection (选课/PK) ============
+  /selection/calendars:
+    get: { tags: [selection], security: [], summary: All calendars, responses: { "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Calendar" } } } } } } }
+  /selection/campuses:
+    get: { tags: [selection], security: [], summary: All campuses, responses: { "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Campus" } } } } } } }
+  /selection/faculties:
+    get: { tags: [selection], security: [], summary: All faculties, responses: { "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Faculty" } } } } } } }
+  /selection/grades:
+    get:
+      tags: [selection]
+      security: []
+      summary: Grades for a calendar
+      parameters: [{ name: calendarId, in: query, required: true, schema: { type: string } }]
+      responses: { "200": { description: ok, content: { application/json: { schema: { type: array, items: { type: string } } } } } }
+  /selection/majors:
+    get:
+      tags: [selection]
+      security: []
+      summary: Majors for a grade
+      parameters: [{ name: grade, in: query, required: true, schema: { type: string } }]
+      responses: { "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Major" } } } } } }
+  /selection/course-natures:
+    get: { tags: [selection], security: [], summary: Optional course types/natures, responses: { "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/CourseNature" } } } } } } }
+  /selection/courses/by-major:
+    get:
+      tags: [selection]
+      security: []
+      summary: Courses for a major
+      parameters: [{ name: majorId, in: query, required: true, schema: { type: string } }, { name: grade, in: query, schema: { type: string } }]
+      responses: { "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/SelectionCourse" } } } } } }
+  /selection/courses/by-nature:
+    get:
+      tags: [selection]
+      security: []
+      summary: Courses by nature/type
+      parameters: [{ name: natureId, in: query, required: true, schema: { type: string } }]
+      responses: { "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/SelectionCourse" } } } } } }
+  /selection/courses/by-code/{code}:
+    get:
+      tags: [selection]
+      security: []
+      summary: Selection course detail by code
+      parameters: [{ name: code, in: path, required: true, schema: { type: string } }]
+      responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/SelectionCourse" } } } } }
+  /selection/courses/search:
+    get:
+      tags: [selection]
+      security: []
+      summary: Search selection courses
+      parameters: [{ name: q, in: query, required: true, schema: { type: string } }]
+      responses: { "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/SelectionCourse" } } } } } }
+  /selection/courses/by-time:
+    get:
+      tags: [selection]
+      security: []
+      summary: Courses matching a time window (for scheduling)
+      parameters: [{ name: weekday, in: query, schema: { type: integer } }, { name: startSlot, in: query, schema: { type: integer } }, { name: endSlot, in: query, schema: { type: integer } }]
+      responses: { "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/TimeSlot" } } } } } }
+  /selection/latest-update:
+    get: { tags: [selection], security: [], summary: Latest sync time, responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/LatestUpdate" } } } } } }
+
+  # ============ reviews ============
+  /courses/{id}/reviews:
+    get:
+      tags: [reviews]
+      security: []
+      summary: Course reviews (paginated, sorted)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: sort, in: query, schema: { type: string, enum: [hot, new], default: hot } }
+        - { $ref: "#/components/parameters/Cursor" }
+        - { $ref: "#/components/parameters/Limit" }
+      responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/ReviewPage" } } } } }
+    post:
+      tags: [reviews]
+      summary: Publish a review (captcha + idempotency)
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }, { $ref: "#/components/parameters/IdempotencyKey" }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/ReviewInput" } } } }
+      responses:
+        "201": { description: created, content: { application/json: { schema: { $ref: "#/components/schemas/Review" } } } }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /reviews/{id}:
+    patch:
+      tags: [reviews]
+      summary: Edit own review
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      requestBody: { content: { application/json: { schema: { $ref: "#/components/schemas/ReviewInput" } } } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Review" } } } }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /reviews/{id}/like:
+    post: { tags: [reviews], summary: Like, parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { "204": { description: ok } } }
+    delete: { tags: [reviews], summary: Unlike, parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { "204": { description: ok } } }
+  /reviews/{id}/report:
+    post:
+      tags: [reviews]
+      summary: Report a review
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [reason], properties: { reason: { type: string } } } } } }
+      responses: { "202": { description: queued } }
+
+  # ============ forum (Phase B) ============
+  /forum/boards:
+    get: { tags: [forum], security: [], summary: Boards, responses: { "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Board" } } } } } } }
+  /forum/threads:
+    get:
+      tags: [forum]
+      security: []
+      summary: Thread feed (hot/new/following)
+      parameters:
+        - { name: board, in: query, schema: { type: string } }
+        - { name: sort, in: query, schema: { type: string, enum: [hot, new, following], default: hot } }
+        - { $ref: "#/components/parameters/Cursor" }
+        - { $ref: "#/components/parameters/Limit" }
+      responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/ThreadPage" } } } } }
+    post:
+      tags: [forum]
+      summary: Create thread
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/ThreadInput" } } } }
+      responses: { "201": { description: created, content: { application/json: { schema: { $ref: "#/components/schemas/Thread" } } } } }
+  /forum/threads/{id}:
+    get:
+      tags: [forum]
+      security: []
+      summary: Thread detail
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/ThreadDetail" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /forum/threads/{id}/comments:
+    get:
+      tags: [forum]
+      security: []
+      summary: Comments (nested 楼中楼)
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }, { $ref: "#/components/parameters/Cursor" }, { $ref: "#/components/parameters/Limit" }]
+      responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/CommentPage" } } } } }
+    post:
+      tags: [forum]
+      summary: Add a comment
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/CommentInput" } } } }
+      responses: { "201": { description: created, content: { application/json: { schema: { $ref: "#/components/schemas/Comment" } } } } }
+  /forum/posts/{id}/vote:
+    post:
+      tags: [forum]
+      summary: Up/down vote a thread or comment
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/VoteInput" } } } }
+      responses: { "204": { description: ok } }
+
+  # ============ notifications ============
+  /notifications:
+    get:
+      tags: [notifications]
+      summary: My notifications (cursor)
+      parameters: [{ $ref: "#/components/parameters/Cursor" }, { $ref: "#/components/parameters/Limit" }]
+      responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/NotificationPage" } } } } }
+  /notifications/read:
+    post:
+      tags: [notifications]
+      summary: Mark notifications read
+      requestBody: { content: { application/json: { schema: { type: object, properties: { ids: { type: array, items: { type: string } } } } } } }
+      responses: { "204": { description: ok } }
+
+  # ============ platform ============
+  /startup/verify:
+    post:
+      tags: [platform]
+      security: []
+      summary: Captcha gate (Turnstile / TongjiCaptcha)
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [token], properties: { token: { type: string } } } } } }
+      responses:
+        "200": { description: ok }
+        "400": { $ref: "#/components/responses/BadRequest" }
+  /announcements:
+    get: { tags: [platform], security: [], summary: Public announcements, responses: { "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Announcement" } } } } } } }
+  /settings:
+    get: { tags: [platform], security: [], summary: Public runtime settings, responses: { "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Setting" } } } } } } }
+
+  # ============ admin (role: mod/admin) ============
+  /admin/reviews:
+    get:
+      tags: [admin]
+      summary: List reviews for moderation
+      parameters: [{ name: status, in: query, schema: { type: string, enum: [visible, hidden, pending, all] } }, { $ref: "#/components/parameters/Cursor" }, { $ref: "#/components/parameters/Limit" }]
+      responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/ReviewPage" } } } } }
+  /admin/reviews/{id}:
+    patch:
+      tags: [admin]
+      summary: Edit a review
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      requestBody: { content: { application/json: { schema: { $ref: "#/components/schemas/ReviewInput" } } } }
+      responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Review" } } } } }
+    delete:
+      tags: [admin]
+      summary: Delete a review
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses: { "204": { description: ok } }
+  /admin/reviews/{id}/toggle:
+    post:
+      tags: [admin]
+      summary: Toggle visibility (hide/unhide)
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Review" } } } } }
+  /admin/courses:
+    get:
+      tags: [admin]
+      summary: List courses
+      parameters: [{ $ref: "#/components/parameters/Cursor" }, { $ref: "#/components/parameters/Limit" }]
+      responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/CoursePage" } } } } }
+    post:
+      tags: [admin]
+      summary: Create a course
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/Course" } } } }
+      responses: { "201": { description: created, content: { application/json: { schema: { $ref: "#/components/schemas/Course" } } } } }
+  /admin/courses/{id}:
+    put:
+      tags: [admin]
+      summary: Update a course
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/Course" } } } }
+      responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Course" } } } } }
+    delete:
+      tags: [admin]
+      summary: Delete a course
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses: { "204": { description: ok } }
+  /admin/reports:
+    get:
+      tags: [admin]
+      summary: Report queue
+      parameters: [{ name: status, in: query, schema: { type: string, enum: [open, resolved, all] } }, { $ref: "#/components/parameters/Cursor" }, { $ref: "#/components/parameters/Limit" }]
+      responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/ReportPage" } } } } }
+  /admin/reports/{id}/resolve:
+    post:
+      tags: [admin]
+      summary: Resolve a report
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      requestBody: { content: { application/json: { schema: { type: object, properties: { action: { type: string }, note: { type: string } } } } } }
+      responses: { "200": { description: ok } }
+  /admin/settings:
+    get: { tags: [admin], summary: All settings, responses: { "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Setting" } } } } } } }
+  /admin/settings/{key}:
+    put:
+      tags: [admin]
+      summary: Update a setting
+      parameters: [{ name: key, in: path, required: true, schema: { type: string } }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [value], properties: { value: { type: string } } } } } }
+      responses: { "200": { description: ok } }
+  /admin/selection/sync:
+    post: { tags: [admin], summary: Trigger 一系统 sync job, responses: { "202": { description: queued } } }
+  /admin/reviews/reindex:
+    post: { tags: [admin], summary: Rebuild the Meilisearch review index, responses: { "202": { description: queued } } }
