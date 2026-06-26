@@ -6,6 +6,10 @@
 //! - The server stores only Ed25519 *public* keys — never private keys or secrets.
 //! - Old wallets are merged via a signed challenge (`/wallet/claim`), not by import.
 
+mod dto;
+mod error;
+mod models;
+
 use axum::routing::get;
 use axum::{Json, Router};
 use serde_json::{json, Value};
