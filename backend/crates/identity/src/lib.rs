@@ -8,6 +8,8 @@
 
 mod auth;
 mod email_code;
+mod repo;
+
 
 mod dto;
 mod error;
