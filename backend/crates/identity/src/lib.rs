@@ -8,24 +8,32 @@
 
 mod auth;
 mod email_code;
+mod handlers;
 mod repo;
-
 
 mod dto;
 mod error;
 mod models;
 
-use axum::routing::get;
-use axum::{Json, Router};
-use serde_json::{json, Value};
+use axum::routing::{get, post};
+use axum::Router;
 use shared::AppState;
 
 /// All routes owned by the identity domain.
-pub fn routes(_state: AppState) -> Router {
-    Router::new().route("/api/v2/me", get(me))
-}
-
-async fn me() -> Json<Value> {
-    // TODO(P1): resolve the authenticated account from the bearer session.
-    Json(json!({ "todo": "identity.me" }))
+pub fn routes(state: AppState) -> Router {
+    Router::new()
+        // Auth
+        .route(
+            "/api/v2/auth/email/request-code",
+            post(handlers::request_code),
+        )
+        .route("/api/v2/auth/email/verify", post(handlers::verify_email))
+        .route("/api/v2/auth/refresh", post(handlers::refresh))
+        .route("/api/v2/auth/logout", post(handlers::logout))
+        // Profile
+        .route("/api/v2/me", get(handlers::get_me).patch(handlers::update_me))
+        // Wallet
+        .route("/api/v2/wallet", get(handlers::get_wallet))
+        .route("/api/v2/wallet/bind", post(handlers::bind_key))
+        .with_state(state)
 }

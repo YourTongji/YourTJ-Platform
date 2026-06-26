@@ -5,7 +5,6 @@
 
 use shared::AppError;
 
-/// Errors raised by identity domain logic.
 #[derive(Debug, thiserror::Error)]
 pub enum IdentityError {
     #[error("invalid verification code")]
@@ -31,6 +30,12 @@ pub enum IdentityError {
 
     #[error("key is already bound to this account")]
     KeyAlreadyBound,
+
+    #[error("request too frequent — wait 60 seconds")]
+    RateLimited,
+
+    #[error("only @tongji.edu.cn email addresses are accepted")]
+    InvalidEmailDomain,
 }
 
 impl From<IdentityError> for AppError {
@@ -38,10 +43,12 @@ impl From<IdentityError> for AppError {
         match err {
             IdentityError::InvalidCode
             | IdentityError::CodeExpired
-            | IdentityError::CodeExhausted => AppError::BadRequest(err.to_string()),
+            | IdentityError::CodeExhausted
+            | IdentityError::InvalidEmailDomain => AppError::BadRequest(err.to_string()),
             IdentityError::EmailAlreadyUsed | IdentityError::HandleTaken | IdentityError::KeyAlreadyBound => {
                 AppError::Conflict(err.to_string())
             }
+            IdentityError::RateLimited => AppError::RateLimited,
             IdentityError::InvalidHandle | IdentityError::InvalidPublicKey => {
                 AppError::BadRequest(err.to_string())
             }
