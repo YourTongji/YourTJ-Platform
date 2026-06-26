@@ -18,7 +18,7 @@ pub mod ledger;
 pub mod models;
 pub mod repo;
 
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::Router;
 use shared::AppState;
 
@@ -26,6 +26,7 @@ use shared::AppState;
 pub fn routes(state: AppState) -> Router {
     Router::new()
         .route("/api/v2/wallet", get(handlers::get_wallet))
+        .route("/api/v2/wallet/tip", post(handlers::tip))
         .route("/api/v2/wallet/ledger", get(handlers::get_ledger))
         .route("/api/v2/wallet/ledger/verify", get(handlers::verify_ledger))
         .with_state(state)
