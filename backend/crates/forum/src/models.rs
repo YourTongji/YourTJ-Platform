@@ -39,3 +39,34 @@ pub struct CommentRow {
     pub vote_count: i32,
     pub created_at: DateTime<Utc>,
 }
+
+/// A joined row from `forum.threads` + `identity.accounts` (via author_id).
+#[derive(Debug, Clone, FromRow)]
+pub struct ThreadRowJoined {
+    pub id: i64,
+    pub board_id: i64,
+    pub author_id: i64,
+    pub title: String,
+    pub body: Option<String>,
+    pub reply_count: i32,
+    pub vote_count: i32,
+    pub hot_score: Option<f64>,
+    pub status: String,
+    pub created_at: DateTime<Utc>,
+    pub last_activity_at: DateTime<Utc>,
+    pub author_handle: String,
+}
+
+/// A joined row from `forum.comments` + `identity.accounts` (via author_id).
+#[derive(Debug, Clone, FromRow)]
+pub struct CommentRowJoined {
+    pub id: i64,
+    pub thread_id: i64,
+    pub parent_id: Option<i64>,
+    pub path: Option<String>,
+    pub author_id: i64,
+    pub body: String,
+    pub vote_count: i32,
+    pub created_at: DateTime<Utc>,
+    pub author_handle: String,
+}
