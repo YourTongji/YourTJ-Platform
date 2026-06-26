@@ -39,10 +39,7 @@ pub async fn run() -> anyhow::Result<()> {
 
 /// Compose the full application router from per-domain routers.
 fn build_router(state: AppState) -> Router {
-    let cors = CorsLayer::new()
-        .allow_origin(Any)
-        .allow_methods(Any)
-        .allow_headers(Any);
+    let cors = CorsLayer::new().allow_origin(Any).allow_methods(Any).allow_headers(Any);
 
     let request_id_layer = SetRequestIdLayer::x_request_id(MakeRequestUuid);
 
@@ -66,10 +63,6 @@ async fn health() -> Json<Value> {
 }
 
 fn init_tracing() {
-    let filter =
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-    tracing_subscriber::fmt()
-        .with_env_filter(filter)
-        .with_target(true)
-        .init();
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    tracing_subscriber::fmt().with_env_filter(filter).with_target(true).init();
 }

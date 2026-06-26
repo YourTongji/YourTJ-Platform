@@ -20,6 +20,8 @@ pub async fn create_test_app() -> (PgPool, axum::Router) {
         jwt_secret: "integration-test-secret-32bytes!".into(),
         jwt_ttl: 900,
         refresh_ttl: 604800,
+        meili_url: String::new(),
+        meili_master_key: String::new(),
     };
 
     let router = credit::routes(state);

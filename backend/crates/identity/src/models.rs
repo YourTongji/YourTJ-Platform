@@ -7,10 +7,12 @@ use sqlx::FromRow;
 #[derive(Debug, Clone, FromRow)]
 pub struct AccountRow {
     pub id: i64,
+    #[allow(dead_code)]
     pub email: String,
     pub handle: String,
     pub avatar_url: Option<String>,
     pub role: String,
+    #[allow(dead_code)]
     pub status: String,
     pub created_at: DateTime<Utc>,
 }
@@ -18,8 +20,10 @@ pub struct AccountRow {
 /// A row from `identity.email_codes`.
 #[derive(Debug, Clone, FromRow)]
 pub struct EmailCodeRow {
+    #[allow(dead_code)]
     pub email: String,
     pub code_hash: String,
+    #[allow(dead_code)]
     pub expires_at: DateTime<Utc>,
     pub attempts: i32,
 }
@@ -36,6 +40,7 @@ pub struct SessionRow {
 
 /// A row from `identity.account_keys`.
 #[derive(Debug, Clone, FromRow)]
+#[allow(dead_code)]
 pub struct AccountKeyRow {
     pub account_id: i64,
     pub public_key: String,

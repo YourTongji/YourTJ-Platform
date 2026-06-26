@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Identity domain: campus-email accounts, verification codes, JWT sessions, and
 //! the account-bound Ed25519 keys used to sign credit operations.
 //!
