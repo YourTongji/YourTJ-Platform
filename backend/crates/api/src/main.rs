@@ -25,6 +25,8 @@ async fn main() -> anyhow::Result<()> {
         jwt_secret: config.jwt_secret.clone(),
         jwt_ttl: config.jwt_ttl,
         refresh_ttl: config.refresh_ttl,
+        meili_url: config.meili_url.clone(),
+        meili_master_key: config.meili_master_key.clone(),
     };
 
     let app = build_router(state);

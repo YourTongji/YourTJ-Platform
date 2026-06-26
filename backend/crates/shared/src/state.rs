@@ -18,4 +18,10 @@ pub struct AppState {
 
     /// Refresh token lifetime in seconds (default: 604800 = 7 days).
     pub refresh_ttl: u64,
+
+    /// Meilisearch server URL (e.g. http://localhost:7700).
+    pub meili_url: String,
+
+    /// Meilisearch master key for index management and search.
+    pub meili_master_key: String,
 }

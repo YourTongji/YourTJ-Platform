@@ -178,6 +178,50 @@ pub async fn list_departments(
     Ok(Json(items))
 }
 
+// Global search handler ---------------------------------------------------
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchQuery {
+    pub q: String,
+    #[serde(default = "default_search_limit")]
+    pub limit: usize,
+}
+
+fn default_search_limit() -> usize {
+    10
+}
+
+/// GET /api/v2/search — global Meilisearch search across courses and reviews.
+pub async fn global_search(
+    State(state): State<AppState>,
+    Query(params): Query<SearchQuery>,
+) -> AppResult<Json<Vec<serde_json::Value>>> {
+    use crate::meili;
+
+    let results = meili::search_courses_and_reviews(
+        &state.meili_url,
+        &state.meili_master_key,
+        &params.q,
+        params.limit,
+    )
+    .await;
+
+    let items: Vec<serde_json::Value> = results
+        .into_iter()
+        .map(|r| {
+            serde_json::json!({
+                "id": r.id,
+                "name": r.name,
+                "code": r.code,
+                "kind": r.kind,
+            })
+        })
+        .collect();
+
+    Ok(Json(items))
+}
+
 // Helpers ---------------------------------------------------------------
 
 fn row_to_course_dto(r: repo::CourseWithTeacherRow, _teacher_name: Option<String>) -> CourseDto {

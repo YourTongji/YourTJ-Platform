@@ -8,6 +8,7 @@
 pub mod dto;
 pub mod error;
 pub(crate) mod handlers;
+pub mod meili;
 pub mod models;
 pub mod pinyin;
 pub mod repo;
@@ -27,8 +28,10 @@ pub fn routes(state: AppState) -> Router {
         .route("/api/v2/courses/{id}", get(handlers::get_course))
         .route("/api/v2/courses/code/{code}", get(handlers::get_course_by_code))
         .route("/api/v2/courses/{id}/related", get(handlers::list_related_courses))
-        .route("/api/v2/courses/{id}/ai-summary", get(handlers::get_ai_summary))
         .route("/api/v2/departments", get(handlers::list_departments))
+        .route("/api/v2/courses/{id}/ai-summary", get(handlers::get_ai_summary))
+        // --- global search ---
+        .route("/api/v2/search", get(handlers::global_search))
         // --- selection (选课) mirror ---
         .route("/api/v2/selection/calendars", get(selection_handlers::selection_calendars))
         .route("/api/v2/selection/campuses", get(selection_handlers::selection_campuses))
