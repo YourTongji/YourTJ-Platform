@@ -9,6 +9,8 @@ use std::net::SocketAddr;
 
 use axum::Router;
 use shared::AppState;
+use tower_http::cors::{Any, CorsLayer};
+use tower_http::request_id::{MakeRequestUuid, SetRequestIdLayer};
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
 
@@ -38,8 +40,11 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Compose the full application router from per-domain routers.
 fn build_router(state: AppState) -> Router {
+    let cors = CorsLayer::new().allow_origin(Any).allow_methods(Any).allow_headers(Any);
+
+    let request_id_layer = SetRequestIdLayer::x_request_id(MakeRequestUuid);
+
     platform::routes(state.clone())
         .merge(admin::routes(state.clone()))
         .merge(identity::routes(state.clone()))
@@ -47,6 +52,8 @@ fn build_router(state: AppState) -> Router {
         .merge(reviews::routes(state.clone()))
         .merge(credit::routes(state.clone()))
         .merge(forum::routes(state.clone()))
+        .layer(cors)
+        .layer(request_id_layer)
         .layer(TraceLayer::new_for_http())
 }
 
