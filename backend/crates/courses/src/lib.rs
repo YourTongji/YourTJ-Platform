@@ -7,6 +7,8 @@
 pub mod dto;
 pub mod error;
 pub(crate) mod models;
+pub(crate) mod repo;
+pub(crate) mod selection_repo;
 pub mod selection;
 
 use axum::routing::get;
