@@ -4,6 +4,9 @@
 //! Performance contract: realtime search is served by Meilisearch (pinyin /
 //! initials / alias fields), never by `LIKE %q%` over the DB. Browse/list and
 //! detail endpoints are cached (short TTL + SWR) and invalidated by version bump.
+pub mod dto;
+pub mod error;
+pub(crate) mod models;
 
 use axum::routing::get;
 use axum::{Json, Router};
