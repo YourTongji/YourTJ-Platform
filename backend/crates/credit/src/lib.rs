@@ -11,35 +11,15 @@
 //! the account key for tip/bounty/escrow). Balance is a derived cache, never the
 //! source of truth. Appends are serialized (advisory lock) to keep the chain linear.
 
-use axum::routing::get;
-use axum::{Json, Router};
-use serde_json::{json, Value};
+pub mod dto;
+pub mod error;
+pub mod ledger;
+pub mod models;
+
+use axum::Router;
 use shared::AppState;
 
 /// All routes owned by the credit domain.
 pub fn routes(_state: AppState) -> Router {
     Router::new()
-        .route("/api/v2/wallet", get(wallet))
-        .route("/api/v2/wallet/ledger/verify", get(verify_ledger))
-        .route("/api/v2/credit/tasks", get(tasks))
-        .route("/api/v2/credit/products", get(products))
-}
-
-async fn wallet() -> Json<Value> {
-    Json(json!({ "todo": "credit.wallet" }))
-}
-
-async fn tasks() -> Json<Value> {
-    // TODO(P2): escrow task square; money via ledger escrow_hold/release only.
-    Json(json!({ "todo": "credit.tasks" }))
-}
-
-async fn products() -> Json<Value> {
-    // TODO(P2): product listings; purchase via ledger escrow.
-    Json(json!({ "todo": "credit.products" }))
-}
-
-async fn verify_ledger() -> Json<Value> {
-    // TODO(P2): recompute the hash chain + verify each signature; return latest seq/hash.
-    Json(json!({ "todo": "credit.ledger.verify" }))
 }
