@@ -7,6 +7,7 @@
 pub mod dto;
 pub mod error;
 pub(crate) mod models;
+pub mod selection;
 
 use axum::routing::get;
 use axum::{Json, Router};
