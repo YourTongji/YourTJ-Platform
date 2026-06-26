@@ -280,6 +280,21 @@ checksum = "217698eaf96b4a3f0bc4f3662aaa55bdf913cd54d7204591faa790070c6d0853"
 [[package]]
 name = "credit"
 version = "0.1.0"
+dependencies = [
+ "axum",
+ "base64",
+ "chrono",
+ "hex",
+ "ring",
+ "serde",
+ "serde_json",
+ "sha2",
+ "shared",
+ "sqlx",
+ "thiserror",
+ "tracing",
+ "uuid",
+]
 
 [[package]]
 name = "crossbeam-queue"
@@ -436,9 +451,13 @@ name = "forum"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "chrono",
  "serde",
  "serde_json",
  "shared",
+ "sqlx",
+ "thiserror",
+ "uuid",
 ]
 
 [[package]]
