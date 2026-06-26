@@ -2,6 +2,7 @@
 //! tracing, server) and composes one router per domain crate. Business logic
 //! lives in the domain crates, never here.
 
+mod admin;
 mod platform;
 
 use std::net::SocketAddr;
@@ -38,6 +39,7 @@ async fn main() -> anyhow::Result<()> {
 /// Compose the full application router from per-domain routers.
 fn build_router(state: AppState) -> Router {
     platform::routes(state.clone())
+        .merge(admin::routes(state.clone()))
         .merge(identity::routes(state.clone()))
         .merge(courses::routes(state.clone()))
         .merge(reviews::routes(state.clone()))
