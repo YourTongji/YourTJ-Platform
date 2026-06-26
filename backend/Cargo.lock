@@ -242,12 +242,15 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
+ "base64",
  "chrono",
+ "pinyin",
  "serde",
  "serde_json",
  "shared",
  "sqlx",
  "thiserror",
+ "tokio",
 ]
 
 [[package]]
@@ -277,12 +280,6 @@ checksum = "217698eaf96b4a3f0bc4f3662aaa55bdf913cd54d7204591faa790070c6d0853"
 [[package]]
 name = "credit"
 version = "0.1.0"
-dependencies = [
- "axum",
- "serde",
- "serde_json",
- "shared",
-]
 
 [[package]]
 name = "crossbeam-queue"
@@ -804,6 +801,7 @@ dependencies = [
 name = "identity"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "axum",
  "base64",
  "chrono",
@@ -816,6 +814,9 @@ dependencies = [
  "shared",
  "sqlx",
  "thiserror",
+ "tokio",
+ "tower",
+ "tracing",
  "uuid",
 ]
 
@@ -1132,6 +1133,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 
 [[package]]
+name = "pinyin"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e225f595052d9c46045755be4b8d7950b6d9f3c33e0c0b74ba58f11bbfa8c64b"
+
+[[package]]
 name = "pkcs1"
 version = "0.7.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1282,9 +1289,14 @@ name = "reviews"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "chrono",
  "serde",
  "serde_json",
  "shared",
+ "sqlx",
+ "thiserror",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]
