@@ -38,3 +38,22 @@ pub struct ReviewReportRow {
     pub admin_note: Option<String>,
     pub created_at: DateTime<Utc>,
 }
+
+/// Joined row: review + author handle + avatar for list queries.
+#[derive(Debug, Clone, FromRow)]
+pub(crate) struct ReviewWithAuthorRow {
+    pub id: i64,
+    pub course_id: i64,
+    pub account_id: i64,
+    pub rating: i32,
+    pub comment: Option<String>,
+    pub score: Option<String>,
+    pub semester: Option<String>,
+    pub approve_count: i32,
+    pub disapprove_count: i32,
+    pub status: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub handle: String,
+    pub avatar_url: Option<String>,
+}

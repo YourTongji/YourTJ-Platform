@@ -8,9 +8,10 @@
 // TODO: remove when all types are in use.
 #![allow(dead_code)]
 
-mod dto;
-mod error;
-mod models;
+pub(crate) mod dto;
+pub(crate) mod error;
+pub(crate) mod models;
+pub(crate) mod repo;
 
 use axum::Router;
 use shared::AppState;
