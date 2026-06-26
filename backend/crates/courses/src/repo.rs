@@ -24,6 +24,22 @@ pub(crate) struct CourseWithTeacherRow {
     pub teacher_name: Option<String>,
 }
 
+// Reusable column list for CourseWithTeacherRow queries (avoids column mismatch
+// with `SELECT c.*` which would pick up `is_legacy` / `is_icu`).
+const COURSE_COLS: &str = "c.id, c.code, c.name, c.credit, c.department, c.teacher_id, \
+     c.review_count, c.review_avg, c.name_pinyin, c.name_initials, c.search_keywords";
+
+const LIST_COURSE_SQL_BASE: &str = " \
+     SELECT {course_cols}, t.name AS teacher_name \
+     FROM courses.courses c \
+     LEFT JOIN courses.teachers t ON c.teacher_id = t.id \
+    ";
+
+/// Compose a concrete SELECT by substituting the column list.
+fn list_course_sql() -> String {
+    LIST_COURSE_SQL_BASE.replace("{course_cols}", COURSE_COLS)
+}
+
 /// List distinct, non-null departments from `courses.courses`.
 pub async fn list_departments(pool: &PgPool) -> Result<Vec<DepartmentRow>, CoursesError> {
     let rows = sqlx::query_as::<_, DepartmentRow>(
@@ -47,185 +63,82 @@ pub async fn list_courses(
     let limit = limit.min(100);
     let fetch_limit = limit + 1; // fetch one extra to detect has_more
 
+    let base_sql = list_course_sql();
+
     let rows: Vec<CourseWithTeacherRow> = match sort {
         "hot" => {
             if let (Some(dept), Some(cursor)) = (dept, cursor) {
-                sqlx::query_as(
-                    "SELECT c.*, t.name AS teacher_name \
-                     FROM courses.courses c \
-                     LEFT JOIN courses.teachers t ON c.teacher_id = t.id \
-                     WHERE c.department = $1 AND c.id < $2 \
-                     ORDER BY c.review_count DESC, c.id DESC \
-                     LIMIT $3",
-                )
-                .bind(dept)
-                .bind(cursor)
-                .bind(fetch_limit)
-                .fetch_all(pool)
-                .await?
+                let sql = format!("{base_sql} WHERE c.department = $1 AND c.id < $2 ORDER BY c.review_count DESC, c.id DESC LIMIT $3");
+                sqlx::query_as(&sql)
+                    .bind(dept)
+                    .bind(cursor)
+                    .bind(fetch_limit)
+                    .fetch_all(pool)
+                    .await?
             } else if let Some(dept) = dept {
-                sqlx::query_as(
-                    "SELECT c.*, t.name AS teacher_name \
-                     FROM courses.courses c \
-                     LEFT JOIN courses.teachers t ON c.teacher_id = t.id \
-                     WHERE c.department = $1 \
-                     ORDER BY c.review_count DESC, c.id DESC \
-                     LIMIT $2",
-                )
-                .bind(dept)
-                .bind(fetch_limit)
-                .fetch_all(pool)
-                .await?
+                let sql = format!("{base_sql} WHERE c.department = $1 ORDER BY c.review_count DESC, c.id DESC LIMIT $2");
+                sqlx::query_as(&sql).bind(dept).bind(fetch_limit).fetch_all(pool).await?
             } else if let Some(cursor) = cursor {
-                sqlx::query_as(
-                    "SELECT c.*, t.name AS teacher_name \
-                     FROM courses.courses c \
-                     LEFT JOIN courses.teachers t ON c.teacher_id = t.id \
-                     WHERE c.id < $1 \
-                     ORDER BY c.review_count DESC, c.id DESC \
-                     LIMIT $2",
-                )
-                .bind(cursor)
-                .bind(fetch_limit)
-                .fetch_all(pool)
-                .await?
+                let sql = format!(
+                    "{base_sql} WHERE c.id < $1 ORDER BY c.review_count DESC, c.id DESC LIMIT $2"
+                );
+                sqlx::query_as(&sql).bind(cursor).bind(fetch_limit).fetch_all(pool).await?
             } else {
-                sqlx::query_as(
-                    "SELECT c.*, t.name AS teacher_name \
-                     FROM courses.courses c \
-                     LEFT JOIN courses.teachers t ON c.teacher_id = t.id \
-                     ORDER BY c.review_count DESC, c.id DESC \
-                     LIMIT $1",
-                )
-                .bind(fetch_limit)
-                .fetch_all(pool)
-                .await?
+                let sql = format!("{base_sql} ORDER BY c.review_count DESC, c.id DESC LIMIT $1");
+                sqlx::query_as(&sql).bind(fetch_limit).fetch_all(pool).await?
             }
         }
         "rating" => {
             if let (Some(dept), Some(cursor)) = (dept, cursor) {
-                sqlx::query_as(
-                    "SELECT c.*, t.name AS teacher_name \
-                     FROM courses.courses c \
-                     LEFT JOIN courses.teachers t ON c.teacher_id = t.id \
-                     WHERE c.department = $1 AND c.id < $2 \
-                     ORDER BY c.review_avg DESC NULLS LAST, c.id DESC \
-                     LIMIT $3",
-                )
-                .bind(dept)
-                .bind(cursor)
-                .bind(fetch_limit)
-                .fetch_all(pool)
-                .await?
+                let sql = format!("{base_sql} WHERE c.department = $1 AND c.id < $2 ORDER BY c.review_avg DESC NULLS LAST, c.id DESC LIMIT $3");
+                sqlx::query_as(&sql)
+                    .bind(dept)
+                    .bind(cursor)
+                    .bind(fetch_limit)
+                    .fetch_all(pool)
+                    .await?
             } else if let Some(dept) = dept {
-                sqlx::query_as(
-                    "SELECT c.*, t.name AS teacher_name \
-                     FROM courses.courses c \
-                     LEFT JOIN courses.teachers t ON c.teacher_id = t.id \
-                     WHERE c.department = $1 \
-                     ORDER BY c.review_avg DESC NULLS LAST, c.id DESC \
-                     LIMIT $2",
-                )
-                .bind(dept)
-                .bind(fetch_limit)
-                .fetch_all(pool)
-                .await?
+                let sql = format!("{base_sql} WHERE c.department = $1 ORDER BY c.review_avg DESC NULLS LAST, c.id DESC LIMIT $2");
+                sqlx::query_as(&sql).bind(dept).bind(fetch_limit).fetch_all(pool).await?
             } else if let Some(cursor) = cursor {
-                sqlx::query_as(
-                    "SELECT c.*, t.name AS teacher_name \
-                     FROM courses.courses c \
-                     LEFT JOIN courses.teachers t ON c.teacher_id = t.id \
-                     WHERE c.id < $1 \
-                     ORDER BY c.review_avg DESC NULLS LAST, c.id DESC \
-                     LIMIT $2",
-                )
-                .bind(cursor)
-                .bind(fetch_limit)
-                .fetch_all(pool)
-                .await?
+                let sql = format!("{base_sql} WHERE c.id < $1 ORDER BY c.review_avg DESC NULLS LAST, c.id DESC LIMIT $2");
+                sqlx::query_as(&sql).bind(cursor).bind(fetch_limit).fetch_all(pool).await?
             } else {
-                sqlx::query_as(
-                    "SELECT c.*, t.name AS teacher_name \
-                     FROM courses.courses c \
-                     LEFT JOIN courses.teachers t ON c.teacher_id = t.id \
-                     ORDER BY c.review_avg DESC NULLS LAST, c.id DESC \
-                     LIMIT $1",
-                )
-                .bind(fetch_limit)
-                .fetch_all(pool)
-                .await?
+                let sql =
+                    format!("{base_sql} ORDER BY c.review_avg DESC NULLS LAST, c.id DESC LIMIT $1");
+                sqlx::query_as(&sql).bind(fetch_limit).fetch_all(pool).await?
             }
         }
         _ => {
             // "new" — default
             if let (Some(dept), Some(cursor)) = (dept, cursor) {
-                sqlx::query_as(
-                    "SELECT c.*, t.name AS teacher_name \
-                     FROM courses.courses c \
-                     LEFT JOIN courses.teachers t ON c.teacher_id = t.id \
-                     WHERE c.department = $1 AND c.id < $2 \
-                     ORDER BY c.id DESC \
-                     LIMIT $3",
-                )
-                .bind(dept)
-                .bind(cursor)
-                .bind(fetch_limit)
-                .fetch_all(pool)
-                .await?
+                let sql = format!(
+                    "{base_sql} WHERE c.department = $1 AND c.id < $2 ORDER BY c.id DESC LIMIT $3"
+                );
+                sqlx::query_as(&sql)
+                    .bind(dept)
+                    .bind(cursor)
+                    .bind(fetch_limit)
+                    .fetch_all(pool)
+                    .await?
             } else if let Some(dept) = dept {
-                sqlx::query_as(
-                    "SELECT c.*, t.name AS teacher_name \
-                     FROM courses.courses c \
-                     LEFT JOIN courses.teachers t ON c.teacher_id = t.id \
-                     WHERE c.department = $1 \
-                     ORDER BY c.id DESC \
-                     LIMIT $2",
-                )
-                .bind(dept)
-                .bind(fetch_limit)
-                .fetch_all(pool)
-                .await?
+                let sql = format!("{base_sql} WHERE c.department = $1 ORDER BY c.id DESC LIMIT $2");
+                sqlx::query_as(&sql).bind(dept).bind(fetch_limit).fetch_all(pool).await?
             } else if let Some(cursor) = cursor {
-                sqlx::query_as(
-                    "SELECT c.*, t.name AS teacher_name \
-                     FROM courses.courses c \
-                     LEFT JOIN courses.teachers t ON c.teacher_id = t.id \
-                     WHERE c.id < $1 \
-                     ORDER BY c.id DESC \
-                     LIMIT $2",
-                )
-                .bind(cursor)
-                .bind(fetch_limit)
-                .fetch_all(pool)
-                .await?
+                let sql = format!("{base_sql} WHERE c.id < $1 ORDER BY c.id DESC LIMIT $2");
+                sqlx::query_as(&sql).bind(cursor).bind(fetch_limit).fetch_all(pool).await?
             } else {
-                sqlx::query_as(
-                    "SELECT c.*, t.name AS teacher_name \
-                     FROM courses.courses c \
-                     LEFT JOIN courses.teachers t ON c.teacher_id = t.id \
-                     ORDER BY c.id DESC \
-                     LIMIT $1",
-                )
-                .bind(fetch_limit)
-                .fetch_all(pool)
-                .await?
+                let sql = format!("{base_sql} ORDER BY c.id DESC LIMIT $1");
+                sqlx::query_as(&sql).bind(fetch_limit).fetch_all(pool).await?
             }
         }
     };
 
     let has_more = rows.len() > limit as usize;
-    let next_cursor = if has_more {
-        // The cursor is the last item's id (the one we'll return, not the extra one)
-        rows.get(limit as usize - 1).map(|r| r.id)
-    } else {
-        None
-    };
+    let next_cursor = if has_more { rows.get(limit as usize - 1).map(|r| r.id) } else { None };
 
-    let items: Vec<CourseWithTeacherRow> = if has_more {
-        rows.into_iter().take(limit as usize).collect()
-    } else {
-        rows
-    };
+    let items: Vec<CourseWithTeacherRow> =
+        if has_more { rows.into_iter().take(limit as usize).collect() } else { rows };
 
     Ok((items, next_cursor))
 }
@@ -235,15 +148,9 @@ pub async fn find_course_by_id(
     pool: &PgPool,
     id: i64,
 ) -> Result<Option<CourseWithTeacherRow>, CoursesError> {
-    let row = sqlx::query_as::<_, CourseWithTeacherRow>(
-        "SELECT c.*, t.name AS teacher_name \
-         FROM courses.courses c \
-         LEFT JOIN courses.teachers t ON c.teacher_id = t.id \
-         WHERE c.id = $1",
-    )
-    .bind(id)
-    .fetch_optional(pool)
-    .await?;
+    let base_sql = list_course_sql();
+    let sql = format!("{base_sql} WHERE c.id = $1");
+    let row = sqlx::query_as::<_, CourseWithTeacherRow>(&sql).bind(id).fetch_optional(pool).await?;
     Ok(row)
 }
 
@@ -252,15 +159,10 @@ pub async fn find_course_by_code(
     pool: &PgPool,
     code: &str,
 ) -> Result<Option<CourseWithTeacherRow>, CoursesError> {
-    let row = sqlx::query_as::<_, CourseWithTeacherRow>(
-        "SELECT c.*, t.name AS teacher_name \
-         FROM courses.courses c \
-         LEFT JOIN courses.teachers t ON c.teacher_id = t.id \
-         WHERE c.code = $1",
-    )
-    .bind(code)
-    .fetch_optional(pool)
-    .await?;
+    let base_sql = list_course_sql();
+    let sql = format!("{base_sql} WHERE c.code = $1");
+    let row =
+        sqlx::query_as::<_, CourseWithTeacherRow>(&sql).bind(code).fetch_optional(pool).await?;
     Ok(row)
 }
 
@@ -270,48 +172,43 @@ pub async fn list_related_courses(
     pool: &PgPool,
     id: i64,
 ) -> Result<Vec<CourseWithTeacherRow>, CoursesError> {
-    let rows = sqlx::query_as::<_, CourseWithTeacherRow>(
-        "SELECT c.*, t.name AS teacher_name \
-         FROM courses.courses c \
-         LEFT JOIN courses.teachers t ON c.teacher_id = t.id \
+    let base_sql = list_course_sql();
+    let sql = format!(
+        "{base_sql} \
          WHERE c.id != $1 \
-           AND (c.department = (SELECT department FROM courses.courses WHERE id = $1) \
-                OR c.teacher_id = (SELECT teacher_id FROM courses.courses WHERE id = $1)) \
+           AND (c.department = (SELECT department FROM courses.courses WHERE id = $2) \
+                OR c.teacher_id = (SELECT teacher_id FROM courses.courses WHERE id = $3)) \
          ORDER BY c.review_count DESC \
-         LIMIT 5",
-    )
-    .bind(id)
-    .bind(id)
-    .bind(id)
-    .fetch_all(pool)
-    .await?;
+         LIMIT 5"
+    );
+    let rows = sqlx::query_as::<_, CourseWithTeacherRow>(&sql)
+        .bind(id)
+        .bind(id)
+        .bind(id)
+        .fetch_all(pool)
+        .await?;
     Ok(rows)
 }
 
 /// All aliases for a course.
-pub async fn find_aliases(
-    pool: &PgPool,
-    course_id: i64,
-) -> Result<Vec<String>, CoursesError> {
-    let rows: Vec<(String,)> = sqlx::query_as(
-        "SELECT alias FROM courses.course_aliases WHERE course_id = $1",
-    )
-    .bind(course_id)
-    .fetch_all(pool)
-    .await?;
+pub async fn find_aliases(pool: &PgPool, course_id: i64) -> Result<Vec<String>, CoursesError> {
+    let rows: Vec<(String,)> =
+        sqlx::query_as("SELECT alias FROM courses.course_aliases WHERE course_id = $1")
+            .bind(course_id)
+            .fetch_all(pool)
+            .await?;
     Ok(rows.into_iter().map(|(a,)| a).collect())
 }
 
-/// All teachers for a course (there may be multiple teachers for a single course
-/// via the relationship through the join table or our simplified model — in the
-/// current schema we keep it simple with just the teacher_id FOREIGN KEY, but
-/// the API contract allows a Vec for future expansion).
+/// All teachers for a course — uses explicit column list to avoid the `tid` column
+/// that exists in the DB but not in our struct.
 pub async fn find_teachers_by_course(
     pool: &PgPool,
     course_id: i64,
 ) -> Result<Vec<TeacherRow>, CoursesError> {
     let rows = sqlx::query_as::<_, TeacherRow>(
-        "SELECT t.* FROM courses.teachers t \
+        "SELECT t.id, t.name, t.title, t.department, t.name_pinyin, t.name_initials \
+         FROM courses.teachers t \
          JOIN courses.courses c ON c.teacher_id = t.id \
          WHERE c.id = $1",
     )

@@ -4,37 +4,60 @@
 //! Performance contract: realtime search is served by Meilisearch (pinyin /
 //! initials / alias fields), never by `LIKE %q%` over the DB. Browse/list and
 //! detail endpoints are cached (short TTL + SWR) and invalidated by version bump.
+
 pub mod dto;
 pub mod error;
+pub(crate) mod handlers;
 pub(crate) mod models;
 pub(crate) mod repo;
-pub(crate) mod selection_repo;
 pub mod selection;
+pub(crate) mod selection_handlers;
+pub(crate) mod selection_repo;
 
 use axum::routing::get;
-use axum::{Json, Router};
-use serde_json::{json, Value};
+use axum::Router;
 use shared::AppState;
 
-/// All routes owned by the courses domain.
-pub fn routes(_state: AppState) -> Router {
+/// All routes owned by the courses domain, merged under the Axum router.
+pub fn routes(state: AppState) -> Router {
     Router::new()
-        .route("/api/v2/courses", get(list))
-        .route("/api/v2/search", get(search))
-        .route("/api/v2/selection/calendars", get(selection_calendars))
-}
-
-async fn list() -> Json<Value> {
-    // TODO(P2): cursor-paginated browse with cache.
-    Json(json!({ "todo": "courses.list" }))
-}
-
-async fn search() -> Json<Value> {
-    // TODO(P2): proxy to Meilisearch (courses + reviews indices).
-    Json(json!({ "todo": "courses.search" }))
-}
-
-async fn selection_calendars() -> Json<Value> {
-    // TODO(P2): 选课 (PK) mirror — read from the `selection` schema.
-    Json(json!({ "todo": "selection.calendars" }))
+        // --- courses catalogue ---
+        .route("/api/v2/courses", get(handlers::list_courses))
+        .route("/api/v2/courses/{id}", get(handlers::get_course))
+        .route("/api/v2/courses/code/{code}", get(handlers::get_course_by_code))
+        .route("/api/v2/courses/{id}/related", get(handlers::list_related_courses))
+        .route("/api/v2/courses/{id}/ai-summary", get(handlers::get_ai_summary))
+        .route("/api/v2/departments", get(handlers::list_departments))
+        // --- selection (选课) mirror ---
+        .route("/api/v2/selection/calendars", get(selection_handlers::selection_calendars))
+        .route("/api/v2/selection/campuses", get(selection_handlers::selection_campuses))
+        .route("/api/v2/selection/faculties", get(selection_handlers::selection_faculties))
+        .route("/api/v2/selection/grades", get(selection_handlers::selection_grades))
+        .route("/api/v2/selection/majors", get(selection_handlers::selection_majors))
+        .route(
+            "/api/v2/selection/course-natures",
+            get(selection_handlers::selection_course_natures),
+        )
+        .route(
+            "/api/v2/selection/courses-by-major",
+            get(selection_handlers::selection_courses_by_major),
+        )
+        .route(
+            "/api/v2/selection/courses-by-nature",
+            get(selection_handlers::selection_courses_by_nature),
+        )
+        .route(
+            "/api/v2/selection/courses/search",
+            get(selection_handlers::selection_courses_search),
+        )
+        .route(
+            "/api/v2/selection/courses/{code}",
+            get(selection_handlers::selection_course_by_code),
+        )
+        .route(
+            "/api/v2/selection/courses/{code}/timeslots",
+            get(selection_handlers::selection_courses_by_time),
+        )
+        .route("/api/v2/selection/latest-update", get(selection_handlers::selection_latest_update))
+        .with_state(state)
 }
