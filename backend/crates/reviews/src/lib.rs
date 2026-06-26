@@ -5,8 +5,9 @@
 //! - `courses.review_count` / `review_avg` are maintained incrementally on write —
 //!   never recomputed with `AVG()` on the read path.
 
-// TODO: remove once D5 (admin handlers) is complete.
 #![allow(dead_code)]
+
+mod admin_handlers;
 pub(crate) mod dto;
 pub(crate) mod error;
 mod handlers;
@@ -20,6 +21,7 @@ use shared::AppState;
 /// All routes owned by the reviews domain.
 pub fn routes(state: AppState) -> Router {
     Router::new()
+        // Public
         .route(
             "/api/v2/courses/{id}/reviews",
             get(handlers::list_reviews).post(handlers::create_review),
@@ -28,5 +30,14 @@ pub fn routes(state: AppState) -> Router {
         .route("/api/v2/reviews/{id}/like", post(handlers::like_review))
         .route("/api/v2/reviews/{id}/unlike", post(handlers::unlike_review))
         .route("/api/v2/reviews/{id}/report", post(handlers::report_review))
+        // Admin
+        .route("/api/v2/admin/reviews", get(admin_handlers::admin_list_reviews))
+        .route(
+            "/api/v2/admin/reviews/{id}",
+            patch(admin_handlers::admin_edit_review).delete(admin_handlers::admin_delete_review),
+        )
+        .route("/api/v2/admin/reviews/{id}/toggle", post(admin_handlers::admin_toggle_review))
+        .route("/api/v2/admin/reports", get(admin_handlers::admin_list_reports))
+        .route("/api/v2/admin/reports/{id}/resolve", post(admin_handlers::admin_resolve_report))
         .with_state(state)
 }
