@@ -21,9 +21,10 @@ pub async fn list_calendars(pool: &PgPool) -> Result<Vec<CalendarRow>, CoursesEr
 
 /// List all campuses.
 pub async fn list_campuses(pool: &PgPool) -> Result<Vec<CampusRow>, CoursesError> {
-    let rows = sqlx::query_as::<_, CampusRow>("SELECT id, name FROM selection.campuses ORDER BY id")
-        .fetch_all(pool)
-        .await?;
+    let rows =
+        sqlx::query_as::<_, CampusRow>("SELECT id, name FROM selection.campuses ORDER BY id")
+            .fetch_all(pool)
+            .await?;
     Ok(rows)
 }
 
@@ -38,10 +39,7 @@ pub async fn list_faculties(pool: &PgPool) -> Result<Vec<FacultyRow>, CoursesErr
 }
 
 /// List distinct grades available for a given calendar (from major_courses).
-pub async fn list_grades(
-    pool: &PgPool,
-    calendar_id: i64,
-) -> Result<Vec<String>, CoursesError> {
+pub async fn list_grades(pool: &PgPool, calendar_id: i64) -> Result<Vec<String>, CoursesError> {
     let rows: Vec<(Option<String>,)> = sqlx::query_as(
         "SELECT DISTINCT mc.grade \
          FROM selection.major_courses mc \
@@ -56,10 +54,7 @@ pub async fn list_grades(
 }
 
 /// List majors for a given grade.
-pub async fn list_majors(
-    pool: &PgPool,
-    grade: &str,
-) -> Result<Vec<MajorRow>, CoursesError> {
+pub async fn list_majors(pool: &PgPool, grade: &str) -> Result<Vec<MajorRow>, CoursesError> {
     let rows = sqlx::query_as::<_, MajorRow>(
         "SELECT id, name, faculty_id, grade FROM selection.majors WHERE grade = $1 ORDER BY id",
     )
@@ -71,10 +66,11 @@ pub async fn list_majors(
 
 /// List all course natures (课程性质).
 pub async fn list_course_natures(pool: &PgPool) -> Result<Vec<CourseNatureRow>, CoursesError> {
-    let rows =
-        sqlx::query_as::<_, CourseNatureRow>("SELECT id, name FROM selection.course_natures ORDER BY id")
-            .fetch_all(pool)
-            .await?;
+    let rows = sqlx::query_as::<_, CourseNatureRow>(
+        "SELECT id, name FROM selection.course_natures ORDER BY id",
+    )
+    .fetch_all(pool)
+    .await?;
     Ok(rows)
 }
 

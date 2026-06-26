@@ -16,6 +16,7 @@ pub async fn try_connect() -> Option<PgPool> {
 /// Seed minimal test data into the courses schema. Idempotent — uses ON CONFLICT
 /// DO NOTHING so repeated calls are safe. Tables use GENERATED ALWAYS AS IDENTITY
 /// so we use OVERRIDING SYSTEM VALUE for explicit primary-key inserts.
+#[allow(dead_code)]
 pub async fn seed_courses_data(pool: &PgPool) {
     // Insert teachers
     sqlx::query(
@@ -72,6 +73,7 @@ pub async fn seed_courses_data(pool: &PgPool) {
 }
 
 /// Seed minimal test data into the selection schema.
+#[allow(dead_code)]
 pub async fn seed_selection_data(pool: &PgPool) {
     sqlx::query(
         r#"

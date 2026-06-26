@@ -26,11 +26,22 @@ pub struct AuthAccount {
 }
 
 impl AuthAccount {
+    #[allow(clippy::result_large_err)]
     pub fn require_mod(&self) -> Result<(), Response> {
-        if self.role == "mod" || self.role == "admin" { Ok(()) } else { Err(forbidden()) }
+        if self.role == "mod" || self.role == "admin" {
+            Ok(())
+        } else {
+            Err(forbidden())
+        }
     }
+
+    #[allow(clippy::result_large_err)]
     pub fn require_admin(&self) -> Result<(), Response> {
-        if self.role == "admin" { Ok(()) } else { Err(forbidden()) }
+        if self.role == "admin" {
+            Ok(())
+        } else {
+            Err(forbidden())
+        }
     }
 }
 
@@ -45,41 +56,38 @@ impl AuthAccount {
         db: &PgPool,
         jwt_secret: &str,
     ) -> Result<Self, Response> {
-        let header = headers
-            .get(AUTHORIZATION)
-            .and_then(|v| v.to_str().ok())
-            .ok_or_else(unauthorized)?;
+        let header =
+            headers.get(AUTHORIZATION).and_then(|v| v.to_str().ok()).ok_or_else(unauthorized)?;
 
         let token = header.strip_prefix("Bearer ").ok_or_else(unauthorized)?;
 
         let claims = verify_jwt(token, jwt_secret)?;
         let account_id: i64 = claims.sub.parse().map_err(|_| unauthorized())?;
 
-        let status: String = sqlx::query_scalar(
-            "SELECT status::text FROM identity.accounts WHERE id = $1",
-        )
-        .bind(account_id)
-        .fetch_optional(db)
-        .await
-        .map_err(|_| internal_error())?
-        .ok_or_else(unauthorized)?;
+        let status: String =
+            sqlx::query_scalar("SELECT status::text FROM identity.accounts WHERE id = $1")
+                .bind(account_id)
+                .fetch_optional(db)
+                .await
+                .map_err(|_| internal_error())?
+                .ok_or_else(unauthorized)?;
 
         if status != "active" {
             return Err(forbidden());
         }
 
-        let role: String = sqlx::query_scalar(
-            "SELECT role::text FROM identity.accounts WHERE id = $1",
-        )
-        .bind(account_id)
-        .fetch_one(db)
-        .await
-        .map_err(|_| internal_error())?;
+        let role: String =
+            sqlx::query_scalar("SELECT role::text FROM identity.accounts WHERE id = $1")
+                .bind(account_id)
+                .fetch_one(db)
+                .await
+                .map_err(|_| internal_error())?;
 
         Ok(AuthAccount { id: account_id, role, status })
     }
 }
 
+#[allow(clippy::result_large_err)]
 fn verify_jwt(token: &str, secret: &str) -> Result<JwtClaims, Response> {
     use jsonwebtoken::{decode, DecodingKey, Validation};
     let mut v = Validation::new(jsonwebtoken::Algorithm::HS256);
@@ -89,16 +97,22 @@ fn verify_jwt(token: &str, secret: &str) -> Result<JwtClaims, Response> {
 }
 
 fn unauthorized() -> Response {
-    (StatusCode::UNAUTHORIZED,
-     Json(json!({"error":{"code":"UNAUTHORIZED","message":"unauthorized"}}))).into_response()
+    (
+        StatusCode::UNAUTHORIZED,
+        Json(json!({"error":{"code":"UNAUTHORIZED","message":"unauthorized"}})),
+    )
+        .into_response()
 }
 
 fn forbidden() -> Response {
-    (StatusCode::FORBIDDEN,
-     Json(json!({"error":{"code":"FORBIDDEN","message":"forbidden"}}))).into_response()
+    (StatusCode::FORBIDDEN, Json(json!({"error":{"code":"FORBIDDEN","message":"forbidden"}})))
+        .into_response()
 }
 
 fn internal_error() -> Response {
-    (StatusCode::INTERNAL_SERVER_ERROR,
-     Json(json!({"error":{"code":"INTERNAL","message":"internal server error"}}))).into_response()
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(json!({"error":{"code":"INTERNAL","message":"internal server error"}})),
+    )
+        .into_response()
 }
