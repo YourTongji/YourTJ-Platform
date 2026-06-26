@@ -15,6 +15,7 @@ pub mod dto;
 pub mod error;
 pub mod ledger;
 pub mod models;
+pub mod repo;
 
 use axum::Router;
 use shared::AppState;
