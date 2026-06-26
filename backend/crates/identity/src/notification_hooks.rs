@@ -8,12 +8,7 @@ use sqlx::PgPool;
 
 /// Insert a notification row. Call via `tokio::spawn` so the caller does not
 /// wait for the INSERT.
-pub async fn create_notification(
-    pool: &PgPool,
-    account_id: i64,
-    r#type: &str,
-    payload: Value,
-) {
+pub async fn create_notification(pool: &PgPool, account_id: i64, r#type: &str, payload: Value) {
     let result = sqlx::query(
         "INSERT INTO forum.notifications (account_id, type, payload) VALUES ($1, $2, $3)",
     )

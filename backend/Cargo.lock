@@ -38,11 +38,13 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
+ "chrono",
  "courses",
  "credit",
  "forum",
  "identity",
  "reviews",
+ "serde",
  "serde_json",
  "shared",
  "sqlx",

@@ -9,10 +9,10 @@ use axum::Json;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use sqlx::FromRow;
-use sqlx::PgPool;
 use shared::pagination::Page;
 use shared::{AppError, AppResult, AppState, AuthAccount};
+use sqlx::FromRow;
+use sqlx::PgPool;
 
 // ---------------------------------------------------------------------------
 // DB row
@@ -98,38 +98,24 @@ pub async fn list_notifications(
     };
 
     let has_more = rows.len() > limit as usize;
-    let next_cursor = if has_more {
-        rows.get(limit as usize).map(|r| r.id)
-    } else {
-        None
-    };
+    let next_cursor = if has_more { rows.get(limit as usize).map(|r| r.id) } else { None };
 
-    let truncated: Vec<NotificationRow> = if has_more {
-        rows.into_iter().take(limit as usize).collect()
-    } else {
-        rows
-    };
+    let truncated: Vec<NotificationRow> =
+        if has_more { rows.into_iter().take(limit as usize).collect() } else { rows };
 
     Ok((truncated, next_cursor))
 }
 
 /// Mark notifications as read. Only touches notifications belonging to the
 /// given account, silently skipping any `ids` that belong to another account.
-pub async fn mark_read(
-    pool: &PgPool,
-    account_id: i64,
-    notification_ids: &[i64],
-) -> AppResult<()> {
+pub async fn mark_read(pool: &PgPool, account_id: i64, notification_ids: &[i64]) -> AppResult<()> {
     if notification_ids.is_empty() {
         return Ok(());
     }
 
     // sqlx does not support array binding natively, so we build IN ($1, $2, ...).
-    let placeholders: Vec<String> = notification_ids
-        .iter()
-        .enumerate()
-        .map(|(i, _)| format!("${}", i + 2))
-        .collect();
+    let placeholders: Vec<String> =
+        notification_ids.iter().enumerate().map(|(i, _)| format!("${}", i + 2)).collect();
 
     let sql = format!(
         "UPDATE forum.notifications SET read_at = now() \
@@ -166,8 +152,7 @@ pub async fn list_notifications_handler(
         .map(|c| c.parse::<i64>().map_err(|_| AppError::BadRequest("invalid cursor".into())))
         .transpose()?;
 
-    let (rows, next_cursor) =
-        list_notifications(&state.db, auth.id, cursor_id, q.limit).await?;
+    let (rows, next_cursor) = list_notifications(&state.db, auth.id, cursor_id, q.limit).await?;
 
     let items: Vec<NotificationDto> = rows
         .into_iter()
@@ -194,8 +179,7 @@ pub async fn mark_read_handler(
         .await
         .map_err(|_r| AppError::Unauthorized)?;
 
-    let ids: Result<Vec<i64>, _> =
-        body.ids.iter().map(|s| s.parse::<i64>()).collect();
+    let ids: Result<Vec<i64>, _> = body.ids.iter().map(|s| s.parse::<i64>()).collect();
 
     let ids = ids.map_err(|_| AppError::BadRequest("invalid notification id".into()))?;
 

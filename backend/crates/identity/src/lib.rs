@@ -35,13 +35,7 @@ pub fn routes(state: AppState) -> Router {
         .route("/api/v2/wallet", get(handlers::get_wallet))
         .route("/api/v2/wallet/bind", post(handlers::bind_key))
         // Notifications
-        .route(
-            "/api/v2/notifications",
-            get(notifications::list_notifications_handler),
-        )
-        .route(
-            "/api/v2/notifications/read",
-            post(notifications::mark_read_handler),
-        )
+        .route("/api/v2/notifications", get(notifications::list_notifications_handler))
+        .route("/api/v2/notifications/read", post(notifications::mark_read_handler))
         .with_state(state)
 }

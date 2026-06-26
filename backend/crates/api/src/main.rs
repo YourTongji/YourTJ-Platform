@@ -2,11 +2,11 @@
 //! tracing, server) and composes one router per domain crate. Business logic
 //! lives in the domain crates, never here.
 
+mod platform;
+
 use std::net::SocketAddr;
 
-use axum::routing::get;
-use axum::{Json, Router};
-use serde_json::{json, Value};
+use axum::Router;
 use shared::AppState;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
@@ -37,19 +37,13 @@ async fn main() -> anyhow::Result<()> {
 
 /// Compose the full application router from per-domain routers.
 fn build_router(state: AppState) -> Router {
-    Router::new()
-        .route("/health", get(health))
+    platform::routes(state.clone())
         .merge(identity::routes(state.clone()))
         .merge(courses::routes(state.clone()))
         .merge(reviews::routes(state.clone()))
         .merge(credit::routes(state.clone()))
         .merge(forum::routes(state.clone()))
         .layer(TraceLayer::new_for_http())
-}
-
-/// Liveness probe used by SAE / load balancers.
-async fn health() -> Json<Value> {
-    Json(json!({ "status": "ok", "service": "yourtj-platform" }))
 }
 
 fn init_tracing() {
