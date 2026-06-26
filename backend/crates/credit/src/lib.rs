@@ -25,9 +25,23 @@ use shared::AppState;
 /// All routes owned by the credit domain.
 pub fn routes(state: AppState) -> Router {
     Router::new()
+        // Wallet
         .route("/api/v2/wallet", get(handlers::get_wallet))
         .route("/api/v2/wallet/tip", post(handlers::tip))
         .route("/api/v2/wallet/ledger", get(handlers::get_ledger))
         .route("/api/v2/wallet/ledger/verify", get(handlers::verify_ledger))
+        // Tasks
+        .route("/api/v2/credit/tasks", get(handlers::list_tasks).post(handlers::create_task))
+        .route("/api/v2/credit/tasks/{id}/accept", post(handlers::accept_task))
+        .route("/api/v2/credit/tasks/{id}/action", post(handlers::action_task))
+        // Products
+        .route(
+            "/api/v2/credit/products",
+            get(handlers::list_products).post(handlers::create_product),
+        )
+        .route("/api/v2/credit/products/{id}/purchase", post(handlers::purchase_product))
+        // Purchases
+        .route("/api/v2/credit/purchases", get(handlers::list_purchases))
+        .route("/api/v2/credit/purchases/{id}/action", post(handlers::action_purchase))
         .with_state(state)
 }
