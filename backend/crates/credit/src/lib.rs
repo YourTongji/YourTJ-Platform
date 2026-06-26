@@ -13,14 +13,20 @@
 
 pub mod dto;
 pub mod error;
+pub mod handlers;
 pub mod ledger;
 pub mod models;
 pub mod repo;
 
+use axum::routing::get;
 use axum::Router;
 use shared::AppState;
 
 /// All routes owned by the credit domain.
-pub fn routes(_state: AppState) -> Router {
+pub fn routes(state: AppState) -> Router {
     Router::new()
+        .route("/api/v2/wallet", get(handlers::get_wallet))
+        .route("/api/v2/wallet/ledger", get(handlers::get_ledger))
+        .route("/api/v2/wallet/ledger/verify", get(handlers::verify_ledger))
+        .with_state(state)
 }
