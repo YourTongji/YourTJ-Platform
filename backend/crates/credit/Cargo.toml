@@ -18,3 +18,8 @@ uuid.workspace = true
 chrono.workspace = true
 tracing.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+tower.workspace = true
+tokio = { workspace = true, features = ["macros"] }
+identity.workspace = true
