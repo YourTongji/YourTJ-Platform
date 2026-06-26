@@ -6,7 +6,7 @@
 //! - The server stores only Ed25519 *public* keys — never private keys or secrets.
 //! - Old wallets are merged via a signed challenge (`/wallet/claim`), not by import.
 
-mod auth;
+pub mod auth;
 mod email_code;
 mod handlers;
 mod repo;
@@ -23,10 +23,7 @@ use shared::AppState;
 pub fn routes(state: AppState) -> Router {
     Router::new()
         // Auth
-        .route(
-            "/api/v2/auth/email/request-code",
-            post(handlers::request_code),
-        )
+        .route("/api/v2/auth/email/request-code", post(handlers::request_code))
         .route("/api/v2/auth/email/verify", post(handlers::verify_email))
         .route("/api/v2/auth/refresh", post(handlers::refresh))
         .route("/api/v2/auth/logout", post(handlers::logout))
