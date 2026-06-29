@@ -1,8 +1,8 @@
 //! Cross-cutting types shared by every domain crate: configuration, the unified
 //! error type, and pagination primitives. Keep this crate dependency-light — it
 //! is compiled by everything.
-
 pub mod auth;
+pub mod cache;
 pub mod config;
 pub mod error;
 pub mod pagination;
