@@ -6,6 +6,7 @@ pub mod cache;
 pub mod config;
 pub mod error;
 pub mod pagination;
+pub mod ratelimit;
 pub mod state;
 
 pub use auth::AuthAccount;
