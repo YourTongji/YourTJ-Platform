@@ -127,25 +127,6 @@ pub async fn find_selection_course_by_code(
     Ok(row)
 }
 
-/// Full-text-ish search for selection courses via ILIKE on code, name, teacher.
-pub async fn search_selection_courses(
-    pool: &PgPool,
-    q: &str,
-) -> Result<Vec<SelectionCourseRow>, CoursesError> {
-    let pattern = format!("%{}%", q);
-    let rows = sqlx::query_as::<_, SelectionCourseRow>(
-        "SELECT id, code, name, credit, nature_id, campus_id, teacher_name \
-         FROM selection.courses \
-         WHERE code ILIKE $1 OR name ILIKE $1 OR teacher_name ILIKE $1 \
-         ORDER BY code \
-         LIMIT 200",
-    )
-    .bind(&pattern)
-    .fetch_all(pool)
-    .await?;
-    Ok(rows)
-}
-
 /// List all timeslots for a given selection course.
 pub async fn list_timeslots(
     pool: &PgPool,

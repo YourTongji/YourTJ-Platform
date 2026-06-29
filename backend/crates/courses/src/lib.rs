@@ -5,6 +5,8 @@
 //! initials / alias fields), never by `LIKE %q%` over the DB. Browse/list and
 //! detail endpoints are cached (short TTL + SWR) and invalidated by version bump.
 
+pub mod admin_handlers;
+pub(crate) mod admin_repo;
 pub mod dto;
 pub mod error;
 pub(crate) mod handlers;
@@ -16,7 +18,7 @@ pub mod selection;
 pub(crate) mod selection_handlers;
 pub mod selection_repo;
 
-use axum::routing::get;
+use axum::routing::{get, put};
 use axum::Router;
 use shared::AppState;
 
@@ -26,6 +28,8 @@ pub fn routes(state: AppState) -> Router {
         // --- courses catalogue ---
         .route("/api/v2/courses", get(handlers::list_courses))
         .route("/api/v2/courses/{id}", get(handlers::get_course))
+        // Canonical: GET /api/v2/courses/by-code/{code} — alias: GET /api/v2/courses/code/{code}
+        .route("/api/v2/courses/by-code/{code}", get(handlers::get_course_by_code))
         .route("/api/v2/courses/code/{code}", get(handlers::get_course_by_code))
         .route("/api/v2/courses/{id}/related", get(handlers::list_related_courses))
         .route("/api/v2/departments", get(handlers::list_departments))
@@ -63,5 +67,14 @@ pub fn routes(state: AppState) -> Router {
             get(selection_handlers::selection_courses_by_time),
         )
         .route("/api/v2/selection/latest-update", get(selection_handlers::selection_latest_update))
+        // --- admin course CRUD ---
+        .route(
+            "/api/v2/admin/courses",
+            get(admin_handlers::admin_list_courses).post(admin_handlers::admin_create_course),
+        )
+        .route(
+            "/api/v2/admin/courses/{id}",
+            put(admin_handlers::admin_update_course).delete(admin_handlers::admin_delete_course),
+        )
         .with_state(state)
 }

@@ -90,13 +90,10 @@ async fn find_selection_course_by_code() {
     assert_eq!(row.unwrap().name, "选课测试课");
 }
 
-#[tokio::test]
-async fn search_selection_courses() {
-    let pool = pool_or_skip!();
-    common::seed_selection_data(&pool).await;
-    let rows = selection_repo::search_selection_courses(&pool, "测试").await.unwrap();
-    assert!(!rows.is_empty());
-}
+// search_selection_courses was moved from DB ILIKE to Meilisearch
+// (courses::meili::search_selection_courses). Integration tests for
+// the Meilisearch path require a running Meilisearch instance and are
+// covered by end-to-end testing.
 
 #[tokio::test]
 async fn list_timeslots() {

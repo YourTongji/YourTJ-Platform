@@ -7,7 +7,6 @@ use serde::Deserialize;
 use shared::{AppResult, AppState};
 
 use crate::error::CoursesError;
-use crate::handlers::cached_json;
 use crate::selection::dto::{
     CalendarDto, CampusDto, CourseNatureDto, FacultyDto, LatestUpdateDto, MajorDto,
     SelectionCourseDto, TimeSlotDto,
@@ -16,7 +15,7 @@ use crate::selection_repo;
 
 /// `GET /api/v2/selection/calendars`
 pub async fn selection_calendars(state: State<AppState>) -> AppResult<Json<Vec<CalendarDto>>> {
-    let items = cached_json(&state, "calendars", "all", 600, async {
+    let items = shared::cache::cached_json(state.redis.as_ref(), "calendars", "all", 600, async {
         let rows = selection_repo::list_calendars(&state.db).await?;
         let cal: Vec<CalendarDto> = rows
             .into_iter()
@@ -38,7 +37,7 @@ pub async fn selection_campuses(State(state): State<AppState>) -> AppResult<Json
 
 /// `GET /api/v2/selection/faculties`
 pub async fn selection_faculties(state: State<AppState>) -> AppResult<Json<Vec<FacultyDto>>> {
-    let items = cached_json(&state, "faculties", "all", 600, async {
+    let items = shared::cache::cached_json(state.redis.as_ref(), "faculties", "all", 600, async {
         let rows = selection_repo::list_faculties(&state.db).await?;
         let fac: Vec<FacultyDto> = rows
             .into_iter()
@@ -96,7 +95,7 @@ pub async fn selection_majors(
 pub async fn selection_course_natures(
     state: State<AppState>,
 ) -> AppResult<Json<Vec<CourseNatureDto>>> {
-    let items = cached_json(&state, "natures", "all", 600, async {
+    let items = shared::cache::cached_json(state.redis.as_ref(), "natures", "all", 600, async {
         let rows = selection_repo::list_course_natures(&state.db).await?;
         let nats: Vec<CourseNatureDto> = rows
             .into_iter()
@@ -185,19 +184,24 @@ pub async fn selection_course_by_code(
 
 /// `GET /api/v2/selection/courses/search?q=...`
 #[derive(Debug, Deserialize)]
-pub struct SearchQuery {
+pub struct SelectionSearchQuery {
     pub q: String,
 }
 
 pub async fn selection_courses_search(
     State(state): State<AppState>,
-    Query(params): Query<SearchQuery>,
+    Query(params): Query<SelectionSearchQuery>,
 ) -> AppResult<Json<Vec<SelectionCourseDto>>> {
-    let rows = selection_repo::search_selection_courses(&state.db, &params.q).await?;
-    let items: Vec<SelectionCourseDto> = rows
+    use crate::meili;
+
+    let results =
+        meili::search_selection_courses(&state.meili_url, &state.meili_master_key, &params.q, 20)
+            .await;
+
+    let items: Vec<SelectionCourseDto> = results
         .into_iter()
         .map(|r| SelectionCourseDto {
-            id: r.id.to_string(),
+            id: r.id,
             code: r.code,
             name: r.name,
             credit: r.credit,
