@@ -6,7 +6,7 @@
 use serde::{Deserialize, Serialize};
 
 /// A review returned in list / detail endpoints.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReviewDto {
     pub id: String,
