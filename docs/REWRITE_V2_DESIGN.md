@@ -524,3 +524,71 @@ yourtj-platform/                      # 新仓库（Cargo workspace + web）
 - iOS / Flutter **保持各自独立仓库**，只消费 `contract/` 生成的类型。
 - 老仓库 `YourTJCourse-Serverless`(course) + `YourTJ-Credit-Serverless`(credit) **继续跑生产**，strangler 逐域切流，切完归档。
 - 切流顺序对齐第 5 节：identity → reviews → courses → credit → forum。
+
+---
+
+## 8. Remediation Changes (2026-06)
+
+### 8.1 Migration 0004 — New tables and columns
+
+Added `backend/migrations/0004_review_remediation.sql`:
+
+| Table/Column | Schema | Purpose |
+|---|---|---|
+| `wallet_claim_challenges` | `identity` | Challenge-response for legacy wallet claim (id, account_id, nonce, expires_at, used_at) |
+| `legacy_public_key`, `legacy_balance`, `imported_metadata` (added to `legacy_wallet_links`) | `identity` | Store legacy Ed25519 key and pending balance for import on claim |
+| `votes` | `forum` | One-vote-per-user (`PRIMARY KEY (post_type, post_id, account_id)`) |
+| `forum_comments_thread_path_unique` | `forum` | Partial unique index on `(thread_id, path) WHERE path IS NOT NULL` — prevents concurrent comment path duplicates |
+
+### 8.2 Credit signing — real Ed25519 system signatures
+
+Previously all system-originated ledger entries used literal `"system-signed"` as signature. Now:
+- `CREDIT_SYSTEM_PRIVATE_KEY` (hex-encoded 32-byte seed) loaded from the environment
+- `derive_system_key()` in `api/src/bootstrap.rs` derives the Ed25519 keypair at startup
+- System public key is stored in `AppState.system_public_key_b64`
+- All `mint`, `escrow_hold`, `escrow_release` entries are signed with real Ed25519 
+- `verify_full_ledger` verifies both user and system signatures against stored public keys
+- Batch preload of `identity.account_keys` reduces N+1 queries during full verification
+
+### 8.3 Wallet claim flow
+
+`GET /api/v2/wallet/claim-challenge`:
+- Returns `{ challengeId, nonce }` valid for 10 minutes
+
+`POST /api/v2/wallet/claim`:
+- Accepts `{ legacyUserHash, challengeId, signature }` with bearer auth
+- One transaction: locks challenge + legacy link, verifies Ed25519 signature over canonical JSON, marks challenge used, links legacy wallet, mints balance via system-signed ledger entry
+
+### 8.4 Atomic purchases and escrow
+
+- `append_ledger_entry_tx()` — transaction-aware variant that accepts `&mut PgConnection`
+- `purchase_product`, `action_task`, `action_purchase` wrap ledger + state-table changes in single transactions
+- All user value-moving writes (tip, task create, task confirm/cancel, purchase, purchase action) verify `X-Wallet-Sig` header
+
+### 8.5 Forum votes and comment paths
+
+- Forum votes use UPSERT on `forum.votes` with one-vote-per-user enforcement (PRIMARY KEY)
+- Comment path generation uses `FOR UPDATE` row locks inside a transaction
+- Unique partial index on `(thread_id, path)` prevents concurrent path collisions
+
+### 8.6 Domain boundaries
+
+| Crate | Owns |
+|---|---|
+| `identity` | Auth, accounts, sessions, Ed25519 key management, wallet claim |
+| `credit` | Ledger, wallets, wallets balance, tasks, products, purchases |
+| `forum` | Boards, threads, comments, votes, notifications (moved from identity) |
+| `courses` | Catalogue, teachers, departments, selection (选课) mirror, admin course CRUD (moved from api) |
+| `shared` | Config, JWT primitives (no DB queries), AppState, error types, pagination, cache, rate limiting |
+| `api` | Router composition, startup wiring, platform routes, admin stubs (selection sync, review reindex) |
+
+### 8.7 Rate limits (Redis token bucket)
+
+| Operation | Rate |
+|---|---|
+| Review creation | 5 per 60s per account |
+| Thread creation | 5 per 60s per account |
+| Comment creation | 20 per 60s per account |
+| Transfer/tip/task ops | 20 per 60s per account |
+| Email code | 1 per 60s per email |
+| IP code | 5 per 10min per IP |
