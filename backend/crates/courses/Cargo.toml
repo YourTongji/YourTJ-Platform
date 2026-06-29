@@ -16,6 +16,8 @@ anyhow.workspace = true
 base64.workspace = true
 pinyin.workspace = true
 meilisearch-sdk.workspace = true
+redis.workspace = true
+deadpool-redis.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]

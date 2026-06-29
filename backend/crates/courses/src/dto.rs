@@ -2,10 +2,10 @@
 //! so the JSON wire format matches OpenAPI conventions. IDs are transmitted as strings to avoid
 //! JavaScript integer precision issues with large BIGINT values.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// A department — one row in the department picker.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DepartmentDto {
     pub id: String,
@@ -13,7 +13,7 @@ pub struct DepartmentDto {
 }
 
 /// A teacher shown in course details.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TeacherDto {
     pub id: String,
@@ -23,7 +23,7 @@ pub struct TeacherDto {
 }
 
 /// A course in a browse / search list.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CourseDto {
     pub id: String,
@@ -37,7 +37,7 @@ pub struct CourseDto {
 }
 
 /// Full detail for a single course page: the course itself, its teachers, and its aliases.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CourseDetailDto {
     #[serde(flatten)]

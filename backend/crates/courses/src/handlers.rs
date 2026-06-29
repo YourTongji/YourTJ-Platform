@@ -4,8 +4,9 @@
 
 use axum::extract::{Path, Query, State};
 use axum::Json;
-use serde::Deserialize;
-use shared::{AppResult, AppState, Page};
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
+use shared::{AppError, AppResult, AppState, Page};
 
 use crate::dto::{CourseDetailDto, CourseDto, DepartmentDto, TeacherDto};
 use crate::error::CoursesError;
@@ -90,28 +91,32 @@ pub async fn list_courses(
     Ok(Json(Page::new(items, next_cursor)))
 }
 
-/// `GET /api/v2/courses/:id` — single course detail.
 pub async fn get_course(
     State(state): State<AppState>,
     Path(id): Path<i64>,
 ) -> AppResult<Json<CourseDetailDto>> {
-    let row = repo::find_course_by_id(&state.db, id).await?.ok_or(CoursesError::CourseNotFound)?;
+    let detail = cached_json(&state, "course", &id.to_string(), 300, async {
+        let row =
+            repo::find_course_by_id(&state.db, id).await?.ok_or(CoursesError::CourseNotFound)?;
 
-    let teacher_rows = repo::find_teachers_by_course(&state.db, row.id).await?;
-    let aliases = repo::find_aliases(&state.db, row.id).await?;
+        let teacher_rows = repo::find_teachers_by_course(&state.db, row.id).await?;
+        let aliases = repo::find_aliases(&state.db, row.id).await?;
 
-    let course = row_to_course_dto(row, None);
-    let teachers: Vec<TeacherDto> = teacher_rows
-        .into_iter()
-        .map(|t| TeacherDto {
-            id: t.id.to_string(),
-            name: t.name,
-            title: t.title,
-            department: t.department,
-        })
-        .collect();
+        let course = row_to_course_dto(row, None);
+        let teachers: Vec<TeacherDto> = teacher_rows
+            .into_iter()
+            .map(|t| TeacherDto {
+                id: t.id.to_string(),
+                name: t.name,
+                title: t.title,
+                department: t.department,
+            })
+            .collect();
 
-    Ok(Json(CourseDetailDto { course, teachers, aliases }))
+        Ok::<_, CoursesError>(CourseDetailDto { course, teachers, aliases })
+    })
+    .await?;
+    Ok(Json(detail))
 }
 
 /// `GET /api/v2/courses/code/:code` — single course by code.
@@ -119,24 +124,30 @@ pub async fn get_course_by_code(
     State(state): State<AppState>,
     Path(code): Path<String>,
 ) -> AppResult<Json<CourseDetailDto>> {
-    let row =
-        repo::find_course_by_code(&state.db, &code).await?.ok_or(CoursesError::CourseNotFound)?;
+    let code_clone = code.clone();
+    let detail = cached_json(&state, "course_code", &code, 300, async {
+        let row = repo::find_course_by_code(&state.db, &code_clone)
+            .await?
+            .ok_or(CoursesError::CourseNotFound)?;
 
-    let teacher_rows = repo::find_teachers_by_course(&state.db, row.id).await?;
-    let aliases = repo::find_aliases(&state.db, row.id).await?;
+        let teacher_rows = repo::find_teachers_by_course(&state.db, row.id).await?;
+        let aliases = repo::find_aliases(&state.db, row.id).await?;
 
-    let course = row_to_course_dto(row, None);
-    let teachers: Vec<TeacherDto> = teacher_rows
-        .into_iter()
-        .map(|t| TeacherDto {
-            id: t.id.to_string(),
-            name: t.name,
-            title: t.title,
-            department: t.department,
-        })
-        .collect();
+        let course = row_to_course_dto(row, None);
+        let teachers: Vec<TeacherDto> = teacher_rows
+            .into_iter()
+            .map(|t| TeacherDto {
+                id: t.id.to_string(),
+                name: t.name,
+                title: t.title,
+                department: t.department,
+            })
+            .collect();
 
-    Ok(Json(CourseDetailDto { course, teachers, aliases }))
+        Ok::<_, CoursesError>(CourseDetailDto { course, teachers, aliases })
+    })
+    .await?;
+    Ok(Json(detail))
 }
 
 /// `GET /api/v2/courses/:id/related` — related courses.
@@ -163,18 +174,20 @@ pub async fn get_ai_summary(
 }
 
 /// `GET /api/v2/departments` — department picker.
-pub async fn list_departments(
-    State(state): State<AppState>,
-) -> AppResult<Json<Vec<DepartmentDto>>> {
-    let rows = repo::list_departments(&state.db).await?;
-    let items: Vec<DepartmentDto> = rows
-        .into_iter()
-        .enumerate()
-        .map(|(i, r)| DepartmentDto {
-            id: (i + 1).to_string(),
-            name: r.department.unwrap_or_default(),
-        })
-        .collect();
+pub async fn list_departments(state: State<AppState>) -> AppResult<Json<Vec<DepartmentDto>>> {
+    let items = cached_json(&state, "departments", "all", 3600, async {
+        let rows = repo::list_departments(&state.db).await?;
+        let depts: Vec<DepartmentDto> = rows
+            .into_iter()
+            .enumerate()
+            .map(|(i, r)| DepartmentDto {
+                id: (i + 1).to_string(),
+                name: r.department.unwrap_or_default(),
+            })
+            .collect();
+        Ok::<_, CoursesError>(depts)
+    })
+    .await?;
     Ok(Json(items))
 }
 
@@ -235,4 +248,27 @@ fn row_to_course_dto(r: repo::CourseWithTeacherRow, _teacher_name: Option<String
         review_count: r.review_count,
         review_avg: r.review_avg,
     }
+}
+
+pub(crate) async fn cached_json<T: Serialize + DeserializeOwned>(
+    state: &AppState,
+    prefix: &str,
+    id: &str,
+    ttl: u64,
+    fetch: impl std::future::Future<Output = Result<T, impl Into<AppError>>>,
+) -> Result<T, AppError> {
+    if let Some(ref redis) = state.redis {
+        if let Ok(Some(cached)) = shared::cache::get_cached(redis, prefix, id).await {
+            if let Ok(val) = serde_json::from_str::<T>(&cached) {
+                return Ok(val);
+            }
+        }
+    }
+    let val = fetch.await.map_err(|e| e.into())?;
+    if let Some(ref redis) = state.redis {
+        if let Ok(json) = serde_json::to_string(&val) {
+            let _ = shared::cache::set_cached(redis, prefix, id, &json, ttl).await;
+        }
+    }
+    Ok(val)
 }

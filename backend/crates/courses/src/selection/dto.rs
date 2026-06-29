@@ -2,10 +2,10 @@
 //! camelCase JSON serialization. IDs are strings to avoid JavaScript
 //! integer precision issues.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// A selection calendar (semester).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CalendarDto {
     pub id: String,
@@ -14,7 +14,7 @@ pub struct CalendarDto {
 }
 
 /// A campus.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CampusDto {
     pub id: String,
@@ -22,7 +22,7 @@ pub struct CampusDto {
 }
 
 /// A faculty / college.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FacultyDto {
     pub id: String,
@@ -41,7 +41,7 @@ pub struct MajorDto {
 }
 
 /// A course nature (必修/选修 etc.).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CourseNatureDto {
     pub id: String,

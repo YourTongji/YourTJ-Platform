@@ -7,6 +7,7 @@ use serde::Deserialize;
 use shared::{AppResult, AppState};
 
 use crate::error::CoursesError;
+use crate::handlers::cached_json;
 use crate::selection::dto::{
     CalendarDto, CampusDto, CourseNatureDto, FacultyDto, LatestUpdateDto, MajorDto,
     SelectionCourseDto, TimeSlotDto,
@@ -14,14 +15,16 @@ use crate::selection::dto::{
 use crate::selection_repo;
 
 /// `GET /api/v2/selection/calendars`
-pub async fn selection_calendars(
-    State(state): State<AppState>,
-) -> AppResult<Json<Vec<CalendarDto>>> {
-    let rows = selection_repo::list_calendars(&state.db).await?;
-    let items: Vec<CalendarDto> = rows
-        .into_iter()
-        .map(|r| CalendarDto { id: r.id.to_string(), name: r.name, is_current: r.is_current })
-        .collect();
+pub async fn selection_calendars(state: State<AppState>) -> AppResult<Json<Vec<CalendarDto>>> {
+    let items = cached_json(&state, "calendars", "all", 600, async {
+        let rows = selection_repo::list_calendars(&state.db).await?;
+        let cal: Vec<CalendarDto> = rows
+            .into_iter()
+            .map(|r| CalendarDto { id: r.id.to_string(), name: r.name, is_current: r.is_current })
+            .collect();
+        Ok::<_, CoursesError>(cal)
+    })
+    .await?;
     Ok(Json(items))
 }
 
@@ -34,18 +37,20 @@ pub async fn selection_campuses(State(state): State<AppState>) -> AppResult<Json
 }
 
 /// `GET /api/v2/selection/faculties`
-pub async fn selection_faculties(
-    State(state): State<AppState>,
-) -> AppResult<Json<Vec<FacultyDto>>> {
-    let rows = selection_repo::list_faculties(&state.db).await?;
-    let items: Vec<FacultyDto> = rows
-        .into_iter()
-        .map(|r| FacultyDto {
-            id: r.id.to_string(),
-            name: r.name,
-            campus_id: r.campus_id.map(|v| v.to_string()),
-        })
-        .collect();
+pub async fn selection_faculties(state: State<AppState>) -> AppResult<Json<Vec<FacultyDto>>> {
+    let items = cached_json(&state, "faculties", "all", 600, async {
+        let rows = selection_repo::list_faculties(&state.db).await?;
+        let fac: Vec<FacultyDto> = rows
+            .into_iter()
+            .map(|r| FacultyDto {
+                id: r.id.to_string(),
+                name: r.name,
+                campus_id: r.campus_id.map(|v| v.to_string()),
+            })
+            .collect();
+        Ok::<_, CoursesError>(fac)
+    })
+    .await?;
     Ok(Json(items))
 }
 
@@ -89,11 +94,17 @@ pub async fn selection_majors(
 
 /// `GET /api/v2/selection/course-natures`
 pub async fn selection_course_natures(
-    State(state): State<AppState>,
+    state: State<AppState>,
 ) -> AppResult<Json<Vec<CourseNatureDto>>> {
-    let rows = selection_repo::list_course_natures(&state.db).await?;
-    let items: Vec<CourseNatureDto> =
-        rows.into_iter().map(|r| CourseNatureDto { id: r.id.to_string(), name: r.name }).collect();
+    let items = cached_json(&state, "natures", "all", 600, async {
+        let rows = selection_repo::list_course_natures(&state.db).await?;
+        let nats: Vec<CourseNatureDto> = rows
+            .into_iter()
+            .map(|r| CourseNatureDto { id: r.id.to_string(), name: r.name })
+            .collect();
+        Ok::<_, CoursesError>(nats)
+    })
+    .await?;
     Ok(Json(items))
 }
 
