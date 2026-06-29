@@ -292,6 +292,16 @@ pub async fn claim_challenge(
 /// Runs in a single transaction that locks the challenge and legacy wallet
 /// link rows, validates all conditions, then mints any legacy balance into
 /// the credit ledger.
+///
+/// NOTE: This handler directly queries/inserts into `credit.ledger` and
+/// `credit.wallets` — an intentional exception to the domain-boundary rule
+/// that "identity must not query credit tables." The cross-domain access is
+/// architecturally necessary because this is a one-time legacy-claim flow
+/// that must atomically transfer balance from the old system into the new
+/// ledger. Moving it to the credit crate would create circular dependencies
+/// (credit needs identity data for the claim). The tight coupling here is
+/// confined to this single handler and is not used as a precedent for other
+/// identity → credit queries.
 #[tracing::instrument(skip(state, headers))]
 pub async fn claim_wallet(
     State(state): State<AppState>,

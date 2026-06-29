@@ -364,43 +364,83 @@ pub async fn find_review_by_id(pool: &PgPool, review_id: i64) -> AppResult<Optio
 }
 
 /// List all reviews (admin view), optionally filtered by status.
+/// Uses cursor-based pagination ordered by `created_at DESC, id DESC`.
 pub async fn admin_list_reviews(
     pool: &PgPool,
     status_filter: Option<&str>,
-    page: i64,
-    per_page: i64,
-) -> AppResult<Vec<ReviewDto>> {
-    let offset = (page - 1) * per_page;
+    cursor: Option<i64>,
+    limit: Option<i64>,
+) -> AppResult<Page<ReviewDto>> {
+    let fetch_limit = limit.unwrap_or(DEFAULT_LIMIT).min(100) + 1;
 
     let rows = if let Some(s) = status_filter {
-        sqlx::query_as::<_, ReviewWithAuthorRow>(
-            "SELECT r.*, a.handle, a.avatar_url \
-             FROM reviews.reviews r \
-             JOIN identity.accounts a ON a.id = r.account_id \
-             WHERE r.status = $1::reviews.review_status \
-             ORDER BY r.created_at DESC \
-             LIMIT $2 OFFSET $3",
-        )
-        .bind(s)
-        .bind(per_page)
-        .bind(offset)
-        .fetch_all(pool)
-        .await?
+        if let Some(c) = cursor {
+            sqlx::query_as::<_, ReviewWithAuthorRow>(
+                "SELECT r.*, a.handle, a.avatar_url \
+                 FROM reviews.reviews r \
+                 JOIN identity.accounts a ON a.id = r.account_id \
+                 WHERE r.status = $1::reviews.review_status AND r.id < $2 \
+                 ORDER BY r.id DESC \
+                 LIMIT $3",
+            )
+            .bind(s)
+            .bind(c)
+            .bind(fetch_limit)
+            .fetch_all(pool)
+            .await?
+        } else {
+            sqlx::query_as::<_, ReviewWithAuthorRow>(
+                "SELECT r.*, a.handle, a.avatar_url \
+                 FROM reviews.reviews r \
+                 JOIN identity.accounts a ON a.id = r.account_id \
+                 WHERE r.status = $1::reviews.review_status \
+                 ORDER BY r.id DESC \
+                 LIMIT $2",
+            )
+            .bind(s)
+            .bind(fetch_limit)
+            .fetch_all(pool)
+            .await?
+        }
     } else {
-        sqlx::query_as::<_, ReviewWithAuthorRow>(
-            "SELECT r.*, a.handle, a.avatar_url \
-             FROM reviews.reviews r \
-             JOIN identity.accounts a ON a.id = r.account_id \
-             ORDER BY r.created_at DESC \
-             LIMIT $1 OFFSET $2",
-        )
-        .bind(per_page)
-        .bind(offset)
-        .fetch_all(pool)
-        .await?
+        if let Some(c) = cursor {
+            sqlx::query_as::<_, ReviewWithAuthorRow>(
+                "SELECT r.*, a.handle, a.avatar_url \
+                 FROM reviews.reviews r \
+                 JOIN identity.accounts a ON a.id = r.account_id \
+                 WHERE r.id < $1 \
+                 ORDER BY r.id DESC \
+                 LIMIT $2",
+            )
+            .bind(c)
+            .bind(fetch_limit)
+            .fetch_all(pool)
+            .await?
+        } else {
+            sqlx::query_as::<_, ReviewWithAuthorRow>(
+                "SELECT r.*, a.handle, a.avatar_url \
+                 FROM reviews.reviews r \
+                 JOIN identity.accounts a ON a.id = r.account_id \
+                 ORDER BY r.id DESC \
+                 LIMIT $1",
+            )
+            .bind(fetch_limit)
+            .fetch_all(pool)
+            .await?
+        }
     };
 
-    Ok(rows.iter().map(row_to_dto).collect())
+    let actual_limit = fetch_limit - 1;
+    let has_more = rows.len() > actual_limit as usize;
+    let items: Vec<ReviewDto> = if has_more {
+        rows[..actual_limit as usize].iter().map(row_to_dto).collect()
+    } else {
+        rows.iter().map(row_to_dto).collect()
+    };
+    let next_cursor =
+        if has_more { items.last().map(|r| r.id.parse::<i64>().unwrap_or(0)) } else { None };
+
+    Ok(Page::new(items, next_cursor.map(|c| c.to_string())))
 }
 
 /// Admin: soft-delete a review and update course aggregates.
