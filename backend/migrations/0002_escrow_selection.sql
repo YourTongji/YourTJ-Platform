@@ -90,7 +90,7 @@ CREATE TABLE selection.courses (
   id           BIGINT PRIMARY KEY,
   code         TEXT NOT NULL,
   name         TEXT NOT NULL,
-  credit       REAL DEFAULT 0,
+    credit       DOUBLE PRECISION DEFAULT 0,
   nature_id    BIGINT REFERENCES selection.course_natures(id),
   calendar_id  BIGINT REFERENCES selection.calendars(id),
   campus_id    BIGINT REFERENCES selection.campuses(id),

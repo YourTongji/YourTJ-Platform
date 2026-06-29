@@ -78,11 +78,11 @@ CREATE TABLE courses.courses (
   id              BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   code            TEXT NOT NULL,
   name            TEXT NOT NULL,
-  credit          REAL DEFAULT 0,
+    credit          DOUBLE PRECISION DEFAULT 0,
   department      TEXT,
   teacher_id      BIGINT REFERENCES courses.teachers(id),
   review_count    INT  NOT NULL DEFAULT 0,             -- maintained incrementally
-  review_avg      REAL NOT NULL DEFAULT 0,
+    review_avg      DOUBLE PRECISION NOT NULL DEFAULT 0,
   name_pinyin     TEXT,
   name_initials   TEXT,
   search_keywords TEXT,

@@ -35,13 +35,19 @@ pub async fn create_test_app() -> (PgPool, axum::Router) {
 
 /// Run the DDL from migrations and clean review-related tables.
 async fn run_migrations(pool: &PgPool) {
-    let sql = include_str!("../../../../migrations/0001_init.sql");
-    sqlx::query(sql).execute(pool).await.expect("migration 0001 failed");
+    let exists: Option<bool> = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM information_schema.schemata WHERE schema_name = 'identity')"
+    ).fetch_one(pool).await.ok().flatten();
+    if exists != Some(true) {
+        // Apply migrations if not already done by docker-compose initdb.
+        let sql = include_str!("../../../../migrations/0001_init.sql");
+        sqlx::raw_sql(sql).execute(pool).await.expect("migration 0001 failed");
 
-    let sql2 = include_str!("../../../../migrations/0002_escrow_selection.sql");
-    sqlx::query(sql2).execute(pool).await.expect("migration 0002 failed");
+        let sql2 = include_str!("../../../../migrations/0002_escrow_selection.sql");
+        sqlx::raw_sql(sql2).execute(pool).await.expect("migration 0002 failed");
+    }
 
-    // Clean test data from previous runs.
+    // Clean test data from previous runs (always run, even if migrations were skipped).
     sqlx::query("DELETE FROM reviews.review_reports").execute(pool).await.ok();
     sqlx::query("DELETE FROM reviews.review_likes").execute(pool).await.ok();
     sqlx::query("DELETE FROM reviews.reviews").execute(pool).await.ok();
