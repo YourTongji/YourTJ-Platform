@@ -550,11 +550,14 @@ dependencies = [
 name = "forum"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "axum",
  "base64",
  "chrono",
+ "deadpool-redis",
  "hex",
  "identity",
+ "redis",
  "serde",
  "serde_json",
  "sha2",

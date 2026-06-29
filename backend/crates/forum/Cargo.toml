@@ -13,6 +13,9 @@ sqlx.workspace = true
 chrono.workspace = true
 uuid.workspace = true
 thiserror.workspace = true
+redis.workspace = true
+deadpool-redis.workspace = true
+anyhow.workspace = true
 base64.workspace = true
 
 [dev-dependencies]

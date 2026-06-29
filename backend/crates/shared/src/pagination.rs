@@ -1,10 +1,10 @@
 //! Cursor pagination envelope. The platform uses opaque cursors (not page/offset)
 //! on public list endpoints; admin endpoints may use page/limit instead.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// A page of results plus the cursor to fetch the next page.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Page<T> {
     pub items: Vec<T>,

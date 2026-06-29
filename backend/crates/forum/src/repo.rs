@@ -445,3 +445,23 @@ fn decode_hot_cursor(cursor: &str) -> Result<(f64, i64), String> {
     let id = id_str.parse::<i64>().map_err(|e| e.to_string())?;
     Ok((hot_score, id))
 }
+
+/// Compute hot rank scores and store in Redis ZSET.
+pub async fn refresh_hot_rank(pool: &deadpool_redis::Pool, db: &PgPool) -> anyhow::Result<()> {
+    let threads = sqlx::query_as::<_, (i64, i32, i32)>(
+        "SELECT id, vote_count, reply_count FROM forum.threads WHERE status = 'normal'",
+    )
+    .fetch_all(db)
+    .await?;
+    let mut conn = pool.get().await?;
+    for (id, vote_count, reply_count) in threads {
+        let score = (vote_count as f64) * 0.7 + (reply_count as f64) * 0.3;
+        redis::cmd("ZADD")
+            .arg("hot:threads")
+            .arg(score)
+            .arg(id)
+            .query_async::<()>(&mut conn)
+            .await?;
+    }
+    Ok(())
+}

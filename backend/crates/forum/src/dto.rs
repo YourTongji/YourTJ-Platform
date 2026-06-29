@@ -15,7 +15,7 @@ pub struct BoardDto {
 }
 
 /// Summary view of a thread (list responses).
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadDto {
     pub id: String,
@@ -30,7 +30,7 @@ pub struct ThreadDto {
 }
 
 /// Detail view of a thread — ThreadDto + optional body.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadDetailDto {
     #[serde(flatten)]
