@@ -30,6 +30,7 @@ pub struct EmailCodeRow {
 
 /// A row from `identity.sessions`.
 #[derive(Debug, Clone, FromRow)]
+#[allow(dead_code)]
 pub struct SessionRow {
     pub id: i64,
     pub account_id: i64,
@@ -46,9 +47,26 @@ pub struct AccountKeyRow {
     pub public_key: String,
 }
 
-/// A row from `credit.wallets`.
+/// A row from `identity.wallet_claim_challenges`.
 #[derive(Debug, Clone, FromRow)]
-pub struct WalletRow {
+#[allow(dead_code)]
+pub struct WalletClaimChallengeRow {
+    pub id: String,
     pub account_id: i64,
-    pub balance: i64,
+    pub nonce: String,
+    pub expires_at: DateTime<Utc>,
+    pub used_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// A row from `identity.legacy_wallet_links`.
+#[derive(Debug, Clone, FromRow)]
+#[allow(dead_code)]
+pub struct LegacyWalletLinkRow {
+    pub legacy_user_hash: String,
+    pub account_id: Option<i64>,
+    pub claimed_at: Option<DateTime<Utc>>,
+    pub legacy_public_key: Option<String>,
+    pub legacy_balance: i64,
+    pub imported_metadata: Option<serde_json::Value>,
 }

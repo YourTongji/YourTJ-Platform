@@ -63,10 +63,27 @@ pub struct BindKeyInput {
     pub public_key: String,
 }
 
-/// GET /wallet
+/// GET /wallet/claim-challenge response
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct WalletOutput {
+pub struct ClaimChallengeOutput {
+    pub challenge_id: String,
+    pub nonce: String,
+}
+
+/// POST /wallet/claim request
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClaimInput {
+    pub legacy_user_hash: String,
+    pub challenge_id: String,
+    pub signature: String,
+}
+
+/// Wallet balance DTO (replaces legacy WalletOutput).
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WalletDto {
     pub account_id: String,
     pub balance: i64,
 }

@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! Identity domain: campus-email accounts, verification codes, JWT sessions, and
 //! the account-bound Ed25519 keys used to sign credit operations.
 //!
@@ -8,15 +7,15 @@
 //! - Old wallets are merged via a signed challenge (`/wallet/claim`), not by import.
 
 pub mod auth;
+pub mod auth_middleware;
 mod email_code;
 mod handlers;
+mod ledger;
 mod repo;
 
 mod dto;
 mod error;
 mod models;
-pub mod notification_hooks;
-mod notifications;
 
 use axum::routing::{get, post};
 use axum::Router;
@@ -33,10 +32,8 @@ pub fn routes(state: AppState) -> Router {
         // Profile
         .route("/api/v2/me", get(handlers::get_me).patch(handlers::update_me))
         // Wallet
-        .route("/api/v2/wallet", get(handlers::get_wallet))
         .route("/api/v2/wallet/bind", post(handlers::bind_key))
-        // Notifications
-        .route("/api/v2/notifications", get(notifications::list_notifications_handler))
-        .route("/api/v2/notifications/read", post(notifications::mark_read_handler))
+        .route("/api/v2/wallet/claim-challenge", get(handlers::claim_challenge))
+        .route("/api/v2/wallet/claim", post(handlers::claim_wallet))
         .with_state(state)
 }

@@ -36,6 +36,31 @@ pub enum IdentityError {
 
     #[error("only @tongji.edu.cn email addresses are accepted")]
     InvalidEmailDomain,
+
+    // Wallet claim errors
+    #[error("challenge not found")]
+    ChallengeNotFound,
+
+    #[error("challenge expired")]
+    ChallengeExpired,
+
+    #[error("challenge already used")]
+    ChallengeAlreadyUsed,
+
+    #[error("challenge belongs to another account")]
+    ChallengeWrongAccount,
+
+    #[error("legacy wallet link not found")]
+    LegacyLinkNotFound,
+
+    #[error("legacy wallet link already claimed")]
+    LegacyLinkAlreadyClaimed,
+
+    #[error("legacy wallet link has no public key")]
+    LegacyNoPublicKey,
+
+    #[error("invalid signature")]
+    InvalidSignature,
 }
 
 impl From<IdentityError> for AppError {
@@ -52,6 +77,14 @@ impl From<IdentityError> for AppError {
             IdentityError::InvalidHandle | IdentityError::InvalidPublicKey => {
                 AppError::BadRequest(err.to_string())
             }
+            IdentityError::ChallengeNotFound
+            | IdentityError::LegacyLinkNotFound
+            | IdentityError::ChallengeWrongAccount
+            | IdentityError::LegacyLinkAlreadyClaimed
+            | IdentityError::LegacyNoPublicKey
+            | IdentityError::InvalidSignature
+            | IdentityError::ChallengeAlreadyUsed => AppError::BadRequest(err.to_string()),
+            IdentityError::ChallengeExpired => AppError::BadRequest(err.to_string()),
         }
     }
 }
