@@ -2,12 +2,15 @@
 
 use std::net::SocketAddr;
 
+use axum::http::HeaderValue;
 use axum::routing::get;
 use axum::{Json, Router};
 use serde_json::{json, Value};
 use shared::AppState;
 use tower_http::cors::{Any, CorsLayer};
+use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::request_id::{MakeRequestUuid, SetRequestIdLayer};
+use tower_http::set_header::SetResponseHeaderLayer;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
 
@@ -15,6 +18,13 @@ use tracing_subscriber::EnvFilter;
 pub async fn run() -> anyhow::Result<()> {
     init_tracing();
     let config = shared::Config::from_env()?;
+
+    // Reject default JWT secret in production.
+    if config.jwt_secret.is_empty() || config.jwt_secret == "change-me-please" {
+        anyhow::bail!(
+            "JWT_SECRET is empty or set to a default value. Set a strong random secret before deploying."
+        );
+    }
 
     let db = sqlx::PgPool::connect(&config.database_url).await?;
     tracing::info!("connected to database");
@@ -43,6 +53,10 @@ pub async fn run() -> anyhow::Result<()> {
         }
     };
 
+    // Decode system Ed25519 private key and derive public key.
+    let (system_private_key, system_public_key_b64) =
+        derive_system_key(&config.credit_system_private_key)?;
+
     let state = AppState {
         db,
         jwt_secret: config.jwt_secret.clone(),
@@ -51,6 +65,8 @@ pub async fn run() -> anyhow::Result<()> {
         meili_url: config.meili_url.clone(),
         meili_master_key: config.meili_master_key.clone(),
         redis: redis_pool,
+        system_private_key,
+        system_public_key_b64,
     };
 
     let app = build_router(state);
@@ -68,6 +84,11 @@ fn build_router(state: AppState) -> Router {
 
     let request_id_layer = SetRequestIdLayer::x_request_id(MakeRequestUuid);
 
+    // Security headers: prevent clickjacking, MIME sniffing, and referrer leakage.
+
+    // Limit request body to 256 KB.
+    let body_limit = RequestBodyLimitLayer::new(256_000);
+
     Router::new()
         .route("/health", get(health))
         .merge(crate::platform::routes(state.clone()))
@@ -80,6 +101,23 @@ fn build_router(state: AppState) -> Router {
         .layer(cors)
         .layer(request_id_layer)
         .layer(TraceLayer::new_for_http())
+        .layer(
+            // Security headers: prevent clickjacking, MIME sniffing, and referrer leakage.
+            tower::ServiceBuilder::new()
+                .layer(SetResponseHeaderLayer::overriding(
+                    axum::http::header::X_FRAME_OPTIONS,
+                    HeaderValue::from_static("DENY"),
+                ))
+                .layer(SetResponseHeaderLayer::overriding(
+                    axum::http::header::X_CONTENT_TYPE_OPTIONS,
+                    HeaderValue::from_static("nosniff"),
+                ))
+                .layer(SetResponseHeaderLayer::overriding(
+                    axum::http::header::REFERRER_POLICY,
+                    HeaderValue::from_static("strict-origin-when-cross-origin"),
+                )),
+        )
+        .layer(body_limit)
 }
 
 /// Liveness probe used by SAE / load balancers.
@@ -90,4 +128,26 @@ async fn health() -> Json<Value> {
 fn init_tracing() {
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     tracing_subscriber::fmt().with_env_filter(filter).with_target(true).init();
+}
+
+/// Decode the hex-encoded system Ed25519 private key seed and derive the
+/// corresponding public key. Returns `(private_key_bytes, public_key_b64)`.
+fn derive_system_key(hex_key: &str) -> anyhow::Result<(Vec<u8>, String)> {
+    if hex_key.is_empty() {
+        anyhow::bail!("CREDIT_SYSTEM_PRIVATE_KEY is not set");
+    }
+    let seed = hex::decode(hex_key)
+        .map_err(|e| anyhow::anyhow!("CREDIT_SYSTEM_PRIVATE_KEY is not valid hex: {e}"))?;
+    if seed.len() != 32 {
+        anyhow::bail!(
+            "CREDIT_SYSTEM_PRIVATE_KEY must be 32 bytes (64 hex chars), got {} bytes",
+            seed.len()
+        );
+    }
+    use ring::signature::KeyPair;
+    let key_pair = ring::signature::Ed25519KeyPair::from_seed_unchecked(&seed)
+        .map_err(|e| anyhow::anyhow!("invalid Ed25519 seed: {e}"))?;
+    use base64::Engine as _;
+    let pk_b64 = base64::engine::general_purpose::STANDARD.encode(key_pair.public_key().as_ref());
+    Ok((seed, pk_b64))
 }

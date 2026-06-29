@@ -11,6 +11,7 @@
 //! the account key for tip/bounty/escrow). Balance is a derived cache, never the
 //! source of truth. Appends are serialized (advisory lock) to keep the chain linear.
 
+pub mod auth;
 pub mod dto;
 pub mod error;
 pub mod handlers;
@@ -27,6 +28,8 @@ pub fn routes(state: AppState) -> Router {
     Router::new()
         // Wallet
         .route("/api/v2/wallet", get(handlers::get_wallet))
+        // Canonical: POST /api/v2/credit/tip — alias: POST /api/v2/wallet/tip
+        .route("/api/v2/credit/tip", post(handlers::tip))
         .route("/api/v2/wallet/tip", post(handlers::tip))
         .route("/api/v2/wallet/ledger", get(handlers::get_ledger))
         .route("/api/v2/wallet/ledger/verify", get(handlers::verify_ledger))
