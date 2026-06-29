@@ -44,6 +44,25 @@ pub struct ResolveReportInput {
 }
 
 // ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/// Fetch a review's course_id and bump the cache version for both the course
+/// and its review list, so CDN and app caches see the change immediately.
+async fn bump_review_cache(state: &AppState, review_id: i64) {
+    if let Ok(Some(course_id)) =
+        sqlx::query_scalar::<_, i64>("SELECT course_id FROM reviews.reviews WHERE id = $1")
+            .bind(review_id)
+            .fetch_optional(&state.db)
+            .await
+    {
+        let cid = course_id.to_string();
+        shared::cache::bump_version_opt(state.redis.as_ref(), "course", &cid).await.ok();
+        shared::cache::bump_version_opt(state.redis.as_ref(), "reviews", &cid).await.ok();
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Handlers
 // ---------------------------------------------------------------------------
 
@@ -86,6 +105,8 @@ pub async fn admin_edit_review(
     )
     .await?;
 
+    bump_review_cache(&state, review_id).await;
+
     Ok(Json(dto))
 }
 
@@ -102,6 +123,8 @@ pub async fn admin_delete_review(
 
     repo::admin_soft_delete_review(&state.db, review_id).await?;
 
+    bump_review_cache(&state, review_id).await;
+
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
@@ -117,6 +140,8 @@ pub async fn admin_toggle_review(
     auth.require_mod().map_err(|_| shared::AppError::Forbidden)?;
 
     repo::admin_toggle_review_visibility(&state.db, review_id).await?;
+
+    bump_review_cache(&state, review_id).await;
 
     Ok(Json(serde_json::json!({ "ok": true })))
 }

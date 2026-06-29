@@ -59,6 +59,7 @@ fn validate_handle(handle: &str) -> Result<(), IdentityError> {
 /// Rate-limited: one code per email per 60 seconds. Sends a 204 on success.
 pub async fn request_code(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(body): Json<RequestCodeInput>,
 ) -> AppResult<StatusCode> {
     let email = body.email.trim().to_lowercase();
@@ -69,6 +70,14 @@ pub async fn request_code(
     // Rate-limit code requests: 1 per 60 seconds per email (Redis-backed).
     shared::ratelimit::check_token_bucket(state.redis.as_ref(), "email_code", &email, 1, 60)
         .await?;
+    // Rate-limit by IP as well: 5 requests per 10 minutes.
+    let ip = headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.split(',').next())
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(|| "unknown".into());
+    shared::ratelimit::check_token_bucket(state.redis.as_ref(), "ip_code", &ip, 5, 600).await?;
 
     let code = generate_code();
     let code_hash = hash_code(&code);

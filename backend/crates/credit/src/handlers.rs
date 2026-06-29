@@ -552,6 +552,15 @@ pub async fn purchase_product(
     let auth = AuthAccount::from_headers(&headers, &state.db, &state.jwt_secret)
         .await
         .map_err(map_auth_err)?;
+    // Rate-limit credit operations: 20 per 60 seconds per account.
+    shared::ratelimit::check_token_bucket(
+        state.redis.as_ref(),
+        "transfer",
+        &auth.id.to_string(),
+        20,
+        60,
+    )
+    .await?;
 
     let product = repo::find_product(&state.db, id).await?.ok_or(CreditError::ProductNotFound)?;
 
