@@ -8,6 +8,10 @@
 
 use anyhow::Result;
 use deadpool_redis::Pool;
+use serde::de::DeserializeOwned;
+use serde::Serialize;
+
+use crate::AppError;
 
 /// INCR the version key for a cached object. Old cache keys naturally expire
 /// via TTL.
@@ -55,4 +59,33 @@ pub async fn set_cached(
         .query_async::<()>(&mut conn)
         .await?;
     Ok(())
+}
+
+/// Generic cached JSON wrapper: read from Redis cache, or call `fetch` to
+/// populate the cache on miss.
+pub async fn cached_json<T, E>(
+    redis: Option<&Pool>,
+    prefix: &str,
+    id: &str,
+    ttl_secs: u64,
+    fetch: impl std::future::Future<Output = Result<T, E>>,
+) -> Result<T, AppError>
+where
+    T: Serialize + DeserializeOwned,
+    E: Into<AppError>,
+{
+    if let Some(pool) = redis {
+        if let Ok(Some(cached)) = get_cached(pool, prefix, id).await {
+            if let Ok(val) = serde_json::from_str::<T>(&cached) {
+                return Ok(val);
+            }
+        }
+    }
+    let val = fetch.await.map_err(Into::into)?;
+    if let Some(pool) = redis {
+        if let Ok(json) = serde_json::to_string(&val) {
+            let _ = set_cached(pool, prefix, id, &json, ttl_secs).await;
+        }
+    }
+    Ok(val)
 }
