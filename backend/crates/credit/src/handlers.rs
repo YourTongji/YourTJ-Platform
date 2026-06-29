@@ -105,6 +105,14 @@ pub async fn tip(
         .await
         .map_err(map_auth_err)?;
 
+    shared::ratelimit::check_token_bucket(
+        state.redis.as_ref(),
+        "transfer",
+        &auth.id.to_string(),
+        20,
+        60,
+    )
+    .await?;
     let to_account_id: i64 = body
         .to_account_id
         .parse()
@@ -243,6 +251,15 @@ pub async fn create_task(
     let auth = AuthAccount::from_headers(&headers, &state.db, &state.jwt_secret)
         .await
         .map_err(map_auth_err)?;
+
+    shared::ratelimit::check_token_bucket(
+        state.redis.as_ref(),
+        "transfer",
+        &auth.id.to_string(),
+        20,
+        60,
+    )
+    .await?;
 
     if body.reward_amount <= 0 {
         return Err(shared::AppError::BadRequest("reward_amount must be positive".into()));
@@ -489,6 +506,14 @@ pub async fn create_product(
         .await
         .map_err(map_auth_err)?;
 
+    shared::ratelimit::check_token_bucket(
+        state.redis.as_ref(),
+        "transfer",
+        &auth.id.to_string(),
+        20,
+        60,
+    )
+    .await?;
     if body.price <= 0 {
         return Err(shared::AppError::BadRequest("price must be positive".into()));
     }

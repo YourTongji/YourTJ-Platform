@@ -208,8 +208,17 @@ fn default_search_limit() -> usize {
 /// GET /api/v2/search — global Meilisearch search across courses and reviews.
 pub async fn global_search(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     Query(params): Query<SearchQuery>,
 ) -> AppResult<Json<Vec<serde_json::Value>>> {
+    // Rate-limit search: 30 requests per 10 seconds per client IP.
+    let ip = headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.split(',').next())
+        .unwrap_or("unknown");
+    shared::ratelimit::check_token_bucket(state.redis.as_ref(), "search", ip, 30, 10).await?;
+
     use crate::meili;
 
     let results = meili::search_courses_and_reviews(

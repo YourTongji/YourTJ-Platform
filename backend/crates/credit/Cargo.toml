@@ -17,6 +17,8 @@ base64.workspace = true
 uuid.workspace = true
 chrono.workspace = true
 tracing.workspace = true
+redis.workspace = true
+deadpool-redis.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
