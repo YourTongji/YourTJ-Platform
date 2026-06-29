@@ -6,9 +6,7 @@
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
-use serde::de::DeserializeOwned;
-use serde::Serialize;
-use shared::{AppError, AppResult, AppState, AuthAccount};
+use shared::{AppResult, AppState, Page};
 
 use crate::dto::{ListReviewsQuery, ReportInput, ReviewDto, ReviewInput};
 use crate::repo;
@@ -21,16 +19,16 @@ pub async fn list_reviews(
     State(state): State<AppState>,
     Path(course_id): Path<i64>,
     Query(params): Query<ListReviewsQuery>,
-) -> AppResult<Json<Vec<ReviewDto>>> {
+) -> AppResult<Json<Page<ReviewDto>>> {
     let sort = params.sort.as_deref().unwrap_or("new");
     let c = params.cursor.map(|x| x.to_string()).unwrap_or_default();
     let cache_id = format!("{course_id}:{sort}:{c}");
-    let items = cached_json(&state, "reviews", &cache_id, 120, async {
+    let page = shared::cache::cached_json(state.redis.as_ref(), "reviews", &cache_id, 120, async {
         repo::list_reviews(&state.db, course_id, Some(sort), params.cursor, Some(params.limit))
             .await
     })
     .await?;
-    Ok(Json(items))
+    Ok(Json(page))
 }
 
 /// POST /courses/{id}/reviews — create a new review (authenticated).
@@ -40,9 +38,18 @@ pub async fn create_review(
     headers: HeaderMap,
     Json(body): Json<ReviewInput>,
 ) -> AppResult<(StatusCode, Json<ReviewDto>)> {
-    let auth = AuthAccount::from_headers(&headers, &state.db, &state.jwt_secret)
+    let auth = identity::auth_middleware::authenticate(&headers, &state.db, &state.jwt_secret)
         .await
         .map_err(|_r| shared::AppError::Unauthorized)?;
+
+    shared::ratelimit::check_token_bucket(
+        state.redis.as_ref(),
+        "review_create",
+        &auth.id.to_string(),
+        5,
+        60,
+    )
+    .await?;
 
     let dto = repo::create_review(
         &state.db,
@@ -70,7 +77,7 @@ pub async fn edit_review(
     headers: HeaderMap,
     Json(body): Json<ReviewInput>,
 ) -> AppResult<Json<ReviewDto>> {
-    let auth = AuthAccount::from_headers(&headers, &state.db, &state.jwt_secret)
+    let auth = identity::auth_middleware::authenticate(&headers, &state.db, &state.jwt_secret)
         .await
         .map_err(|_r| shared::AppError::Unauthorized)?;
 
@@ -98,7 +105,7 @@ pub async fn like_review(
     Path(review_id): Path<i64>,
     headers: HeaderMap,
 ) -> AppResult<StatusCode> {
-    let auth = AuthAccount::from_headers(&headers, &state.db, &state.jwt_secret)
+    let auth = identity::auth_middleware::authenticate(&headers, &state.db, &state.jwt_secret)
         .await
         .map_err(|_r| shared::AppError::Unauthorized)?;
 
@@ -121,7 +128,7 @@ pub async fn unlike_review(
     Path(review_id): Path<i64>,
     headers: HeaderMap,
 ) -> AppResult<StatusCode> {
-    let auth = AuthAccount::from_headers(&headers, &state.db, &state.jwt_secret)
+    let auth = identity::auth_middleware::authenticate(&headers, &state.db, &state.jwt_secret)
         .await
         .map_err(|_r| shared::AppError::Unauthorized)?;
 
@@ -145,34 +152,11 @@ pub async fn report_review(
     headers: HeaderMap,
     Json(body): Json<ReportInput>,
 ) -> AppResult<StatusCode> {
-    let auth = AuthAccount::from_headers(&headers, &state.db, &state.jwt_secret)
+    let auth = identity::auth_middleware::authenticate(&headers, &state.db, &state.jwt_secret)
         .await
         .map_err(|_r| shared::AppError::Unauthorized)?;
 
     repo::report_review(&state.db, review_id, auth.id, &body.reason).await?;
 
     Ok(StatusCode::NO_CONTENT)
-}
-
-async fn cached_json<T: Serialize + DeserializeOwned>(
-    state: &AppState,
-    prefix: &str,
-    id: &str,
-    ttl: u64,
-    fetch: impl std::future::Future<Output = Result<T, AppError>>,
-) -> Result<T, AppError> {
-    if let Some(ref redis) = state.redis {
-        if let Ok(Some(cached)) = shared::cache::get_cached(redis, prefix, id).await {
-            if let Ok(val) = serde_json::from_str::<T>(&cached) {
-                return Ok(val);
-            }
-        }
-    }
-    let val = fetch.await?;
-    if let Some(ref redis) = state.redis {
-        if let Ok(json) = serde_json::to_string(&val) {
-            let _ = shared::cache::set_cached(redis, prefix, id, &json, ttl).await;
-        }
-    }
-    Ok(val)
 }

@@ -6,7 +6,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::HeaderMap;
 use axum::Json;
 use serde::Deserialize;
-use shared::{AppResult, AppState, AuthAccount};
+use shared::{AppResult, AppState};
 
 use crate::dto::{ReportDto, ReviewDto, ReviewInput};
 use crate::repo;
@@ -72,7 +72,7 @@ pub async fn admin_list_reviews(
     headers: HeaderMap,
     Query(params): Query<AdminListReviewsQuery>,
 ) -> AppResult<Json<Vec<ReviewDto>>> {
-    let auth = AuthAccount::from_headers(&headers, &state.db, &state.jwt_secret)
+    let auth = identity::auth_middleware::authenticate(&headers, &state.db, &state.jwt_secret)
         .await
         .map_err(|_r| shared::AppError::Unauthorized)?;
     auth.require_mod().map_err(|_| shared::AppError::Forbidden)?;
@@ -90,7 +90,7 @@ pub async fn admin_edit_review(
     headers: HeaderMap,
     Json(body): Json<ReviewInput>,
 ) -> AppResult<Json<ReviewDto>> {
-    let auth = AuthAccount::from_headers(&headers, &state.db, &state.jwt_secret)
+    let auth = identity::auth_middleware::authenticate(&headers, &state.db, &state.jwt_secret)
         .await
         .map_err(|_r| shared::AppError::Unauthorized)?;
     auth.require_mod().map_err(|_| shared::AppError::Forbidden)?;
@@ -116,7 +116,7 @@ pub async fn admin_delete_review(
     Path(review_id): Path<i64>,
     headers: HeaderMap,
 ) -> AppResult<Json<serde_json::Value>> {
-    let auth = AuthAccount::from_headers(&headers, &state.db, &state.jwt_secret)
+    let auth = identity::auth_middleware::authenticate(&headers, &state.db, &state.jwt_secret)
         .await
         .map_err(|_r| shared::AppError::Unauthorized)?;
     auth.require_mod().map_err(|_| shared::AppError::Forbidden)?;
@@ -134,7 +134,7 @@ pub async fn admin_toggle_review(
     Path(review_id): Path<i64>,
     headers: HeaderMap,
 ) -> AppResult<Json<serde_json::Value>> {
-    let auth = AuthAccount::from_headers(&headers, &state.db, &state.jwt_secret)
+    let auth = identity::auth_middleware::authenticate(&headers, &state.db, &state.jwt_secret)
         .await
         .map_err(|_r| shared::AppError::Unauthorized)?;
     auth.require_mod().map_err(|_| shared::AppError::Forbidden)?;
@@ -152,7 +152,7 @@ pub async fn admin_list_reports(
     headers: HeaderMap,
     Query(params): Query<AdminListReportsQuery>,
 ) -> AppResult<Json<Vec<ReportDto>>> {
-    let auth = AuthAccount::from_headers(&headers, &state.db, &state.jwt_secret)
+    let auth = identity::auth_middleware::authenticate(&headers, &state.db, &state.jwt_secret)
         .await
         .map_err(|_r| shared::AppError::Unauthorized)?;
     auth.require_mod().map_err(|_| shared::AppError::Forbidden)?;
@@ -168,7 +168,7 @@ pub async fn admin_resolve_report(
     headers: HeaderMap,
     Json(body): Json<ResolveReportInput>,
 ) -> AppResult<Json<serde_json::Value>> {
-    let auth = AuthAccount::from_headers(&headers, &state.db, &state.jwt_secret)
+    let auth = identity::auth_middleware::authenticate(&headers, &state.db, &state.jwt_secret)
         .await
         .map_err(|_r| shared::AppError::Unauthorized)?;
     auth.require_mod().map_err(|_| shared::AppError::Forbidden)?;

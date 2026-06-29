@@ -16,8 +16,8 @@ tracing.workspace = true
 redis.workspace = true
 deadpool-redis.workspace = true
 uuid.workspace = true
+identity.workspace = true
 
 [dev-dependencies]
-identity.workspace = true
 tower.workspace = true
 tokio = { workspace = true, features = ["macros"] }

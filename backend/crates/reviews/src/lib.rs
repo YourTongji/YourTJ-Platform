@@ -5,8 +5,6 @@
 //! - `courses.review_count` / `review_avg` are maintained incrementally on write —
 //!   never recomputed with `AVG()` on the read path.
 
-#![allow(dead_code)]
-
 mod admin_handlers;
 pub(crate) mod dto;
 pub(crate) mod error;
@@ -27,7 +25,11 @@ pub fn routes(state: AppState) -> Router {
             get(handlers::list_reviews).post(handlers::create_review),
         )
         .route("/api/v2/reviews/{id}", patch(handlers::edit_review))
-        .route("/api/v2/reviews/{id}/like", post(handlers::like_review))
+        // POST like, DELETE like (canonical), POST unlike (alias)
+        .route(
+            "/api/v2/reviews/{id}/like",
+            post(handlers::like_review).delete(handlers::unlike_review),
+        )
         .route("/api/v2/reviews/{id}/unlike", post(handlers::unlike_review))
         .route("/api/v2/reviews/{id}/report", post(handlers::report_review))
         // Admin
