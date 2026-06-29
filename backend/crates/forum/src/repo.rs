@@ -159,6 +159,206 @@ async fn list_threads_hot(
     Ok((items, next_cursor))
 }
 
+/// List threads across all boards (optional board filter) with cursor pagination.
+///
+/// `board_id` is optional — when `None`, returns threads from all boards.
+pub async fn list_threads_feed(
+    pool: &PgPool,
+    board_id: Option<i64>,
+    sort: &str,
+    cursor: Option<&str>,
+    limit: i64,
+) -> AppResult<(Vec<ThreadRowJoined>, Option<String>)> {
+    match sort {
+        "hot" => list_threads_feed_hot(pool, board_id, cursor, limit).await,
+        _ => list_threads_feed_new(pool, board_id, cursor, limit).await,
+    }
+}
+
+async fn list_threads_feed_new(
+    pool: &PgPool,
+    board_id: Option<i64>,
+    cursor: Option<&str>,
+    limit: i64,
+) -> AppResult<(Vec<ThreadRowJoined>, Option<String>)> {
+    let cursor_id: Option<i64> = cursor
+        .map(base64_decode_i64)
+        .transpose()
+        .map_err(|_| shared::AppError::BadRequest("invalid cursor".into()))?;
+
+    let rows = if let (Some(cid), Some(bid)) = (cursor_id, board_id) {
+        sqlx::query_as::<_, ThreadRowJoined>(
+            "SELECT t.id, t.board_id, t.author_id, t.title, t.body, \
+                    t.reply_count, t.vote_count, t.hot_score, t.status, \
+                    t.created_at, t.last_activity_at, \
+                    a.handle AS author_handle \
+             FROM forum.threads t \
+             JOIN identity.accounts a ON a.id = t.author_id \
+             WHERE t.board_id = $1 AND t.created_at < (SELECT created_at FROM forum.threads WHERE id = $3) \
+             ORDER BY t.created_at DESC, t.id DESC \
+             LIMIT $2",
+        )
+        .bind(bid)
+        .bind(limit + 1)
+        .bind(cid)
+        .fetch_all(pool)
+        .await?
+    } else if let (Some(cid), None) = (cursor_id, board_id) {
+        sqlx::query_as::<_, ThreadRowJoined>(
+            "SELECT t.id, t.board_id, t.author_id, t.title, t.body, \
+                    t.reply_count, t.vote_count, t.hot_score, t.status, \
+                    t.created_at, t.last_activity_at, \
+                    a.handle AS author_handle \
+             FROM forum.threads t \
+             JOIN identity.accounts a ON a.id = t.author_id \
+             WHERE t.created_at < (SELECT created_at FROM forum.threads WHERE id = $2) \
+             ORDER BY t.created_at DESC, t.id DESC \
+             LIMIT $1",
+        )
+        .bind(limit + 1)
+        .bind(cid)
+        .fetch_all(pool)
+        .await?
+    } else if let (None, Some(bid)) = (cursor_id, board_id) {
+        sqlx::query_as::<_, ThreadRowJoined>(
+            "SELECT t.id, t.board_id, t.author_id, t.title, t.body, \
+                    t.reply_count, t.vote_count, t.hot_score, t.status, \
+                    t.created_at, t.last_activity_at, \
+                    a.handle AS author_handle \
+             FROM forum.threads t \
+             JOIN identity.accounts a ON a.id = t.author_id \
+             WHERE t.board_id = $1 \
+             ORDER BY t.created_at DESC, t.id DESC \
+             LIMIT $2",
+        )
+        .bind(bid)
+        .bind(limit + 1)
+        .fetch_all(pool)
+        .await?
+    } else {
+        sqlx::query_as::<_, ThreadRowJoined>(
+            "SELECT t.id, t.board_id, t.author_id, t.title, t.body, \
+                    t.reply_count, t.vote_count, t.hot_score, t.status, \
+                    t.created_at, t.last_activity_at, \
+                    a.handle AS author_handle \
+             FROM forum.threads t \
+             JOIN identity.accounts a ON a.id = t.author_id \
+             ORDER BY t.created_at DESC, t.id DESC \
+             LIMIT $1",
+        )
+        .bind(limit + 1)
+        .fetch_all(pool)
+        .await?
+    };
+
+    let has_more = rows.len() > limit as usize;
+    let items = if has_more { rows[..limit as usize].to_vec() } else { rows };
+    let next_cursor = if has_more { items.last().map(|r| base64_encode_i64(r.id)) } else { None };
+
+    Ok((items, next_cursor))
+}
+
+async fn list_threads_feed_hot(
+    pool: &PgPool,
+    board_id: Option<i64>,
+    cursor: Option<&str>,
+    limit: i64,
+) -> AppResult<(Vec<ThreadRowJoined>, Option<String>)> {
+    let (cursor_hot, cursor_id): (Option<f64>, Option<i64>) = if let Some(c) = cursor {
+        let decoded = decode_hot_cursor(c)
+            .map_err(|_| shared::AppError::BadRequest("invalid cursor".into()))?;
+        (Some(decoded.0), Some(decoded.1))
+    } else {
+        (None, None)
+    };
+
+    let (ch, ci) = (cursor_hot, cursor_id);
+    let rows = match (board_id, ch, ci) {
+        (Some(bid), Some(ch), Some(ci)) => {
+            sqlx::query_as::<_, ThreadRowJoined>(
+                "SELECT t.id, t.board_id, t.author_id, t.title, t.body, \
+                        t.reply_count, t.vote_count, t.hot_score, t.status, \
+                        t.created_at, t.last_activity_at, \
+                        a.handle AS author_handle \
+                 FROM forum.threads t \
+                 JOIN identity.accounts a ON a.id = t.author_id \
+                 WHERE t.board_id = $1 \
+                   AND (COALESCE(t.hot_score, 0) < $3 \
+                        OR (COALESCE(t.hot_score, 0) = $3 AND t.id < $4)) \
+                 ORDER BY COALESCE(t.hot_score, 0) DESC, t.id DESC \
+                 LIMIT $2",
+            )
+            .bind(bid)
+            .bind(limit + 1)
+            .bind(ch)
+            .bind(ci)
+            .fetch_all(pool)
+            .await?
+        }
+        (None, Some(ch), Some(ci)) => {
+            sqlx::query_as::<_, ThreadRowJoined>(
+                "SELECT t.id, t.board_id, t.author_id, t.title, t.body, \
+                        t.reply_count, t.vote_count, t.hot_score, t.status, \
+                        t.created_at, t.last_activity_at, \
+                        a.handle AS author_handle \
+                 FROM forum.threads t \
+                 JOIN identity.accounts a ON a.id = t.author_id \
+                 WHERE (COALESCE(t.hot_score, 0) < $2 \
+                        OR (COALESCE(t.hot_score, 0) = $2 AND t.id < $3)) \
+                 ORDER BY COALESCE(t.hot_score, 0) DESC, t.id DESC \
+                 LIMIT $1",
+            )
+            .bind(limit + 1)
+            .bind(ch)
+            .bind(ci)
+            .fetch_all(pool)
+            .await?
+        }
+        (Some(bid), _, _) => {
+            sqlx::query_as::<_, ThreadRowJoined>(
+                "SELECT t.id, t.board_id, t.author_id, t.title, t.body, \
+                        t.reply_count, t.vote_count, t.hot_score, t.status, \
+                        t.created_at, t.last_activity_at, \
+                        a.handle AS author_handle \
+                 FROM forum.threads t \
+                 JOIN identity.accounts a ON a.id = t.author_id \
+                 WHERE t.board_id = $1 \
+                 ORDER BY COALESCE(t.hot_score, 0) DESC, t.id DESC \
+                 LIMIT $2",
+            )
+            .bind(bid)
+            .bind(limit + 1)
+            .fetch_all(pool)
+            .await?
+        }
+        (None, _, _) => {
+            sqlx::query_as::<_, ThreadRowJoined>(
+                "SELECT t.id, t.board_id, t.author_id, t.title, t.body, \
+                        t.reply_count, t.vote_count, t.hot_score, t.status, \
+                        t.created_at, t.last_activity_at, \
+                        a.handle AS author_handle \
+                 FROM forum.threads t \
+                 JOIN identity.accounts a ON a.id = t.author_id \
+                 ORDER BY COALESCE(t.hot_score, 0) DESC, t.id DESC \
+                 LIMIT $1",
+            )
+            .bind(limit + 1)
+            .fetch_all(pool)
+            .await?
+        }
+    };
+
+    let has_more = rows.len() > limit as usize;
+    let items = if has_more { rows[..limit as usize].to_vec() } else { rows };
+    let next_cursor = if has_more {
+        items.last().map(|r| encode_hot_cursor(r.hot_score.unwrap_or(0.0), r.id))
+    } else {
+        None
+    };
+
+    Ok((items, next_cursor))
+}
+
 /// Find a single thread by id, joined with author handle.
 pub async fn find_thread(pool: &PgPool, id: i64) -> AppResult<Option<ThreadRowJoined>> {
     let row = sqlx::query_as::<_, ThreadRowJoined>(
@@ -271,6 +471,7 @@ pub async fn list_comments(
 ///
 /// If `parent_id` is provided, the path is computed as `{parent_path}.{next_sibling}`.
 /// Otherwise the path is the next zero-padded top-level index.
+/// Uses a transaction with row-level locks for race-free path generation.
 pub async fn create_comment(
     pool: &PgPool,
     thread_id: i64,
@@ -278,46 +479,72 @@ pub async fn create_comment(
     body: &str,
     parent_id: Option<i64>,
 ) -> AppResult<CommentRowJoined> {
-    let path = if let Some(pid) = parent_id {
-        // Find parent's path.
-        let parent_path: Option<String> =
-            sqlx::query_scalar("SELECT path FROM forum.comments WHERE id = $1 AND thread_id = $2")
-                .bind(pid)
-                .bind(thread_id)
-                .fetch_optional(pool)
-                .await?
-                .flatten();
+    let mut tx = pool.begin().await?;
+
+    if let Some(pid) = parent_id {
+        // Lock the parent comment row to prevent concurrent sibling inserts.
+        // Fetch parent path inside the same transaction with FOR UPDATE.
+        let parent_path: Option<String> = sqlx::query_scalar(
+            "SELECT path FROM forum.comments WHERE id = $1 AND thread_id = $2 FOR UPDATE",
+        )
+        .bind(pid)
+        .bind(thread_id)
+        .fetch_optional(&mut *tx)
+        .await?
+        .flatten();
 
         let parent_path = parent_path.ok_or(crate::error::ForumError::CommentMissing)?;
 
-        // Find max child path under this parent.
-        let max_child: Option<String> = sqlx::query_scalar(
+        // Find max child path under this parent inside the locked transaction.
+        let max_child: String = sqlx::query_scalar(
             "SELECT COALESCE(MAX(path), '') FROM forum.comments \
              WHERE thread_id = $1 AND parent_id = $2 AND path IS NOT NULL",
         )
         .bind(thread_id)
         .bind(pid)
-        .fetch_one(pool)
+        .fetch_one(&mut *tx)
         .await?;
 
-        let max_child_str = max_child.unwrap_or_default();
-        let next_index = next_sibling_index(&max_child_str, &parent_path);
-        format!("{parent_path}.{next_index:04x}")
+        let next_index = next_sibling_index(&max_child, &parent_path);
+        let path = format!("{parent_path}.{next_index:04x}");
+
+        let row = insert_comment_tx(&mut tx, thread_id, parent_id, &path, author_id, body).await?;
+        tx.commit().await?;
+        Ok(row)
     } else {
+        // Lock the thread row to prevent concurrent top-level comment creation.
+        let _: (i64,) = sqlx::query_as("SELECT id FROM forum.threads WHERE id = $1 FOR UPDATE")
+            .bind(thread_id)
+            .fetch_one(&mut *tx)
+            .await?;
+
         // Top-level comment: find next top-level index.
-        let max_path: Option<String> = sqlx::query_scalar(
+        let max_path: String = sqlx::query_scalar(
             "SELECT COALESCE(MAX(path), '') FROM forum.comments \
              WHERE thread_id = $1 AND parent_id IS NULL AND path IS NOT NULL",
         )
         .bind(thread_id)
-        .fetch_one(pool)
+        .fetch_one(&mut *tx)
         .await?;
 
-        let max_path_str = max_path.unwrap_or_default();
-        let top_level = next_sibling_index(&max_path_str, "");
-        format!("{top_level:04x}")
-    };
+        let top_level = next_sibling_index(&max_path, "");
+        let path = format!("{top_level:04x}");
 
+        let row = insert_comment_tx(&mut tx, thread_id, None, &path, author_id, body).await?;
+        tx.commit().await?;
+        Ok(row)
+    }
+}
+
+/// Insert the comment row and update thread reply_count in the active transaction.
+async fn insert_comment_tx(
+    tx: &mut sqlx::PgConnection,
+    thread_id: i64,
+    parent_id: Option<i64>,
+    path: &str,
+    author_id: i64,
+    body: &str,
+) -> AppResult<CommentRowJoined> {
     let row = sqlx::query_as::<_, CommentRowJoined>(
         "WITH inserted AS ( \
             INSERT INTO forum.comments (thread_id, parent_id, path, author_id, body) \
@@ -332,10 +559,10 @@ pub async fn create_comment(
     )
     .bind(thread_id)
     .bind(parent_id)
-    .bind(&path)
+    .bind(path)
     .bind(author_id)
     .bind(body)
-    .fetch_one(pool)
+    .fetch_one(&mut *tx)
     .await?;
 
     // Bump thread reply_count and last_activity_at.
@@ -345,7 +572,7 @@ pub async fn create_comment(
          WHERE id = $1",
     )
     .bind(thread_id)
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
 
     Ok(row)
@@ -370,39 +597,89 @@ pub fn next_sibling_index(max_child_path: &str, parent_path: &str) -> u32 {
 // votes
 // ---------------------------------------------------------------------------
 
-/// Vote on a thread or comment. `value` is "up" (+1) or "down" (-1).
+/// Vote on a thread or comment with one-vote-per-user.
 ///
-/// Returns `true` if a row was affected, `false` if the post was not found.
-pub async fn vote_post(pool: &PgPool, post_id: i64, value: &str) -> AppResult<bool> {
+/// Uses UPSERT on `forum.votes` so each account can only have one vote per post.
+/// `post_type` must be "thread" or "comment". `value` is "up" (+1) or "down" (-1).
+///
+/// Returns the new vote count for the post after this vote.
+pub async fn vote_post(
+    pool: &PgPool,
+    post_type: &str,
+    post_id: i64,
+    account_id: i64,
+    value: &str,
+) -> AppResult<i32> {
     let delta: i32 = match value {
         "up" => 1,
         "down" => -1,
         _ => return Err(shared::AppError::BadRequest("vote value must be 'up' or 'down'".into())),
     };
 
-    // Try threads first.
-    let affected =
-        sqlx::query("UPDATE forum.threads SET vote_count = vote_count + $1 WHERE id = $2")
-            .bind(delta)
-            .bind(post_id)
-            .execute(pool)
-            .await?
-            .rows_affected();
-
-    if affected > 0 {
-        return Ok(true);
+    if post_type != "thread" && post_type != "comment" {
+        return Err(shared::AppError::BadRequest("post_type must be 'thread' or 'comment'".into()));
     }
 
-    // Try comments.
-    let affected =
-        sqlx::query("UPDATE forum.comments SET vote_count = vote_count + $1 WHERE id = $2")
-            .bind(delta)
+    // Validate that the post exists.
+    let exists: bool = if post_type == "thread" {
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM forum.threads WHERE id = $1)")
             .bind(post_id)
-            .execute(pool)
+            .fetch_one(pool)
             .await?
-            .rows_affected();
+    } else {
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM forum.comments WHERE id = $1)")
+            .bind(post_id)
+            .fetch_one(pool)
+            .await?
+    };
 
-    Ok(affected > 0)
+    if !exists {
+        return Err(shared::AppError::NotFound);
+    }
+
+    let mut tx = pool.begin().await?;
+
+    // UPSERT into forum.votes — same (post_type, post_id, account_id) → UPDATE value.
+    sqlx::query(
+        "INSERT INTO forum.votes (post_type, post_id, account_id, value) \
+         VALUES ($1, $2, $3, $4) \
+         ON CONFLICT (post_type, post_id, account_id) \
+         DO UPDATE SET value = EXCLUDED.value, updated_at = now()",
+    )
+    .bind(post_type)
+    .bind(post_id)
+    .bind(account_id)
+    .bind(delta)
+    .execute(&mut *tx)
+    .await?;
+
+    // Recompute the vote_count for the post by summing votes.
+    let new_vote_count: i32 = sqlx::query_scalar(
+        "SELECT COALESCE(SUM(value), 0) FROM forum.votes WHERE post_type = $1 AND post_id = $2",
+    )
+    .bind(post_type)
+    .bind(post_id)
+    .fetch_one(&mut *tx)
+    .await?;
+
+    // Update the post's materialised vote_count.
+    if post_type == "thread" {
+        sqlx::query("UPDATE forum.threads SET vote_count = $1 WHERE id = $2")
+            .bind(new_vote_count)
+            .bind(post_id)
+            .execute(&mut *tx)
+            .await?;
+    } else {
+        sqlx::query("UPDATE forum.comments SET vote_count = $1 WHERE id = $2")
+            .bind(new_vote_count)
+            .bind(post_id)
+            .execute(&mut *tx)
+            .await?;
+    }
+
+    tx.commit().await?;
+
+    Ok(new_vote_count)
 }
 
 // ---------------------------------------------------------------------------
@@ -446,22 +723,25 @@ fn decode_hot_cursor(cursor: &str) -> Result<(f64, i64), String> {
     Ok((hot_score, id))
 }
 
-/// Compute hot rank scores and store in Redis ZSET.
+/// Compute hot rank scores and batch-store in Redis ZSET (single round-trip).
 pub async fn refresh_hot_rank(pool: &deadpool_redis::Pool, db: &PgPool) -> anyhow::Result<()> {
     let threads = sqlx::query_as::<_, (i64, i32, i32)>(
         "SELECT id, vote_count, reply_count FROM forum.threads WHERE status = 'normal'",
     )
     .fetch_all(db)
     .await?;
-    let mut conn = pool.get().await?;
-    for (id, vote_count, reply_count) in threads {
-        let score = (vote_count as f64) * 0.7 + (reply_count as f64) * 0.3;
-        redis::cmd("ZADD")
-            .arg("hot:threads")
-            .arg(score)
-            .arg(id)
-            .query_async::<()>(&mut conn)
-            .await?;
+
+    if threads.is_empty() {
+        return Ok(());
     }
+
+    let mut conn = pool.get().await?;
+    let mut cmd = redis::cmd("ZADD");
+    cmd.arg("hot:threads");
+    for (id, vote_count, reply_count) in &threads {
+        let score = (*vote_count as f64) * 0.7 + (*reply_count as f64) * 0.3;
+        cmd.arg(score).arg(*id);
+    }
+    cmd.query_async::<()>(&mut conn).await?;
     Ok(())
 }

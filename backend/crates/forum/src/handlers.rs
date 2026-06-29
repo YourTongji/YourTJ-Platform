@@ -5,10 +5,9 @@
 use axum::extract::{Path, Query, State};
 use axum::http::HeaderMap;
 use axum::Json;
-use serde::de::DeserializeOwned;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use shared::pagination::Page;
-use shared::{AppError, AppResult, AppState, AuthAccount};
+use shared::{AppError, AppResult, AppState};
 
 use crate::dto::{
     BoardDto, CommentDto, CommentInput, ThreadDetailDto, ThreadDto, ThreadInput, VoteInput,
@@ -27,6 +26,17 @@ pub struct ThreadListQuery {
     cursor: Option<String>,
     #[serde(default = "default_limit")]
     limit: i64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadFeedQuery {
+    pub board: Option<String>,
+    #[serde(default = "default_sort")]
+    pub sort: String,
+    pub cursor: Option<String>,
+    #[serde(default = "default_limit")]
+    pub limit: i64,
 }
 
 fn default_sort() -> String {
@@ -103,9 +113,27 @@ pub async fn list_threads(
     let board_id: i64 = board_id_str.parse().map_err(|_| AppError::NotFound)?;
     let c = q.cursor.as_deref().unwrap_or("");
     let cache_id = format!("{board_id}:{}:{}", q.sort, c);
-    let page = cached_json(&state, "board", &cache_id, 60, async {
+    let page = shared::cache::cached_json(state.redis.as_ref(), "board", &cache_id, 60, async {
         let (rows, next_cursor) =
             repo::list_threads(&state.db, board_id, &q.sort, q.cursor.as_deref(), q.limit).await?;
+        let items: Vec<ThreadDto> = rows.iter().map(thread_to_dto).collect();
+        Ok::<_, AppError>(Page::new(items, next_cursor))
+    })
+    .await?;
+    Ok(Json(page))
+}
+
+/// GET /api/v2/forum/threads — global feed (optional board filter)
+pub async fn list_threads_feed(
+    State(state): State<AppState>,
+    Query(q): Query<ThreadFeedQuery>,
+) -> AppResult<Json<Page<ThreadDto>>> {
+    let board_id: Option<i64> = q.board.as_deref().and_then(|b| b.parse::<i64>().ok());
+    let cache_id = format!("feed:{}:{:?}:{}", q.sort, board_id, q.cursor.as_deref().unwrap_or(""));
+    let page = shared::cache::cached_json(state.redis.as_ref(), "board", &cache_id, 60, async {
+        let (rows, next_cursor) =
+            repo::list_threads_feed(&state.db, board_id, &q.sort, q.cursor.as_deref(), q.limit)
+                .await?;
         let items: Vec<ThreadDto> = rows.iter().map(thread_to_dto).collect();
         Ok::<_, AppError>(Page::new(items, next_cursor))
     })
@@ -119,11 +147,12 @@ pub async fn get_thread(
     Path(id_str): Path<String>,
 ) -> AppResult<Json<ThreadDetailDto>> {
     let id: i64 = id_str.parse().map_err(|_| AppError::NotFound)?;
-    let detail = cached_json(&state, "thread", &id.to_string(), 120, async {
-        let row = repo::find_thread(&state.db, id).await?.ok_or(AppError::NotFound)?;
-        Ok::<_, AppError>(thread_to_detail_dto(&row))
-    })
-    .await?;
+    let detail =
+        shared::cache::cached_json(state.redis.as_ref(), "thread", &id.to_string(), 120, async {
+            let row = repo::find_thread(&state.db, id).await?.ok_or(AppError::NotFound)?;
+            Ok::<_, AppError>(thread_to_detail_dto(&row))
+        })
+        .await?;
     Ok(Json(detail))
 }
 
@@ -133,9 +162,18 @@ pub async fn create_thread(
     headers: HeaderMap,
     Json(body): Json<ThreadInput>,
 ) -> AppResult<Json<ThreadDetailDto>> {
-    let auth = AuthAccount::from_headers(&headers, &state.db, &state.jwt_secret)
+    let auth = identity::auth_middleware::authenticate(&headers, &state.db, &state.jwt_secret)
         .await
         .map_err(|_r| AppError::Unauthorized)?;
+
+    shared::ratelimit::check_token_bucket(
+        state.redis.as_ref(),
+        "thread_create",
+        &auth.id.to_string(),
+        5,
+        60,
+    )
+    .await?;
 
     let board_id: i64 = body.board_id.parse().map_err(|_| AppError::NotFound)?;
     let row = repo::create_thread(&state.db, board_id, auth.id, &body).await?;
@@ -168,9 +206,18 @@ pub async fn create_comment(
     headers: HeaderMap,
     Json(body): Json<CommentInput>,
 ) -> AppResult<Json<CommentDto>> {
-    let auth = AuthAccount::from_headers(&headers, &state.db, &state.jwt_secret)
+    let auth = identity::auth_middleware::authenticate(&headers, &state.db, &state.jwt_secret)
         .await
         .map_err(|_r| AppError::Unauthorized)?;
+
+    shared::ratelimit::check_token_bucket(
+        state.redis.as_ref(),
+        "comment_create",
+        &auth.id.to_string(),
+        20,
+        60,
+    )
+    .await?;
 
     let thread_id: i64 = thread_id_str.parse().map_err(|_| AppError::NotFound)?;
 
@@ -197,51 +244,17 @@ pub async fn vote_post(
     headers: HeaderMap,
     Json(body): Json<VoteInput>,
 ) -> AppResult<Json<serde_json::Value>> {
-    let auth = AuthAccount::from_headers(&headers, &state.db, &state.jwt_secret)
+    let auth = identity::auth_middleware::authenticate(&headers, &state.db, &state.jwt_secret)
         .await
         .map_err(|_r| AppError::Unauthorized)?;
 
-    let _post_id: i64 = post_id_str.parse().map_err(|_| AppError::NotFound)?;
-    let ok = repo::vote_post(&state.db, _post_id, &body.value).await?;
-    if !ok {
-        return Err(AppError::NotFound);
-    }
-    let _ = auth;
+    let post_id: i64 = post_id_str.parse().map_err(|_| AppError::NotFound)?;
 
-    // Fire-and-forget Redis counter update.
-    if let Some(ref redis) = state.redis {
-        if let Ok(mut conn) = redis.get().await {
-            let key = format!("counters:post:{}:votes", _post_id);
-            let _ = redis::cmd("INCRBY")
-                .arg(&key)
-                .arg(if body.value == "up" { 1 } else { -1 })
-                .query_async::<()>(&mut conn)
-                .await;
-        }
-    }
+    let vote_count =
+        repo::vote_post(&state.db, &body.post_type, post_id, auth.id, &body.value).await?;
 
-    Ok(Json(serde_json::json!({"ok": true})))
-}
+    // Bump board cache version.
+    shared::cache::bump_version_opt(state.redis.as_ref(), "board", &post_id.to_string()).await.ok();
 
-async fn cached_json<T: Serialize + DeserializeOwned>(
-    state: &AppState,
-    prefix: &str,
-    id: &str,
-    ttl: u64,
-    fetch: impl std::future::Future<Output = Result<T, AppError>>,
-) -> Result<T, AppError> {
-    if let Some(ref redis) = state.redis {
-        if let Ok(Some(cached)) = shared::cache::get_cached(redis, prefix, id).await {
-            if let Ok(val) = serde_json::from_str::<T>(&cached) {
-                return Ok(val);
-            }
-        }
-    }
-    let val = fetch.await?;
-    if let Some(ref redis) = state.redis {
-        if let Ok(json) = serde_json::to_string(&val) {
-            let _ = shared::cache::set_cached(redis, prefix, id, &json, ttl).await;
-        }
-    }
-    Ok(val)
+    Ok(Json(serde_json::json!({"ok": true, "vote_count": vote_count})))
 }
