@@ -19,6 +19,8 @@ chrono.workspace = true
 sqlx.workspace = true
 thiserror.workspace = true
 anyhow.workspace = true
+redis.workspace = true
+deadpool-redis.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]

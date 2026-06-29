@@ -5,10 +5,6 @@
 
 use sha2::Digest as _;
 
-use std::collections::HashMap;
-use std::sync::{LazyLock, Mutex};
-use std::time::{Duration, Instant};
-
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
@@ -24,29 +20,8 @@ use crate::email_code::{generate_code, hash_code, verify_code};
 use crate::error::IdentityError;
 use crate::repo;
 
-// ---------------------------------------------------------------------------
-// Rate limiter
-// ---------------------------------------------------------------------------
-
-/// Per-email minimum interval between code requests (60 seconds).
-const CODE_RATE_LIMIT: Duration = Duration::from_secs(60);
-
-/// Thread-local rate limiter. In production this would be Redis-backed, but a
-/// simple in-process map is sufficient for now.
-static LAST_CODE_REQUEST: LazyLock<Mutex<HashMap<String, Instant>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
-
-fn check_rate_limit(email: &str) -> Result<(), IdentityError> {
-    let mut map = LAST_CODE_REQUEST.lock().expect("rate-limit lock poisoned");
-    let now = Instant::now();
-    if let Some(last) = map.get(email) {
-        if now.duration_since(*last) < CODE_RATE_LIMIT {
-            return Err(IdentityError::RateLimited);
-        }
-    }
-    map.insert(email.to_lowercase(), now);
-    Ok(())
-}
+// Rate limiting is now handled by shared::ratelimit::check_token_bucket (Redis-backed).
+// When Redis is unavailable the check passes through so we never block legitimate traffic.
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -91,7 +66,9 @@ pub async fn request_code(
         return Err(IdentityError::InvalidEmailDomain.into());
     }
 
-    check_rate_limit(&email)?;
+    // Rate-limit code requests: 1 per 60 seconds per email (Redis-backed).
+    shared::ratelimit::check_token_bucket(state.redis.as_ref(), "email_code", &email, 1, 60)
+        .await?;
 
     let code = generate_code();
     let code_hash = hash_code(&code);
