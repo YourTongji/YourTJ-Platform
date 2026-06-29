@@ -15,3 +15,6 @@ sqlx.workspace = true
 redis.workspace = true
 deadpool-redis.workspace = true
 jsonwebtoken.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "time"] }

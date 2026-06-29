@@ -28,7 +28,6 @@ pub async fn list_reviews(
     let items = cached_json(&state, "reviews", &cache_id, 120, async {
         repo::list_reviews(&state.db, course_id, Some(sort), params.cursor, Some(params.limit))
             .await
-            .map_err(|e| e.into())
     })
     .await?;
     Ok(Json(items))
