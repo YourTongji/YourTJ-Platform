@@ -19,6 +19,30 @@ pub async fn run() -> anyhow::Result<()> {
     let db = sqlx::PgPool::connect(&config.database_url).await?;
     tracing::info!("connected to database");
 
+    // Connect Redis (optional — app degrades gracefully if unavailable).
+    let redis_pool = match deadpool_redis::Config::from_url(&config.redis_url)
+        .create_pool(Some(deadpool_redis::Runtime::Tokio1))
+    {
+        Ok(pool) => {
+            match pool.get().await {
+                Ok(mut conn) => {
+                    let _: String = redis::cmd("PING").query_async(&mut conn).await?;
+                    tracing::info!("connected to Redis");
+                }
+                Err(_) => {
+                    tracing::warn!(
+                        "Redis pool created but connection failed — continuing without Redis"
+                    );
+                }
+            };
+            Some(pool)
+        }
+        Err(e) => {
+            tracing::warn!("Failed to create Redis pool: {e} — continuing without Redis");
+            None
+        }
+    };
+
     let state = AppState {
         db,
         jwt_secret: config.jwt_secret.clone(),
@@ -26,6 +50,7 @@ pub async fn run() -> anyhow::Result<()> {
         refresh_ttl: config.refresh_ttl,
         meili_url: config.meili_url.clone(),
         meili_master_key: config.meili_master_key.clone(),
+        redis: redis_pool,
     };
 
     let app = build_router(state);

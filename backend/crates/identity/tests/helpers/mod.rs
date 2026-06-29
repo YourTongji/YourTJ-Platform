@@ -26,13 +26,13 @@ pub async fn create_test_app() -> (PgPool, axum::Router) {
         refresh_ttl: 604800,
         meili_url: String::new(),
         meili_master_key: String::new(),
+        redis: None,
     };
 
     let router = identity::routes(state);
     (pool, router)
 }
 
-/// Same as `create_test_app` but reuses an existing pool.
 pub async fn create_test_app_with_pool(pool: PgPool) -> axum::Router {
     let state = AppState {
         db: pool,
@@ -41,6 +41,7 @@ pub async fn create_test_app_with_pool(pool: PgPool) -> axum::Router {
         refresh_ttl: 604800,
         meili_url: String::new(),
         meili_master_key: String::new(),
+        redis: None,
     };
     identity::routes(state)
 }

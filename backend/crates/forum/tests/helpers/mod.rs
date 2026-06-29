@@ -22,6 +22,7 @@ pub async fn create_test_app() -> (PgPool, axum::Router) {
         refresh_ttl: 604800,
         meili_url: String::new(),
         meili_master_key: String::new(),
+        redis: None,
     };
 
     let router = forum::routes(state);

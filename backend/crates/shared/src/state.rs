@@ -24,4 +24,8 @@ pub struct AppState {
 
     /// Meilisearch master key for index management and search.
     pub meili_master_key: String,
+
+    /// Redis connection pool. `None` when Redis is unavailable — caching
+    /// and rate limiting gracefully degrade without it.
+    pub redis: Option<deadpool_redis::Pool>,
 }
