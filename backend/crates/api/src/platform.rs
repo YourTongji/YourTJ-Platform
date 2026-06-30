@@ -7,7 +7,7 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use shared::{AppError, AppResult, AppState, AuthAccount};
+use shared::{AppError, AppResult, AppState};
 use sqlx::FromRow;
 use sqlx::PgPool;
 
@@ -152,7 +152,7 @@ pub async fn admin_list_settings_handler(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> AppResult<Json<Vec<SettingDto>>> {
-    let auth = AuthAccount::from_headers(&headers, &state.db, &state.jwt_secret)
+    let auth = identity::auth_middleware::authenticate(&headers, &state.db, &state.jwt_secret)
         .await
         .map_err(|_r| AppError::Unauthorized)?;
     auth.require_mod().map_err(|_| AppError::Forbidden)?;
@@ -168,7 +168,7 @@ pub async fn admin_get_setting_handler(
     headers: HeaderMap,
     Path(key): Path<String>,
 ) -> AppResult<Json<SettingDto>> {
-    let auth = AuthAccount::from_headers(&headers, &state.db, &state.jwt_secret)
+    let auth = identity::auth_middleware::authenticate(&headers, &state.db, &state.jwt_secret)
         .await
         .map_err(|_r| AppError::Unauthorized)?;
     auth.require_mod().map_err(|_| AppError::Forbidden)?;
@@ -184,7 +184,7 @@ pub async fn admin_update_setting_handler(
     Path(key): Path<String>,
     Json(body): Json<UpdateSettingInput>,
 ) -> AppResult<Json<SettingDto>> {
-    let auth = AuthAccount::from_headers(&headers, &state.db, &state.jwt_secret)
+    let auth = identity::auth_middleware::authenticate(&headers, &state.db, &state.jwt_secret)
         .await
         .map_err(|_r| AppError::Unauthorized)?;
     auth.require_mod().map_err(|_| AppError::Forbidden)?;

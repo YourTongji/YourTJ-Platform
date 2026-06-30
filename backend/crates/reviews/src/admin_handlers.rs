@@ -6,7 +6,8 @@ use axum::extract::{Path, Query, State};
 use axum::http::HeaderMap;
 use axum::Json;
 use serde::Deserialize;
-use shared::{AppResult, AppState, AuthAccount};
+use shared::pagination::Page;
+use shared::{AppResult, AppState};
 
 use crate::dto::{ReportDto, ReviewDto, ReviewInput};
 use crate::repo;
@@ -18,18 +19,8 @@ use crate::repo;
 #[derive(Debug, Deserialize)]
 pub struct AdminListReviewsQuery {
     pub status: Option<String>,
-    #[serde(default = "default_page")]
-    pub page: i64,
-    #[serde(default = "default_per_page")]
-    pub limit: i64,
-}
-
-fn default_page() -> i64 {
-    1
-}
-
-fn default_per_page() -> i64 {
-    20
+    pub cursor: Option<i64>,
+    pub limit: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -67,20 +58,21 @@ async fn bump_review_cache(state: &AppState, review_id: i64) {
 // ---------------------------------------------------------------------------
 
 /// GET /admin/reviews — list all reviews with optional status filter.
+/// Returns a cursor-paginated `Page<ReviewDto>` matching the OpenAPI contract.
 pub async fn admin_list_reviews(
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(params): Query<AdminListReviewsQuery>,
-) -> AppResult<Json<Vec<ReviewDto>>> {
-    let auth = AuthAccount::from_headers(&headers, &state.db, &state.jwt_secret)
+) -> AppResult<Json<Page<ReviewDto>>> {
+    let auth = identity::auth_middleware::authenticate(&headers, &state.db, &state.jwt_secret)
         .await
         .map_err(|_r| shared::AppError::Unauthorized)?;
     auth.require_mod().map_err(|_| shared::AppError::Forbidden)?;
 
-    let items =
-        repo::admin_list_reviews(&state.db, params.status.as_deref(), params.page, params.limit)
+    let page =
+        repo::admin_list_reviews(&state.db, params.status.as_deref(), params.cursor, params.limit)
             .await?;
-    Ok(Json(items))
+    Ok(Json(page))
 }
 
 /// PATCH /admin/reviews/{id} — mod can edit any review.
@@ -90,7 +82,7 @@ pub async fn admin_edit_review(
     headers: HeaderMap,
     Json(body): Json<ReviewInput>,
 ) -> AppResult<Json<ReviewDto>> {
-    let auth = AuthAccount::from_headers(&headers, &state.db, &state.jwt_secret)
+    let auth = identity::auth_middleware::authenticate(&headers, &state.db, &state.jwt_secret)
         .await
         .map_err(|_r| shared::AppError::Unauthorized)?;
     auth.require_mod().map_err(|_| shared::AppError::Forbidden)?;
@@ -116,7 +108,7 @@ pub async fn admin_delete_review(
     Path(review_id): Path<i64>,
     headers: HeaderMap,
 ) -> AppResult<Json<serde_json::Value>> {
-    let auth = AuthAccount::from_headers(&headers, &state.db, &state.jwt_secret)
+    let auth = identity::auth_middleware::authenticate(&headers, &state.db, &state.jwt_secret)
         .await
         .map_err(|_r| shared::AppError::Unauthorized)?;
     auth.require_mod().map_err(|_| shared::AppError::Forbidden)?;
@@ -134,7 +126,7 @@ pub async fn admin_toggle_review(
     Path(review_id): Path<i64>,
     headers: HeaderMap,
 ) -> AppResult<Json<serde_json::Value>> {
-    let auth = AuthAccount::from_headers(&headers, &state.db, &state.jwt_secret)
+    let auth = identity::auth_middleware::authenticate(&headers, &state.db, &state.jwt_secret)
         .await
         .map_err(|_r| shared::AppError::Unauthorized)?;
     auth.require_mod().map_err(|_| shared::AppError::Forbidden)?;
@@ -152,7 +144,7 @@ pub async fn admin_list_reports(
     headers: HeaderMap,
     Query(params): Query<AdminListReportsQuery>,
 ) -> AppResult<Json<Vec<ReportDto>>> {
-    let auth = AuthAccount::from_headers(&headers, &state.db, &state.jwt_secret)
+    let auth = identity::auth_middleware::authenticate(&headers, &state.db, &state.jwt_secret)
         .await
         .map_err(|_r| shared::AppError::Unauthorized)?;
     auth.require_mod().map_err(|_| shared::AppError::Forbidden)?;
@@ -168,7 +160,7 @@ pub async fn admin_resolve_report(
     headers: HeaderMap,
     Json(body): Json<ResolveReportInput>,
 ) -> AppResult<Json<serde_json::Value>> {
-    let auth = AuthAccount::from_headers(&headers, &state.db, &state.jwt_secret)
+    let auth = identity::auth_middleware::authenticate(&headers, &state.db, &state.jwt_secret)
         .await
         .map_err(|_r| shared::AppError::Unauthorized)?;
     auth.require_mod().map_err(|_| shared::AppError::Forbidden)?;

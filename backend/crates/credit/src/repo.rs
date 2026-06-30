@@ -1,7 +1,8 @@
 //! Database access layer for the credit domain.
 //!
 //! Every function takes `&PgPool` and returns `AppResult` so callers
-//! can use `?` and let Axum render errors.
+//! can use `?` and let Axum render errors. Transaction-aware `_tx`
+//! variants accept `&mut PgConnection` for atomic multi-step flows.
 
 use chrono::Utc;
 use serde_json::Value;
@@ -10,7 +11,7 @@ use sqlx::PgPool;
 
 use crate::dto::{LedgerEntryDto, LedgerVerify, WalletDto};
 use crate::error::CreditError;
-use crate::ledger::{canonicalize, compute_hash};
+use crate::ledger::{compute_hash, sign_with_seed};
 use crate::models::{LedgerEntryRow, ProductRow, PurchaseRow, TaskRow};
 
 const GENESIS_HASH: &str = "0000000000000000000000000000000000000000000000000000000000000000";
@@ -19,45 +20,44 @@ const GENESIS_HASH: &str = "0000000000000000000000000000000000000000000000000000
 // Ledger: append, list, verify
 // ---------------------------------------------------------------------------
 
-/// Append a ledger entry inside a transaction that takes an advisory lock.
-/// Updates the wallet balance cache for both sides. Returns the inserted row.
+/// Transaction-internal variant: append a ledger entry inside an existing
+/// transaction. Takes the advisory lock, computes `prev_hash`, builds the
+/// canonical payload using the deterministic `created_at`, inserts the row,
+/// and updates wallet balances. Does NOT commit or roll back.
 #[allow(clippy::too_many_arguments)]
-#[tracing::instrument(skip(pool))]
-pub async fn append_ledger_entry(
-    pool: &PgPool,
+pub async fn append_ledger_entry_tx(
+    conn: &mut sqlx::PgConnection,
     tx_id: &str,
     type_: &str,
     from_account: Option<i64>,
     to_account: Option<i64>,
     amount: i64,
     nonce: &str,
-    metadata: Option<Value>,
+    metadata: Option<&Value>,
     signer: &str,
     signature: &str,
+    created_at: i64,
 ) -> AppResult<LedgerEntryRow> {
-    let mut tx = pool.begin().await?;
-
-    sqlx::query("SELECT pg_advisory_xact_lock(42)").execute(&mut *tx).await?;
+    sqlx::query("SELECT pg_advisory_xact_lock(42)").execute(&mut *conn).await?;
 
     let prev_hash: Option<String> =
         sqlx::query_scalar("SELECT hash FROM credit.ledger ORDER BY seq DESC LIMIT 1")
-            .fetch_optional(&mut *tx)
+            .fetch_optional(&mut *conn)
             .await?;
 
     let prev_hash = prev_hash.unwrap_or_else(|| GENESIS_HASH.to_string());
 
-    let payload = serde_json::json!({
-        "tx_id": tx_id,
-        "type": type_,
-        "from_account": from_account.map(|v| v.to_string()),
-        "to_account": to_account.map(|v| v.to_string()),
-        "amount": amount,
-        "nonce": nonce,
-        "metadata": metadata,
-        "signer": signer,
-        "timestamp": Utc::now().timestamp(),
-    });
-    let canonical = canonicalize(&payload);
+    let canonical = crate::ledger::build_ledger_canonical(
+        tx_id,
+        type_,
+        from_account,
+        to_account,
+        amount,
+        nonce,
+        metadata,
+        signer,
+        created_at,
+    );
     let hash = compute_hash(&canonical, &prev_hash);
 
     let row: LedgerEntryRow = sqlx::query_as(
@@ -74,39 +74,74 @@ pub async fn append_ledger_entry(
     .bind(to_account)
     .bind(amount)
     .bind(nonce)
-    .bind(&metadata)
+    .bind(metadata)
     .bind(signer)
     .bind(signature)
     .bind(&prev_hash)
     .bind(&hash)
-    .fetch_one(&mut *tx)
+    .fetch_one(&mut *conn)
     .await?;
 
     // Update wallets — increment recipient, decrement sender.
     if let Some(to) = to_account {
-        ensure_wallet_exists_tx(&mut tx, to).await?;
+        ensure_wallet_exists_tx(conn, to).await?;
         sqlx::query(
             "UPDATE credit.wallets SET balance = balance + $1, last_seq = $2 WHERE account_id = $3",
         )
         .bind(amount)
         .bind(row.seq)
         .bind(to)
-        .execute(&mut *tx)
+        .execute(&mut *conn)
         .await?;
     }
 
     if let Some(from) = from_account {
-        ensure_wallet_exists_tx(&mut tx, from).await?;
+        ensure_wallet_exists_tx(conn, from).await?;
         sqlx::query(
             "UPDATE credit.wallets SET balance = balance - $1, last_seq = $2 WHERE account_id = $3",
         )
         .bind(amount)
         .bind(row.seq)
         .bind(from)
-        .execute(&mut *tx)
+        .execute(&mut *conn)
         .await?;
     }
 
+    Ok(row)
+}
+
+/// Append a ledger entry inside its own transaction. Uses `Utc::now()` for
+/// the timestamp. Delegates to [`append_ledger_entry_tx`].
+#[allow(clippy::too_many_arguments)]
+#[tracing::instrument(skip(pool))]
+pub async fn append_ledger_entry(
+    pool: &PgPool,
+    tx_id: &str,
+    type_: &str,
+    from_account: Option<i64>,
+    to_account: Option<i64>,
+    amount: i64,
+    nonce: &str,
+    metadata: Option<Value>,
+    signer: &str,
+    signature: &str,
+) -> AppResult<LedgerEntryRow> {
+    let created_at = Utc::now().timestamp();
+    let mut tx = pool.begin().await?;
+    let row = append_ledger_entry_tx(
+        &mut tx,
+        tx_id,
+        type_,
+        from_account,
+        to_account,
+        amount,
+        nonce,
+        metadata.as_ref(),
+        signer,
+        signature,
+        created_at,
+    )
+    .await?;
     tx.commit().await?;
     Ok(row)
 }
@@ -154,8 +189,16 @@ pub async fn list_ledger(
     Ok(Page::new(items, next_cursor))
 }
 
-/// Recompute the hash chain and verify every Ed25519 signature for all ledger entries.
-pub async fn verify_full_ledger(pool: &PgPool) -> AppResult<LedgerVerify> {
+/// Recompute the hash chain and verify every Ed25519 signature for all ledger
+/// entries. System-signed entries are verified against `system_public_key_b64`;
+/// user-signed entries are verified against the account's bound key
+/// (`identity.account_keys`).
+pub async fn verify_full_ledger(
+    pool: &PgPool,
+    system_public_key_b64: &str,
+) -> AppResult<LedgerVerify> {
+    use std::collections::HashMap;
+
     let rows: Vec<LedgerEntryRow> = sqlx::query_as(
         "SELECT seq, tx_id, type, from_account, to_account, amount, nonce, \
                 metadata, signer, signature, prev_hash, hash, created_at \
@@ -168,6 +211,29 @@ pub async fn verify_full_ledger(pool: &PgPool) -> AppResult<LedgerVerify> {
         return Ok(LedgerVerify { ok: true, latest_seq: None, latest_hash: None });
     }
 
+    // Batch-load public keys for all non-system signers in a single query.
+    let signer_ids: Vec<i64> = rows
+        .iter()
+        .filter(|r| r.signer != "system")
+        .filter_map(|r| r.signer.parse::<i64>().ok())
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
+
+    let mut pk_map: HashMap<i64, String> = HashMap::new();
+    if !signer_ids.is_empty() {
+        let key_rows: Vec<(i64, String)> = sqlx::query_as(
+            "SELECT account_id, public_key FROM identity.account_keys \
+             WHERE account_id = ANY($1)",
+        )
+        .bind(&signer_ids)
+        .fetch_all(pool)
+        .await?;
+        for (account_id, public_key) in key_rows {
+            pk_map.insert(account_id, public_key);
+        }
+    }
+
     let mut expected_prev = GENESIS_HASH.to_string();
     for row in &rows {
         if row.prev_hash != expected_prev {
@@ -178,18 +244,17 @@ pub async fn verify_full_ledger(pool: &PgPool) -> AppResult<LedgerVerify> {
             });
         }
 
-        let payload = serde_json::json!({
-            "tx_id": row.tx_id,
-            "type": row.type_,
-            "from_account": row.from_account.map(|v| v.to_string()),
-            "to_account": row.to_account.map(|v| v.to_string()),
-            "amount": row.amount,
-            "nonce": row.nonce,
-            "metadata": row.metadata,
-            "signer": row.signer,
-            "timestamp": row.created_at.timestamp(),
-        });
-        let canonical = canonicalize(&payload);
+        let canonical = crate::ledger::build_ledger_canonical(
+            &row.tx_id,
+            &row.type_,
+            row.from_account,
+            row.to_account,
+            row.amount,
+            &row.nonce,
+            row.metadata.as_ref(),
+            &row.signer,
+            row.created_at.timestamp(),
+        );
         let computed_hash = compute_hash(&canonical, &row.prev_hash);
 
         if computed_hash != row.hash {
@@ -200,18 +265,17 @@ pub async fn verify_full_ledger(pool: &PgPool) -> AppResult<LedgerVerify> {
             });
         }
 
-        if row.signer != "system" {
-            let pk_row: Option<(String,)> = sqlx::query_as(
-                "SELECT public_key FROM identity.account_keys \
-                 WHERE account_id = (SELECT id FROM identity.accounts WHERE id::text = $1 LIMIT 1) \
-                 LIMIT 1",
-            )
-            .bind(&row.signer)
-            .fetch_optional(pool)
-            .await?;
-
-            if let Some((pk,)) = pk_row {
-                if !crate::ledger::verify_signature(&canonical, &row.signature, &pk) {
+        if row.signer == "system" {
+            if !crate::ledger::verify_signature(&canonical, &row.signature, system_public_key_b64) {
+                return Ok(LedgerVerify {
+                    ok: false,
+                    latest_seq: Some(row.seq),
+                    latest_hash: Some(row.hash.clone()),
+                });
+            }
+        } else if let Ok(account_id) = row.signer.parse::<i64>() {
+            if let Some(pk) = pk_map.get(&account_id) {
+                if !crate::ledger::verify_signature(&canonical, &row.signature, pk) {
                     return Ok(LedgerVerify {
                         ok: false,
                         latest_seq: Some(row.seq),
@@ -257,42 +321,62 @@ pub async fn ensure_wallet_exists(pool: &PgPool, account_id: i64) -> AppResult<(
 }
 
 /// Transaction-internal variant — works on any PostgreSQL executor.
-async fn ensure_wallet_exists_tx(tx: &mut sqlx::PgConnection, account_id: i64) -> AppResult<()> {
+async fn ensure_wallet_exists_tx(conn: &mut sqlx::PgConnection, account_id: i64) -> AppResult<()> {
     sqlx::query(
         "INSERT INTO credit.wallets (account_id, balance, last_seq) \
          VALUES ($1, 0, 0) ON CONFLICT (account_id) DO NOTHING",
     )
     .bind(account_id)
-    .execute(&mut *tx)
+    .execute(&mut *conn)
     .await?;
     Ok(())
 }
 
 /// System-signed mint: creates a ledger entry with `type = "mint"`.
-#[tracing::instrument(skip(pool))]
+/// Signs the payload using the system private key seed.
+#[tracing::instrument(skip(pool, system_seed))]
 pub async fn mint_points(
     pool: &PgPool,
     to_account_id: i64,
     amount: i64,
     reason: &str,
+    system_seed: &[u8],
 ) -> AppResult<LedgerEntryRow> {
     let tx_id = uuid::Uuid::new_v4().to_string();
     let nonce = uuid::Uuid::new_v4().to_string();
     let metadata = serde_json::json!({ "reason": reason });
+    let created_at = Utc::now().timestamp();
 
-    append_ledger_entry(
-        pool,
+    let canonical = crate::ledger::build_ledger_canonical(
         &tx_id,
         "mint",
         None,
         Some(to_account_id),
         amount,
         &nonce,
-        Some(metadata),
+        Some(&metadata),
         "system",
-        "system-signed",
+        created_at,
+    );
+    let signature = sign_with_seed(&canonical, system_seed);
+
+    let mut tx = pool.begin().await?;
+    let row = append_ledger_entry_tx(
+        &mut tx,
+        &tx_id,
+        "mint",
+        None,
+        Some(to_account_id),
+        amount,
+        &nonce,
+        Some(&metadata),
+        "system",
+        &signature,
+        created_at,
     )
-    .await
+    .await?;
+    tx.commit().await?;
+    Ok(row)
 }
 
 // ---------------------------------------------------------------------------
@@ -366,6 +450,35 @@ pub async fn insert_task(
     Ok(row)
 }
 
+/// Transaction-internal variant of [`insert_task`].
+pub async fn insert_task_tx(
+    conn: &mut sqlx::PgConnection,
+    creator_id: i64,
+    title: &str,
+    description: Option<&str>,
+    reward_amount: i64,
+    contact_info: Option<&str>,
+    hold_tx_id: &str,
+) -> AppResult<TaskRow> {
+    let row = sqlx::query_as(
+        "INSERT INTO credit.tasks \
+         (creator_id, title, description, reward_amount, contact_info, hold_tx_id) \
+         VALUES ($1, $2, $3, $4, $5, $6) \
+         RETURNING id, creator_id, acceptor_id, title, description, \
+                   reward_amount, contact_info, status::text, hold_tx_id, created_at",
+    )
+    .bind(creator_id)
+    .bind(title)
+    .bind(description)
+    .bind(reward_amount)
+    .bind(contact_info)
+    .bind(hold_tx_id)
+    .fetch_one(&mut *conn)
+    .await?;
+
+    Ok(row)
+}
+
 /// Look up a task by id.
 pub async fn find_task(pool: &PgPool, id: i64) -> AppResult<Option<TaskRow>> {
     let row = sqlx::query_as(
@@ -422,11 +535,44 @@ pub async fn update_task_status(
     Ok(())
 }
 
+/// Transaction-internal variant of [`update_task_status`].
+pub async fn update_task_status_tx(
+    conn: &mut sqlx::PgConnection,
+    id: i64,
+    new_status: &str,
+) -> AppResult<()> {
+    if !matches!(new_status, "submit" | "confirm" | "cancel" | "reject" | "delete") {
+        return Err(CreditError::InvalidAction(format!("unknown task action: {new_status}")).into());
+    }
+
+    sqlx::query(
+        "UPDATE credit.tasks \
+         SET status = $1::credit.task_status, updated_at = now() \
+         WHERE id = $2",
+    )
+    .bind(new_status)
+    .bind(id)
+    .execute(&mut *conn)
+    .await?;
+
+    Ok(())
+}
+
 /// Clear a task's hold_tx_id (e.g., after escrow release).
 pub async fn clear_task_hold(pool: &PgPool, id: i64) -> AppResult<()> {
     sqlx::query("UPDATE credit.tasks SET hold_tx_id = NULL WHERE id = $1")
         .bind(id)
         .execute(pool)
+        .await?;
+
+    Ok(())
+}
+
+/// Transaction-internal variant of [`clear_task_hold`].
+pub async fn clear_task_hold_tx(conn: &mut sqlx::PgConnection, id: i64) -> AppResult<()> {
+    sqlx::query("UPDATE credit.tasks SET hold_tx_id = NULL WHERE id = $1")
+        .bind(id)
+        .execute(&mut *conn)
         .await?;
 
     Ok(())
@@ -528,11 +674,36 @@ pub async fn update_product_status(pool: &PgPool, id: i64, status: &str) -> AppR
     Ok(())
 }
 
+/// Transaction-internal variant of [`update_product_status`].
+pub async fn update_product_status_tx(
+    conn: &mut sqlx::PgConnection,
+    id: i64,
+    status: &str,
+) -> AppResult<()> {
+    sqlx::query("UPDATE credit.products SET status = $1::credit.product_status WHERE id = $2")
+        .bind(status)
+        .bind(id)
+        .execute(&mut *conn)
+        .await?;
+
+    Ok(())
+}
+
 /// Decrement product stock.
 pub async fn decrement_stock(pool: &PgPool, id: i64) -> AppResult<()> {
     sqlx::query("UPDATE credit.products SET stock = stock - 1 WHERE id = $1 AND stock > 0")
         .bind(id)
         .execute(pool)
+        .await?;
+
+    Ok(())
+}
+
+/// Transaction-internal variant of [`decrement_stock`].
+pub async fn decrement_stock_tx(conn: &mut sqlx::PgConnection, id: i64) -> AppResult<()> {
+    sqlx::query("UPDATE credit.products SET stock = stock - 1 WHERE id = $1 AND stock > 0")
+        .bind(id)
+        .execute(&mut *conn)
         .await?;
 
     Ok(())
@@ -593,6 +764,32 @@ pub async fn insert_purchase(
     Ok(row)
 }
 
+/// Transaction-internal variant of [`insert_purchase`].
+pub async fn insert_purchase_tx(
+    conn: &mut sqlx::PgConnection,
+    product_id: i64,
+    buyer_id: i64,
+    seller_id: i64,
+    amount: i64,
+    hold_tx_id: &str,
+) -> AppResult<PurchaseRow> {
+    let row = sqlx::query_as(
+        "INSERT INTO credit.purchases \
+         (product_id, buyer_id, seller_id, amount, hold_tx_id) \
+         VALUES ($1, $2, $3, $4, $5) \
+         RETURNING id, product_id, buyer_id, seller_id, amount, status::text, hold_tx_id",
+    )
+    .bind(product_id)
+    .bind(buyer_id)
+    .bind(seller_id)
+    .bind(amount)
+    .bind(hold_tx_id)
+    .fetch_one(&mut *conn)
+    .await?;
+
+    Ok(row)
+}
+
 /// Look up a purchase by id.
 pub async fn find_purchase(pool: &PgPool, id: i64) -> AppResult<Option<PurchaseRow>> {
     let row = sqlx::query_as(
@@ -612,6 +809,21 @@ pub async fn update_purchase_status(pool: &PgPool, id: i64, status: &str) -> App
         .bind(status)
         .bind(id)
         .execute(pool)
+        .await?;
+
+    Ok(())
+}
+
+/// Transaction-internal variant of [`update_purchase_status`].
+pub async fn update_purchase_status_tx(
+    conn: &mut sqlx::PgConnection,
+    id: i64,
+    status: &str,
+) -> AppResult<()> {
+    sqlx::query("UPDATE credit.purchases SET status = $1::credit.purchase_status WHERE id = $2")
+        .bind(status)
+        .bind(id)
+        .execute(&mut *conn)
         .await?;
 
     Ok(())

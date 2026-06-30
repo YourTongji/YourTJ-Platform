@@ -5,6 +5,7 @@ use sqlx::FromRow;
 
 /// A row from `reviews.reviews`.
 #[derive(Debug, Clone, FromRow)]
+#[allow(dead_code)]
 pub struct ReviewRow {
     pub id: i64,
     pub course_id: i64,
@@ -22,6 +23,7 @@ pub struct ReviewRow {
 
 /// A row from `reviews.review_likes`.
 #[derive(Debug, Clone, FromRow)]
+#[allow(dead_code)]
 pub struct ReviewLikeRow {
     pub review_id: i64,
     pub account_id: i64,
@@ -29,6 +31,7 @@ pub struct ReviewLikeRow {
 
 /// A row from `reviews.review_reports`.
 #[derive(Debug, Clone, FromRow)]
+#[allow(dead_code)]
 pub struct ReviewReportRow {
     pub id: i64,
     pub review_id: i64,
@@ -41,6 +44,7 @@ pub struct ReviewReportRow {
 
 /// Joined row: review + author handle + avatar for list queries.
 #[derive(Debug, Clone, FromRow)]
+#[allow(dead_code)]
 pub(crate) struct ReviewWithAuthorRow {
     pub id: i64,
     pub course_id: i64,

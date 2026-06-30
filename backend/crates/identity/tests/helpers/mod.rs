@@ -27,6 +27,8 @@ pub async fn create_test_app() -> (PgPool, axum::Router) {
         meili_url: String::new(),
         meili_master_key: String::new(),
         redis: None,
+        system_private_key: vec![0u8; 32],
+        system_public_key_b64: String::new(),
     };
 
     let router = identity::routes(state);
@@ -42,6 +44,8 @@ pub async fn create_test_app_with_pool(pool: PgPool) -> axum::Router {
         meili_url: String::new(),
         meili_master_key: String::new(),
         redis: None,
+        system_private_key: vec![0u8; 32],
+        system_public_key_b64: String::new(),
     };
     identity::routes(state)
 }
@@ -49,8 +53,12 @@ pub async fn create_test_app_with_pool(pool: PgPool) -> axum::Router {
 /// Run the DDL from migrations to set up the test database.
 async fn run_migrations(pool: &PgPool) {
     let exists: Option<bool> = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM information_schema.schemata WHERE schema_name = 'identity')"
-    ).fetch_one(pool).await.ok().flatten();
+        "SELECT EXISTS(SELECT 1 FROM information_schema.schemata WHERE schema_name = 'identity')",
+    )
+    .fetch_one(pool)
+    .await
+    .ok()
+    .flatten();
     if exists != Some(true) {
         // Apply migrations if not already done by docker-compose initdb.
         let sql = include_str!("../../../../migrations/0001_init.sql");

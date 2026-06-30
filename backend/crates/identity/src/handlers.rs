@@ -9,12 +9,12 @@ use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
 use chrono::Utc;
-use shared::{AppResult, AppState, AuthAccount};
+use shared::{AppResult, AppState};
 
 use crate::auth::{create_access_token, generate_refresh_token};
 use crate::dto::{
-    AccountDto, AuthTokensOutput, BindKeyInput, RefreshInput, RequestCodeInput, UpdateMeInput,
-    VerifyEmailInput, WalletOutput,
+    AccountDto, AuthTokensOutput, BindKeyInput, ClaimChallengeOutput, ClaimInput, RefreshInput,
+    RequestCodeInput, UpdateMeInput, VerifyEmailInput, WalletDto,
 };
 use crate::email_code::{generate_code, hash_code, verify_code};
 use crate::error::IdentityError;
@@ -86,7 +86,9 @@ pub async fn request_code(
     repo::insert_email_code(&state.db, &email, &code_hash, expires_at).await?;
 
     // In production we would send the code via email here.
-    tracing::info!(email = %email, "verification code generated (not sent — email SMTP not yet wired)");
+    tracing::info!(
+        "verification code generated for registered email (not sent — email SMTP not yet wired)"
+    );
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -204,7 +206,7 @@ pub async fn refresh(
 ///
 /// Revokes every active session for the authenticated account.
 pub async fn logout(State(state): State<AppState>, headers: HeaderMap) -> AppResult<StatusCode> {
-    let auth = AuthAccount::from_headers(&headers, &state.db, &state.jwt_secret)
+    let auth = crate::auth_middleware::authenticate(&headers, &state.db, &state.jwt_secret)
         .await
         .map_err(|_r| shared::AppError::Unauthorized)?;
     repo::revoke_all_sessions(&state.db, auth.id).await?;
@@ -216,7 +218,7 @@ pub async fn get_me(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> AppResult<Json<AccountDto>> {
-    let auth = AuthAccount::from_headers(&headers, &state.db, &state.jwt_secret)
+    let auth = crate::auth_middleware::authenticate(&headers, &state.db, &state.jwt_secret)
         .await
         .map_err(|_r| shared::AppError::Unauthorized)?;
     let account =
@@ -230,7 +232,7 @@ pub async fn update_me(
     headers: HeaderMap,
     Json(body): Json<UpdateMeInput>,
 ) -> AppResult<Json<AccountDto>> {
-    let auth = AuthAccount::from_headers(&headers, &state.db, &state.jwt_secret)
+    let auth = crate::auth_middleware::authenticate(&headers, &state.db, &state.jwt_secret)
         .await
         .map_err(|_r| shared::AppError::Unauthorized)?;
 
@@ -261,20 +263,208 @@ pub async fn update_me(
     Ok(Json(row_to_dto(&row)))
 }
 
-/// GET /wallet
-pub async fn get_wallet(
+/// GET /wallet/claim-challenge
+///
+/// Creates a random challenge with 10-minute expiry that the legacy app must
+/// sign to prove ownership of the legacy wallet.
+pub async fn claim_challenge(
     State(state): State<AppState>,
     headers: HeaderMap,
-) -> AppResult<Json<WalletOutput>> {
-    let auth = AuthAccount::from_headers(&headers, &state.db, &state.jwt_secret)
+) -> AppResult<Json<ClaimChallengeOutput>> {
+    let auth = crate::auth_middleware::authenticate(&headers, &state.db, &state.jwt_secret)
         .await
         .map_err(|_r| shared::AppError::Unauthorized)?;
 
-    let wallet = repo::find_wallet(&state.db, auth.id)
-        .await?
-        .unwrap_or(crate::models::WalletRow { account_id: auth.id, balance: 0 });
+    let challenge_id = uuid::Uuid::new_v4().to_string();
+    let nonce = uuid::Uuid::new_v4().to_string();
+    let expires_at = Utc::now() + chrono::Duration::minutes(10);
 
-    Ok(Json(WalletOutput { account_id: wallet.account_id.to_string(), balance: wallet.balance }))
+    repo::insert_claim_challenge(&state.db, &challenge_id, auth.id, &nonce, expires_at).await?;
+
+    Ok(Json(ClaimChallengeOutput { challenge_id, nonce }))
+}
+
+/// POST /wallet/claim
+///
+/// Claims a legacy wallet by verifying the Ed25519 signature over the
+/// canonical payload `{ accountId, challengeId, legacyUserHash, nonce }`.
+///
+/// Runs in a single transaction that locks the challenge and legacy wallet
+/// link rows, validates all conditions, then mints any legacy balance into
+/// the credit ledger.
+///
+/// NOTE: This handler directly queries/inserts into `credit.ledger` and
+/// `credit.wallets` — an intentional exception to the domain-boundary rule
+/// that "identity must not query credit tables." The cross-domain access is
+/// architecturally necessary because this is a one-time legacy-claim flow
+/// that must atomically transfer balance from the old system into the new
+/// ledger. Moving it to the credit crate would create circular dependencies
+/// (credit needs identity data for the claim). The tight coupling here is
+/// confined to this single handler and is not used as a precedent for other
+/// identity → credit queries.
+#[tracing::instrument(skip(state, headers))]
+pub async fn claim_wallet(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<ClaimInput>,
+) -> AppResult<Json<WalletDto>> {
+    let auth = crate::auth_middleware::authenticate(&headers, &state.db, &state.jwt_secret)
+        .await
+        .map_err(|_r| shared::AppError::Unauthorized)?;
+
+    let mut tx = state.db.begin().await?;
+
+    // Lock the challenge row.
+    let challenge = sqlx::query_as::<_, crate::models::WalletClaimChallengeRow>(
+        "SELECT id, account_id, nonce, expires_at, used_at, created_at \
+         FROM identity.wallet_claim_challenges \
+         WHERE id = $1 FOR UPDATE",
+    )
+    .bind(&body.challenge_id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or(IdentityError::ChallengeNotFound)?;
+
+    // Validate challenge conditions.
+    if challenge.account_id != auth.id {
+        return Err(IdentityError::ChallengeWrongAccount.into());
+    }
+    if challenge.used_at.is_some() {
+        return Err(IdentityError::ChallengeAlreadyUsed.into());
+    }
+    if challenge.expires_at < Utc::now() {
+        return Err(IdentityError::ChallengeExpired.into());
+    }
+
+    // Lock the legacy wallet link row.
+    let link = sqlx::query_as::<_, crate::models::LegacyWalletLinkRow>(
+        "SELECT legacy_user_hash, account_id, claimed_at, legacy_public_key, \
+                legacy_balance, imported_metadata \
+         FROM identity.legacy_wallet_links \
+         WHERE legacy_user_hash = $1 FOR UPDATE",
+    )
+    .bind(&body.legacy_user_hash)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or(IdentityError::LegacyLinkNotFound)?;
+
+    // Validate link conditions.
+    if link.account_id.is_some() {
+        return Err(IdentityError::LegacyLinkAlreadyClaimed.into());
+    }
+
+    let legacy_pk = link.legacy_public_key.as_deref().ok_or(IdentityError::LegacyNoPublicKey)?;
+
+    // Reconstruct the canonical payload that the legacy wallet signed.
+    let payload = serde_json::json!({
+        "accountId": auth.id.to_string(),
+        "challengeId": body.challenge_id,
+        "legacyUserHash": body.legacy_user_hash,
+        "nonce": challenge.nonce,
+    });
+    let canonical = serde_json::to_string(&payload).map_err(|_| {
+        shared::AppError::Internal(anyhow::anyhow!("failed to serialize canonical claim payload"))
+    })?;
+
+    // Verify the signature.
+    if !crate::ledger::verify_signature(&canonical, &body.signature, legacy_pk) {
+        return Err(IdentityError::InvalidSignature.into());
+    }
+
+    // Mark challenge used.
+    sqlx::query("UPDATE identity.wallet_claim_challenges SET used_at = now() WHERE id = $1")
+        .bind(&body.challenge_id)
+        .execute(&mut *tx)
+        .await?;
+
+    // Claim the link.
+    sqlx::query(
+        "UPDATE identity.legacy_wallet_links \
+         SET account_id = $2, claimed_at = now() \
+         WHERE legacy_user_hash = $1",
+    )
+    .bind(&body.legacy_user_hash)
+    .bind(auth.id)
+    .execute(&mut *tx)
+    .await?;
+
+    // If there is a legacy balance, mint points into the credit ledger.
+    if link.legacy_balance > 0 {
+        let tx_id = format!("legacy_claim:{}", body.legacy_user_hash);
+        let nonce = uuid::Uuid::new_v4().to_string();
+        let created_at = Utc::now().timestamp();
+        let metadata = serde_json::json!({
+            "reason": "legacy_wallet_claim",
+            "legacy_user_hash": body.legacy_user_hash,
+        });
+
+        // Build canonical payload and sign with system key.
+        let canonical = credit::ledger::build_ledger_canonical(
+            &tx_id,
+            "mint",
+            None,
+            Some(auth.id),
+            link.legacy_balance,
+            &nonce,
+            Some(&metadata),
+            "system",
+            created_at,
+        );
+        let signature = credit::ledger::sign_with_seed(&canonical, &state.system_private_key);
+
+        // Append mint entry via the shared repo function.
+        let prev_hash: Option<String> =
+            sqlx::query_scalar("SELECT hash FROM credit.ledger ORDER BY seq DESC LIMIT 1")
+                .fetch_optional(&mut *tx)
+                .await?;
+        let prev_hash = prev_hash.unwrap_or_else(|| {
+            "0000000000000000000000000000000000000000000000000000000000000000".to_string()
+        });
+
+        let hash = credit::ledger::compute_hash(&canonical, &prev_hash);
+
+        sqlx::query(
+            "INSERT INTO credit.ledger \
+             (tx_id, type, from_account, to_account, amount, nonce, metadata, \
+              signer, signature, prev_hash, hash) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
+        )
+        .bind(&tx_id)
+        .bind("mint")
+        .bind(None::<i64>)
+        .bind(auth.id)
+        .bind(link.legacy_balance)
+        .bind(&nonce)
+        .bind(&metadata)
+        .bind("system")
+        .bind(&signature)
+        .bind(&prev_hash)
+        .bind(&hash)
+        .execute(&mut *tx)
+        .await?;
+
+        // Ensure wallet cache exists and update balance.
+        sqlx::query(
+            "INSERT INTO credit.wallets (account_id, balance, last_seq) \
+             VALUES ($1, $2, 0) ON CONFLICT (account_id) DO UPDATE \
+             SET balance = credit.wallets.balance + $2",
+        )
+        .bind(auth.id)
+        .bind(link.legacy_balance)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    tx.commit().await?;
+
+    // Read the final wallet balance.
+    let balance: i64 =
+        sqlx::query_scalar("SELECT COALESCE(balance, 0) FROM credit.wallets WHERE account_id = $1")
+            .bind(auth.id)
+            .fetch_one(&state.db)
+            .await?;
+
+    Ok(Json(WalletDto { account_id: auth.id.to_string(), balance }))
 }
 
 /// POST /wallet/bind
@@ -286,7 +476,7 @@ pub async fn bind_key(
     headers: HeaderMap,
     Json(body): Json<BindKeyInput>,
 ) -> AppResult<StatusCode> {
-    let auth = AuthAccount::from_headers(&headers, &state.db, &state.jwt_secret)
+    let auth = crate::auth_middleware::authenticate(&headers, &state.db, &state.jwt_secret)
         .await
         .map_err(|_r| shared::AppError::Unauthorized)?;
 

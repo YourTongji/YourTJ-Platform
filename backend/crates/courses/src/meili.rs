@@ -5,7 +5,7 @@
 
 use meilisearch_sdk::client::Client;
 use serde::{Deserialize, Serialize};
-use sqlx::PgPool;
+use sqlx::{FromRow, PgPool};
 
 /// Minimal search result returned to clients.
 #[derive(Debug, Serialize, Deserialize)]
@@ -130,6 +130,135 @@ pub async fn search_courses_and_reviews(
             tracing::warn!(error = %e, query = %q, "Meili search failed — returning empty");
             Vec::new()
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Selection course index
+// ---------------------------------------------------------------------------
+
+/// Setup the Meilisearch "selection_courses" index with searchable attributes.
+pub async fn setup_selection_index(url: &str, api_key: &str) -> Result<(), String> {
+    let client = Client::new(url, Some(api_key)).map_err(|e| format!("Meili client: {e}"))?;
+
+    match client.create_index("selection_courses", None).await {
+        Ok(index) => {
+            let _ = index.wait_for_completion(&client, None, None).await;
+        }
+        Err(e) if e.to_string().contains("index_already_exists") => {
+            // Index already exists — continue
+        }
+        Err(e) => return Err(format!("Meili create index: {e}")),
+    }
+
+    let index = client.index("selection_courses");
+    index
+        .set_searchable_attributes(&["code", "name", "teacherName"])
+        .await
+        .map_err(|e| format!("Meili searchable attrs: {e}"))?;
+
+    index
+        .set_filterable_attributes(&["natureId", "campusId"])
+        .await
+        .map_err(|e| format!("Meili filterable attrs: {e}"))?;
+
+    Ok(())
+}
+
+/// Document shape for a selection course in Meilisearch.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SelectionCourseDocument {
+    pub id: String,
+    pub code: String,
+    pub name: String,
+    pub credit: Option<f64>,
+    pub nature_id: Option<i64>,
+    pub campus_id: Option<i64>,
+    pub teacher_name: Option<String>,
+    pub kind: String,
+}
+
+/// Search selection courses via Meilisearch. Returns empty Vec on failure.
+pub async fn search_selection_courses(
+    url: &str,
+    api_key: &str,
+    q: &str,
+    limit: usize,
+) -> Vec<SelectionCourseDocument> {
+    let client = match Client::new(url, Some(api_key)) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!(error = %e, "Meili client failed — selection search returning empty");
+            return Vec::new();
+        }
+    };
+
+    let index = client.index("selection_courses");
+    match index.search().with_query(q).with_limit(limit).execute::<SelectionCourseDocument>().await
+    {
+        Ok(results) => results.hits.into_iter().map(|h| h.result).collect(),
+        Err(e) => {
+            tracing::warn!(error = %e, query = %q, "Meili selection search failed");
+            Vec::new()
+        }
+    }
+}
+
+/// Row type for selection course sync.
+#[derive(Debug, FromRow)]
+struct SelectionCourseRow {
+    id: i64,
+    code: String,
+    name: String,
+    credit: Option<f64>,
+    nature_id: Option<i64>,
+    campus_id: Option<i64>,
+    teacher_name: Option<String>,
+}
+
+/// Sync all selection courses to Meilisearch.
+pub async fn sync_selection_courses_to_meili(url: &str, api_key: &str, pool: &PgPool) {
+    let rows: Vec<SelectionCourseRow> = match sqlx::query_as::<_, SelectionCourseRow>(
+        "SELECT id, code, name, credit, nature_id, campus_id, teacher_name \
+         FROM selection.courses ORDER BY id",
+    )
+    .fetch_all(pool)
+    .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(error = %e, "failed to fetch selection courses for Meili sync");
+            return;
+        }
+    };
+
+    let docs: Vec<serde_json::Value> = rows
+        .into_iter()
+        .map(|r| {
+            serde_json::json!({
+                "id": r.id.to_string(),
+                "code": r.code,
+                "name": r.name,
+                "credit": r.credit,
+                "natureId": r.nature_id,
+                "campusId": r.campus_id,
+                "teacherName": r.teacher_name,
+                "kind": "selection_course",
+            })
+        })
+        .collect();
+
+    let client = match Client::new(url, Some(api_key)) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!(error = %e, "Meili client failed during selection sync");
+            return;
+        }
+    };
+
+    if let Err(e) = client.index("selection_courses").add_documents(&docs, Some("id")).await {
+        tracing::warn!(error = %e, "Meili add_documents failed for selection sync");
     }
 }
 

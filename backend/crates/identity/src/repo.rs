@@ -7,7 +7,7 @@ use chrono::{DateTime, Utc};
 use shared::AppResult;
 use sqlx::PgPool;
 
-use crate::models::{AccountRow, EmailCodeRow, SessionRow, WalletRow};
+use crate::models::{AccountRow, EmailCodeRow, SessionRow};
 
 // ---------------------------------------------------------------------------
 // email_codes
@@ -278,16 +278,90 @@ pub async fn insert_account_key(pool: &PgPool, account_id: i64, public_key: &str
 }
 
 // ---------------------------------------------------------------------------
-// wallets (cross-domain read from credit.wallets)
+// wallet claim challenges
 // ---------------------------------------------------------------------------
 
-/// Read the wallet balance from `credit.wallets`.
-pub async fn find_wallet(pool: &PgPool, account_id: i64) -> AppResult<Option<WalletRow>> {
-    let row = sqlx::query_as::<_, WalletRow>(
-        "SELECT account_id, balance FROM credit.wallets WHERE account_id = $1",
+use crate::models::{LegacyWalletLinkRow, WalletClaimChallengeRow};
+
+/// Insert a new wallet claim challenge for the given account.
+pub async fn insert_claim_challenge(
+    pool: &PgPool,
+    id: &str,
+    account_id: i64,
+    nonce: &str,
+    expires_at: DateTime<Utc>,
+) -> AppResult<()> {
+    sqlx::query(
+        "INSERT INTO identity.wallet_claim_challenges (id, account_id, nonce, expires_at) \
+         VALUES ($1, $2, $3, $4)",
     )
+    .bind(id)
     .bind(account_id)
+    .bind(nonce)
+    .bind(expires_at)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Fetch a claim challenge by id.
+#[allow(dead_code)]
+pub async fn find_claim_challenge(
+    pool: &PgPool,
+    id: &str,
+) -> AppResult<Option<WalletClaimChallengeRow>> {
+    let row = sqlx::query_as::<_, WalletClaimChallengeRow>(
+        "SELECT id, account_id, nonce, expires_at, used_at, created_at \
+         FROM identity.wallet_claim_challenges WHERE id = $1",
+    )
+    .bind(id)
     .fetch_optional(pool)
     .await?;
     Ok(row)
+}
+
+/// Mark a claim challenge as used.
+#[allow(dead_code)]
+pub async fn mark_challenge_used(pool: &PgPool, id: &str) -> AppResult<()> {
+    sqlx::query("UPDATE identity.wallet_claim_challenges SET used_at = now() WHERE id = $1")
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Look up a legacy wallet link by hash.
+#[allow(dead_code)]
+pub async fn find_legacy_wallet_link(
+    pool: &PgPool,
+    legacy_user_hash: &str,
+) -> AppResult<Option<LegacyWalletLinkRow>> {
+    let row = sqlx::query_as::<_, LegacyWalletLinkRow>(
+        "SELECT legacy_user_hash, account_id, claimed_at, legacy_public_key, \
+                legacy_balance, imported_metadata \
+         FROM identity.legacy_wallet_links WHERE legacy_user_hash = $1",
+    )
+    .bind(legacy_user_hash)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row)
+}
+
+/// Claim a legacy wallet link: set account_id and claimed_at.
+#[allow(dead_code)]
+pub async fn claim_legacy_wallet_link(
+    pool: &PgPool,
+    legacy_user_hash: &str,
+    account_id: i64,
+) -> AppResult<()> {
+    sqlx::query(
+        "UPDATE identity.legacy_wallet_links \
+         SET account_id = $2, claimed_at = now() \
+         WHERE legacy_user_hash = $1 AND account_id IS NULL",
+    )
+    .bind(legacy_user_hash)
+    .bind(account_id)
+    .execute(pool)
+    .await?;
+    Ok(())
 }

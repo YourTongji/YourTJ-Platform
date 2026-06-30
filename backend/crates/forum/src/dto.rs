@@ -73,5 +73,6 @@ pub struct CommentInput {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VoteInput {
-    pub value: String, // "up" or "down"
+    pub value: String,     // "up" or "down"
+    pub post_type: String, // "thread" or "comment"
 }

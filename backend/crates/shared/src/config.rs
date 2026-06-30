@@ -12,6 +12,7 @@ pub struct Config {
     pub jwt_secret: String,
     pub jwt_ttl: u64,
     pub refresh_ttl: u64,
+    pub credit_system_private_key: String,
 }
 
 impl Config {
@@ -33,6 +34,7 @@ impl Config {
             jwt_secret: env_or_default("JWT_SECRET", ""),
             jwt_ttl: env_or_default_u64("JWT_TTL", 900),
             refresh_ttl: env_or_default_u64("REFRESH_TTL", 604800),
+            credit_system_private_key: env_or_default("CREDIT_SYSTEM_PRIVATE_KEY", ""),
         })
     }
 

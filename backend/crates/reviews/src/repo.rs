@@ -3,6 +3,7 @@
 //! Every function takes `&PgPool` and returns `AppResult` so the caller
 //! (typically a handler) can use `?` and let Axum render errors.
 
+use shared::pagination::Page;
 use shared::AppResult;
 use sqlx::PgPool;
 
@@ -67,14 +68,15 @@ fn row_to_dto_with_author(row: &ReviewRow, handle: &str, avatar_url: Option<&str
 ///
 /// `sort` = `"hot"` → order by `approve_count DESC, created_at DESC`.
 /// `sort` = `"new"` (default) → order by `created_at DESC`.
+/// Returns a `Page<ReviewDto>` with cursor-based continuation.
 pub async fn list_reviews(
     pool: &PgPool,
     course_id: i64,
     sort: Option<&str>,
     cursor: Option<i64>,
     limit: Option<i64>,
-) -> AppResult<Vec<ReviewDto>> {
-    let limit = limit.unwrap_or(DEFAULT_LIMIT).min(100);
+) -> AppResult<Page<ReviewDto>> {
+    let fetch_limit = limit.unwrap_or(DEFAULT_LIMIT).min(100) + 1;
 
     let rows = if sort == Some("hot") {
         if let Some(c) = cursor {
@@ -92,7 +94,7 @@ pub async fn list_reviews(
             )
             .bind(course_id)
             .bind(c)
-            .bind(limit)
+            .bind(fetch_limit)
             .fetch_all(pool)
             .await?
         } else {
@@ -105,7 +107,7 @@ pub async fn list_reviews(
                  LIMIT $2",
             )
             .bind(course_id)
-            .bind(limit)
+            .bind(fetch_limit)
             .fetch_all(pool)
             .await?
         }
@@ -121,7 +123,7 @@ pub async fn list_reviews(
             )
             .bind(course_id)
             .bind(c)
-            .bind(limit)
+            .bind(fetch_limit)
             .fetch_all(pool)
             .await?
         } else {
@@ -134,13 +136,23 @@ pub async fn list_reviews(
                  LIMIT $2",
             )
             .bind(course_id)
-            .bind(limit)
+            .bind(fetch_limit)
             .fetch_all(pool)
             .await?
         }
     };
 
-    Ok(rows.iter().map(row_to_dto).collect())
+    let actual_limit = fetch_limit - 1;
+    let has_more = rows.len() > actual_limit as usize;
+    let items: Vec<ReviewDto> = if has_more {
+        rows[..actual_limit as usize].iter().map(row_to_dto).collect()
+    } else {
+        rows.iter().map(row_to_dto).collect()
+    };
+    let next_cursor =
+        if has_more { items.last().map(|r| r.id.parse::<i64>().unwrap_or(0)) } else { None };
+
+    Ok(Page::new(items, next_cursor.map(|c| c.to_string())))
 }
 
 /// Create a new review and update the course aggregate stats in a transaction.
@@ -207,18 +219,22 @@ pub async fn update_review(
 ) -> AppResult<ReviewDto> {
     check_rating(rating)?;
 
-    // Fetch the existing review to verify ownership.
-    let existing = sqlx::query_as::<_, ReviewRow>("SELECT * FROM reviews.reviews WHERE id = $1")
-        .bind(review_id)
-        .fetch_optional(pool)
-        .await?
-        .ok_or(ReviewsError::ReviewNotFound)?;
+    let mut tx = pool.begin().await?;
+
+    // Fetch the existing review with row lock to verify ownership.
+    let existing =
+        sqlx::query_as::<_, ReviewRow>("SELECT * FROM reviews.reviews WHERE id = $1 FOR UPDATE")
+            .bind(review_id)
+            .fetch_optional(&mut *tx)
+            .await?
+            .ok_or(ReviewsError::ReviewNotFound)?;
 
     if existing.account_id != account_id {
         return Err(ReviewsError::NotOwnReview.into());
     }
 
     let old_rating = existing.rating;
+    let course_id = existing.course_id;
 
     let row = sqlx::query_as::<_, ReviewRow>(
         "UPDATE reviews.reviews \
@@ -231,28 +247,30 @@ pub async fn update_review(
     .bind(comment)
     .bind(semester)
     .bind(score)
-    .fetch_one(pool)
+    .fetch_one(&mut *tx)
     .await?;
 
-    // If rating changed, update the course average.
+    // Update course aggregate stats in the same transaction.
     if old_rating != rating {
         sqlx::query(
             "UPDATE courses.courses \
              SET review_avg = ((review_avg * review_count::float8 - $2 + $3) / review_count::float8) \
              WHERE id = $1",
         )
-        .bind(existing.course_id)
+        .bind(course_id)
         .bind(old_rating as f64)
         .bind(rating as f64)
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
     }
 
     let (handle, avatar_url): (String, Option<String>) =
         sqlx::query_as("SELECT handle, avatar_url FROM identity.accounts WHERE id = $1")
             .bind(account_id)
-            .fetch_one(pool)
+            .fetch_one(&mut *tx)
             .await?;
+
+    tx.commit().await?;
 
     Ok(row_to_dto_with_author(&row, &handle, avatar_url.as_deref()))
 }
@@ -336,6 +354,7 @@ pub async fn report_review(
 }
 
 /// Look up a single review by id (for admin or ownership checks).
+#[allow(dead_code)]
 pub async fn find_review_by_id(pool: &PgPool, review_id: i64) -> AppResult<Option<ReviewRow>> {
     let row = sqlx::query_as::<_, ReviewRow>("SELECT * FROM reviews.reviews WHERE id = $1")
         .bind(review_id)
@@ -345,80 +364,175 @@ pub async fn find_review_by_id(pool: &PgPool, review_id: i64) -> AppResult<Optio
 }
 
 /// List all reviews (admin view), optionally filtered by status.
+/// Uses cursor-based pagination ordered by `created_at DESC, id DESC`.
 pub async fn admin_list_reviews(
     pool: &PgPool,
     status_filter: Option<&str>,
-    page: i64,
-    per_page: i64,
-) -> AppResult<Vec<ReviewDto>> {
-    let offset = (page - 1) * per_page;
+    cursor: Option<i64>,
+    limit: Option<i64>,
+) -> AppResult<Page<ReviewDto>> {
+    let fetch_limit = limit.unwrap_or(DEFAULT_LIMIT).min(100) + 1;
 
     let rows = if let Some(s) = status_filter {
-        sqlx::query_as::<_, ReviewWithAuthorRow>(
-            "SELECT r.*, a.handle, a.avatar_url \
-             FROM reviews.reviews r \
-             JOIN identity.accounts a ON a.id = r.account_id \
-             WHERE r.status = $1::reviews.review_status \
-             ORDER BY r.created_at DESC \
-             LIMIT $2 OFFSET $3",
-        )
-        .bind(s)
-        .bind(per_page)
-        .bind(offset)
-        .fetch_all(pool)
-        .await?
+        if let Some(c) = cursor {
+            sqlx::query_as::<_, ReviewWithAuthorRow>(
+                "SELECT r.*, a.handle, a.avatar_url \
+                 FROM reviews.reviews r \
+                 JOIN identity.accounts a ON a.id = r.account_id \
+                 WHERE r.status = $1::reviews.review_status AND r.id < $2 \
+                 ORDER BY r.id DESC \
+                 LIMIT $3",
+            )
+            .bind(s)
+            .bind(c)
+            .bind(fetch_limit)
+            .fetch_all(pool)
+            .await?
+        } else {
+            sqlx::query_as::<_, ReviewWithAuthorRow>(
+                "SELECT r.*, a.handle, a.avatar_url \
+                 FROM reviews.reviews r \
+                 JOIN identity.accounts a ON a.id = r.account_id \
+                 WHERE r.status = $1::reviews.review_status \
+                 ORDER BY r.id DESC \
+                 LIMIT $2",
+            )
+            .bind(s)
+            .bind(fetch_limit)
+            .fetch_all(pool)
+            .await?
+        }
     } else {
-        sqlx::query_as::<_, ReviewWithAuthorRow>(
-            "SELECT r.*, a.handle, a.avatar_url \
-             FROM reviews.reviews r \
-             JOIN identity.accounts a ON a.id = r.account_id \
-             ORDER BY r.created_at DESC \
-             LIMIT $1 OFFSET $2",
-        )
-        .bind(per_page)
-        .bind(offset)
-        .fetch_all(pool)
-        .await?
+        if let Some(c) = cursor {
+            sqlx::query_as::<_, ReviewWithAuthorRow>(
+                "SELECT r.*, a.handle, a.avatar_url \
+                 FROM reviews.reviews r \
+                 JOIN identity.accounts a ON a.id = r.account_id \
+                 WHERE r.id < $1 \
+                 ORDER BY r.id DESC \
+                 LIMIT $2",
+            )
+            .bind(c)
+            .bind(fetch_limit)
+            .fetch_all(pool)
+            .await?
+        } else {
+            sqlx::query_as::<_, ReviewWithAuthorRow>(
+                "SELECT r.*, a.handle, a.avatar_url \
+                 FROM reviews.reviews r \
+                 JOIN identity.accounts a ON a.id = r.account_id \
+                 ORDER BY r.id DESC \
+                 LIMIT $1",
+            )
+            .bind(fetch_limit)
+            .fetch_all(pool)
+            .await?
+        }
     };
 
-    Ok(rows.iter().map(row_to_dto).collect())
+    let actual_limit = fetch_limit - 1;
+    let has_more = rows.len() > actual_limit as usize;
+    let items: Vec<ReviewDto> = if has_more {
+        rows[..actual_limit as usize].iter().map(row_to_dto).collect()
+    } else {
+        rows.iter().map(row_to_dto).collect()
+    };
+    let next_cursor =
+        if has_more { items.last().map(|r| r.id.parse::<i64>().unwrap_or(0)) } else { None };
+
+    Ok(Page::new(items, next_cursor.map(|c| c.to_string())))
 }
 
-/// Admin: soft-delete a review.
+/// Admin: soft-delete a review and update course aggregates.
 pub async fn admin_soft_delete_review(pool: &PgPool, review_id: i64) -> AppResult<()> {
-    let affected = sqlx::query("UPDATE reviews.reviews SET status = 'hidden' WHERE id = $1")
+    let mut tx = pool.begin().await?;
+
+    let existing =
+        sqlx::query_as::<_, ReviewRow>("SELECT * FROM reviews.reviews WHERE id = $1 FOR UPDATE")
+            .bind(review_id)
+            .fetch_optional(&mut *tx)
+            .await?
+            .ok_or(ReviewsError::ReviewNotFound)?;
+
+    if existing.status == "visible" {
+        // Decrement review_count and recompute average.
+        sqlx::query(
+            "UPDATE courses.courses \
+             SET review_count = GREATEST(review_count - 1, 0), \
+                 review_avg = CASE \
+                   WHEN review_count <= 1 THEN 0 \
+                   ELSE ((review_avg * review_count::float8 - $2) / (review_count - 1)::float8) \
+                 END \
+             WHERE id = $1",
+        )
+        .bind(existing.course_id)
+        .bind(existing.rating as f64)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    sqlx::query("UPDATE reviews.reviews SET status = 'hidden' WHERE id = $1")
         .bind(review_id)
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
 
-    if affected.rows_affected() == 0 {
-        return Err(ReviewsError::ReviewNotFound.into());
-    }
+    tx.commit().await?;
     Ok(())
 }
 
-/// Admin: toggle a review between visible and hidden.
+/// Admin: toggle a review between visible and hidden, updating course aggregates.
 pub async fn admin_toggle_review_visibility(pool: &PgPool, review_id: i64) -> AppResult<()> {
-    let status: Option<String> =
-        sqlx::query_scalar("SELECT status::text FROM reviews.reviews WHERE id = $1")
+    let mut tx = pool.begin().await?;
+
+    let existing =
+        sqlx::query_as::<_, ReviewRow>("SELECT * FROM reviews.reviews WHERE id = $1 FOR UPDATE")
             .bind(review_id)
-            .fetch_optional(pool)
-            .await?;
+            .fetch_optional(&mut *tx)
+            .await?
+            .ok_or(ReviewsError::ReviewNotFound)?;
 
-    let status = status.ok_or(ReviewsError::ReviewNotFound)?;
+    let new_status = if existing.status == "visible" { "hidden" } else { "visible" };
 
-    let new_status = if status == "visible" { "hidden" } else { "visible" };
+    if existing.status == "visible" {
+        // Hiding: decrement count, remove rating from average.
+        sqlx::query(
+            "UPDATE courses.courses \
+             SET review_count = GREATEST(review_count - 1, 0), \
+                 review_avg = CASE \
+                   WHEN review_count <= 1 THEN 0 \
+                   ELSE ((review_avg * review_count::float8 - $2) / (review_count - 1)::float8) \
+                 END \
+             WHERE id = $1",
+        )
+        .bind(existing.course_id)
+        .bind(existing.rating as f64)
+        .execute(&mut *tx)
+        .await?;
+    } else if existing.status == "hidden" && new_status == "visible" {
+        // Showing: increment count, add rating to average.
+        sqlx::query(
+            "UPDATE courses.courses \
+             SET review_count = review_count + 1, \
+                 review_avg = ((review_avg * (review_count - 1)::float8 + $2) / review_count::float8) \
+             WHERE id = $1",
+        )
+        .bind(existing.course_id)
+        .bind(existing.rating as f64)
+        .execute(&mut *tx)
+        .await?;
+    }
 
     sqlx::query("UPDATE reviews.reviews SET status = $1::reviews.review_status WHERE id = $2")
         .bind(new_status)
         .bind(review_id)
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
 
+    tx.commit().await?;
     Ok(())
 }
 
-/// Admin: edit any review.
+/// Admin: edit any review with transactional course aggregate update.
 pub async fn admin_edit_review(
     pool: &PgPool,
     review_id: i64,
@@ -429,14 +543,18 @@ pub async fn admin_edit_review(
 ) -> AppResult<ReviewDto> {
     check_rating(rating)?;
 
-    let existing = sqlx::query_as::<_, ReviewRow>("SELECT * FROM reviews.reviews WHERE id = $1")
-        .bind(review_id)
-        .fetch_optional(pool)
-        .await?
-        .ok_or(ReviewsError::ReviewNotFound)?;
+    let mut tx = pool.begin().await?;
+
+    let existing =
+        sqlx::query_as::<_, ReviewRow>("SELECT * FROM reviews.reviews WHERE id = $1 FOR UPDATE")
+            .bind(review_id)
+            .fetch_optional(&mut *tx)
+            .await?
+            .ok_or(ReviewsError::ReviewNotFound)?;
 
     let old_rating = existing.rating;
     let account_id = existing.account_id;
+    let course_id = existing.course_id;
 
     let row = sqlx::query_as::<_, ReviewRow>(
         "UPDATE reviews.reviews \
@@ -449,7 +567,7 @@ pub async fn admin_edit_review(
     .bind(comment)
     .bind(semester)
     .bind(score)
-    .fetch_one(pool)
+    .fetch_one(&mut *tx)
     .await?;
 
     if old_rating != rating {
@@ -458,18 +576,20 @@ pub async fn admin_edit_review(
              SET review_avg = ((review_avg * review_count::float8 - $2 + $3) / review_count::float8) \
              WHERE id = $1",
         )
-        .bind(existing.course_id)
+        .bind(course_id)
         .bind(old_rating as f64)
         .bind(rating as f64)
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
     }
 
     let (handle, avatar_url): (String, Option<String>) =
         sqlx::query_as("SELECT handle, avatar_url FROM identity.accounts WHERE id = $1")
             .bind(account_id)
-            .fetch_one(pool)
+            .fetch_one(&mut *tx)
             .await?;
+
+    tx.commit().await?;
 
     Ok(row_to_dto_with_author(&row, &handle, avatar_url.as_deref()))
 }

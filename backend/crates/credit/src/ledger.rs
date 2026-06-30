@@ -13,6 +13,34 @@ pub fn canonicalize(payload: &serde_json::Value) -> String {
     serde_json::to_string(payload).expect("canonicalize: serialisation must not fail")
 }
 
+/// Build the canonical payload for a ledger entry. Returns the canonical JSON string
+/// ready for hashing or signing.
+#[allow(clippy::too_many_arguments)]
+pub fn build_ledger_canonical(
+    tx_id: &str,
+    type_: &str,
+    from_account: Option<i64>,
+    to_account: Option<i64>,
+    amount: i64,
+    nonce: &str,
+    metadata: Option<&serde_json::Value>,
+    signer: &str,
+    created_at: i64,
+) -> String {
+    let payload = serde_json::json!({
+        "tx_id": tx_id,
+        "type": type_,
+        "from_account": from_account.map(|v| v.to_string()),
+        "to_account": to_account.map(|v| v.to_string()),
+        "amount": amount,
+        "nonce": nonce,
+        "metadata": metadata,
+        "signer": signer,
+        "timestamp": created_at,
+    });
+    canonicalize(&payload)
+}
+
 /// Compute the entry hash: SHA-256 hex of `canonical || prev_hash`.
 pub fn compute_hash(canonical: &str, prev_hash: &str) -> String {
     let mut hasher = sha2::Sha256::new();
@@ -25,6 +53,20 @@ pub fn compute_hash(canonical: &str, prev_hash: &str) -> String {
 pub fn sign_payload(payload: &str, private_key_bytes: &[u8]) -> String {
     let key_pair =
         Ed25519KeyPair::from_seed_unchecked(private_key_bytes).expect("invalid seed length");
+    use base64::Engine as _;
+    base64::engine::general_purpose::STANDARD.encode(key_pair.sign(payload.as_bytes()).as_ref())
+}
+
+/// Derive the Ed25519 public key bytes from a 32-byte seed. Returns the raw public key bytes.
+pub fn derive_public_key(seed: &[u8]) -> Vec<u8> {
+    use ring::signature::KeyPair;
+    let key_pair = Ed25519KeyPair::from_seed_unchecked(seed).expect("invalid seed length");
+    key_pair.public_key().as_ref().to_vec()
+}
+
+/// Sign a payload with an Ed25519 private key seed. Returns the base64 signature.
+pub fn sign_with_seed(payload: &str, seed: &[u8]) -> String {
+    let key_pair = Ed25519KeyPair::from_seed_unchecked(seed).expect("invalid seed length");
     use base64::Engine as _;
     base64::engine::general_purpose::STANDARD.encode(key_pair.sign(payload.as_bytes()).as_ref())
 }
