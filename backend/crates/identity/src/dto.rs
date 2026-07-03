@@ -88,3 +88,25 @@ pub struct WalletDto {
     pub account_id: String,
     pub balance: i64,
 }
+
+/// GET /api/v2/users/{handle} — public user profile.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserProfileDto {
+    pub handle: String,
+    pub avatar_url: Option<String>,
+    pub trust_level: i16,
+    pub badges: Vec<UserBadgeDto>,
+    pub thread_count: i32,
+    pub comment_count: i32,
+    pub votes_received: i32,
+    pub created_at: i64,
+}
+
+/// A single badge entry inside a user profile.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserBadgeDto {
+    pub slug: String,
+    pub name: String,
+}

@@ -1,4 +1,5 @@
-//! Thread state machine operations: pin, close, archive, hide, delete, restore.
+//! Thread state machine operations: pin, close, archive, hide, delete, restore,
+//! and solved-answer management for Q&A boards.
 
 use shared::AppResult;
 use sqlx::PgPool;
@@ -82,6 +83,55 @@ pub async fn restore_thread(pool: &PgPool, thread_id: i64) -> AppResult<()> {
 pub async fn move_thread(pool: &PgPool, thread_id: i64, new_board_id: i64) -> AppResult<()> {
     sqlx::query("UPDATE forum.threads SET board_id = $1 WHERE id = $2")
         .bind(new_board_id)
+        .bind(thread_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Auto-archive threads that have had no new comments for 90+ days.
+///
+/// Threads that are already archived, soft-deleted, or had recent activity
+/// are skipped. Returns the number of threads archived.
+///
+/// This is intended to be called periodically from a scheduled task
+/// (e.g. every hour via `tokio::time::interval`).
+pub async fn auto_archive_stale(pool: &PgPool) -> i32 {
+    let result = sqlx::query_scalar::<_, i64>(
+        "WITH archived AS (
+            UPDATE forum.threads
+            SET archived_at = now()
+            WHERE archived_at IS NULL
+              AND deleted_at IS NULL
+              AND last_activity_at < now() - INTERVAL '90 days'
+            RETURNING id
+        )
+        SELECT count(*) FROM archived",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or(0);
+
+    let count = result as i32;
+    if count > 0 {
+        tracing::info!(count, "auto-archived stale threads");
+    }
+    count
+}
+
+/// Mark a comment as the solved answer for a thread.
+pub async fn set_solved_answer(pool: &PgPool, thread_id: i64, comment_id: i64) -> AppResult<()> {
+    sqlx::query("UPDATE forum.threads SET solved_answer_id = $1 WHERE id = $2")
+        .bind(comment_id)
+        .bind(thread_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Unmark the solved answer for a thread.
+pub async fn clear_solved_answer(pool: &PgPool, thread_id: i64) -> AppResult<()> {
+    sqlx::query("UPDATE forum.threads SET solved_answer_id = NULL WHERE id = $1")
         .bind(thread_id)
         .execute(pool)
         .await?;

@@ -6,7 +6,11 @@
 mod boards;
 mod bookmarks;
 mod comments;
+mod dms;
+mod drafts;
 mod flags;
+mod ignores;
+mod polls;
 mod read_tracking;
 mod subscriptions;
 mod tags;
@@ -19,7 +23,11 @@ use crate::dto::{BoardDto, CommentDto, ThreadDetailDto, ThreadDto};
 pub use boards::*;
 pub use bookmarks::*;
 pub use comments::*;
+pub use dms::*;
+pub use drafts::*;
 pub use flags::*;
+pub use ignores::*;
+pub use polls::*;
 pub use read_tracking::*;
 pub use subscriptions::*;
 pub use tags::*;
@@ -61,6 +69,7 @@ pub(crate) fn thread_to_detail_dto(row: &crate::models::ThreadRowJoinedFull) -> 
         status: row.status.clone(),
         pinned_at: row.pinned_at.map(|v| v.timestamp()),
         pinned_globally: row.pinned_globally,
+        featured_at: row.featured_at.map(|v| v.timestamp()),
         closed_at: row.closed_at.map(|v| v.timestamp()),
         archived_at: row.archived_at.map(|v| v.timestamp()),
         deleted_at: row.deleted_at.map(|v| v.timestamp()),
@@ -68,12 +77,17 @@ pub(crate) fn thread_to_detail_dto(row: &crate::models::ThreadRowJoinedFull) -> 
         hidden_at: row.hidden_at.map(|v| v.timestamp()),
         created_at: row.created_at.timestamp(),
         last_activity_at: row.last_activity_at.timestamp(),
+        solved_answer_id: row.solved_answer_id.map(|v| v.to_string()),
         my_last_read_comment_id: None,
         my_subscription_level: None,
+        poll: None,
     }
 }
 
-pub(crate) fn comment_to_dto(row: &crate::models::CommentRowJoined) -> CommentDto {
+pub(crate) fn comment_to_dto(
+    row: &crate::models::CommentRowJoined,
+    solved_comment_id: Option<i64>,
+) -> CommentDto {
     CommentDto {
         id: row.id.to_string(),
         thread_id: row.thread_id.to_string(),
@@ -87,6 +101,8 @@ pub(crate) fn comment_to_dto(row: &crate::models::CommentRowJoined) -> CommentDt
         is_hidden: row.hidden_at.is_some(),
         edited_at: row.edited_at.map(|v| v.timestamp()),
         created_at: row.created_at.timestamp(),
+        quoted_comment_id: row.quoted_comment_id.map(|v| v.to_string()),
+        is_solved: Some(row.id) == solved_comment_id,
     }
 }
 

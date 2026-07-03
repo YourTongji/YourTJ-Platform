@@ -4,6 +4,8 @@
 //! At current scale, timelines are read-aggregated and cached — do NOT build
 //! fan-out-on-write. Hot ranking is a periodic job writing a Redis ZSET.
 mod admin;
+pub mod badges;
+pub mod digest;
 mod dto;
 mod error;
 mod handlers;
@@ -13,6 +15,7 @@ pub mod notification_hooks;
 mod notifications;
 pub mod repo;
 mod sanctions;
+pub mod sse;
 pub mod trust_levels;
 pub mod watched_words;
 
@@ -44,6 +47,10 @@ pub fn routes(state: AppState) -> Router {
         .route("/api/v2/forum/comments/{id}", patch(handlers::update_comment))
         .route("/api/v2/forum/comments/{id}", delete(handlers::delete_comment))
         .route("/api/v2/forum/comments/{id}/revisions", get(handlers::list_comment_revisions))
+        .route(
+            "/api/v2/forum/comments/{id}/solve",
+            post(handlers::mark_solved_handler).delete(handlers::unmark_solved_handler),
+        )
         .route("/api/v2/forum/threads/unread", get(handlers::list_unread_threads))
         .route("/api/v2/forum/threads/{id}/read", post(handlers::report_read))
         .route("/api/v2/forum/posts/{post_id}/vote", post(handlers::vote_post))
@@ -64,10 +71,39 @@ pub fn routes(state: AppState) -> Router {
         .route("/api/v2/notifications", get(notifications::list_notifications_handler))
         .route("/api/v2/notifications/unread-count", get(notifications::unread_count_handler))
         .route("/api/v2/notifications/read", post(notifications::mark_read_handler))
+        .route("/api/v2/notifications/stream", get(sse::handle_sse_stream))
+        // Drafts
+        .route(
+            "/api/v2/me/drafts",
+            get(handlers::list_drafts_handler).put(handlers::save_draft_handler),
+        )
+        .route(
+            "/api/v2/me/drafts/{draft_key}",
+            get(handlers::get_draft_handler).delete(handlers::delete_draft_handler),
+        )
         // Notification prefs (user level)
         .route(
             "/api/v2/me/notification-prefs",
             get(handlers::get_my_notification_prefs).put(handlers::set_my_notification_prefs),
+        )
+        // User ignores (blocking)
+        .route(
+            "/api/v2/me/ignores/{account_id}",
+            put(handlers::ignore_user_handler).delete(handlers::unignore_user_handler),
+        )
+        .route("/api/v2/me/ignores", get(handlers::list_ignores_handler))
+        // Polls
+        .route("/api/v2/forum/polls/{id}/vote", post(handlers::vote_poll_handler))
+        .route("/api/v2/forum/polls/{id}/results", get(handlers::poll_results_handler))
+        // DMs (1:1 private messages)
+        .route(
+            "/api/v2/forum/dm/conversations",
+            get(handlers::list_conversations_handler)
+                .post(handlers::create_or_get_conversation_handler),
+        )
+        .route(
+            "/api/v2/forum/dm/conversations/{id}/messages",
+            get(handlers::list_messages_handler).post(handlers::send_message_handler),
         )
         .merge(admin::routes())
         .with_state(state)

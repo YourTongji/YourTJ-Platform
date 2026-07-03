@@ -13,6 +13,7 @@ pub struct BoardRow {
     pub description: Option<String>,
     pub position: i32,
     pub is_locked: bool,
+    pub is_qa: bool,
     pub min_trust_to_post: i16,
     pub thread_count: i32,
 }
@@ -79,6 +80,7 @@ pub struct ThreadRowJoinedFull {
     pub status: String,
     pub pinned_at: Option<DateTime<Utc>>,
     pub pinned_globally: bool,
+    pub featured_at: Option<DateTime<Utc>>,
     pub closed_at: Option<DateTime<Utc>>,
     pub archived_at: Option<DateTime<Utc>>,
     pub deleted_at: Option<DateTime<Utc>>,
@@ -87,6 +89,7 @@ pub struct ThreadRowJoinedFull {
     pub hidden_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub last_activity_at: DateTime<Utc>,
+    pub solved_answer_id: Option<i64>,
     pub author_handle: String,
 }
 
@@ -105,6 +108,7 @@ pub struct CommentRowJoined {
     pub edited_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub author_handle: String,
+    pub quoted_comment_id: Option<i64>,
 }
 
 /// A row from `forum.flags`.
@@ -195,6 +199,43 @@ pub struct PostRevisionRow {
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
+/// A row from `forum.dm_conversations`.
+#[allow(dead_code)]
+#[derive(Debug, Clone, FromRow)]
+pub struct DmConversationRow {
+    pub id: i64,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// A row from `forum.dm_participants`.
+#[allow(dead_code)]
+#[derive(Debug, Clone, FromRow)]
+pub struct DmParticipantRow {
+    pub conversation_id: i64,
+    pub account_id: i64,
+    pub joined_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// A row from `forum.dm_messages`, joined with sender handle.
+#[derive(Debug, Clone, FromRow)]
+pub struct DmMessageRow {
+    pub id: i64,
+    pub conversation_id: i64,
+    pub sender_id: i64,
+    pub sender_handle: String,
+    pub body: String,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// A conversation with the other participant's handle and last message time.
+#[derive(Debug, Clone, FromRow)]
+pub struct DmConversationListRow {
+    pub id: i64,
+    pub other_account_id: i64,
+    pub other_handle: String,
+    pub last_message_at: chrono::DateTime<chrono::Utc>,
+}
+
 /// A row from `forum.notification_prefs`.
 #[allow(dead_code)]
 #[derive(Debug, Clone, FromRow)]
@@ -202,4 +243,36 @@ pub struct NotificationPrefsRow {
     pub account_id: i64,
     pub prefs: serde_json::Value,
     pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// A row from `forum.polls`.
+#[allow(dead_code)]
+#[derive(Debug, Clone, FromRow)]
+pub struct PollRow {
+    pub id: i64,
+    pub thread_id: i64,
+    pub question: String,
+    pub multi_select: bool,
+    pub closes_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// A row from `forum.poll_options`.
+#[allow(dead_code)]
+#[derive(Debug, Clone, FromRow)]
+pub struct PollOptionRow {
+    pub id: i64,
+    pub poll_id: i64,
+    pub position: i32,
+    pub label: String,
+    pub vote_count: i32,
+}
+
+/// A row from `forum.poll_votes`.
+#[allow(dead_code)]
+#[derive(Debug, Clone, FromRow)]
+pub struct PollVoteRow {
+    pub poll_option_id: i64,
+    pub account_id: i64,
+    pub created_at: chrono::DateTime<chrono::Utc>,
 }

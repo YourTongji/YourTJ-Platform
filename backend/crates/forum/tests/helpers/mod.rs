@@ -26,6 +26,7 @@ pub async fn create_test_app() -> (PgPool, axum::Router) {
         redis: None,
         system_private_key: vec![0u8; 32],
         system_public_key_b64: String::new(),
+        sse_tx: None,
     };
 
     let router = forum::routes(state);

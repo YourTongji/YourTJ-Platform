@@ -74,6 +74,7 @@ pub async fn vote_post(
             let pool = state.db.clone();
             let vote_type = body.post_type.clone();
             let vote_post_id = post_id;
+            let voter_id = auth.id;
             tokio::spawn(async move {
                 crate::notification_hooks::create_notification(
                     &pool,
@@ -85,6 +86,7 @@ pub async fn vote_post(
                         "voterHandle": "",
                     }),
                     None,
+                    Some(voter_id),
                 )
                 .await;
             });

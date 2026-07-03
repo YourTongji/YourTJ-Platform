@@ -46,11 +46,16 @@ dependencies = [
  "forum",
  "hex",
  "identity",
+ "media",
+ "once_cell",
  "redis",
+ "regex",
+ "reqwest",
  "reviews",
  "ring",
  "serde",
  "serde_json",
+ "sha2",
  "shared",
  "sqlx",
  "tokio",
@@ -612,6 +617,7 @@ dependencies = [
  "base64",
  "chrono",
  "deadpool-redis",
+ "futures",
  "hex",
  "identity",
  "meilisearch-sdk",
@@ -625,6 +631,7 @@ dependencies = [
  "sqlx",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-stream",
  "tower",
  "tracing",
  "uuid",
@@ -1308,6 +1315,26 @@ checksum = "d89e7ee0cfbedfc4da3340218492196241d89eefb6dab27de5df917a6d2e78cf"
 dependencies = [
  "cfg-if",
  "digest",
+]
+
+[[package]]
+name = "media"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "base64",
+ "chrono",
+ "hex",
+ "identity",
+ "serde",
+ "serde_json",
+ "sha2",
+ "shared",
+ "sqlx",
+ "thiserror 2.0.18",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -2733,6 +2760,7 @@ dependencies = [
  "futures-core",
  "pin-project-lite",
  "tokio",
+ "tokio-util",
 ]
 
 [[package]]

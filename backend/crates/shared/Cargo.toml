@@ -16,6 +16,6 @@ redis.workspace = true
 deadpool-redis.workspace = true
 jsonwebtoken.workspace = true
 lettre.workspace = true
+tokio.workspace = true
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["macros", "rt", "time"] }

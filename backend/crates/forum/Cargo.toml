@@ -25,6 +25,8 @@ identity.workspace = true
 regex.workspace = true
 meilisearch-sdk.workspace = true
 once_cell.workspace = true
+futures.workspace = true
+tokio-stream.workspace = true
 
 [dev-dependencies]
 tower.workspace = true

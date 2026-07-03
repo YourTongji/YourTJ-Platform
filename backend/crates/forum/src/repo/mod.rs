@@ -51,10 +51,14 @@ pub mod threads;
 pub mod votes;
 
 pub mod bookmarks;
+pub mod dms;
+pub mod drafts;
 pub mod flags;
+pub mod ignores;
 pub mod mod_actions;
 pub mod notification_prefs;
 pub mod notifications;
+pub mod polls;
 pub mod reads;
 pub mod revisions;
 pub mod subscriptions;
@@ -64,14 +68,23 @@ pub mod thread_state;
 pub use flags::{insert_flag, list_flag_queue, resolve_flag};
 pub use mod_actions::{insert_mod_action, list_mod_actions};
 
-pub use boards::list_boards;
+pub use boards::{find_board, list_boards};
 pub use bookmarks::{delete_bookmark, list_bookmarks, upsert_bookmark};
 pub use comments::{
     create_comment, find_comment, list_comments, next_sibling_index, update_comment,
 };
+pub use drafts::{
+    count_drafts, delete_draft, delete_drafts_for_account, draft_exists, get_draft, list_drafts,
+    upsert_draft,
+};
 pub use hot_rank::refresh_hot_rank;
+pub use ignores::{batch_ignored_ids, delete_ignore, insert_ignore, is_ignored, list_ignored_ids};
 pub use notification_prefs::{get_notification_prefs, set_notification_prefs};
 pub use notifications::{list_notifications, mark_read, NotificationRow};
+pub use polls::{
+    create_poll, get_poll, get_poll_by_id, get_poll_id_by_thread, get_poll_option,
+    get_poll_results, get_voted_option_ids, vote_option, PollWithOptions,
+};
 pub use reads::{get_last_read_comment_id, get_unread_thread_ids, upsert_read_position};
 pub use revisions::{create_revision, list_revisions};
 pub use subscriptions::{
@@ -83,8 +96,9 @@ pub use tags::{
     resolve_tag_slugs, set_thread_tags, update_tag,
 };
 pub use thread_state::{
-    archive_thread, close_thread, hide_thread, move_thread, pin_thread, reopen_thread,
-    restore_thread, unhide_thread, unpin_thread,
+    archive_thread, auto_archive_stale, clear_solved_answer, close_thread, hide_thread,
+    move_thread, pin_thread, reopen_thread, restore_thread, set_solved_answer, unhide_thread,
+    unpin_thread,
 };
 pub use threads::{
     create_thread, find_thread, list_threads, list_threads_feed, list_threads_feed_following,

@@ -25,6 +25,10 @@ deadpool-redis.workspace = true
 ring.workspace = true
 hex.workspace = true
 base64.workspace = true
+reqwest.workspace = true
+sha2.workspace = true
+regex.workspace = true
+once_cell.workspace = true
 
 shared.workspace = true
 identity.workspace = true
@@ -32,3 +36,4 @@ courses.workspace = true
 reviews.workspace = true
 credit.workspace = true
 forum.workspace = true
+media.workspace = true

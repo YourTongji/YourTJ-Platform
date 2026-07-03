@@ -8,13 +8,36 @@ use sqlx::PgPool;
 
 /// Insert a notification row. Call via `tokio::spawn` so the caller does not
 /// wait for the INSERT.
+///
+/// When `actor_id` is `Some`, the notification is silently skipped if the
+/// recipient (`account_id`) has ignored the actor (user blocking).
 pub async fn create_notification(
     pool: &PgPool,
     account_id: i64,
     r#type: &str,
     payload: Value,
     aggregation_key: Option<&str>,
+    actor_id: Option<i64>,
 ) {
+    // Check ignore: if the recipient has ignored the actor, drop the notification.
+    if let Some(aid) = actor_id {
+        let ignored: bool = sqlx::query_scalar(
+            "SELECT EXISTS( \
+             SELECT 1 FROM forum.user_ignores \
+             WHERE account_id = $1 AND ignored_account_id = $2 \
+             )",
+        )
+        .bind(account_id)
+        .bind(aid)
+        .fetch_one(pool)
+        .await
+        .unwrap_or(false);
+
+        if ignored {
+            return;
+        }
+    }
+
     let result = sqlx::query(
         "INSERT INTO forum.notifications (account_id, type, payload, aggregation_key) \
          VALUES ($1, $2, $3, $4)",
@@ -28,7 +51,11 @@ pub async fn create_notification(
 
     if let Err(e) = result {
         tracing::warn!(error = %e, account_id, notification_type = %r#type, "failed to create notification");
+        return;
     }
+
+    // Publish SSE event for real-time delivery.
+    crate::sse::publish_event(account_id, r#type, payload);
 }
 
 /// Create a notification with aggregation support.
@@ -37,13 +64,36 @@ pub async fn create_notification(
 /// exists within the last 10 minutes, its payload count is incremented instead
 /// of inserting a new row. Falls back to `create_notification` when no match is
 /// found.
+///
+/// When `actor_id` is `Some`, the notification is silently skipped if the
+/// recipient (`account_id`) has ignored the actor (user blocking).
 pub async fn create_notification_aggregated(
     pool: &PgPool,
     account_id: i64,
     r#type: &str,
     aggregation_key: &str,
     payload: Value,
+    actor_id: Option<i64>,
 ) {
+    // Check ignore: if the recipient has ignored the actor, drop the notification.
+    if let Some(aid) = actor_id {
+        let ignored: bool = sqlx::query_scalar(
+            "SELECT EXISTS( \
+             SELECT 1 FROM forum.user_ignores \
+             WHERE account_id = $1 AND ignored_account_id = $2 \
+             )",
+        )
+        .bind(account_id)
+        .bind(aid)
+        .fetch_one(pool)
+        .await
+        .unwrap_or(false);
+
+        if ignored {
+            return;
+        }
+    }
+
     // Try to find an existing unread notification to aggregate into.
     let existing: Option<(i64, Value)> = sqlx::query_as(
         "SELECT id, payload FROM forum.notifications \
@@ -78,9 +128,14 @@ pub async fn create_notification_aggregated(
                 .execute(pool)
                 .await;
         }
+
+        // Publish SSE event for the aggregated (bumped) notification.
+        crate::sse::publish_event(account_id, r#type, payload);
     } else {
         // No existing aggregation — insert fresh with the aggregation key.
-        create_notification(pool, account_id, r#type, payload, Some(aggregation_key)).await;
+        // Re-check ignore inside create_notification via actor_id.
+        create_notification(pool, account_id, r#type, payload, Some(aggregation_key), actor_id)
+            .await;
     }
 }
 
