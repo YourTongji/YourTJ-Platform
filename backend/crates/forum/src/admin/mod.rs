@@ -3,6 +3,7 @@
 //!
 //! Every handler checks for mod or admin role via `identity::auth_middleware`.
 
+pub mod badges;
 pub mod boards;
 pub mod comments;
 pub mod flags;
@@ -42,4 +43,8 @@ pub fn routes() -> Router<AppState> {
         .route("/api/v2/admin/forum/watched-words/{id}", delete(watched_words::delete_watched_word))
         // Mod action log
         .route("/api/v2/admin/forum/mod-actions", get(mod_actions::list_mod_actions))
+        // Badges
+        .route("/api/v2/admin/platform/badges", get(badges::list_badges).post(badges::create_badge))
+        // Thread feature
+        .route("/api/v2/admin/forum/threads/{id}/feature", post(badges::feature_thread))
 }
