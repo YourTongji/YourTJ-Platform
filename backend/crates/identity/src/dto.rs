@@ -110,3 +110,26 @@ pub struct UserBadgeDto {
     pub slug: String,
     pub name: String,
 }
+
+/// GET /api/v2/users/{handle}/threads — public user activity.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserThreadDto {
+    pub id: String,
+    pub title: String,
+    pub board_slug: String,
+    pub reply_count: i32,
+    pub vote_count: i32,
+    pub created_at: i64,
+}
+
+/// GET /api/v2/users/{handle}/comments — public user activity.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserCommentDto {
+    pub id: String,
+    pub thread_id: String,
+    pub thread_title: String,
+    pub body_excerpt: String,
+    pub created_at: i64,
+}

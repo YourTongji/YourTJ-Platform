@@ -17,6 +17,7 @@ pub struct BoardDto {
     pub position: i32,
     pub is_locked: bool,
     pub min_trust_to_post: i16,
+    pub is_qa: bool,
     pub thread_count: i32,
 }
 

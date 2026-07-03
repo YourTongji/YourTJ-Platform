@@ -33,6 +33,8 @@ pub fn routes(state: AppState) -> Router {
         // Profile
         .route("/api/v2/me", get(handlers::get_me).patch(handlers::update_me))
         .route("/api/v2/users/{handle}", get(handlers::get_user_profile))
+        .route("/api/v2/users/{handle}/threads", get(handlers::list_user_threads))
+        .route("/api/v2/users/{handle}/comments", get(handlers::list_user_comments))
         // Wallet
         .route("/api/v2/wallet/bind", post(handlers::bind_key))
         .route("/api/v2/wallet/claim-challenge", get(handlers::claim_challenge))

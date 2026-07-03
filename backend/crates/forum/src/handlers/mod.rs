@@ -116,6 +116,7 @@ pub(crate) fn board_to_dto(row: &crate::models::BoardRow) -> BoardDto {
         position: row.position,
         is_locked: row.is_locked,
         min_trust_to_post: row.min_trust_to_post,
+        is_qa: row.is_qa,
         thread_count: row.thread_count,
     }
 }

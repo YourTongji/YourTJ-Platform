@@ -790,3 +790,89 @@ pub async fn list_user_sanctions(
 
     Ok(Json(serde_json::json!(items)))
 }
+
+/// GET /api/v2/users/{handle}/threads — public user thread list.
+pub async fn list_user_threads(
+    State(state): State<AppState>,
+    Path(handle): Path<String>,
+) -> AppResult<Json<Vec<crate::dto::UserThreadDto>>> {
+    use crate::dto::UserThreadDto;
+
+    // Find account by handle
+    let account_id: Option<i64> =
+        sqlx::query_scalar("SELECT id FROM identity.accounts WHERE handle = $1")
+            .bind(&handle)
+            .fetch_optional(&state.db)
+            .await?
+            .map(|id: i64| id);
+
+    let account_id = account_id.ok_or(shared::AppError::NotFound)?;
+
+    let rows: Vec<(i64, String, String, i32, i32, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
+        "SELECT t.id, t.title, COALESCE(b.slug, ''), \
+                t.reply_count, t.vote_count, t.created_at \
+         FROM forum.threads t \
+         JOIN forum.boards b ON b.id = t.board_id \
+         WHERE t.author_id = $1 AND t.deleted_at IS NULL AND t.hidden_at IS NULL \
+         ORDER BY t.created_at DESC LIMIT 50",
+    )
+    .bind(account_id)
+    .fetch_all(&state.db)
+    .await?;
+
+    let items: Vec<UserThreadDto> = rows
+        .into_iter()
+        .map(|(id, title, board_slug, reply_count, vote_count, created_at)| UserThreadDto {
+            id: id.to_string(),
+            title,
+            board_slug,
+            reply_count,
+            vote_count,
+            created_at: created_at.timestamp(),
+        })
+        .collect();
+
+    Ok(Json(items))
+}
+
+/// GET /api/v2/users/{handle}/comments — public user comment list.
+pub async fn list_user_comments(
+    State(state): State<AppState>,
+    Path(handle): Path<String>,
+) -> AppResult<Json<Vec<crate::dto::UserCommentDto>>> {
+    use crate::dto::UserCommentDto;
+
+    let account_id: Option<i64> =
+        sqlx::query_scalar("SELECT id FROM identity.accounts WHERE handle = $1")
+            .bind(&handle)
+            .fetch_optional(&state.db)
+            .await?
+            .map(|id: i64| id);
+
+    let account_id = account_id.ok_or(shared::AppError::NotFound)?;
+
+    let rows: Vec<(i64, i64, String, String, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
+        "SELECT c.id, c.thread_id, COALESCE(t.title, ''), \
+                LEFT(c.body, 200), c.created_at \
+         FROM forum.comments c \
+         JOIN forum.threads t ON t.id = c.thread_id \
+         WHERE c.author_id = $1 AND c.deleted_at IS NULL AND c.hidden_at IS NULL \
+         ORDER BY c.created_at DESC LIMIT 50",
+    )
+    .bind(account_id)
+    .fetch_all(&state.db)
+    .await?;
+
+    let items: Vec<UserCommentDto> = rows
+        .into_iter()
+        .map(|(id, thread_id, thread_title, body_excerpt, created_at)| UserCommentDto {
+            id: id.to_string(),
+            thread_id: thread_id.to_string(),
+            thread_title,
+            body_excerpt,
+            created_at: created_at.timestamp(),
+        })
+        .collect();
+
+    Ok(Json(items))
+}

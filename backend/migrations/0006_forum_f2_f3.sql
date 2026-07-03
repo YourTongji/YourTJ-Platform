@@ -157,3 +157,9 @@ CREATE INDEX ON platform.badges (slug);
 -- ============================================================================
 ALTER TABLE forum.threads
   ADD COLUMN featured_at TIMESTAMPTZ;
+
+-- ============================================================================
+-- 2.10 Quoted comment support
+-- ============================================================================
+ALTER TABLE forum.comments
+  ADD COLUMN quoted_comment_id BIGINT REFERENCES forum.comments(id);
