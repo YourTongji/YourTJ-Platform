@@ -8,12 +8,14 @@ pub mod email;
 pub mod error;
 pub mod pagination;
 pub mod ratelimit;
+pub mod sse;
 pub mod state;
 
 pub use auth::AuthAccount;
 pub use config::Config;
 pub use error::AppError;
 pub use pagination::Page;
+pub use sse::SsePayload;
 pub use state::AppState;
 
 /// The result type returned by handlers and domain services across the platform.

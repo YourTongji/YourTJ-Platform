@@ -3,7 +3,9 @@
 //! are behind `Arc` or connection pools.
 
 use sqlx::PgPool;
+use tokio::sync::broadcast;
 
+use crate::sse::SsePayload;
 use crate::Config;
 
 /// Application state available to all handlers via `State<AppState>`.
@@ -39,4 +41,8 @@ pub struct AppState {
 
     /// System Ed25519 public key (base64-encoded).
     pub system_public_key_b64: String,
+
+    /// SSE broadcast sender for real-time notification delivery.
+    /// `None` when SSE is not configured / disabled.
+    pub sse_tx: Option<broadcast::Sender<SsePayload>>,
 }
