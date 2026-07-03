@@ -59,20 +59,27 @@ pub async fn create_test_app_with_pool(pool: PgPool) -> axum::Router {
 
 /// Run the DDL from migrations to set up the test database.
 async fn run_migrations(pool: &PgPool) {
-    let exists: Option<bool> = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM information_schema.schemata WHERE schema_name = 'identity')",
+    let is_fresh = sqlx::query_scalar(
+        "SELECT NOT EXISTS(SELECT 1 FROM information_schema.schemata WHERE schema_name = 'identity')",
     )
     .fetch_one(pool)
     .await
-    .ok()
-    .flatten();
-    if exists != Some(true) {
-        // Apply migrations if not already done by docker-compose initdb.
-        let sql = include_str!("../../../../migrations/0001_init.sql");
-        sqlx::raw_sql(sql).execute(pool).await.expect("migration 0001 failed");
-
-        let sql2 = include_str!("../../../../migrations/0002_escrow_selection.sql");
-        sqlx::raw_sql(sql2).execute(pool).await.expect("migration 0002 failed");
+    .unwrap_or(false);
+    if is_fresh {
+        let migrations: [&str; 6] = [
+            include_str!("../../../../migrations/0001_init.sql"),
+            include_str!("../../../../migrations/0002_escrow_selection.sql"),
+            include_str!("../../../../migrations/0003_platform.sql"),
+            include_str!("../../../../migrations/0004_review_remediation.sql"),
+            include_str!("../../../../migrations/0005_forum_parity.sql"),
+            include_str!("../../../../migrations/0006_forum_f2_f3.sql"),
+        ];
+        for (i, sql) in migrations.iter().enumerate() {
+            sqlx::raw_sql(sql)
+                .execute(pool)
+                .await
+                .unwrap_or_else(|_| panic!("migration {:03} failed", i + 1));
+        }
     }
 
     // Clean test data from previous runs (always run, even if migrations were skipped).
