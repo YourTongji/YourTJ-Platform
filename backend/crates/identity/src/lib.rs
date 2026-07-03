@@ -32,6 +32,7 @@ pub fn routes(state: AppState) -> Router {
         .route("/api/v2/auth/logout", post(handlers::logout))
         // Profile
         .route("/api/v2/me", get(handlers::get_me).patch(handlers::update_me))
+        .route("/api/v2/users/{handle}", get(handlers::get_user_profile))
         // Wallet
         .route("/api/v2/wallet/bind", post(handlers::bind_key))
         .route("/api/v2/wallet/claim-challenge", get(handlers::claim_challenge))

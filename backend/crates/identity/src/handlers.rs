@@ -16,7 +16,7 @@ use shared::{AppResult, AppState};
 use crate::auth::{create_access_token, generate_refresh_token};
 use crate::dto::{
     AccountDto, AuthTokensOutput, BindKeyInput, ClaimChallengeOutput, ClaimInput, RefreshInput,
-    RequestCodeInput, UpdateMeInput, VerifyEmailInput, WalletDto,
+    RequestCodeInput, UpdateMeInput, UserBadgeDto, UserProfileDto, VerifyEmailInput, WalletDto,
 };
 use crate::email_code::{generate_code, hash_code, verify_code};
 use crate::error::IdentityError;
@@ -240,6 +240,59 @@ pub async fn get_me(
     let account =
         repo::find_account_by_id(&state.db, auth.id).await?.ok_or(shared::AppError::NotFound)?;
     Ok(Json(row_to_dto(&account)))
+}
+
+/// GET /api/v2/users/{handle} — public user profile (no auth required).
+#[tracing::instrument(skip(state))]
+pub async fn get_user_profile(
+    State(state): State<AppState>,
+    Path(handle): Path<String>,
+) -> AppResult<Json<UserProfileDto>> {
+    // Look up account by handle (CITEXT, case-insensitive).
+    let account = sqlx::query_as::<_, crate::models::AccountRow>(
+        "SELECT id, email, handle, avatar_url, role, status, trust_level, created_at \
+         FROM identity.accounts WHERE handle = $1",
+    )
+    .bind(&handle)
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or(shared::AppError::NotFound)?;
+
+    // Aggregate stats from forum.user_stats (LEFT JOIN behaviour via COALESCE).
+    let (thread_count, comment_count, votes_received) = sqlx::query_as::<_, (i32, i32, i32)>(
+        "SELECT COALESCE(threads_created, 0), COALESCE(comments_created, 0), \
+                    COALESCE(votes_received, 0) \
+             FROM forum.user_stats WHERE account_id = $1",
+    )
+    .bind(account.id)
+    .fetch_optional(&state.db)
+    .await?
+    .unwrap_or((0, 0, 0));
+
+    // Badges from platform.account_badges → platform.badges.
+    let badges: Vec<UserBadgeDto> = sqlx::query_as::<_, (String, String)>(
+        "SELECT b.slug, b.name \
+         FROM platform.account_badges ab \
+         JOIN platform.badges b ON b.id = ab.badge_id \
+         WHERE ab.account_id = $1",
+    )
+    .bind(account.id)
+    .fetch_all(&state.db)
+    .await?
+    .into_iter()
+    .map(|(slug, name)| UserBadgeDto { slug, name })
+    .collect();
+
+    Ok(Json(UserProfileDto {
+        handle: account.handle,
+        avatar_url: account.avatar_url,
+        trust_level: account.trust_level,
+        badges,
+        thread_count,
+        comment_count,
+        votes_received,
+        created_at: account.created_at.timestamp(),
+    }))
 }
 
 /// PATCH /me
