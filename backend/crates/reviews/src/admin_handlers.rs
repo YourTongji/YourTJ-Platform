@@ -64,9 +64,14 @@ pub async fn admin_list_reviews(
     headers: HeaderMap,
     Query(params): Query<AdminListReviewsQuery>,
 ) -> AppResult<Json<Page<ReviewDto>>> {
-    let auth = identity::auth_middleware::authenticate(&headers, &state.db, &state.jwt_secret)
-        .await
-        .map_err(|_r| shared::AppError::Unauthorized)?;
+    let auth = identity::auth_middleware::authenticate(
+        &headers,
+        &state.db,
+        &state.jwt_secret,
+        state.redis.as_ref(),
+    )
+    .await
+    .map_err(|_r| shared::AppError::Unauthorized)?;
     auth.require_mod().map_err(|_| shared::AppError::Forbidden)?;
 
     let page =
@@ -82,9 +87,14 @@ pub async fn admin_edit_review(
     headers: HeaderMap,
     Json(body): Json<ReviewInput>,
 ) -> AppResult<Json<ReviewDto>> {
-    let auth = identity::auth_middleware::authenticate(&headers, &state.db, &state.jwt_secret)
-        .await
-        .map_err(|_r| shared::AppError::Unauthorized)?;
+    let auth = identity::auth_middleware::authenticate(
+        &headers,
+        &state.db,
+        &state.jwt_secret,
+        state.redis.as_ref(),
+    )
+    .await
+    .map_err(|_r| shared::AppError::Unauthorized)?;
     auth.require_mod().map_err(|_| shared::AppError::Forbidden)?;
 
     let dto = repo::admin_edit_review(
@@ -108,9 +118,14 @@ pub async fn admin_delete_review(
     Path(review_id): Path<i64>,
     headers: HeaderMap,
 ) -> AppResult<Json<serde_json::Value>> {
-    let auth = identity::auth_middleware::authenticate(&headers, &state.db, &state.jwt_secret)
-        .await
-        .map_err(|_r| shared::AppError::Unauthorized)?;
+    let auth = identity::auth_middleware::authenticate(
+        &headers,
+        &state.db,
+        &state.jwt_secret,
+        state.redis.as_ref(),
+    )
+    .await
+    .map_err(|_r| shared::AppError::Unauthorized)?;
     auth.require_mod().map_err(|_| shared::AppError::Forbidden)?;
 
     repo::admin_soft_delete_review(&state.db, review_id).await?;
@@ -126,9 +141,14 @@ pub async fn admin_toggle_review(
     Path(review_id): Path<i64>,
     headers: HeaderMap,
 ) -> AppResult<Json<serde_json::Value>> {
-    let auth = identity::auth_middleware::authenticate(&headers, &state.db, &state.jwt_secret)
-        .await
-        .map_err(|_r| shared::AppError::Unauthorized)?;
+    let auth = identity::auth_middleware::authenticate(
+        &headers,
+        &state.db,
+        &state.jwt_secret,
+        state.redis.as_ref(),
+    )
+    .await
+    .map_err(|_r| shared::AppError::Unauthorized)?;
     auth.require_mod().map_err(|_| shared::AppError::Forbidden)?;
 
     repo::admin_toggle_review_visibility(&state.db, review_id).await?;
@@ -144,9 +164,14 @@ pub async fn admin_list_reports(
     headers: HeaderMap,
     Query(params): Query<AdminListReportsQuery>,
 ) -> AppResult<Json<Vec<ReportDto>>> {
-    let auth = identity::auth_middleware::authenticate(&headers, &state.db, &state.jwt_secret)
-        .await
-        .map_err(|_r| shared::AppError::Unauthorized)?;
+    let auth = identity::auth_middleware::authenticate(
+        &headers,
+        &state.db,
+        &state.jwt_secret,
+        state.redis.as_ref(),
+    )
+    .await
+    .map_err(|_r| shared::AppError::Unauthorized)?;
     auth.require_mod().map_err(|_| shared::AppError::Forbidden)?;
 
     let items = repo::list_reports(&state.db, params.status.as_deref()).await?;
@@ -160,9 +185,14 @@ pub async fn admin_resolve_report(
     headers: HeaderMap,
     Json(body): Json<ResolveReportInput>,
 ) -> AppResult<Json<serde_json::Value>> {
-    let auth = identity::auth_middleware::authenticate(&headers, &state.db, &state.jwt_secret)
-        .await
-        .map_err(|_r| shared::AppError::Unauthorized)?;
+    let auth = identity::auth_middleware::authenticate(
+        &headers,
+        &state.db,
+        &state.jwt_secret,
+        state.redis.as_ref(),
+    )
+    .await
+    .map_err(|_r| shared::AppError::Unauthorized)?;
     auth.require_mod().map_err(|_| shared::AppError::Forbidden)?;
 
     repo::resolve_report(&state.db, report_id, body.note.as_deref()).await?;

@@ -142,9 +142,14 @@ pub async fn list_notifications_handler(
     headers: HeaderMap,
     Query(q): Query<NotificationListQuery>,
 ) -> AppResult<Json<Page<NotificationDto>>> {
-    let auth = identity::auth_middleware::authenticate(&headers, &state.db, &state.jwt_secret)
-        .await
-        .map_err(|_r| AppError::Unauthorized)?;
+    let auth = identity::auth_middleware::authenticate(
+        &headers,
+        &state.db,
+        &state.jwt_secret,
+        state.redis.as_ref(),
+    )
+    .await
+    .map_err(|_r| AppError::Unauthorized)?;
 
     let cursor_id: Option<i64> = q
         .cursor
@@ -170,15 +175,44 @@ pub async fn list_notifications_handler(
     Ok(Json(Page::new(items, next_str)))
 }
 
+/// GET /api/v2/notifications/unread-count — auth required
+pub async fn unread_count_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> AppResult<Json<serde_json::Value>> {
+    let auth = identity::auth_middleware::authenticate(
+        &headers,
+        &state.db,
+        &state.jwt_secret,
+        state.redis.as_ref(),
+    )
+    .await
+    .map_err(|_r| AppError::Unauthorized)?;
+
+    let count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM forum.notifications WHERE account_id = $1 AND read_at IS NULL",
+    )
+    .bind(auth.id)
+    .fetch_one(&state.db)
+    .await?;
+
+    Ok(Json(serde_json::json!({ "count": count })))
+}
+
 /// POST /api/v2/notifications/read — auth required
 pub async fn mark_read_handler(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(body): Json<MarkReadInput>,
 ) -> AppResult<Json<serde_json::Value>> {
-    let auth = identity::auth_middleware::authenticate(&headers, &state.db, &state.jwt_secret)
-        .await
-        .map_err(|_r| AppError::Unauthorized)?;
+    let auth = identity::auth_middleware::authenticate(
+        &headers,
+        &state.db,
+        &state.jwt_secret,
+        state.redis.as_ref(),
+    )
+    .await
+    .map_err(|_r| AppError::Unauthorized)?;
 
     let ids: Result<Vec<i64>, _> = body.ids.iter().map(|s| s.parse::<i64>()).collect();
 

@@ -13,6 +13,11 @@ pub struct Config {
     pub jwt_ttl: u64,
     pub refresh_ttl: u64,
     pub credit_system_private_key: String,
+    pub smtp_host: String,
+    pub smtp_port: u16,
+    pub smtp_username: String,
+    pub smtp_password: String,
+    pub smtp_from: String,
 }
 
 impl Config {
@@ -35,6 +40,11 @@ impl Config {
             jwt_ttl: env_or_default_u64("JWT_TTL", 900),
             refresh_ttl: env_or_default_u64("REFRESH_TTL", 604800),
             credit_system_private_key: env_or_default("CREDIT_SYSTEM_PRIVATE_KEY", ""),
+            smtp_host: env_or_default("SMTP_HOST", ""),
+            smtp_port: env_or_default_u64("SMTP_PORT", 587) as u16,
+            smtp_username: env_or_default("SMTP_USERNAME", ""),
+            smtp_password: env_or_default("SMTP_PASSWORD", ""),
+            smtp_from: env_or_default("SMTP_FROM", ""),
         })
     }
 

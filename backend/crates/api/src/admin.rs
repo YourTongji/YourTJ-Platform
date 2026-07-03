@@ -16,9 +16,14 @@ pub async fn selection_sync_handler(
     headers: HeaderMap,
     State(state): State<AppState>,
 ) -> AppResult<(StatusCode, Json<serde_json::Value>)> {
-    let _auth = identity::auth_middleware::authenticate(&headers, &state.db, &state.jwt_secret)
-        .await
-        .map_err(|_| shared::AppError::Unauthorized)?;
+    let _auth = identity::auth_middleware::authenticate(
+        &headers,
+        &state.db,
+        &state.jwt_secret,
+        state.redis.as_ref(),
+    )
+    .await
+    .map_err(|_| shared::AppError::Unauthorized)?;
     // require_mod is handled by the courses/admin handlers now
     Ok((StatusCode::ACCEPTED, Json(serde_json::json!({ "status": "queued" }))))
 }
@@ -28,10 +33,43 @@ pub async fn reviews_reindex_handler(
     headers: HeaderMap,
     State(state): State<AppState>,
 ) -> AppResult<(StatusCode, Json<serde_json::Value>)> {
-    let auth = identity::auth_middleware::authenticate(&headers, &state.db, &state.jwt_secret)
-        .await
-        .map_err(|_| shared::AppError::Unauthorized)?;
+    let auth = identity::auth_middleware::authenticate(
+        &headers,
+        &state.db,
+        &state.jwt_secret,
+        state.redis.as_ref(),
+    )
+    .await
+    .map_err(|_| shared::AppError::Unauthorized)?;
     auth.require_mod().map_err(|_| shared::AppError::Forbidden)?;
+    Ok((StatusCode::ACCEPTED, Json(serde_json::json!({ "status": "queued" }))))
+}
+
+/// POST /api/v2/admin/forum/reindex — rebuild forum_threads Meilisearch index
+pub async fn forum_reindex_handler(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+) -> AppResult<(StatusCode, Json<serde_json::Value>)> {
+    let auth = identity::auth_middleware::authenticate(
+        &headers,
+        &state.db,
+        &state.jwt_secret,
+        state.redis.as_ref(),
+    )
+    .await
+    .map_err(|_| shared::AppError::Unauthorized)?;
+    auth.require_mod().map_err(|_| shared::AppError::Forbidden)?;
+
+    let meili_url = state.meili_url.clone();
+    let meili_key = state.meili_master_key.clone();
+    let pool = state.db.clone();
+
+    tokio::spawn(async move {
+        if let Err(e) = forum::meili::reindex_forum(&pool, &meili_url, &meili_key).await {
+            tracing::error!(error = %e, "forum reindex failed");
+        }
+    });
+
     Ok((StatusCode::ACCEPTED, Json(serde_json::json!({ "status": "queued" }))))
 }
 
@@ -44,5 +82,6 @@ pub fn routes(state: AppState) -> Router {
     Router::new()
         .route("/api/v2/admin/selection/sync", post(selection_sync_handler))
         .route("/api/v2/admin/reviews/reindex", post(reviews_reindex_handler))
+        .route("/api/v2/admin/forum/reindex", post(forum_reindex_handler))
         .with_state(state)
 }

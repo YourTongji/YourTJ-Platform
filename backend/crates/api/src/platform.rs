@@ -152,9 +152,14 @@ pub async fn admin_list_settings_handler(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> AppResult<Json<Vec<SettingDto>>> {
-    let auth = identity::auth_middleware::authenticate(&headers, &state.db, &state.jwt_secret)
-        .await
-        .map_err(|_r| AppError::Unauthorized)?;
+    let auth = identity::auth_middleware::authenticate(
+        &headers,
+        &state.db,
+        &state.jwt_secret,
+        state.redis.as_ref(),
+    )
+    .await
+    .map_err(|_r| AppError::Unauthorized)?;
     auth.require_mod().map_err(|_| AppError::Forbidden)?;
     let rows = list_settings(&state.db).await?;
     let items: Vec<SettingDto> =
@@ -168,9 +173,14 @@ pub async fn admin_get_setting_handler(
     headers: HeaderMap,
     Path(key): Path<String>,
 ) -> AppResult<Json<SettingDto>> {
-    let auth = identity::auth_middleware::authenticate(&headers, &state.db, &state.jwt_secret)
-        .await
-        .map_err(|_r| AppError::Unauthorized)?;
+    let auth = identity::auth_middleware::authenticate(
+        &headers,
+        &state.db,
+        &state.jwt_secret,
+        state.redis.as_ref(),
+    )
+    .await
+    .map_err(|_r| AppError::Unauthorized)?;
     auth.require_mod().map_err(|_| AppError::Forbidden)?;
 
     let row = get_setting(&state.db, &key).await?.ok_or(AppError::NotFound)?;
@@ -184,9 +194,14 @@ pub async fn admin_update_setting_handler(
     Path(key): Path<String>,
     Json(body): Json<UpdateSettingInput>,
 ) -> AppResult<Json<SettingDto>> {
-    let auth = identity::auth_middleware::authenticate(&headers, &state.db, &state.jwt_secret)
-        .await
-        .map_err(|_r| AppError::Unauthorized)?;
+    let auth = identity::auth_middleware::authenticate(
+        &headers,
+        &state.db,
+        &state.jwt_secret,
+        state.redis.as_ref(),
+    )
+    .await
+    .map_err(|_r| AppError::Unauthorized)?;
     auth.require_mod().map_err(|_| AppError::Forbidden)?;
 
     update_setting(&state.db, &key, &body.value).await?;

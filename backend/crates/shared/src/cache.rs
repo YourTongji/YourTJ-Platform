@@ -21,6 +21,13 @@ pub async fn bump_version(pool: &Pool, prefix: &str, id: &str) -> Result<i64> {
     Ok(redis::cmd("INCR").arg(&key).query_async(&mut conn).await?)
 }
 
+/// Bump version and ignore errors entirely — no return value.
+pub async fn bump_version_silent(pool: Option<&Pool>, prefix: &str, id: &str) {
+    if let Some(p) = pool {
+        let _ = bump_version_opt(Some(p), prefix, id).await;
+    }
+}
+
 /// Optional wrapper — no-op when Redis is unavailable.
 pub async fn bump_version_opt(pool: Option<&Pool>, prefix: &str, id: &str) -> Result<()> {
     if let Some(p) = pool {

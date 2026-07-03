@@ -38,9 +38,14 @@ pub async fn create_review(
     headers: HeaderMap,
     Json(body): Json<ReviewInput>,
 ) -> AppResult<(StatusCode, Json<ReviewDto>)> {
-    let auth = identity::auth_middleware::authenticate(&headers, &state.db, &state.jwt_secret)
-        .await
-        .map_err(|_r| shared::AppError::Unauthorized)?;
+    let auth = identity::auth_middleware::authenticate(
+        &headers,
+        &state.db,
+        &state.jwt_secret,
+        state.redis.as_ref(),
+    )
+    .await
+    .map_err(|_r| shared::AppError::Unauthorized)?;
 
     shared::ratelimit::check_token_bucket(
         state.redis.as_ref(),
@@ -77,9 +82,14 @@ pub async fn edit_review(
     headers: HeaderMap,
     Json(body): Json<ReviewInput>,
 ) -> AppResult<Json<ReviewDto>> {
-    let auth = identity::auth_middleware::authenticate(&headers, &state.db, &state.jwt_secret)
-        .await
-        .map_err(|_r| shared::AppError::Unauthorized)?;
+    let auth = identity::auth_middleware::authenticate(
+        &headers,
+        &state.db,
+        &state.jwt_secret,
+        state.redis.as_ref(),
+    )
+    .await
+    .map_err(|_r| shared::AppError::Unauthorized)?;
 
     let dto = repo::update_review(
         &state.db,
@@ -105,9 +115,14 @@ pub async fn like_review(
     Path(review_id): Path<i64>,
     headers: HeaderMap,
 ) -> AppResult<StatusCode> {
-    let auth = identity::auth_middleware::authenticate(&headers, &state.db, &state.jwt_secret)
-        .await
-        .map_err(|_r| shared::AppError::Unauthorized)?;
+    let auth = identity::auth_middleware::authenticate(
+        &headers,
+        &state.db,
+        &state.jwt_secret,
+        state.redis.as_ref(),
+    )
+    .await
+    .map_err(|_r| shared::AppError::Unauthorized)?;
 
     repo::like_review(&state.db, review_id, auth.id).await?;
 
@@ -128,9 +143,14 @@ pub async fn unlike_review(
     Path(review_id): Path<i64>,
     headers: HeaderMap,
 ) -> AppResult<StatusCode> {
-    let auth = identity::auth_middleware::authenticate(&headers, &state.db, &state.jwt_secret)
-        .await
-        .map_err(|_r| shared::AppError::Unauthorized)?;
+    let auth = identity::auth_middleware::authenticate(
+        &headers,
+        &state.db,
+        &state.jwt_secret,
+        state.redis.as_ref(),
+    )
+    .await
+    .map_err(|_r| shared::AppError::Unauthorized)?;
 
     repo::unlike_review(&state.db, review_id, auth.id).await?;
 
@@ -152,9 +172,14 @@ pub async fn report_review(
     headers: HeaderMap,
     Json(body): Json<ReportInput>,
 ) -> AppResult<StatusCode> {
-    let auth = identity::auth_middleware::authenticate(&headers, &state.db, &state.jwt_secret)
-        .await
-        .map_err(|_r| shared::AppError::Unauthorized)?;
+    let auth = identity::auth_middleware::authenticate(
+        &headers,
+        &state.db,
+        &state.jwt_secret,
+        state.redis.as_ref(),
+    )
+    .await
+    .map_err(|_r| shared::AppError::Unauthorized)?;
 
     repo::report_review(&state.db, review_id, auth.id, &body.reason).await?;
 

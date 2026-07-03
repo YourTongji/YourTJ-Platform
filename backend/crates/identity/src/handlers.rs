@@ -85,10 +85,13 @@ pub async fn request_code(
 
     repo::insert_email_code(&state.db, &email, &code_hash, expires_at).await?;
 
-    // In production we would send the code via email here.
-    tracing::info!(
-        "verification code generated for registered email (not sent — email SMTP not yet wired)"
-    );
+    shared::email::send_email(
+        &state.config,
+        &email,
+        "YourTJ 验证码",
+        &format!("您的验证码是：{code}，5 分钟内有效。如非本人操作，请忽略此邮件。"),
+    )
+    .await;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -206,9 +209,14 @@ pub async fn refresh(
 ///
 /// Revokes every active session for the authenticated account.
 pub async fn logout(State(state): State<AppState>, headers: HeaderMap) -> AppResult<StatusCode> {
-    let auth = crate::auth_middleware::authenticate(&headers, &state.db, &state.jwt_secret)
-        .await
-        .map_err(|_r| shared::AppError::Unauthorized)?;
+    let auth = crate::auth_middleware::authenticate(
+        &headers,
+        &state.db,
+        &state.jwt_secret,
+        state.redis.as_ref(),
+    )
+    .await
+    .map_err(|_r| shared::AppError::Unauthorized)?;
     repo::revoke_all_sessions(&state.db, auth.id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -218,9 +226,14 @@ pub async fn get_me(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> AppResult<Json<AccountDto>> {
-    let auth = crate::auth_middleware::authenticate(&headers, &state.db, &state.jwt_secret)
-        .await
-        .map_err(|_r| shared::AppError::Unauthorized)?;
+    let auth = crate::auth_middleware::authenticate(
+        &headers,
+        &state.db,
+        &state.jwt_secret,
+        state.redis.as_ref(),
+    )
+    .await
+    .map_err(|_r| shared::AppError::Unauthorized)?;
     let account =
         repo::find_account_by_id(&state.db, auth.id).await?.ok_or(shared::AppError::NotFound)?;
     Ok(Json(row_to_dto(&account)))
@@ -232,9 +245,14 @@ pub async fn update_me(
     headers: HeaderMap,
     Json(body): Json<UpdateMeInput>,
 ) -> AppResult<Json<AccountDto>> {
-    let auth = crate::auth_middleware::authenticate(&headers, &state.db, &state.jwt_secret)
-        .await
-        .map_err(|_r| shared::AppError::Unauthorized)?;
+    let auth = crate::auth_middleware::authenticate(
+        &headers,
+        &state.db,
+        &state.jwt_secret,
+        state.redis.as_ref(),
+    )
+    .await
+    .map_err(|_r| shared::AppError::Unauthorized)?;
 
     // Validate handle if provided.
     if let Some(ref handle) = body.handle {
@@ -271,9 +289,14 @@ pub async fn claim_challenge(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> AppResult<Json<ClaimChallengeOutput>> {
-    let auth = crate::auth_middleware::authenticate(&headers, &state.db, &state.jwt_secret)
-        .await
-        .map_err(|_r| shared::AppError::Unauthorized)?;
+    let auth = crate::auth_middleware::authenticate(
+        &headers,
+        &state.db,
+        &state.jwt_secret,
+        state.redis.as_ref(),
+    )
+    .await
+    .map_err(|_r| shared::AppError::Unauthorized)?;
 
     let challenge_id = uuid::Uuid::new_v4().to_string();
     let nonce = uuid::Uuid::new_v4().to_string();
@@ -308,9 +331,14 @@ pub async fn claim_wallet(
     headers: HeaderMap,
     Json(body): Json<ClaimInput>,
 ) -> AppResult<Json<WalletDto>> {
-    let auth = crate::auth_middleware::authenticate(&headers, &state.db, &state.jwt_secret)
-        .await
-        .map_err(|_r| shared::AppError::Unauthorized)?;
+    let auth = crate::auth_middleware::authenticate(
+        &headers,
+        &state.db,
+        &state.jwt_secret,
+        state.redis.as_ref(),
+    )
+    .await
+    .map_err(|_r| shared::AppError::Unauthorized)?;
 
     let mut tx = state.db.begin().await?;
 
@@ -476,9 +504,14 @@ pub async fn bind_key(
     headers: HeaderMap,
     Json(body): Json<BindKeyInput>,
 ) -> AppResult<StatusCode> {
-    let auth = crate::auth_middleware::authenticate(&headers, &state.db, &state.jwt_secret)
-        .await
-        .map_err(|_r| shared::AppError::Unauthorized)?;
+    let auth = crate::auth_middleware::authenticate(
+        &headers,
+        &state.db,
+        &state.jwt_secret,
+        state.redis.as_ref(),
+    )
+    .await
+    .map_err(|_r| shared::AppError::Unauthorized)?;
 
     // Decode base64 and validate exactly 32 bytes.
     let key_bytes =

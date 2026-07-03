@@ -21,6 +21,7 @@ pub async fn create_test_app() -> (PgPool, axum::Router) {
 
     let state = AppState {
         db: pool.clone(),
+        config: shared::Config::from_env().expect("test Config::from_env"),
         jwt_secret: "integration-test-secret-32bytes!".into(),
         jwt_ttl: 900,
         refresh_ttl: 604800,

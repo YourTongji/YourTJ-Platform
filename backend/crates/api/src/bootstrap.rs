@@ -59,6 +59,7 @@ pub async fn run() -> anyhow::Result<()> {
 
     let state = AppState {
         db,
+        config: config.clone(),
         jwt_secret: config.jwt_secret.clone(),
         jwt_ttl: config.jwt_ttl,
         refresh_ttl: config.refresh_ttl,

@@ -14,13 +14,15 @@ use sqlx::PgPool;
 /// 1. Extracts the Bearer token from the `Authorization` header.
 /// 2. Verifies the JWT and extracts the `sub` claim (account id).
 /// 3. Looks up `status` and `role` from `identity.accounts`.
+/// 4. Checks for active suspensions (cached in Redis).
 ///
 /// Returns `Result<AuthAccount, Response>` for use with `map_err`.
-#[tracing::instrument(skip(headers, db))]
+#[tracing::instrument(skip(headers, db, redis))]
 pub async fn authenticate(
     headers: &HeaderMap,
     db: &PgPool,
     jwt_secret: &str,
+    redis: Option<&deadpool_redis::Pool>,
 ) -> Result<AuthAccount, axum::response::Response> {
     let header = headers
         .get(AUTHORIZATION)
@@ -41,6 +43,14 @@ pub async fn authenticate(
             .ok_or_else(shared::auth::unauthorized)?;
 
     if status != "active" {
+        return Err(shared::auth::forbidden());
+    }
+
+    // Check for active suspension
+    if crate::sanctions::is_suspended(redis, db, account_id)
+        .await
+        .map_err(|_| shared::auth::internal_error())?
+    {
         return Err(shared::auth::forbidden());
     }
 

@@ -78,9 +78,14 @@ pub async fn admin_list_courses(
     headers: HeaderMap,
     Query(params): Query<AdminListCoursesQuery>,
 ) -> AppResult<Json<Page<AdminCourseDto>>> {
-    let auth = identity::auth_middleware::authenticate(&headers, &state.db, &state.jwt_secret)
-        .await
-        .map_err(|_r| AppError::Unauthorized)?;
+    let auth = identity::auth_middleware::authenticate(
+        &headers,
+        &state.db,
+        &state.jwt_secret,
+        state.redis.as_ref(),
+    )
+    .await
+    .map_err(|_r| AppError::Unauthorized)?;
     auth.require_mod().map_err(|_| AppError::Forbidden)?;
 
     let page = admin_repo::admin_list_courses(&state.db, params.cursor, params.limit).await?;
@@ -109,9 +114,14 @@ pub async fn admin_create_course(
     headers: HeaderMap,
     Json(body): Json<CreateCourseInput>,
 ) -> AppResult<(StatusCode, Json<AdminCourseDto>)> {
-    let auth = identity::auth_middleware::authenticate(&headers, &state.db, &state.jwt_secret)
-        .await
-        .map_err(|_r| AppError::Unauthorized)?;
+    let auth = identity::auth_middleware::authenticate(
+        &headers,
+        &state.db,
+        &state.jwt_secret,
+        state.redis.as_ref(),
+    )
+    .await
+    .map_err(|_r| AppError::Unauthorized)?;
     auth.require_mod().map_err(|_| AppError::Forbidden)?;
 
     let row = admin_repo::admin_create_course(
@@ -145,9 +155,14 @@ pub async fn admin_update_course(
     Path(id_str): Path<String>,
     Json(body): Json<UpdateCourseInput>,
 ) -> AppResult<Json<AdminCourseDto>> {
-    let auth = identity::auth_middleware::authenticate(&headers, &state.db, &state.jwt_secret)
-        .await
-        .map_err(|_r| AppError::Unauthorized)?;
+    let auth = identity::auth_middleware::authenticate(
+        &headers,
+        &state.db,
+        &state.jwt_secret,
+        state.redis.as_ref(),
+    )
+    .await
+    .map_err(|_r| AppError::Unauthorized)?;
     auth.require_mod().map_err(|_| AppError::Forbidden)?;
 
     let id: i64 = id_str.parse().map_err(|_| AppError::BadRequest("invalid course id".into()))?;
@@ -188,9 +203,14 @@ pub async fn admin_delete_course(
     headers: HeaderMap,
     Path(id_str): Path<String>,
 ) -> AppResult<StatusCode> {
-    let auth = identity::auth_middleware::authenticate(&headers, &state.db, &state.jwt_secret)
-        .await
-        .map_err(|_r| AppError::Unauthorized)?;
+    let auth = identity::auth_middleware::authenticate(
+        &headers,
+        &state.db,
+        &state.jwt_secret,
+        state.redis.as_ref(),
+    )
+    .await
+    .map_err(|_r| AppError::Unauthorized)?;
     auth.require_mod().map_err(|_| AppError::Forbidden)?;
 
     let id: i64 = id_str.parse().map_err(|_| AppError::BadRequest("invalid course id".into()))?;

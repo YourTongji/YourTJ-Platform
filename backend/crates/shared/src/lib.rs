@@ -4,6 +4,7 @@
 pub mod auth;
 pub mod cache;
 pub mod config;
+pub mod email;
 pub mod error;
 pub mod pagination;
 pub mod ratelimit;

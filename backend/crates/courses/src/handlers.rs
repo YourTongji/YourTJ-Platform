@@ -202,21 +202,29 @@ pub struct SearchQuery {
     pub q: String,
     #[serde(default = "default_search_limit")]
     pub limit: usize,
+    /// Search type: "course" | "review" | "thread" | "all" (default)
+    #[serde(rename = "type", default = "default_query_type")]
+    pub query_type: String,
+}
+
+fn default_query_type() -> String {
+    "all".into()
 }
 
 fn default_search_limit() -> usize {
     10
 }
 
-/// Structured search result with separated courses and reviews.
+/// Structured search result with separated courses, reviews, and forum threads.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchResultDto {
     pub courses: Vec<serde_json::Value>,
     pub reviews: Vec<serde_json::Value>,
+    pub threads: Vec<serde_json::Value>,
 }
 
-/// GET /api/v2/search — global Meilisearch search across courses and reviews.
+/// GET /api/v2/search — global Meilisearch search across courses, reviews, and forum threads.
 pub async fn global_search(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
@@ -257,7 +265,28 @@ pub async fn global_search(
         }
     }
 
-    Ok(Json(SearchResultDto { courses, reviews }))
+    // Search forum threads when type includes "thread" or is "all" (default).
+    let mut threads = Vec::new();
+    if params.query_type == "thread" || params.query_type == "all" {
+        if let Ok(client) =
+            meilisearch_sdk::client::Client::new(&state.meili_url, Some(&state.meili_master_key))
+        {
+            let index = client.index("forum_threads");
+            if let Ok(search_results) = index
+                .search()
+                .with_query(&params.q)
+                .with_limit(params.limit)
+                .execute::<serde_json::Value>()
+                .await
+            {
+                for hit in search_results.hits {
+                    threads.push(hit.result);
+                }
+            }
+        }
+    }
+
+    Ok(Json(SearchResultDto { courses, reviews, threads }))
 }
 
 // Helpers ---------------------------------------------------------------

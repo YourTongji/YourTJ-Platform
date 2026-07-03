@@ -4,11 +4,16 @@
 
 use sqlx::PgPool;
 
+use crate::Config;
+
 /// Application state available to all handlers via `State<AppState>`.
 #[derive(Clone)]
 pub struct AppState {
     /// Primary database connection pool.
     pub db: PgPool,
+
+    /// Full application config (SMTP, etc.).
+    pub config: Config,
 
     /// HS256 JWT secret loaded from the environment.
     pub jwt_secret: String,

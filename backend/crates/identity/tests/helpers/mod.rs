@@ -19,8 +19,11 @@ pub async fn create_test_app() -> (PgPool, axum::Router) {
 
     run_migrations(&pool).await;
 
+    let test_config = shared::Config::from_env().expect("test Config::from_env");
+
     let state = AppState {
         db: pool.clone(),
+        config: test_config.clone(),
         jwt_secret: "integration-test-secret-32bytes!".into(),
         jwt_ttl: 900,
         refresh_ttl: 604800,
@@ -36,8 +39,10 @@ pub async fn create_test_app() -> (PgPool, axum::Router) {
 }
 
 pub async fn create_test_app_with_pool(pool: PgPool) -> axum::Router {
+    let test_config = shared::Config::from_env().expect("test Config::from_env");
     let state = AppState {
         db: pool,
+        config: test_config,
         jwt_secret: "integration-test-secret-32bytes!".into(),
         jwt_ttl: 900,
         refresh_ttl: 604800,

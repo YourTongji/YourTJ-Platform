@@ -38,6 +38,8 @@ jsonwebtoken = "9"
 async-trait = "0.1"
 meilisearch-sdk = "0.27"
 pinyin = { version = "0.11", features = ["plain"] }
+lettre = { version = "0.11", default-features = false, features = ["tokio1-native-tls", "builder", "smtp-transport"] }
+regex = "1"
 
 # Internal crates (domain boundaries).
 shared = { path = "crates/shared" }
