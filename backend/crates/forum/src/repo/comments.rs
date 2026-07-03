@@ -7,11 +7,14 @@ use super::{base64_decode_str, base64_encode_str};
 
 /// List comments for a thread with cursor pagination.
 /// Ordered by `path` ASC for correct nested (楼中楼) display.
+/// When `current_user_id` is `Some`, comments by users the current user has
+/// ignored are excluded.
 pub async fn list_comments(
     pool: &PgPool,
     thread_id: i64,
     cursor: Option<&str>,
     limit: i64,
+    current_user_id: Option<i64>,
 ) -> AppResult<(Vec<CommentRowJoined>, Option<String>)> {
     let cursor_path: Option<String> = cursor
         .map(base64_decode_str)
@@ -22,31 +25,42 @@ pub async fn list_comments(
         sqlx::query_as::<_, CommentRowJoined>(
             "SELECT c.id, c.thread_id, c.parent_id, c.path, c.author_id, \
                     c.body, c.vote_count, c.deleted_at, c.hidden_at, c.edited_at, c.created_at, \
+                    c.quoted_comment_id, \
                     a.handle AS author_handle \
              FROM forum.comments c \
              JOIN identity.accounts a ON a.id = c.author_id \
-             WHERE c.thread_id = $1 AND c.deleted_at IS NULL AND c.hidden_at IS NULL AND c.path > $3 \
+             WHERE c.thread_id = $1 AND c.deleted_at IS NULL AND c.hidden_at IS NULL \
+               AND c.path > $3 \
+               AND ($4::bigint IS NULL OR c.author_id <> ALL( \
+                    SELECT ignored_account_id FROM forum.user_ignores WHERE account_id = $4 \
+               )) \
              ORDER BY c.path ASC \
              LIMIT $2",
         )
         .bind(thread_id)
         .bind(limit + 1)
         .bind(cp)
+        .bind(current_user_id)
         .fetch_all(pool)
         .await?
     } else {
         sqlx::query_as::<_, CommentRowJoined>(
             "SELECT c.id, c.thread_id, c.parent_id, c.path, c.author_id, \
                     c.body, c.vote_count, c.deleted_at, c.hidden_at, c.edited_at, c.created_at, \
+                    c.quoted_comment_id, \
                     a.handle AS author_handle \
              FROM forum.comments c \
              JOIN identity.accounts a ON a.id = c.author_id \
              WHERE c.thread_id = $1 AND c.deleted_at IS NULL AND c.hidden_at IS NULL \
+               AND ($3::bigint IS NULL OR c.author_id <> ALL( \
+                    SELECT ignored_account_id FROM forum.user_ignores WHERE account_id = $3 \
+               )) \
              ORDER BY c.path ASC \
              LIMIT $2",
         )
         .bind(thread_id)
         .bind(limit + 1)
+        .bind(current_user_id)
         .fetch_all(pool)
         .await?
     };
@@ -73,6 +87,7 @@ pub async fn create_comment(
     author_id: i64,
     body: &str,
     parent_id: Option<i64>,
+    quoted_comment_id: Option<i64>,
 ) -> AppResult<CommentRowJoined> {
     let mut tx = pool.begin().await?;
 
@@ -103,7 +118,16 @@ pub async fn create_comment(
         let next_index = next_sibling_index(&max_child, &parent_path);
         let path = format!("{parent_path}.{next_index:04x}");
 
-        let row = insert_comment_tx(&mut tx, thread_id, parent_id, &path, author_id, body).await?;
+        let row = insert_comment_tx(
+            &mut tx,
+            thread_id,
+            parent_id,
+            &path,
+            author_id,
+            body,
+            quoted_comment_id,
+        )
+        .await?;
         tx.commit().await?;
         Ok(row)
     } else {
@@ -125,7 +149,9 @@ pub async fn create_comment(
         let top_level = next_sibling_index(&max_path, "");
         let path = format!("{top_level:04x}");
 
-        let row = insert_comment_tx(&mut tx, thread_id, None, &path, author_id, body).await?;
+        let row =
+            insert_comment_tx(&mut tx, thread_id, None, &path, author_id, body, quoted_comment_id)
+                .await?;
         tx.commit().await?;
         Ok(row)
     }
@@ -139,15 +165,17 @@ async fn insert_comment_tx(
     path: &str,
     author_id: i64,
     body: &str,
+    quoted_comment_id: Option<i64>,
 ) -> AppResult<CommentRowJoined> {
     let row = sqlx::query_as::<_, CommentRowJoined>(
         "WITH inserted AS ( \
-            INSERT INTO forum.comments (thread_id, parent_id, path, author_id, body) \
-            VALUES ($1, $2, $3, $4, $5) \
-            RETURNING id, thread_id, parent_id, path, author_id, body, vote_count, created_at \
+            INSERT INTO forum.comments (thread_id, parent_id, path, author_id, body, quoted_comment_id) \
+            VALUES ($1, $2, $3, $4, $5, $6) \
+            RETURNING id, thread_id, parent_id, path, author_id, body, vote_count, created_at, quoted_comment_id \
          ) \
          SELECT c.id, c.thread_id, c.parent_id, c.path, c.author_id, \
                 c.body, c.vote_count, c.deleted_at, c.hidden_at, c.edited_at, c.created_at, \
+                c.quoted_comment_id, \
                 a.handle AS author_handle \
          FROM inserted c \
          JOIN identity.accounts a ON a.id = c.author_id",
@@ -157,6 +185,7 @@ async fn insert_comment_tx(
     .bind(path)
     .bind(author_id)
     .bind(body)
+    .bind(quoted_comment_id)
     .fetch_one(&mut *tx)
     .await?;
 
@@ -193,6 +222,7 @@ pub async fn find_comment(pool: &PgPool, id: i64) -> AppResult<Option<CommentRow
     let row = sqlx::query_as::<_, CommentRowJoined>(
         "SELECT c.id, c.thread_id, c.parent_id, c.path, c.author_id, \
                 c.body, c.vote_count, c.deleted_at, c.hidden_at, c.edited_at, c.created_at, \
+                c.quoted_comment_id, \
                 a.handle AS author_handle \
          FROM forum.comments c \
          JOIN identity.accounts a ON a.id = c.author_id \
@@ -209,10 +239,11 @@ pub async fn update_comment(pool: &PgPool, id: i64, body: &str) -> AppResult<Com
     let row = sqlx::query_as::<_, CommentRowJoined>(
         "WITH updated AS ( \
          UPDATE forum.comments SET body = $1, edited_at = now() WHERE id = $2 \
-         RETURNING id, thread_id, parent_id, path, author_id, body, vote_count, created_at \
+         RETURNING id, thread_id, parent_id, path, author_id, body, vote_count, created_at, quoted_comment_id \
          ) \
          SELECT u.id, u.thread_id, u.parent_id, u.path, u.author_id, \
                 u.body, u.vote_count, u.deleted_at, u.hidden_at, u.edited_at, u.created_at, \
+                u.quoted_comment_id, \
                 a.handle AS author_handle \
          FROM updated u \
          JOIN identity.accounts a ON a.id = u.author_id",
