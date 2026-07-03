@@ -6,7 +6,9 @@ use axum::http::HeaderValue;
 use axum::routing::get;
 use axum::{Json, Router};
 use serde_json::{json, Value};
+use shared::sse::SsePayload;
 use shared::AppState;
+use tokio::sync::broadcast;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::request_id::{MakeRequestUuid, SetRequestIdLayer};
@@ -57,6 +59,10 @@ pub async fn run() -> anyhow::Result<()> {
     let (system_private_key, system_public_key_b64) =
         derive_system_key(&config.credit_system_private_key)?;
 
+    // SSE broadcast channel (capacity 128, wrapping).
+    let (sse_tx, _sse_rx) = broadcast::channel::<SsePayload>(128);
+    forum::sse::init_global(sse_tx.clone());
+
     let state = AppState {
         db,
         config: config.clone(),
@@ -68,6 +74,7 @@ pub async fn run() -> anyhow::Result<()> {
         redis: redis_pool,
         system_private_key,
         system_public_key_b64,
+        sse_tx: Some(sse_tx),
     };
 
     // --- Forum background tasks ---
@@ -106,6 +113,41 @@ pub async fn run() -> anyhow::Result<()> {
     forum::watched_words::init_watched_words(&state.db).await;
     tracing::info!("forum watched words loaded");
 
+    // 4. Seed standard badges.
+    forum::badges::seed_badges(&state.db).await;
+    tracing::info!("forum badges seeded");
+
+    // 5. Auto-archive stale threads (daily).
+    {
+        let db = state.db.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(86400)).await;
+                tracing::info!("running daily auto-archive of stale threads");
+                forum::repo::auto_archive_stale(&db).await;
+            }
+        });
+        tracing::info!("forum auto-archive scheduled (every 24h)");
+    }
+
+    // 6. Weekly email digest (every 7 days).
+    {
+        let db = state.db.clone();
+        let config = state.config.clone();
+        tokio::spawn(async move {
+            // Start the first digest after a short initial delay (1 hour),
+            // then every 7 days thereafter. The exact alignment to Sunday
+            // 00:00 UTC is a nice-to-have that can be tuned later.
+            tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+            loop {
+                tracing::info!("running weekly email digest");
+                forum::digest::run_digest(&db, &config).await;
+                tokio::time::sleep(std::time::Duration::from_secs(7 * 86400)).await;
+            }
+        });
+        tracing::info!("forum email digest scheduled (every 7 days)");
+    }
+
     let app = build_router(state);
     let addr = SocketAddr::from(([0, 0, 0, 0], config.port));
     let listener = tokio::net::TcpListener::bind(addr).await?;
@@ -135,6 +177,8 @@ fn build_router(state: AppState) -> Router {
         .merge(reviews::routes(state.clone()))
         .merge(credit::routes(state.clone()))
         .merge(forum::routes(state.clone()))
+        .merge(media::routes(state.clone()))
+        .merge(crate::onebox::routes(state.clone()))
         .layer(cors)
         .layer(request_id_layer)
         .layer(TraceLayer::new_for_http())

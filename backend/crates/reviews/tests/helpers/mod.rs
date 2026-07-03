@@ -30,6 +30,7 @@ pub async fn create_test_app() -> (PgPool, axum::Router) {
         redis: None,
         system_private_key: vec![0u8; 32],
         system_public_key_b64: "test-public-key".into(),
+        sse_tx: None,
     };
 
     let router = reviews::routes(state);
