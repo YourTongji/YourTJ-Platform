@@ -6,10 +6,37 @@ use serde_json::json;
 use shared::pagination::Page;
 use shared::{AppError, AppResult, AppState};
 
-use crate::dto::{RevisionDto, ThreadDetailDto, ThreadDto, ThreadInput, ThreadUpdateInput};
+use crate::dto::{
+    PollDto, PollOptionDto, RevisionDto, ThreadDetailDto, ThreadDto, ThreadInput, ThreadUpdateInput,
+};
 use crate::repo;
 
 use super::{default_limit, default_sort, thread_to_detail_dto, thread_to_dto};
+
+/// Load poll data for a thread and attach it to a `ThreadDetailDto`.
+async fn attach_poll_to_detail(pool: &sqlx::PgPool, thread_id: i64, dto: &mut ThreadDetailDto) {
+    let poll_result = repo::get_poll(pool, thread_id).await;
+    if let Ok(Some(poll_with_opts)) = poll_result {
+        let option_dtos: Vec<PollOptionDto> = poll_with_opts
+            .options
+            .into_iter()
+            .map(|o| PollOptionDto {
+                id: o.id.to_string(),
+                label: o.label,
+                vote_count: o.vote_count,
+                position: o.position,
+            })
+            .collect();
+        dto.poll = Some(PollDto {
+            id: poll_with_opts.poll.id.to_string(),
+            question: poll_with_opts.poll.question,
+            multi_select: poll_with_opts.poll.multi_select,
+            closes_at: poll_with_opts.poll.closes_at.map(|v| v.timestamp()),
+            options: option_dtos,
+            my_votes: vec![],
+        });
+    }
+}
 
 // ---------------------------------------------------------------------------
 // query params
@@ -43,20 +70,56 @@ pub struct ThreadFeedQuery {
 /// GET /api/v2/forum/boards/{board_id}/threads — public
 pub async fn list_threads(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(board_id_str): Path<String>,
     Query(q): Query<ThreadListQuery>,
 ) -> AppResult<Json<Page<ThreadDto>>> {
     let board_id: i64 = board_id_str.parse().map_err(|_| AppError::NotFound)?;
+
+    // Try auth — if the user is logged in, filter out ignored authors.
+    let current_user_id: Option<i64> = identity::auth_middleware::authenticate(
+        &headers,
+        &state.db,
+        &state.jwt_secret,
+        state.redis.as_ref(),
+    )
+    .await
+    .ok()
+    .map(|a| a.id);
+
     let c = q.cursor.as_deref().unwrap_or("");
-    let cache_id = format!("{board_id}:{}:{}", q.sort, c);
-    let page = shared::cache::cached_json(state.redis.as_ref(), "board", &cache_id, 60, async {
-        let (rows, next_cursor) =
-            repo::list_threads(&state.db, board_id, &q.sort, q.cursor.as_deref(), q.limit).await?;
+    // Only use the cache for unauthenticated requests.
+    if current_user_id.is_some() {
+        let (rows, next_cursor) = repo::list_threads(
+            &state.db,
+            board_id,
+            &q.sort,
+            q.cursor.as_deref(),
+            q.limit,
+            current_user_id,
+        )
+        .await?;
         let items: Vec<ThreadDto> = rows.iter().map(thread_to_dto).collect();
-        Ok::<_, AppError>(Page::new(items, next_cursor))
-    })
-    .await?;
-    Ok(Json(page))
+        Ok(Json(Page::new(items, next_cursor)))
+    } else {
+        let cache_id = format!("{board_id}:{}:{}", q.sort, c);
+        let page =
+            shared::cache::cached_json(state.redis.as_ref(), "board", &cache_id, 60, async {
+                let (rows, next_cursor) = repo::list_threads(
+                    &state.db,
+                    board_id,
+                    &q.sort,
+                    q.cursor.as_deref(),
+                    q.limit,
+                    None,
+                )
+                .await?;
+                let items: Vec<ThreadDto> = rows.iter().map(thread_to_dto).collect();
+                Ok::<_, AppError>(Page::new(items, next_cursor))
+            })
+            .await?;
+        Ok(Json(page))
+    }
 }
 
 /// GET /api/v2/forum/threads — global feed (optional board filter, sort=following)
@@ -84,16 +147,51 @@ pub async fn list_threads_feed(
     }
 
     let board_id: Option<i64> = q.board.as_deref().and_then(|b| b.parse::<i64>().ok());
-    let cache_id = format!("feed:{}:{:?}:{}", q.sort, board_id, q.cursor.as_deref().unwrap_or(""));
-    let page = shared::cache::cached_json(state.redis.as_ref(), "board", &cache_id, 60, async {
-        let (rows, next_cursor) =
-            repo::list_threads_feed(&state.db, board_id, &q.sort, q.cursor.as_deref(), q.limit)
-                .await?;
+
+    // Try auth — if the user is logged in, filter out ignored authors.
+    let current_user_id: Option<i64> = identity::auth_middleware::authenticate(
+        &headers,
+        &state.db,
+        &state.jwt_secret,
+        state.redis.as_ref(),
+    )
+    .await
+    .ok()
+    .map(|a| a.id);
+
+    // Only use the cache for unauthenticated requests.
+    if current_user_id.is_some() {
+        let (rows, next_cursor) = repo::list_threads_feed(
+            &state.db,
+            board_id,
+            &q.sort,
+            q.cursor.as_deref(),
+            q.limit,
+            current_user_id,
+        )
+        .await?;
         let items: Vec<ThreadDto> = rows.iter().map(thread_to_dto).collect();
-        Ok::<_, AppError>(Page::new(items, next_cursor))
-    })
-    .await?;
-    Ok(Json(page))
+        Ok(Json(Page::new(items, next_cursor)))
+    } else {
+        let cache_id =
+            format!("feed:{}:{:?}:{}", q.sort, board_id, q.cursor.as_deref().unwrap_or(""));
+        let page =
+            shared::cache::cached_json(state.redis.as_ref(), "board", &cache_id, 60, async {
+                let (rows, next_cursor) = repo::list_threads_feed(
+                    &state.db,
+                    board_id,
+                    &q.sort,
+                    q.cursor.as_deref(),
+                    q.limit,
+                    None,
+                )
+                .await?;
+                let items: Vec<ThreadDto> = rows.iter().map(thread_to_dto).collect();
+                Ok::<_, AppError>(Page::new(items, next_cursor))
+            })
+            .await?;
+        Ok(Json(page))
+    }
 }
 
 /// GET /api/v2/forum/threads/{id} — public
@@ -105,7 +203,10 @@ pub async fn get_thread(
     let detail =
         shared::cache::cached_json(state.redis.as_ref(), "thread", &id.to_string(), 120, async {
             let row = repo::find_thread(&state.db, id).await?.ok_or(AppError::NotFound)?;
-            Ok::<_, AppError>(thread_to_detail_dto(&row))
+            let mut dto = thread_to_detail_dto(&row);
+            // Load poll data (best-effort — not all threads have polls).
+            attach_poll_to_detail(&state.db, id, &mut dto).await;
+            Ok::<_, AppError>(dto)
         })
         .await?;
     Ok(Json(detail))
@@ -178,6 +279,17 @@ pub async fn create_thread(
     // Auto-track: creator automatically subscribes to their thread.
     let _ = crate::repo::set_subscription(&state.db, auth.id, "thread", row.id, "tracking").await;
 
+    // Auto-award first-thread badge (fire-and-forget).
+    let pool = state.db.clone();
+    let author_id = auth.id;
+    tokio::spawn(async move {
+        match crate::badges::award_first_thread_badge(&pool, author_id).await {
+            Ok(true) => tracing::info!(author_id, "first-thread badge awarded"),
+            Ok(false) => {} // already had it or not first thread
+            Err(e) => tracing::warn!(error = %e, author_id, "failed to award first-thread badge"),
+        }
+    });
+
     // Look up own handle for self-mention filtering.
     let my_handle: String =
         sqlx::query_scalar("SELECT handle FROM identity.accounts WHERE id = $1")
@@ -196,6 +308,7 @@ pub async fn create_thread(
             .take(10)
             .collect();
 
+        let thread_actor_id = auth.id;
         if !handles.is_empty() {
             let pool = state.db.clone();
             let thread_author = row.author_handle.clone();
@@ -222,6 +335,7 @@ pub async fn create_thread(
                                 "bodyExcerpt": thread_body_excerpt,
                             }),
                             None,
+                            Some(thread_actor_id),
                         )
                         .await;
                     }
@@ -276,8 +390,36 @@ pub async fn create_thread(
             .await;
     }
 
+    // Create poll if provided.
+    if let Some(ref poll_input) = body.poll {
+        if poll_input.options.len() < 2 {
+            return Err(AppError::BadRequest("poll requires at least 2 options".into()));
+        }
+        if poll_input.options.len() > 20 {
+            return Err(AppError::BadRequest("poll cannot have more than 20 options".into()));
+        }
+        let closes_at = poll_input
+            .closes_at
+            .map(|ts| chrono::DateTime::from_timestamp(ts, 0).unwrap_or(chrono::Utc::now()));
+        let _poll_id = repo::create_poll(
+            &state.db,
+            row.id,
+            &poll_input.question,
+            poll_input.multi_select,
+            closes_at,
+            &poll_input.options,
+        )
+        .await?;
+    }
+
     // Build response DTO, applying censorship for censor action.
     let mut dto = thread_to_detail_dto(&row);
+
+    // Load poll data into the response if a poll was created.
+    if body.poll.is_some() {
+        attach_poll_to_detail(&state.db, row.id, &mut dto).await;
+    }
+
     if watched_word_action.as_deref() == Some("censor") {
         if let Some(ref body_text) = dto.body {
             dto.body = Some(crate::watched_words::censor_text(body_text));

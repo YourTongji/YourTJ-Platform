@@ -113,6 +113,7 @@ pub async fn flag_post(
                         "postId": flag_post_id.to_string(),
                     }),
                     None,
+                    None,
                 )
                 .await;
             }

@@ -30,13 +30,36 @@ pub struct CommentListQuery {
 /// GET /api/v2/forum/threads/{thread_id}/comments — public
 pub async fn list_comments(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(thread_id_str): Path<String>,
     Query(q): Query<CommentListQuery>,
 ) -> AppResult<Json<Page<CommentDto>>> {
     let thread_id: i64 = thread_id_str.parse().map_err(|_| AppError::NotFound)?;
+
+    // Try auth — if the user is logged in, filter out ignored authors.
+    let current_user_id: Option<i64> = identity::auth_middleware::authenticate(
+        &headers,
+        &state.db,
+        &state.jwt_secret,
+        state.redis.as_ref(),
+    )
+    .await
+    .ok()
+    .map(|a| a.id);
+
+    // Fetch solved_answer_id for Q&A solved-answer marking
+    let solved_comment_id: Option<i64> =
+        sqlx::query_scalar("SELECT solved_answer_id FROM forum.threads WHERE id = $1")
+            .bind(thread_id)
+            .fetch_optional(&state.db)
+            .await?
+            .flatten();
+
     let (rows, next_cursor) =
-        repo::list_comments(&state.db, thread_id, q.cursor.as_deref(), q.limit).await?;
-    let items: Vec<CommentDto> = rows.iter().map(comment_to_dto).collect();
+        repo::list_comments(&state.db, thread_id, q.cursor.as_deref(), q.limit, current_user_id)
+            .await?;
+    let items: Vec<CommentDto> =
+        rows.iter().map(|r| comment_to_dto(r, solved_comment_id)).collect();
     Ok(Json(Page::new(items, next_cursor)))
 }
 
@@ -97,7 +120,23 @@ pub async fn create_comment(
         .map(|s| s.parse::<i64>().map_err(|_| AppError::BadRequest("invalid parentId".into())))
         .transpose()?;
 
-    let row = repo::create_comment(&state.db, thread_id, auth.id, &body.body, parent_id).await?;
+    let quoted_comment_id: Option<i64> = body
+        .quoted_comment_id
+        .as_deref()
+        .map(|s| {
+            s.parse::<i64>().map_err(|_| AppError::BadRequest("invalid quotedCommentId".into()))
+        })
+        .transpose()?;
+
+    let row = repo::create_comment(
+        &state.db,
+        thread_id,
+        auth.id,
+        &body.body,
+        parent_id,
+        quoted_comment_id,
+    )
+    .await?;
 
     // Update user_stats: comments_created +1 (best-effort).
     let _ = sqlx::query(
@@ -110,6 +149,21 @@ pub async fn create_comment(
     .bind(auth.id)
     .execute(&state.db)
     .await;
+
+    // Auto-award first-comment badge (fire-and-forget).
+    let pool = state.db.clone();
+    let comment_author_id = auth.id;
+    tokio::spawn(async move {
+        match crate::badges::award_first_comment_badge(&pool, comment_author_id).await {
+            Ok(true) => {
+                tracing::info!(author_id = comment_author_id, "first-comment badge awarded")
+            }
+            Ok(false) => {}
+            Err(e) => {
+                tracing::warn!(error = %e, author_id = comment_author_id, "failed to award first-comment badge")
+            }
+        }
+    });
 
     // Auto-track: commenter automatically follows the thread.
     let _ =
@@ -125,6 +179,7 @@ pub async fn create_comment(
     // Notify thread author of reply (fire-and-forget).
     if row.author_id != thread_author_id {
         let pool = state.db.clone();
+        let actor_id = auth.id;
         let payload = serde_json::json!({
             "threadId": thread_id.to_string(),
             "commentId": row.id.to_string(),
@@ -138,9 +193,50 @@ pub async fn create_comment(
                 "reply",
                 payload,
                 None,
+                Some(actor_id),
             )
             .await;
         });
+    }
+
+    // Notify quoted comment author (fire-and-forget).
+    if let Some(qcid) = quoted_comment_id {
+        let quoted_author_id: Option<i64> =
+            sqlx::query_scalar("SELECT author_id FROM forum.comments WHERE id = $1")
+                .bind(qcid)
+                .fetch_optional(&state.db)
+                .await?;
+        if let Some(qaid) = quoted_author_id {
+            if qaid != auth.id {
+                let pool = state.db.clone();
+                let qcid_str = qcid.to_string();
+                let thread_id_str = thread_id.to_string();
+                let author_handle = row.author_handle.clone();
+                let new_comment_id = row.id;
+                let actor_id = auth.id;
+                tokio::spawn(async move {
+                    if !crate::notification_hooks::is_notification_enabled(&pool, qaid, "quote")
+                        .await
+                    {
+                        return;
+                    }
+                    crate::notification_hooks::create_notification(
+                        &pool,
+                        qaid,
+                        "quote",
+                        serde_json::json!({
+                            "threadId": thread_id_str,
+                            "commentId": new_comment_id.to_string(),
+                            "quotedCommentId": qcid_str,
+                            "authorHandle": author_handle,
+                        }),
+                        None,
+                        Some(actor_id),
+                    )
+                    .await;
+                });
+            }
+        }
     }
 
     // Look up own handle for self-mention filtering.
@@ -160,6 +256,7 @@ pub async fn create_comment(
         .take(10)
         .collect();
 
+    let comment_actor_id = auth.id;
     if !handles.is_empty() {
         let pool = state.db.clone();
         let comment_author = row.author_handle.clone();
@@ -187,6 +284,7 @@ pub async fn create_comment(
                             "bodyExcerpt": comment_body,
                         }),
                         None,
+                        Some(comment_actor_id),
                     )
                     .await;
                 }
@@ -203,7 +301,7 @@ pub async fn create_comment(
     }
 
     // Build response DTO, applying censorship for censor action.
-    let mut dto = comment_to_dto(&row);
+    let mut dto = comment_to_dto(&row, None);
     if watched_word_action.as_deref() == Some("censor") {
         dto.body = crate::watched_words::censor_text(&dto.body);
     }
@@ -253,11 +351,19 @@ pub async fn update_comment(
     // Update the comment
     let row = repo::update_comment(&state.db, id, &body.body).await?;
 
+    // Fetch solved_answer_id for Q&A solved-answer marking
+    let solved_comment_id: Option<i64> =
+        sqlx::query_scalar("SELECT solved_answer_id FROM forum.threads WHERE id = $1")
+            .bind(row.thread_id)
+            .fetch_optional(&state.db)
+            .await?
+            .flatten();
+
     // Bump thread cache
     shared::cache::bump_version_silent(state.redis.as_ref(), "thread", &row.thread_id.to_string())
         .await;
 
-    Ok(Json(comment_to_dto(&row)))
+    Ok(Json(comment_to_dto(&row, solved_comment_id)))
 }
 
 /// DELETE /api/v2/forum/comments/{id} — auth required (author only)
@@ -336,4 +442,135 @@ pub async fn list_comment_revisions(
         .collect();
 
     Ok(Json(dtos))
+}
+
+/// POST /api/v2/forum/comments/{id}/solve — auth required (thread author or mod)
+///
+/// Mark a comment as the solved answer on a Q&A board. Cannot solve own comment.
+pub async fn mark_solved_handler(
+    State(state): State<AppState>,
+    Path(id_str): Path<String>,
+    headers: HeaderMap,
+) -> AppResult<Json<serde_json::Value>> {
+    let auth = identity::auth_middleware::authenticate(
+        &headers,
+        &state.db,
+        &state.jwt_secret,
+        state.redis.as_ref(),
+    )
+    .await
+    .map_err(|_r| AppError::Unauthorized)?;
+
+    let comment_id: i64 = id_str.parse().map_err(|_| AppError::NotFound)?;
+
+    // Find the comment and its thread
+    let comment = repo::find_comment(&state.db, comment_id).await?.ok_or(AppError::NotFound)?;
+
+    let thread =
+        repo::find_thread(&state.db, comment.thread_id).await?.ok_or(AppError::NotFound)?;
+
+    // Find the board to check is_qa
+    let board =
+        crate::repo::find_board(&state.db, thread.board_id).await?.ok_or(AppError::NotFound)?;
+
+    if !board.is_qa {
+        return Err(AppError::BadRequest("board is not a Q&A board".into()));
+    }
+
+    // Verify permission: must be thread author or mod/admin
+    let is_mod = auth.role == "mod" || auth.role == "admin";
+    if thread.author_id != auth.id && !is_mod {
+        return Err(AppError::Forbidden);
+    }
+
+    // Cannot solve own comment
+    if comment.author_id == auth.id {
+        return Err(AppError::BadRequest("cannot mark own comment as the solved answer".into()));
+    }
+
+    repo::set_solved_answer(&state.db, comment.thread_id, comment_id).await?;
+
+    // Log mod action if a mod/admin did this
+    if is_mod {
+        repo::insert_mod_action(
+            &state.db,
+            auth.id,
+            "solve",
+            "comment",
+            comment_id,
+            None,
+            Some(&serde_json::json!({
+                "threadId": comment.thread_id.to_string(),
+            })),
+        )
+        .await?;
+    }
+
+    shared::cache::bump_version_silent(
+        state.redis.as_ref(),
+        "thread",
+        &comment.thread_id.to_string(),
+    )
+    .await;
+
+    Ok(Json(json!({"ok": true})))
+}
+
+/// DELETE /api/v2/forum/comments/{id}/solve — auth required (thread author or mod)
+///
+/// Unmark the solved answer on a Q&A board.
+pub async fn unmark_solved_handler(
+    State(state): State<AppState>,
+    Path(id_str): Path<String>,
+    headers: HeaderMap,
+) -> AppResult<Json<serde_json::Value>> {
+    let auth = identity::auth_middleware::authenticate(
+        &headers,
+        &state.db,
+        &state.jwt_secret,
+        state.redis.as_ref(),
+    )
+    .await
+    .map_err(|_r| AppError::Unauthorized)?;
+
+    let comment_id: i64 = id_str.parse().map_err(|_| AppError::NotFound)?;
+
+    // Find the comment and its thread
+    let comment = repo::find_comment(&state.db, comment_id).await?.ok_or(AppError::NotFound)?;
+
+    let thread =
+        repo::find_thread(&state.db, comment.thread_id).await?.ok_or(AppError::NotFound)?;
+
+    // Verify permission: must be thread author or mod/admin
+    let is_mod = auth.role == "mod" || auth.role == "admin";
+    if thread.author_id != auth.id && !is_mod {
+        return Err(AppError::Forbidden);
+    }
+
+    repo::clear_solved_answer(&state.db, comment.thread_id).await?;
+
+    // Log mod action if a mod/admin did this
+    if is_mod {
+        repo::insert_mod_action(
+            &state.db,
+            auth.id,
+            "unsolve",
+            "comment",
+            comment_id,
+            None,
+            Some(&serde_json::json!({
+                "threadId": comment.thread_id.to_string(),
+            })),
+        )
+        .await?;
+    }
+
+    shared::cache::bump_version_silent(
+        state.redis.as_ref(),
+        "thread",
+        &comment.thread_id.to_string(),
+    )
+    .await;
+
+    Ok(Json(json!({"ok": true})))
 }
