@@ -3,6 +3,7 @@
 
 mod admin;
 mod bootstrap;
+mod onebox;
 mod platform;
 
 #[tokio::main]
