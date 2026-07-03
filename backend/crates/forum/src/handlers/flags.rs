@@ -102,6 +102,7 @@ pub async fn flag_post(
                         "postType": post_type,
                         "postId": flag_post_id.to_string(),
                     }),
+                    None,
                 )
                 .await;
             }

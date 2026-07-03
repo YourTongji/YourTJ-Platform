@@ -56,6 +56,32 @@ pub async fn delete_thread_from_meili(meili_url: &str, meili_key: &str, thread_i
     }
 }
 
+/// Search forum threads via Meilisearch. Returns empty Vec on failure
+/// (graceful degradation when Meilisearch is unreachable).
+pub async fn search_threads(
+    meili_url: &str,
+    meili_key: &str,
+    query: &str,
+    limit: usize,
+) -> Vec<serde_json::Value> {
+    let client = match meilisearch_sdk::client::Client::new(meili_url, Some(meili_key)) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!(error = %e, "Meili client failed — forum search returning empty");
+            return Vec::new();
+        }
+    };
+
+    let index = client.index("forum_threads");
+    match index.search().with_query(query).with_limit(limit).execute::<serde_json::Value>().await {
+        Ok(results) => results.hits.into_iter().map(|h| h.result).collect(),
+        Err(e) => {
+            tracing::warn!(error = %e, query = %query, "forum thread search failed");
+            Vec::new()
+        }
+    }
+}
+
 /// Rebuild the entire forum_threads index from the database.
 /// Requires access to the PgPool to query all visible threads.
 #[allow(dead_code)]

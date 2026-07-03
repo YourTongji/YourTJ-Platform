@@ -22,6 +22,42 @@ pub mod repo;
 use axum::routing::{get, post};
 use axum::Router;
 use shared::AppState;
+use sqlx::PgPool;
+
+/// System-signed mint for contributions with idempotency protection.
+///
+/// Before minting, checks `SELECT seq, tx_id, type, from_account, to_account,
+/// amount, nonce, metadata, signer, signature, prev_hash, hash, created_at
+/// FROM credit.ledger WHERE tx_id = $1`. If a matching entry exists, returns
+/// it without minting again.
+///
+/// # Panics
+/// Never panics — the query and insert are handled via `?`.
+pub async fn mint_for_contribution(
+    pool: &PgPool,
+    account_id: i64,
+    amount: i64,
+    idempotency_key: &str,
+    reason: &str,
+    system_seed: &[u8],
+) -> shared::AppResult<crate::models::LedgerEntryRow> {
+    // Check idempotency — already minted?
+    let existing = sqlx::query_as::<_, crate::models::LedgerEntryRow>(
+        "SELECT seq, tx_id, type, from_account, to_account, \
+                amount, nonce, metadata, signer, signature, prev_hash, hash, created_at \
+         FROM credit.ledger WHERE tx_id = $1",
+    )
+    .bind(idempotency_key)
+    .fetch_optional(pool)
+    .await?;
+
+    if let Some(row) = existing {
+        return Ok(row);
+    }
+
+    // Not yet minted — proceed
+    repo::mint_points(pool, account_id, amount, reason, system_seed).await
+}
 
 /// All routes owned by the credit domain.
 pub fn routes(state: AppState) -> Router {

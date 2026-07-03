@@ -59,11 +59,30 @@ pub async fn list_threads(
     Ok(Json(page))
 }
 
-/// GET /api/v2/forum/threads — global feed (optional board filter)
+/// GET /api/v2/forum/threads — global feed (optional board filter, sort=following)
 pub async fn list_threads_feed(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Query(q): Query<ThreadFeedQuery>,
 ) -> AppResult<Json<Page<ThreadDto>>> {
+    if q.sort == "following" {
+        let auth = identity::auth_middleware::authenticate(
+            &headers,
+            &state.db,
+            &state.jwt_secret,
+            state.redis.as_ref(),
+        )
+        .await
+        .map_err(|_r| AppError::Unauthorized)?;
+
+        let cursor: Option<i64> = q.cursor.and_then(|c| c.parse().ok());
+        let (rows, next_cursor) =
+            repo::list_threads_feed_following(&state.db, auth.id, cursor, q.limit).await?;
+        let items: Vec<ThreadDto> = rows.iter().map(thread_to_dto).collect();
+        let next_str = next_cursor.map(|c| c.to_string());
+        return Ok(Json(Page::new(items, next_str)));
+    }
+
     let board_id: Option<i64> = q.board.as_deref().and_then(|b| b.parse::<i64>().ok());
     let cache_id = format!("feed:{}:{:?}:{}", q.sort, board_id, q.cursor.as_deref().unwrap_or(""));
     let page = shared::cache::cached_json(state.redis.as_ref(), "board", &cache_id, 60, async {
@@ -107,6 +126,9 @@ pub async fn create_thread(
     .await
     .map_err(|_r| AppError::Unauthorized)?;
 
+    // Check that the account is not silenced
+    crate::sanctions::require_can_post(state.redis.as_ref(), &state.db, auth.id).await?;
+
     let tl = crate::trust_levels::get_trust_level(state.redis.as_ref(), &state.db, auth.id).await?;
     if tl == 0 {
         shared::ratelimit::check_token_bucket(
@@ -128,8 +150,33 @@ pub async fn create_thread(
         .await?;
     }
 
+    // Check watched words on the body text (if provided).
+    let watched_word_action: Option<String> = body.body.as_ref().and_then(|body_text| {
+        crate::watched_words::check_watched_words(body_text).map(|(_matched, action)| action)
+    });
+
+    // Block action: reject before insert.
+    if watched_word_action.as_deref() == Some("block") {
+        return Err(AppError::BadRequest("content contains blocked words".into()));
+    }
+
     let board_id: i64 = body.board_id.parse().map_err(|_| AppError::NotFound)?;
     let row = repo::create_thread(&state.db, board_id, auth.id, &body).await?;
+
+    // Update user_stats: threads_created +1 (best-effort).
+    let _ = sqlx::query(
+        "INSERT INTO forum.user_stats (account_id, threads_created, last_posted_at) \
+         VALUES ($1, 1, now()) \
+         ON CONFLICT (account_id) \
+         DO UPDATE SET threads_created = forum.user_stats.threads_created + 1, \
+                       last_posted_at = now()",
+    )
+    .bind(auth.id)
+    .execute(&state.db)
+    .await;
+
+    // Auto-track: creator automatically subscribes to their thread.
+    let _ = crate::repo::set_subscription(&state.db, auth.id, "thread", row.id, "tracking").await;
 
     // Parse @mentions from body and notify mentioned users (fire-and-forget).
     if let Some(ref body_text) = body.body {
@@ -170,6 +217,7 @@ pub async fn create_thread(
                                 "handle": handle,
                                 "bodyExcerpt": thread_body_excerpt,
                             }),
+                            None,
                         )
                         .await;
                     }
@@ -209,12 +257,28 @@ pub async fn create_thread(
         .await;
     });
 
+    // Handle queue action: auto-hide the thread.
+    if watched_word_action.as_deref() == Some("queue") {
+        let _ = sqlx::query("UPDATE forum.threads SET hidden_at = now() WHERE id = $1")
+            .bind(row.id)
+            .execute(&state.db)
+            .await;
+    }
+
+    // Build response DTO, applying censorship for censor action.
+    let mut dto = thread_to_detail_dto(&row);
+    if watched_word_action.as_deref() == Some("censor") {
+        if let Some(ref body_text) = dto.body {
+            dto.body = Some(crate::watched_words::censor_text(body_text));
+        }
+    }
+
     // Bump board cache version.
     shared::cache::bump_version_opt(state.redis.as_ref(), "board", &board_id.to_string())
         .await
         .ok();
 
-    Ok(Json(thread_to_detail_dto(&row)))
+    Ok(Json(dto))
 }
 
 /// PATCH /api/v2/forum/threads/{id} — auth required (author or mod)

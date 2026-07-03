@@ -56,6 +56,9 @@ pub async fn create_comment(
     .await
     .map_err(|_r| AppError::Unauthorized)?;
 
+    // Check that the account is not silenced
+    crate::sanctions::require_can_post(state.redis.as_ref(), &state.db, auth.id).await?;
+
     let tl = crate::trust_levels::get_trust_level(state.redis.as_ref(), &state.db, auth.id).await?;
     if tl == 0 {
         shared::ratelimit::check_token_bucket(
@@ -77,6 +80,15 @@ pub async fn create_comment(
         .await?;
     }
 
+    // Check watched words on the body text.
+    let watched_word_action: Option<String> =
+        crate::watched_words::check_watched_words(&body.body).map(|(_matched, action)| action);
+
+    // Block action: reject before insert.
+    if watched_word_action.as_deref() == Some("block") {
+        return Err(AppError::BadRequest("content contains blocked words".into()));
+    }
+
     let thread_id: i64 = thread_id_str.parse().map_err(|_| AppError::NotFound)?;
 
     let parent_id: Option<i64> = body
@@ -86,6 +98,22 @@ pub async fn create_comment(
         .transpose()?;
 
     let row = repo::create_comment(&state.db, thread_id, auth.id, &body.body, parent_id).await?;
+
+    // Update user_stats: comments_created +1 (best-effort).
+    let _ = sqlx::query(
+        "INSERT INTO forum.user_stats (account_id, comments_created, last_posted_at) \
+         VALUES ($1, 1, now()) \
+         ON CONFLICT (account_id) \
+         DO UPDATE SET comments_created = forum.user_stats.comments_created + 1, \
+                       last_posted_at = now()",
+    )
+    .bind(auth.id)
+    .execute(&state.db)
+    .await;
+
+    // Auto-track: commenter automatically follows the thread.
+    let _ =
+        crate::repo::set_subscription(&state.db, auth.id, "thread", thread_id, "tracking").await;
 
     // Look up thread author for notification.
     let thread_author_id: i64 =
@@ -109,6 +137,7 @@ pub async fn create_comment(
                 thread_author_id,
                 "reply",
                 payload,
+                None,
             )
             .await;
         });
@@ -152,6 +181,7 @@ pub async fn create_comment(
                             "handle": handle,
                             "bodyExcerpt": comment_body,
                         }),
+                        None,
                     )
                     .await;
                 }
@@ -159,12 +189,26 @@ pub async fn create_comment(
         });
     }
 
+    // Handle queue action: auto-hide the comment.
+    if watched_word_action.as_deref() == Some("queue") {
+        let _ = sqlx::query("UPDATE forum.comments SET hidden_at = now() WHERE id = $1")
+            .bind(row.id)
+            .execute(&state.db)
+            .await;
+    }
+
+    // Build response DTO, applying censorship for censor action.
+    let mut dto = comment_to_dto(&row);
+    if watched_word_action.as_deref() == Some("censor") {
+        dto.body = crate::watched_words::censor_text(&dto.body);
+    }
+
     // Bump thread cache version.
     shared::cache::bump_version_opt(state.redis.as_ref(), "thread", &thread_id.to_string())
         .await
         .ok();
 
-    Ok(Json(comment_to_dto(&row)))
+    Ok(Json(dto))
 }
 
 /// PATCH /api/v2/forum/comments/{id} — auth required (author or mod)

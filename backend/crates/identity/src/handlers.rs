@@ -5,10 +5,12 @@
 
 use sha2::Digest as _;
 
+use axum::extract::Path;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
 use chrono::Utc;
+use serde::Deserialize;
 use shared::{AppResult, AppState};
 
 use crate::auth::{create_access_token, generate_refresh_token};
@@ -33,6 +35,7 @@ fn row_to_dto(row: &crate::models::AccountRow) -> AccountDto {
         handle: row.handle.clone(),
         avatar_url: row.avatar_url.clone(),
         role: row.role.clone(),
+        trust_level: row.trust_level,
         created_at: row.created_at.timestamp(),
     }
 }
@@ -525,4 +528,212 @@ pub async fn bind_key(
     repo::insert_account_key(&state.db, auth.id, &body.public_key).await?;
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// POST /api/v2/admin/users/{id}/silence — silence a user (cannot write)
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SanctionInput {
+    pub reason: String,
+    pub ends_at: Option<i64>, // unix seconds, None = indefinite
+}
+
+/// POST /api/v2/admin/users/{id}/unsanction
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UnsanctionInput {
+    pub sanction_id: String,
+}
+
+/// POST /api/v2/admin/users/{id}/silence — silence a user (cannot write)
+#[tracing::instrument(skip(state, headers))]
+pub async fn silence_user(
+    State(state): State<AppState>,
+    Path(account_id_str): Path<String>,
+    headers: HeaderMap,
+    Json(body): Json<SanctionInput>,
+) -> AppResult<StatusCode> {
+    let auth = crate::auth_middleware::authenticate(
+        &headers,
+        &state.db,
+        &state.jwt_secret,
+        state.redis.as_ref(),
+    )
+    .await
+    .map_err(|_| shared::AppError::Unauthorized)?;
+    auth.require_mod().map_err(|_| shared::AppError::Forbidden)?;
+
+    let account_id: i64 = account_id_str.parse().map_err(|_| shared::AppError::NotFound)?;
+    let ends_at = body
+        .ends_at
+        .map(|ts| chrono::DateTime::from_timestamp(ts, 0).unwrap_or(chrono::Utc::now()));
+
+    sqlx::query(
+        "INSERT INTO identity.sanctions (account_id, kind, reason, issued_by, ends_at) \
+         VALUES ($1, 'silence', $2, $3, $4)",
+    )
+    .bind(account_id)
+    .bind(&body.reason)
+    .bind(auth.id)
+    .bind(ends_at)
+    .execute(&state.db)
+    .await?;
+
+    // Invalidate Redis sanction cache
+    if let Some(ref r) = state.redis {
+        if let Ok(mut conn) = r.get().await {
+            let key = format!("identity:sanction:{account_id}");
+            let _: () = redis::cmd("DEL").arg(&key).query_async(&mut conn).await.unwrap_or(());
+        }
+    }
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// POST /api/v2/admin/users/{id}/suspend — suspend a user (cannot login)
+#[tracing::instrument(skip(state, headers))]
+pub async fn suspend_user(
+    State(state): State<AppState>,
+    Path(account_id_str): Path<String>,
+    headers: HeaderMap,
+    Json(body): Json<SanctionInput>,
+) -> AppResult<StatusCode> {
+    let auth = crate::auth_middleware::authenticate(
+        &headers,
+        &state.db,
+        &state.jwt_secret,
+        state.redis.as_ref(),
+    )
+    .await
+    .map_err(|_| shared::AppError::Unauthorized)?;
+    auth.require_mod().map_err(|_| shared::AppError::Forbidden)?;
+
+    let account_id: i64 = account_id_str.parse().map_err(|_| shared::AppError::NotFound)?;
+    let ends_at = body
+        .ends_at
+        .map(|ts| chrono::DateTime::from_timestamp(ts, 0).unwrap_or(chrono::Utc::now()));
+
+    sqlx::query(
+        "INSERT INTO identity.sanctions (account_id, kind, reason, issued_by, ends_at) \
+         VALUES ($1, 'suspend', $2, $3, $4)",
+    )
+    .bind(account_id)
+    .bind(&body.reason)
+    .bind(auth.id)
+    .bind(ends_at)
+    .execute(&state.db)
+    .await?;
+
+    if let Some(ref r) = state.redis {
+        if let Ok(mut conn) = r.get().await {
+            let key = format!("identity:sanction:{account_id}");
+            let _: () = redis::cmd("DEL").arg(&key).query_async(&mut conn).await.unwrap_or(());
+        }
+    }
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// POST /api/v2/admin/users/{id}/unsanction — revoke a sanction
+#[tracing::instrument(skip(state, headers))]
+pub async fn unsanction_user(
+    State(state): State<AppState>,
+    Path(account_id_str): Path<String>,
+    headers: HeaderMap,
+    Json(body): Json<UnsanctionInput>,
+) -> AppResult<StatusCode> {
+    let auth = crate::auth_middleware::authenticate(
+        &headers,
+        &state.db,
+        &state.jwt_secret,
+        state.redis.as_ref(),
+    )
+    .await
+    .map_err(|_| shared::AppError::Unauthorized)?;
+    auth.require_mod().map_err(|_| shared::AppError::Forbidden)?;
+
+    let account_id: i64 = account_id_str.parse().map_err(|_| shared::AppError::NotFound)?;
+    let sanction_id: i64 = body
+        .sanction_id
+        .parse()
+        .map_err(|_| shared::AppError::BadRequest("invalid sanctionId".into()))?;
+
+    sqlx::query(
+        "UPDATE identity.sanctions SET revoked_at = now(), revoked_by = $1 \
+         WHERE id = $2 AND account_id = $3 AND revoked_at IS NULL",
+    )
+    .bind(auth.id)
+    .bind(sanction_id)
+    .bind(account_id)
+    .execute(&state.db)
+    .await?;
+
+    if let Some(ref r) = state.redis {
+        if let Ok(mut conn) = r.get().await {
+            let key = format!("identity:sanction:{account_id}");
+            let _: () = redis::cmd("DEL").arg(&key).query_async(&mut conn).await.unwrap_or(());
+        }
+    }
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// GET /api/v2/admin/users/{id}/sanctions — list sanctions for a user
+#[tracing::instrument(skip(state, headers))]
+pub async fn list_user_sanctions(
+    State(state): State<AppState>,
+    Path(account_id_str): Path<String>,
+    headers: HeaderMap,
+) -> AppResult<Json<serde_json::Value>> {
+    let auth = crate::auth_middleware::authenticate(
+        &headers,
+        &state.db,
+        &state.jwt_secret,
+        state.redis.as_ref(),
+    )
+    .await
+    .map_err(|_| shared::AppError::Unauthorized)?;
+    auth.require_mod().map_err(|_| shared::AppError::Forbidden)?;
+
+    let account_id: i64 = account_id_str.parse().map_err(|_| shared::AppError::NotFound)?;
+
+    #[derive(Debug, sqlx::FromRow)]
+    struct SanctionRow {
+        id: i64,
+        account_id: i64,
+        kind: String,
+        reason: String,
+        issued_by: i64,
+        starts_at: chrono::DateTime<chrono::Utc>,
+        ends_at: Option<chrono::DateTime<chrono::Utc>>,
+        revoked_at: Option<chrono::DateTime<chrono::Utc>>,
+        created_at: chrono::DateTime<chrono::Utc>,
+    }
+
+    let rows: Vec<SanctionRow> = sqlx::query_as(
+        "SELECT id, account_id, kind, reason, issued_by, starts_at, ends_at, revoked_at, created_at \
+         FROM identity.sanctions WHERE account_id = $1 ORDER BY created_at DESC",
+    )
+    .bind(account_id)
+    .fetch_all(&state.db)
+    .await?;
+
+    let items: Vec<serde_json::Value> = rows
+        .into_iter()
+        .map(|r| {
+            serde_json::json!({
+                "id": r.id.to_string(),
+                "accountId": r.account_id.to_string(),
+                "kind": r.kind,
+                "reason": r.reason,
+                "issuedBy": r.issued_by.to_string(),
+                "startsAt": r.starts_at.timestamp(),
+                "endsAt": r.ends_at.map(|t| t.timestamp()),
+                "revokedAt": r.revoked_at.map(|t| t.timestamp()),
+                "createdAt": r.created_at.timestamp(),
+            })
+        })
+        .collect();
+
+    Ok(Json(serde_json::json!(items)))
 }

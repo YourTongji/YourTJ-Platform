@@ -102,7 +102,7 @@ pub async fn insert_account(
             "INSERT INTO identity.accounts (email, handle) \
              VALUES ($1, $2) \
              ON CONFLICT (handle) DO NOTHING \
-             RETURNING id, email::text, handle, avatar_url, role::text, status::text, created_at",
+             RETURNING id, email::text, handle, avatar_url, role::text, status::text, trust_level, created_at",
         )
         .bind(email)
         .bind(&h)
@@ -123,7 +123,7 @@ pub async fn insert_account(
 /// Look up an account by its email (case-insensitive via CITEXT).
 pub async fn find_account_by_email(pool: &PgPool, email: &str) -> AppResult<Option<AccountRow>> {
     let row = sqlx::query_as::<_, AccountRow>(
-        "SELECT id, email::text, handle, avatar_url, role::text, status::text, created_at \
+        "SELECT id, email::text, handle, avatar_url, role::text, status::text, trust_level, created_at \
          FROM identity.accounts WHERE email = $1",
     )
     .bind(email)
@@ -135,7 +135,7 @@ pub async fn find_account_by_email(pool: &PgPool, email: &str) -> AppResult<Opti
 /// Look up an account by primary-key id.
 pub async fn find_account_by_id(pool: &PgPool, id: i64) -> AppResult<Option<AccountRow>> {
     let row = sqlx::query_as::<_, AccountRow>(
-        "SELECT id, email::text, handle, avatar_url, role::text, status::text, created_at \
+        "SELECT id, email::text, handle, avatar_url, role::text, status::text, trust_level, created_at \
          FROM identity.accounts WHERE id = $1",
     )
     .bind(id)
@@ -175,7 +175,7 @@ pub async fn update_account(
     let parts: Vec<&str> = set.iter().map(|(c, _)| c.as_str()).collect();
     sql.push_str(&parts.join(", "));
     idx += 1;
-    sql.push_str(&format!(" WHERE id = ${idx} RETURNING id, email::text, handle, avatar_url, role::text, status::text, created_at"));
+    sql.push_str(&format!(" WHERE id = ${idx} RETURNING id, email::text, handle, avatar_url, role::text, status::text, trust_level, created_at"));
 
     let mut q = sqlx::query_as::<_, AccountRow>(&sql);
     for (_, val) in &set {

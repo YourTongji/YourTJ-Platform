@@ -12,7 +12,9 @@ mod models;
 pub mod notification_hooks;
 mod notifications;
 pub mod repo;
+mod sanctions;
 pub mod trust_levels;
+pub mod watched_words;
 
 use axum::routing::{delete, get, patch, post, put};
 use axum::Router;

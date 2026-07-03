@@ -86,5 +86,8 @@ pub use thread_state::{
     archive_thread, close_thread, hide_thread, move_thread, pin_thread, reopen_thread,
     restore_thread, unhide_thread, unpin_thread,
 };
-pub use threads::{create_thread, find_thread, list_threads, list_threads_feed, update_thread};
+pub use threads::{
+    create_thread, find_thread, list_threads, list_threads_feed, list_threads_feed_following,
+    update_thread,
+};
 pub use votes::vote_post;

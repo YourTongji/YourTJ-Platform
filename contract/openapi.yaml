@@ -286,8 +286,9 @@ components:
         location: { type: string, nullable: true }
     LatestUpdate: { type: object, properties: { source: { type: string }, fetchedAt: { type: integer } } }
 
-    # ---- forum ----
-    Board: { type: object, properties: { id: { type: string }, slug: { type: string }, name: { type: string } } }
+    # ---- forum (F1) ----
+    Board: { type: object, properties: { id: { type: string }, slug: { type: string }, name: { type: string }, parentId: { type: string, nullable: true }, description: { type: string, nullable: true }, position: { type: integer }, isLocked: { type: boolean }, minTrustToPost: { type: integer }, threadCount: { type: integer } } }
+    Tag: { type: object, properties: { id: { type: string }, slug: { type: string }, name: { type: string }, description: { type: string, nullable: true }, threadCount: { type: integer }, createdAt: { type: integer } } }
     Thread:
       type: object
       properties:
@@ -300,18 +301,39 @@ components:
         hotScore: { type: number }
         createdAt: { type: integer }
         lastActivityAt: { type: integer }
+        tags: { type: array, items: { type: string } }
+    ThreadFeed:
+      allOf: [{ $ref: "#/components/schemas/Thread" }, { type: object, properties: { status: { type: string }, unreadCount: { type: integer, nullable: true } } }]
     ThreadDetail:
-      allOf:
-        - $ref: "#/components/schemas/Thread"
-        - type: object
-          properties: { body: { type: string } }
-    ThreadInput:
       type: object
-      required: [boardId, title]
       properties:
+        id: { type: string }
         boardId: { type: string }
+        authorHandle: { type: string }
+        authorId: { type: string }
         title: { type: string }
-        body: { type: string }
+        body: { type: string, nullable: true }
+        replyCount: { type: integer }
+        voteCount: { type: integer }
+        hotScore: { type: number, nullable: true }
+        tags: { type: array, items: { type: string } }
+        status: { type: string }
+        pinnedAt: { type: integer, nullable: true }
+        pinnedGlobally: { type: boolean }
+        closedAt: { type: integer, nullable: true }
+        archivedAt: { type: integer, nullable: true }
+        deletedAt: { type: integer, nullable: true }
+        editedAt: { type: integer, nullable: true }
+        hiddenAt: { type: integer, nullable: true }
+        createdAt: { type: integer }
+        lastActivityAt: { type: integer }
+        myLastReadCommentId: { type: string, nullable: true }
+        mySubscriptionLevel: { type: string, nullable: true }
+    ThreadInput: { type: object, required: [boardId, title], properties: { boardId: { type: string }, title: { type: string }, body: { type: string }, tags: { type: array, items: { type: string }, maxItems: 3 } } }
+    ThreadUpdateInput: { type: object, properties: { title: { type: string }, body: { type: string }, tags: { type: array, items: { type: string }, maxItems: 3 } } }
+    ThreadPinInput: { type: object, properties: { globally: { type: boolean } } }
+    ThreadMoveInput: { type: object, required: [boardId], properties: { boardId: { type: string } } }
+    PostRevision: { type: object, properties: { id: { type: string }, seq: { type: integer }, editorId: { type: string }, oldTitle: { type: string, nullable: true }, oldBody: { type: string }, createdAt: { type: integer } } }
     Comment:
       type: object
       properties:
@@ -320,28 +342,33 @@ components:
         parentId: { type: string, nullable: true }
         path: { type: string }
         authorHandle: { type: string }
+        authorId: { type: string }
         body: { type: string }
         voteCount: { type: integer }
+        isDeleted: { type: boolean }
+        isHidden: { type: boolean }
+        editedAt: { type: integer, nullable: true }
         createdAt: { type: integer }
-    CommentInput:
-      type: object
-      required: [body]
-      properties:
-        parentId: { type: string }
-        body: { type: string }
-    VoteInput:
-      type: object
-      required: [value]
-      properties:
-        value: { type: string, enum: [up, down] }
-    Notification:
-      type: object
-      properties:
-        id: { type: string }
-        type: { type: string }
-        payload: { type: object }
-        readAt: { type: integer, nullable: true }
-        createdAt: { type: integer }
+    CommentInput: { type: object, required: [body], properties: { parentId: { type: string }, body: { type: string } } }
+    CommentUpdateInput: { type: object, required: [body], properties: { body: { type: string } } }
+    VoteInput: { type: object, required: [value], properties: { value: { type: string, enum: [up, down] } } }
+    FlagInput: { type: object, required: [reason], properties: { reason: { type: string, enum: [spam, abuse, off_topic, illegal, other] }, note: { type: string } } }
+    FlagResolveInput: { type: object, required: [action], properties: { action: { type: string, enum: [uphold, reject, ignore] }, note: { type: string } } }
+    Subscription: { type: object, properties: { targetType: { type: string, enum: [board, thread] }, targetId: { type: string }, level: { type: string, enum: [watching, tracking, muted] }, createdAt: { type: integer } } }
+    SubscriptionInput: { type: object, required: [targetType, targetId, level], properties: { targetType: { type: string, enum: [board, thread] }, targetId: { type: string }, level: { type: string, enum: [watching, tracking, muted] } } }
+    UnsubscribeInput: { type: object, required: [targetType, targetId], properties: { targetType: { type: string, enum: [board, thread] }, targetId: { type: string } } }
+    Bookmark: { type: object, properties: { targetType: { type: string }, targetId: { type: string }, note: { type: string, nullable: true }, createdAt: { type: integer } } }
+    BookmarkInput: { type: object, properties: { note: { type: string } } }
+    ModAction: { type: object, properties: { id: { type: string }, actorId: { type: string }, action: { type: string }, targetType: { type: string }, targetId: { type: string }, reason: { type: string, nullable: true }, createdAt: { type: integer } } }
+    Notification: { type: object, properties: { id: { type: string }, type: { type: string }, payload: { type: object }, read: { type: boolean }, readAt: { type: integer, nullable: true }, createdAt: { type: integer } } }
+    NotificationPrefs: { type: object, properties: { prefs: { type: object } } }
+    NotificationPrefsInput: { type: object, required: [prefs], properties: { prefs: { type: object } } }
+    ReadTrackingInput: { type: object, properties: { lastReadCommentId: { type: string, nullable: true } } }
+    Sanction: { type: object, properties: { id: { type: string }, accountId: { type: string }, kind: { type: string, enum: [silence, suspend] }, reason: { type: string }, issuedBy: { type: string }, startsAt: { type: integer }, endsAt: { type: integer, nullable: true }, revokedAt: { type: integer, nullable: true }, createdAt: { type: integer } } }
+    SanctionInput: { type: object, required: [reason], properties: { reason: { type: string }, endsAt: { type: integer, nullable: true } } }
+    UnsanctionInput: { type: object, required: [sanctionId], properties: { sanctionId: { type: string } } }
+    WatchedWord: { type: object, properties: { id: { type: string }, word: { type: string }, action: { type: string, enum: [block, censor, queue] }, createdAt: { type: integer } } }
+    WatchedWordInput: { type: object, required: [word, action], properties: { word: { type: string }, action: { type: string, enum: [block, censor, queue] } } }
 
     # ---- platform / admin ----
     Setting: { type: object, properties: { key: { type: string }, value: { type: string } } }
@@ -394,6 +421,18 @@ components:
       allOf:
         - $ref: "#/components/schemas/Page"
         - { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/Report" } } } }
+    ThreadFeedPage:
+      allOf:
+        - $ref: "#/components/schemas/Page"
+        - { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/ThreadFeed" } } } }
+    RevisionPage:
+      allOf:
+        - $ref: "#/components/schemas/Page"
+        - { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/PostRevision" } } } }
+    ModActionPage:
+      allOf:
+        - $ref: "#/components/schemas/Page"
+        - { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/ModAction" } } } }
 
 paths:
   # ============ auth & identity ============
@@ -743,68 +782,71 @@ paths:
       requestBody: { required: true, content: { application/json: { schema: { type: object, required: [reason], properties: { reason: { type: string } } } } } }
       responses: { "202": { description: queued } }
 
-  # ============ forum (Phase B) ============
+  # ============ forum (F0 + F1) ============
   /forum/boards:
-    get: { tags: [forum], security: [], summary: Boards, responses: { "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Board" } } } } } } }
+    get: { tags: [forum], security: [], summary: List boards, responses: { "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Board" } } } } } } }
+  /forum/tags:
+    get: { tags: [forum], security: [], summary: List tags, responses: { "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Tag" } } } } } } }
   /forum/threads:
     get:
       tags: [forum]
       security: []
-      summary: Thread feed (hot/new/following)
+      summary: Thread feed (hot/new/following/unread)
       parameters:
         - { name: board, in: query, schema: { type: string } }
-        - { name: sort, in: query, schema: { type: string, enum: [hot, new, following], default: hot } }
+        - { name: tag, in: query, schema: { type: string } }
+        - { name: feed, in: query, schema: { type: string, enum: [hot, new, following, unread], default: new } }
         - { $ref: "#/components/parameters/Cursor" }
         - { $ref: "#/components/parameters/Limit" }
-      responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/ThreadPage" } } } } }
+      responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/ThreadFeedPage" } } } } }
     post:
       tags: [forum]
-      summary: Create thread
+      summary: Create thread (TL/sanction/word-filter check)
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/ThreadInput" } } } }
-      responses: { "201": { description: created, content: { application/json: { schema: { $ref: "#/components/schemas/Thread" } } } } }
+      responses: { "201": { description: created, content: { application/json: { schema: { $ref: "#/components/schemas/ThreadDetail" } } } } }
   /forum/threads/{id}:
-    get:
-      tags: [forum]
-      security: []
-      summary: Thread detail
-      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
-      responses:
-        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/ThreadDetail" } } } }
-        "404": { $ref: "#/components/responses/NotFound" }
+    get: { tags: [forum], security: [], summary: Thread detail, parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/ThreadDetail" } } } }, "404": { $ref: "#/components/responses/NotFound" } } }
+    patch: { tags: [forum], summary: Edit thread, parameters: [{ name: id, in: path, required: true, schema: { type: string } }], requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/ThreadUpdateInput" } } } }, responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/ThreadDetail" } } } } } }
+    delete: { tags: [forum], summary: Soft-delete thread, parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { "204": { description: deleted } } }
+  /forum/threads/{id}/read:
+    post: { tags: [forum], summary: Report read position, parameters: [{ name: id, in: path, required: true, schema: { type: string } }], requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/ReadTrackingInput" } } } }, responses: { "204": { description: ok } } }
+  /forum/threads/{id}/revisions:
+    get: { tags: [forum], summary: Revision history, parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/RevisionPage" } } } } } }
   /forum/threads/{id}/comments:
-    get:
-      tags: [forum]
-      security: []
-      summary: Comments (nested 楼中楼)
-      parameters: [{ name: id, in: path, required: true, schema: { type: string } }, { $ref: "#/components/parameters/Cursor" }, { $ref: "#/components/parameters/Limit" }]
-      responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/CommentPage" } } } } }
-    post:
-      tags: [forum]
-      summary: Add a comment
-      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
-      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/CommentInput" } } } }
-      responses: { "201": { description: created, content: { application/json: { schema: { $ref: "#/components/schemas/Comment" } } } } }
+    get: { tags: [forum], security: [], summary: Comments, parameters: [{ name: id, in: path, required: true, schema: { type: string } }, { $ref: "#/components/parameters/Cursor" }, { $ref: "#/components/parameters/Limit" }], responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/CommentPage" } } } } } }
+    post: { tags: [forum], summary: Add comment, parameters: [{ name: id, in: path, required: true, schema: { type: string } }], requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/CommentInput" } } } }, responses: { "201": { description: created, content: { application/json: { schema: { $ref: "#/components/schemas/Comment" } } } } } }
+  /forum/comments/{id}:
+    patch: { tags: [forum], summary: Edit comment, parameters: [{ name: id, in: path, required: true, schema: { type: string } }], requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/CommentUpdateInput" } } } }, responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Comment" } } } } } }
+    delete: { tags: [forum], summary: Soft-delete comment, parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { "204": { description: deleted } } }
+  /forum/comments/{id}/revisions:
+    get: { tags: [forum], summary: Comment revision history, parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/RevisionPage" } } } } } }
   /forum/posts/{id}/vote:
-    post:
-      tags: [forum]
-      summary: Up/down vote a thread or comment
-      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
-      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/VoteInput" } } } }
-      responses: { "204": { description: ok } }
+    post: { tags: [forum], summary: Up/down vote, parameters: [{ name: id, in: path, required: true, schema: { type: string } }], requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/VoteInput" } } } }, responses: { "204": { description: ok } } }
+  /forum/posts/{id}/flag:
+    post: { tags: [forum], summary: Flag post, parameters: [{ name: id, in: path, required: true, schema: { type: string } }], requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/FlagInput" } } } }, responses: { "202": { description: queued } } }
+  /forum/posts/{id}/bookmark:
+    put: { tags: [forum], summary: Bookmark, parameters: [{ name: id, in: path, required: true, schema: { type: string } }], requestBody: { content: { application/json: { schema: { $ref: "#/components/schemas/BookmarkInput" } } } }, responses: { "204": { description: ok } } }
+    delete: { tags: [forum], summary: Remove bookmark, parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { "204": { description: ok } } }
+  /forum/bookmarks: { get: { tags: [forum], summary: List bookmarks, parameters: [{ $ref: "#/components/parameters/Cursor" }, { $ref: "#/components/parameters/Limit" }], responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Page" } } } } } } }
+  /forum/subscriptions:
+    put: { tags: [forum], summary: Set subscription, requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/SubscriptionInput" } } } }, responses: { "204": { description: ok } } }
+    delete: { tags: [forum], summary: Remove subscription, requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/UnsubscribeInput" } } } }, responses: { "204": { description: ok } } }
+    get: { tags: [forum], summary: List subscriptions, parameters: [{ name: type, in: query, schema: { type: string, enum: [board, thread] } }, { $ref: "#/components/parameters/Cursor" }, { $ref: "#/components/parameters/Limit" }], responses: { "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Subscription" } } } } } } }
 
   # ============ notifications ============
   /notifications:
     get:
       tags: [notifications]
-      summary: My notifications (cursor)
-      parameters: [{ $ref: "#/components/parameters/Cursor" }, { $ref: "#/components/parameters/Limit" }]
+      summary: My notifications
+      parameters: [{ name: unread, in: query, schema: { type: boolean } }, { $ref: "#/components/parameters/Cursor" }, { $ref: "#/components/parameters/Limit" }]
       responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/NotificationPage" } } } } }
   /notifications/read:
-    post:
-      tags: [notifications]
-      summary: Mark notifications read
-      requestBody: { content: { application/json: { schema: { type: object, properties: { ids: { type: array, items: { type: string } } } } } } }
-      responses: { "204": { description: ok } }
+    post: { tags: [notifications], summary: Mark notifications read, requestBody: { content: { application/json: { schema: { type: object, properties: { ids: { type: array, items: { type: string } } } } } } }, responses: { "204": { description: ok } } }
+  /notifications/unread-count:
+    get: { tags: [notifications], summary: Unread notification count, responses: { "200": { description: ok, content: { application/json: { schema: { type: object, properties: { count: { type: integer } } } } } } } }
+  /me/notification-prefs:
+    get: { tags: [notifications], summary: Get notification preferences, responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/NotificationPrefs" } } } } } }
+    put: { tags: [notifications], summary: Update notification preferences, requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/NotificationPrefsInput" } } } }, responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/NotificationPrefs" } } } } } }
 
   # ============ platform ============
   /startup/verify:
@@ -895,3 +937,49 @@ paths:
     post: { tags: [admin], summary: Trigger 一系统 sync job, responses: { "202": { description: queued } } }
   /admin/reviews/reindex:
     post: { tags: [admin], summary: Rebuild the Meilisearch review index, responses: { "202": { description: queued } } }
+  /admin/forum/reindex:
+    post: { tags: [admin], summary: Rebuild the Meilisearch forum index, responses: { "202": { description: queued } } }
+  /admin/forum/boards:
+    post: { tags: [admin], summary: Create board, requestBody: { required: true, content: { application/json: { schema: { type: object, required: [slug, name], properties: { slug: { type: string }, name: { type: string }, description: { type: string }, parentId: { type: string }, position: { type: integer }, isLocked: { type: boolean }, minTrustToPost: { type: integer } } } } } }, responses: { "201": { description: created } } }
+  /admin/forum/boards/{id}:
+    patch: { tags: [admin], summary: Update board, parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { "200": { description: ok } } }
+    delete: { tags: [admin], summary: Delete board, parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { "204": { description: deleted } } }
+  /admin/forum/tags:
+    get: { tags: [admin], summary: List tags, responses: { "200": { description: ok } } }
+    post: { tags: [admin], summary: Create tag, requestBody: { required: true, content: { application/json: { schema: { type: object, required: [slug, name], properties: { slug: { type: string }, name: { type: string }, description: { type: string } } } } } }, responses: { "201": { description: created } } }
+  /admin/forum/tags/{id}:
+    patch: { tags: [admin], summary: Update tag, parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { "200": { description: ok } } }
+    delete: { tags: [admin], summary: Delete tag, parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { "204": { description: deleted } } }
+  /admin/forum/threads/{id}/pin:
+    post: { tags: [admin], summary: Pin/unpin thread, parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { "200": { description: ok } } }
+  /admin/forum/threads/{id}/close:
+    post: { tags: [admin], summary: Close/reopen thread, parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { "200": { description: ok } } }
+  /admin/forum/threads/{id}/archive:
+    post: { tags: [admin], summary: Archive thread, parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { "200": { description: ok } } }
+  /admin/forum/threads/{id}/restore:
+    post: { tags: [admin], summary: Restore deleted thread, parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { "200": { description: ok } } }
+  /admin/forum/threads/{id}/move:
+    post: { tags: [admin], summary: Move thread, parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { "200": { description: ok } } }
+  /admin/forum/threads/{id}/hide:
+    post: { tags: [admin], summary: Hide thread, parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { "200": { description: ok } } }
+  /admin/forum/threads/{id}/unhide:
+    post: { tags: [admin], summary: Unhide thread, parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { "200": { description: ok } } }
+  /admin/forum/flags:
+    get: { tags: [admin], summary: Flag queue, parameters: [{ name: status, in: query, schema: { type: string, enum: [open, all], default: open } }, { $ref: "#/components/parameters/Cursor" }, { $ref: "#/components/parameters/Limit" }], responses: { "200": { description: ok } } }
+  /admin/forum/flags/{id}/resolve:
+    post: { tags: [admin], summary: Resolve flag, parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { "200": { description: ok } } }
+  /admin/forum/watched-words:
+    get: { tags: [admin], summary: List watched words, responses: { "200": { description: ok } } }
+    post: { tags: [admin], summary: Add watched word, requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/WatchedWordInput" } } } }, responses: { "201": { description: created } } }
+  /admin/forum/watched-words/{id}:
+    delete: { tags: [admin], summary: Delete watched word, parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { "204": { description: deleted } } }
+  /admin/forum/mod-actions:
+    get: { tags: [admin], summary: Staff action log, parameters: [{ $ref: "#/components/parameters/Cursor" }, { $ref: "#/components/parameters/Limit" }], responses: { "200": { description: ok } } }
+  /admin/users/{id}/silence:
+    post: { tags: [admin], summary: Silence user, parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { "204": { description: silenced } } }
+  /admin/users/{id}/suspend:
+    post: { tags: [admin], summary: Suspend user, parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { "204": { description: suspended } } }
+  /admin/users/{id}/unsanction:
+    post: { tags: [admin], summary: Revoke sanction, parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { "204": { description: revoked } } }
+  /admin/users/{id}/sanctions:
+    get: { tags: [admin], summary: List sanctions for user, parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { "200": { description: ok } } }

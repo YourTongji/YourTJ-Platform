@@ -25,7 +25,7 @@ pub async fn list_comments(
                     a.handle AS author_handle \
              FROM forum.comments c \
              JOIN identity.accounts a ON a.id = c.author_id \
-             WHERE c.thread_id = $1 AND c.path > $3 \
+             WHERE c.thread_id = $1 AND c.deleted_at IS NULL AND c.hidden_at IS NULL AND c.path > $3 \
              ORDER BY c.path ASC \
              LIMIT $2",
         )
@@ -41,7 +41,7 @@ pub async fn list_comments(
                     a.handle AS author_handle \
              FROM forum.comments c \
              JOIN identity.accounts a ON a.id = c.author_id \
-             WHERE c.thread_id = $1 \
+             WHERE c.thread_id = $1 AND c.deleted_at IS NULL AND c.hidden_at IS NULL \
              ORDER BY c.path ASC \
              LIMIT $2",
         )
@@ -196,7 +196,7 @@ pub async fn find_comment(pool: &PgPool, id: i64) -> AppResult<Option<CommentRow
                 a.handle AS author_handle \
          FROM forum.comments c \
          JOIN identity.accounts a ON a.id = c.author_id \
-         WHERE c.id = $1",
+         WHERE c.id = $1 AND c.deleted_at IS NULL AND c.hidden_at IS NULL",
     )
     .bind(id)
     .fetch_optional(pool)

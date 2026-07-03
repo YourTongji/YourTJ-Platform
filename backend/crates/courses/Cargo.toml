@@ -20,6 +20,7 @@ redis.workspace = true
 deadpool-redis.workspace = true
 tracing.workspace = true
 identity.workspace = true
+forum.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt"] }

@@ -14,6 +14,7 @@ pub struct AccountRow {
     pub role: String,
     #[allow(dead_code)]
     pub status: String,
+    pub trust_level: i16,
     pub created_at: DateTime<Utc>,
 }
 

@@ -38,6 +38,7 @@ pub struct AccountDto {
     pub handle: String,
     pub avatar_url: Option<String>,
     pub role: String,
+    pub trust_level: i16,
     pub created_at: i64,
 }
 

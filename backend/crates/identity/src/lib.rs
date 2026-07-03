@@ -36,5 +36,10 @@ pub fn routes(state: AppState) -> Router {
         .route("/api/v2/wallet/bind", post(handlers::bind_key))
         .route("/api/v2/wallet/claim-challenge", get(handlers::claim_challenge))
         .route("/api/v2/wallet/claim", post(handlers::claim_wallet))
+        // Admin
+        .route("/api/v2/admin/users/{id}/silence", post(handlers::silence_user))
+        .route("/api/v2/admin/users/{id}/suspend", post(handlers::suspend_user))
+        .route("/api/v2/admin/users/{id}/unsanction", post(handlers::unsanction_user))
+        .route("/api/v2/admin/users/{id}/sanctions", get(handlers::list_user_sanctions))
         .with_state(state)
 }

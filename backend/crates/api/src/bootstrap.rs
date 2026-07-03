@@ -70,6 +70,42 @@ pub async fn run() -> anyhow::Result<()> {
         system_public_key_b64,
     };
 
+    // --- Forum background tasks ---
+
+    // 1. Hot rank refresh (every 5 minutes).
+    if let Some(ref redis_pool) = state.redis {
+        let redis = redis_pool.clone();
+        let db = state.db.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(300)).await;
+                tracing::debug!("running hot rank refresh");
+                if let Err(e) = forum::repo::refresh_hot_rank(&redis, &db).await {
+                    tracing::error!(error = %e, "hot rank refresh failed");
+                }
+            }
+        });
+        tracing::info!("forum hot rank refresh scheduled (every 5 min)");
+    }
+
+    // 2. Trust level promotion (every 24 hours).
+    let db = state.db.clone();
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(86400)).await;
+            tracing::info!("running daily trust level promotion");
+            let (promoted, demoted) = forum::trust_levels::run_daily_tl_promotion(&db).await;
+            if promoted > 0 || demoted > 0 {
+                tracing::info!(promoted, demoted, "trust level changes applied");
+            }
+        }
+    });
+    tracing::info!("forum trust level promotion scheduled (every 24h)");
+
+    // 3. Watched words initialization (on startup, once).
+    forum::watched_words::init_watched_words(&state.db).await;
+    tracing::info!("forum watched words loaded");
+
     let app = build_router(state);
     let addr = SocketAddr::from(([0, 0, 0, 0], config.port));
     let listener = tokio::net::TcpListener::bind(addr).await?;

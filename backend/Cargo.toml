@@ -13,33 +13,36 @@ repository = "https://github.com/YourTongji/YourTJ-Platform"
 # member crate references it via `<name>.workspace = true`, so declaring future
 # deps here is free until a crate actually uses them.
 [workspace.dependencies]
-tokio = { version = "1", features = ["full"] }
+aho-corasick = "1"
+anyhow = "1"
+arc-swap = "1"
+async-trait = "0.1"
 axum = "0.8"
+base64 = "0.22"
+chrono = { version = "0.4", features = ["serde"] }
+hex = "0.4"
+jsonwebtoken = "9"
+lettre = { version = "0.11", default-features = false, features = ["tokio1-native-tls", "builder", "smtp-transport"] }
+meilisearch-sdk = "0.27"
+once_cell = "1"
+pinyin = { version = "0.11", features = ["plain"] }
+redis = { version = "0.28", features = ["aio", "tokio-comp"] }
+deadpool-redis = "0.19"
+regex = "1"
+ring = "0.17"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+# Enabled per-crate when the DB layer lands. Uses runtime queries (no compile-time
+# DATABASE_URL needed) so offline builds stay green.
+sqlx = { version = "0.8", features = ["runtime-tokio", "tls-rustls", "postgres", "chrono", "uuid"] }
+thiserror = "2"
+tokio = { version = "1", features = ["full"] }
 tower = "0.5"
 tower-http = { version = "0.6", features = ["trace", "cors", "request-id", "uuid", "limit", "set-header"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-thiserror = "2"
-anyhow = "1"
-# Enabled per-crate when the DB layer lands. Uses runtime queries (no compile-time
-# DATABASE_URL needed) so offline builds stay green.
-sqlx = { version = "0.8", features = ["runtime-tokio", "tls-rustls", "postgres", "chrono", "uuid"] }
-ring = "0.17"
-redis = { version = "0.28", features = ["aio", "tokio-comp"] }
-deadpool-redis = "0.19"
 uuid = { version = "1", features = ["v4"] }
-chrono = { version = "0.4", features = ["serde"] }
-base64 = "0.22"
-hex = "0.4"
-sha2 = "0.10"
-jsonwebtoken = "9"
-async-trait = "0.1"
-meilisearch-sdk = "0.27"
-pinyin = { version = "0.11", features = ["plain"] }
-lettre = { version = "0.11", default-features = false, features = ["tokio1-native-tls", "builder", "smtp-transport"] }
-regex = "1"
 
 # Internal crates (domain boundaries).
 shared = { path = "crates/shared" }

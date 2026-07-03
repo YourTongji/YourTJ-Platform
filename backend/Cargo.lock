@@ -312,6 +312,7 @@ dependencies = [
  "base64",
  "chrono",
  "deadpool-redis",
+ "forum",
  "identity",
  "meilisearch-sdk",
  "pinyin",
@@ -604,7 +605,9 @@ dependencies = [
 name = "forum"
 version = "0.1.0"
 dependencies = [
+ "aho-corasick",
  "anyhow",
+ "arc-swap",
  "axum",
  "base64",
  "chrono",
@@ -612,6 +615,7 @@ dependencies = [
  "hex",
  "identity",
  "meilisearch-sdk",
+ "once_cell",
  "redis",
  "regex",
  "serde",

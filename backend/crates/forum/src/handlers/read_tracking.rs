@@ -70,7 +70,23 @@ pub async fn list_unread_threads(
     let (_rows, next_cursor) =
         repo::get_unread_thread_ids(&state.db, auth.id, q.limit, cursor).await?;
 
-    let items: Vec<ThreadFeedDto> = Vec::new();
+    let mut items: Vec<ThreadFeedDto> = Vec::new();
+    for (thread_id, unread_count) in &_rows {
+        if let Ok(Some(row)) = repo::find_thread(&state.db, *thread_id).await {
+            items.push(ThreadFeedDto {
+                id: row.id.to_string(),
+                board_id: row.board_id.to_string(),
+                author_handle: row.author_handle,
+                title: row.title,
+                reply_count: row.reply_count,
+                vote_count: row.vote_count,
+                hot_score: row.hot_score,
+                created_at: row.created_at.timestamp(),
+                last_activity_at: row.last_activity_at.timestamp(),
+                unread_count: *unread_count,
+            });
+        }
+    }
     let next_str = next_cursor.map(|c| c.to_string());
 
     Ok(Json(shared::pagination::Page::new(items, next_str)))

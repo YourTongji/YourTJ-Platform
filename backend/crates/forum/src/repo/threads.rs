@@ -43,7 +43,7 @@ async fn list_threads_new(
                     a.handle AS author_handle \
              FROM forum.threads t \
              JOIN identity.accounts a ON a.id = t.author_id \
-             WHERE t.board_id = $1 AND t.created_at < (SELECT created_at FROM forum.threads WHERE id = $3) \
+             WHERE t.board_id = $1 AND t.deleted_at IS NULL AND t.hidden_at IS NULL AND t.created_at < (SELECT created_at FROM forum.threads WHERE id = $3) \
              ORDER BY t.created_at DESC, t.id DESC \
              LIMIT $2",
         )
@@ -60,7 +60,7 @@ async fn list_threads_new(
                     a.handle AS author_handle \
              FROM forum.threads t \
              JOIN identity.accounts a ON a.id = t.author_id \
-             WHERE t.board_id = $1 \
+             WHERE t.board_id = $1 AND t.deleted_at IS NULL AND t.hidden_at IS NULL \
              ORDER BY t.created_at DESC, t.id DESC \
              LIMIT $2",
         )
@@ -100,6 +100,7 @@ async fn list_threads_hot(
              FROM forum.threads t \
              JOIN identity.accounts a ON a.id = t.author_id \
              WHERE t.board_id = $1 \
+               AND t.deleted_at IS NULL AND t.hidden_at IS NULL \
                AND (COALESCE(t.hot_score, 0) < $3 \
                     OR (COALESCE(t.hot_score, 0) = $3 AND t.id < $4)) \
              ORDER BY COALESCE(t.hot_score, 0) DESC, t.id DESC \
@@ -119,7 +120,7 @@ async fn list_threads_hot(
                     a.handle AS author_handle \
              FROM forum.threads t \
              JOIN identity.accounts a ON a.id = t.author_id \
-             WHERE t.board_id = $1 \
+             WHERE t.board_id = $1 AND t.deleted_at IS NULL AND t.hidden_at IS NULL \
              ORDER BY COALESCE(t.hot_score, 0) DESC, t.id DESC \
              LIMIT $2",
         )
@@ -175,7 +176,7 @@ async fn list_threads_feed_new(
                     a.handle AS author_handle \
              FROM forum.threads t \
              JOIN identity.accounts a ON a.id = t.author_id \
-             WHERE t.board_id = $1 AND t.created_at < (SELECT created_at FROM forum.threads WHERE id = $3) \
+             WHERE t.board_id = $1 AND t.deleted_at IS NULL AND t.hidden_at IS NULL AND t.created_at < (SELECT created_at FROM forum.threads WHERE id = $3) \
              ORDER BY t.created_at DESC, t.id DESC \
              LIMIT $2",
         )
@@ -192,7 +193,7 @@ async fn list_threads_feed_new(
                     a.handle AS author_handle \
              FROM forum.threads t \
              JOIN identity.accounts a ON a.id = t.author_id \
-             WHERE t.created_at < (SELECT created_at FROM forum.threads WHERE id = $2) \
+             WHERE t.deleted_at IS NULL AND t.hidden_at IS NULL AND t.created_at < (SELECT created_at FROM forum.threads WHERE id = $2) \
              ORDER BY t.created_at DESC, t.id DESC \
              LIMIT $1",
         )
@@ -208,7 +209,7 @@ async fn list_threads_feed_new(
                     a.handle AS author_handle \
              FROM forum.threads t \
              JOIN identity.accounts a ON a.id = t.author_id \
-             WHERE t.board_id = $1 \
+             WHERE t.board_id = $1 AND t.deleted_at IS NULL AND t.hidden_at IS NULL \
              ORDER BY t.created_at DESC, t.id DESC \
              LIMIT $2",
         )
@@ -224,6 +225,7 @@ async fn list_threads_feed_new(
                     a.handle AS author_handle \
              FROM forum.threads t \
              JOIN identity.accounts a ON a.id = t.author_id \
+             WHERE t.deleted_at IS NULL AND t.hidden_at IS NULL \
              ORDER BY t.created_at DESC, t.id DESC \
              LIMIT $1",
         )
@@ -264,6 +266,7 @@ async fn list_threads_feed_hot(
                  FROM forum.threads t \
                  JOIN identity.accounts a ON a.id = t.author_id \
                  WHERE t.board_id = $1 \
+                   AND t.deleted_at IS NULL AND t.hidden_at IS NULL \
                    AND (COALESCE(t.hot_score, 0) < $3 \
                         OR (COALESCE(t.hot_score, 0) = $3 AND t.id < $4)) \
                  ORDER BY COALESCE(t.hot_score, 0) DESC, t.id DESC \
@@ -284,7 +287,8 @@ async fn list_threads_feed_hot(
                         a.handle AS author_handle \
                  FROM forum.threads t \
                  JOIN identity.accounts a ON a.id = t.author_id \
-                 WHERE (COALESCE(t.hot_score, 0) < $2 \
+                 WHERE t.deleted_at IS NULL AND t.hidden_at IS NULL \
+                   AND (COALESCE(t.hot_score, 0) < $2 \
                         OR (COALESCE(t.hot_score, 0) = $2 AND t.id < $3)) \
                  ORDER BY COALESCE(t.hot_score, 0) DESC, t.id DESC \
                  LIMIT $1",
@@ -303,7 +307,7 @@ async fn list_threads_feed_hot(
                         a.handle AS author_handle \
                  FROM forum.threads t \
                  JOIN identity.accounts a ON a.id = t.author_id \
-                 WHERE t.board_id = $1 \
+                 WHERE t.board_id = $1 AND t.deleted_at IS NULL AND t.hidden_at IS NULL \
                  ORDER BY COALESCE(t.hot_score, 0) DESC, t.id DESC \
                  LIMIT $2",
             )
@@ -320,6 +324,7 @@ async fn list_threads_feed_hot(
                         a.handle AS author_handle \
                  FROM forum.threads t \
                  JOIN identity.accounts a ON a.id = t.author_id \
+                 WHERE t.deleted_at IS NULL AND t.hidden_at IS NULL \
                  ORDER BY COALESCE(t.hot_score, 0) DESC, t.id DESC \
                  LIMIT $1",
             )
@@ -340,6 +345,43 @@ async fn list_threads_feed_hot(
     Ok((items, next_cursor))
 }
 
+/// List threads that the given account is following (watching/tracking).
+///
+/// Returns full `ThreadRowJoined` rows ordered by `last_activity_at DESC`.
+pub async fn list_threads_feed_following(
+    pool: &PgPool,
+    account_id: i64,
+    cursor: Option<i64>,
+    limit: i64,
+) -> AppResult<(Vec<ThreadRowJoined>, Option<i64>)> {
+    let since_id = cursor.unwrap_or(0);
+    let rows = sqlx::query_as::<_, ThreadRowJoined>(
+        "SELECT t.id, t.board_id, t.author_id, t.title, t.body, \
+                t.reply_count, t.vote_count, t.hot_score, t.status, \
+                t.created_at, t.last_activity_at, \
+                a.handle AS author_handle \
+         FROM forum.threads t \
+         JOIN identity.accounts a ON a.id = t.author_id \
+         JOIN forum.subscriptions s ON s.target_type = 'thread' AND s.target_id = t.id \
+         WHERE s.account_id = $1 AND s.level IN ('watching', 'tracking') \
+           AND t.deleted_at IS NULL \
+           AND t.id > $2 \
+         ORDER BY t.last_activity_at DESC \
+         LIMIT $3",
+    )
+    .bind(account_id)
+    .bind(since_id)
+    .bind(limit + 1)
+    .fetch_all(pool)
+    .await?;
+
+    let has_more = rows.len() > limit as usize;
+    let items = if has_more { rows[..limit as usize].to_vec() } else { rows };
+    let next_cursor = items.last().map(|r| r.id);
+
+    Ok((items, next_cursor))
+}
+
 /// Find a single thread by id, joined with author handle.
 pub async fn find_thread(pool: &PgPool, id: i64) -> AppResult<Option<ThreadRowJoined>> {
     let row = sqlx::query_as::<_, ThreadRowJoined>(
@@ -349,7 +391,7 @@ pub async fn find_thread(pool: &PgPool, id: i64) -> AppResult<Option<ThreadRowJo
                 a.handle AS author_handle \
          FROM forum.threads t \
          JOIN identity.accounts a ON a.id = t.author_id \
-         WHERE t.id = $1",
+         WHERE t.id = $1 AND t.deleted_at IS NULL AND t.hidden_at IS NULL",
     )
     .bind(id)
     .fetch_optional(pool)

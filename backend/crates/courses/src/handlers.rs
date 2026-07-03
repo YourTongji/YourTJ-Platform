@@ -266,25 +266,17 @@ pub async fn global_search(
     }
 
     // Search forum threads when type includes "thread" or is "all" (default).
-    let mut threads = Vec::new();
-    if params.query_type == "thread" || params.query_type == "all" {
-        if let Ok(client) =
-            meilisearch_sdk::client::Client::new(&state.meili_url, Some(&state.meili_master_key))
-        {
-            let index = client.index("forum_threads");
-            if let Ok(search_results) = index
-                .search()
-                .with_query(&params.q)
-                .with_limit(params.limit)
-                .execute::<serde_json::Value>()
-                .await
-            {
-                for hit in search_results.hits {
-                    threads.push(hit.result);
-                }
-            }
-        }
-    }
+    let threads = if params.query_type == "thread" || params.query_type == "all" {
+        forum::meili::search_threads(
+            &state.meili_url,
+            &state.meili_master_key,
+            &params.q,
+            params.limit,
+        )
+        .await
+    } else {
+        Vec::new()
+    };
 
     Ok(Json(SearchResultDto { courses, reviews, threads }))
 }

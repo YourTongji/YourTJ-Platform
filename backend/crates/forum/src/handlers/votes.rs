@@ -47,6 +47,17 @@ pub async fn vote_post(
     let vote_count =
         repo::vote_post(&state.db, &body.post_type, post_id, auth.id, &body.value).await?;
 
+    // Update user_stats: votes_cast +1 (the voter) — best-effort.
+    let _ = sqlx::query(
+        "INSERT INTO forum.user_stats (account_id, votes_cast) \
+         VALUES ($1, 1) \
+         ON CONFLICT (account_id) \
+         DO UPDATE SET votes_cast = forum.user_stats.votes_cast + 1",
+    )
+    .bind(auth.id)
+    .execute(&state.db)
+    .await;
+
     // Look up post author for notification.
     let post_author_id: Option<i64> = sqlx::query_scalar(if body.post_type == "thread" {
         "SELECT author_id FROM forum.threads WHERE id = $1"
@@ -73,9 +84,25 @@ pub async fn vote_post(
                         "postId": vote_post_id.to_string(),
                         "voterHandle": "",
                     }),
+                    None,
                 )
                 .await;
             });
+        }
+    }
+
+    // Update user_stats: votes_received +1 (the post author) — best-effort.
+    if let Some(author_id) = post_author_id {
+        if author_id != auth.id {
+            let _ = sqlx::query(
+                "INSERT INTO forum.user_stats (account_id, votes_received) \
+                 VALUES ($1, 1) \
+                 ON CONFLICT (account_id) \
+                 DO UPDATE SET votes_received = forum.user_stats.votes_received + 1",
+            )
+            .bind(author_id)
+            .execute(&state.db)
+            .await;
         }
     }
 
