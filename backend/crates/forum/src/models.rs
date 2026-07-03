@@ -9,6 +9,12 @@ pub struct BoardRow {
     pub id: i64,
     pub slug: String,
     pub name: String,
+    pub parent_id: Option<i64>,
+    pub description: Option<String>,
+    pub position: i32,
+    pub is_locked: bool,
+    pub min_trust_to_post: i16,
+    pub thread_count: i32,
 }
 
 /// A row from `forum.threads`.
@@ -59,6 +65,31 @@ pub struct ThreadRowJoined {
     pub author_handle: String,
 }
 
+/// A thread row joined with author handle, including all F1 state-machine columns.
+#[derive(Debug, Clone, FromRow)]
+pub struct ThreadRowJoinedFull {
+    pub id: i64,
+    pub board_id: i64,
+    pub author_id: i64,
+    pub title: String,
+    pub body: Option<String>,
+    pub reply_count: i32,
+    pub vote_count: i32,
+    pub hot_score: Option<f64>,
+    pub status: String,
+    pub pinned_at: Option<DateTime<Utc>>,
+    pub pinned_globally: bool,
+    pub closed_at: Option<DateTime<Utc>>,
+    pub archived_at: Option<DateTime<Utc>>,
+    pub deleted_at: Option<DateTime<Utc>>,
+    pub deleted_by: Option<i64>,
+    pub edited_at: Option<DateTime<Utc>>,
+    pub hidden_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+    pub last_activity_at: DateTime<Utc>,
+    pub author_handle: String,
+}
+
 /// A joined row from `forum.comments` + `identity.accounts` (via author_id).
 #[derive(Debug, Clone, FromRow)]
 pub struct CommentRowJoined {
@@ -69,6 +100,9 @@ pub struct CommentRowJoined {
     pub author_id: i64,
     pub body: String,
     pub vote_count: i32,
+    pub deleted_at: Option<DateTime<Utc>>,
+    pub hidden_at: Option<DateTime<Utc>>,
+    pub edited_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub author_handle: String,
 }
@@ -103,6 +137,7 @@ pub struct TagRow {
 }
 
 /// A row from `forum.thread_reads`.
+#[allow(dead_code)]
 #[derive(Debug, Clone, FromRow)]
 pub struct ThreadReadRow {
     pub account_id: i64,

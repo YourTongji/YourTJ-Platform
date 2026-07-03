@@ -10,6 +10,27 @@ use serde_json::{json, Value};
 use shared::{AppError, AppResult, AppState};
 
 // ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/// Reload the in-memory matcher *and* publish a cross-instance reload signal.
+async fn reload_and_notify(state: &AppState) {
+    if let Err(e) = crate::watched_words::reload_watched_words(&state.db).await {
+        tracing::error!(error = %e, "failed to reload watched words");
+    }
+    if let Some(ref r) = state.redis {
+        if let Ok(mut conn) = r.get().await {
+            let _: () = redis::cmd("PUBLISH")
+                .arg("forum:watched_words:reload")
+                .arg("1")
+                .query_async(&mut conn)
+                .await
+                .unwrap_or(());
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // DTOs
 // ---------------------------------------------------------------------------
 
@@ -34,6 +55,7 @@ struct WatchedWordRow {
     id: i64,
     word: String,
     action: String,
+    #[allow(dead_code)]
     created_by: Option<i64>,
     created_at: chrono::DateTime<chrono::Utc>,
 }
@@ -114,6 +136,9 @@ pub async fn create_watched_word(
     )
     .await?;
 
+    // Reload the matcher to pick up the new word and notify other instances
+    reload_and_notify(&state).await;
+
     Ok(Json(WatchedWordDto {
         id: row.id.to_string(),
         word: row.word,
@@ -160,6 +185,9 @@ pub async fn delete_watched_word(
         None,
     )
     .await?;
+
+    // Reload the matcher and notify other instances
+    reload_and_notify(&state).await;
 
     Ok(Json(json!({"ok": true})))
 }

@@ -143,15 +143,20 @@ pub async fn create_comment(
         });
     }
 
+    // Look up own handle for self-mention filtering.
+    let my_handle: String =
+        sqlx::query_scalar("SELECT handle FROM identity.accounts WHERE id = $1")
+            .bind(auth.id)
+            .fetch_one(&state.db)
+            .await
+            .unwrap_or_default();
+
     // Parse @mentions from body and notify mentioned users (fire-and-forget).
     let mention_re = regex::Regex::new(r"@([\p{L}\p{N}_-]+)").unwrap();
     let handles: Vec<String> = mention_re
         .captures_iter(&body.body)
         .map(|c| c[1].to_string())
-        .filter(|h| {
-            let _ = &auth;
-            true
-        }) // placeholder: skip self-mention filter
+        .filter(|h| h != &my_handle) // skip self-mentions
         .take(10)
         .collect();
 

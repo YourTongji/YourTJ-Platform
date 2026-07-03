@@ -40,13 +40,37 @@ pub(crate) fn thread_to_dto(row: &crate::models::ThreadRowJoined) -> ThreadDto {
         reply_count: row.reply_count,
         vote_count: row.vote_count,
         hot_score: row.hot_score,
+        tags: vec![],
         created_at: row.created_at.timestamp(),
         last_activity_at: row.last_activity_at.timestamp(),
     }
 }
 
-pub(crate) fn thread_to_detail_dto(row: &crate::models::ThreadRowJoined) -> ThreadDetailDto {
-    ThreadDetailDto { base: thread_to_dto(row), body: row.body.clone() }
+pub(crate) fn thread_to_detail_dto(row: &crate::models::ThreadRowJoinedFull) -> ThreadDetailDto {
+    ThreadDetailDto {
+        id: row.id.to_string(),
+        board_id: row.board_id.to_string(),
+        author_handle: row.author_handle.clone(),
+        author_id: row.author_id.to_string(),
+        title: row.title.clone(),
+        body: row.body.clone(),
+        reply_count: row.reply_count,
+        vote_count: row.vote_count,
+        hot_score: row.hot_score,
+        tags: vec![],
+        status: row.status.clone(),
+        pinned_at: row.pinned_at.map(|v| v.timestamp()),
+        pinned_globally: row.pinned_globally,
+        closed_at: row.closed_at.map(|v| v.timestamp()),
+        archived_at: row.archived_at.map(|v| v.timestamp()),
+        deleted_at: row.deleted_at.map(|v| v.timestamp()),
+        edited_at: row.edited_at.map(|v| v.timestamp()),
+        hidden_at: row.hidden_at.map(|v| v.timestamp()),
+        created_at: row.created_at.timestamp(),
+        last_activity_at: row.last_activity_at.timestamp(),
+        my_last_read_comment_id: None,
+        my_subscription_level: None,
+    }
 }
 
 pub(crate) fn comment_to_dto(row: &crate::models::CommentRowJoined) -> CommentDto {
@@ -56,14 +80,28 @@ pub(crate) fn comment_to_dto(row: &crate::models::CommentRowJoined) -> CommentDt
         parent_id: row.parent_id.map(|v| v.to_string()),
         path: row.path.clone().unwrap_or_default(),
         author_handle: row.author_handle.clone(),
+        author_id: row.author_id.to_string(),
         body: row.body.clone(),
         vote_count: row.vote_count,
+        is_deleted: row.deleted_at.is_some(),
+        is_hidden: row.hidden_at.is_some(),
+        edited_at: row.edited_at.map(|v| v.timestamp()),
         created_at: row.created_at.timestamp(),
     }
 }
 
 pub(crate) fn board_to_dto(row: &crate::models::BoardRow) -> BoardDto {
-    BoardDto { id: row.id.to_string(), slug: row.slug.clone(), name: row.name.clone() }
+    BoardDto {
+        id: row.id.to_string(),
+        slug: row.slug.clone(),
+        name: row.name.clone(),
+        parent_id: row.parent_id.map(|v| v.to_string()),
+        description: row.description.clone(),
+        position: row.position,
+        is_locked: row.is_locked,
+        min_trust_to_post: row.min_trust_to_post,
+        thread_count: row.thread_count,
+    }
 }
 
 pub(crate) fn default_sort() -> String {

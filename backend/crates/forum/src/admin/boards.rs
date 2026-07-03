@@ -10,6 +10,7 @@ use serde_json::{json, Value};
 use shared::{AppError, AppResult, AppState};
 
 use crate::dto::BoardDto;
+use crate::handlers::board_to_dto;
 use crate::models::BoardRow;
 
 // ---------------------------------------------------------------------------
@@ -51,7 +52,10 @@ pub async fn create_board(
     auth.require_mod().map_err(|_| AppError::Forbidden)?;
 
     let row: BoardRow = sqlx::query_as(
-        "INSERT INTO forum.boards (slug, name) VALUES ($1, $2) RETURNING id, slug, name",
+        "INSERT INTO forum.boards (slug, name) \
+         VALUES ($1, $2) \
+         RETURNING id, slug, name, parent_id, description, position, \
+                   is_locked, min_trust_to_post, thread_count",
     )
     .bind(&body.slug)
     .bind(&body.name)
@@ -62,7 +66,7 @@ pub async fn create_board(
     crate::repo::insert_mod_action(&state.db, auth.id, "create_board", "board", row.id, None, None)
         .await?;
 
-    Ok(Json(BoardDto { id: row.id.to_string(), slug: row.slug, name: row.name }))
+    Ok(Json(board_to_dto(&row)))
 }
 
 /// PATCH /api/v2/admin/forum/boards/{id} — update a board
@@ -88,7 +92,8 @@ pub async fn update_board(
         "UPDATE forum.boards \
          SET slug = COALESCE($1, slug), name = COALESCE($2, name) \
          WHERE id = $3 \
-         RETURNING id, slug, name",
+         RETURNING id, slug, name, parent_id, description, position, \
+                   is_locked, min_trust_to_post, thread_count",
     )
     .bind(&body.slug)
     .bind(&body.name)
@@ -109,7 +114,7 @@ pub async fn update_board(
     )
     .await?;
 
-    Ok(Json(BoardDto { id: row.id.to_string(), slug: row.slug, name: row.name }))
+    Ok(Json(board_to_dto(&row)))
 }
 
 /// DELETE /api/v2/admin/forum/boards/{id} — delete a board

@@ -12,6 +12,7 @@ use crate::repo;
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReadTrackingQuery {
+    #[allow(dead_code)]
     pub feed: Option<String>, // "unread"
     pub cursor: Option<String>,
     #[serde(default = "super::default_limit")]

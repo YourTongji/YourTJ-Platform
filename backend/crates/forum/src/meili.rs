@@ -96,11 +96,13 @@ pub async fn reindex_forum(pool: &sqlx::PgPool, meili_url: &str, meili_key: &str
         i32,
         String,
         chrono::DateTime<chrono::Utc>,
+        String,
     )> = sqlx::query_as(
         "SELECT t.id, t.title, t.body, a.handle, t.reply_count, t.vote_count, \
-         t.status, t.created_at \
+         t.status, t.created_at, b.slug \
          FROM forum.threads t \
          JOIN identity.accounts a ON a.id = t.author_id \
+         JOIN forum.boards b ON b.id = t.board_id \
          WHERE t.deleted_at IS NULL AND t.hidden_at IS NULL \
          ORDER BY t.id",
     )
@@ -113,7 +115,7 @@ pub async fn reindex_forum(pool: &sqlx::PgPool, meili_url: &str, meili_key: &str
             id: r.0.to_string(),
             title: r.1,
             body_excerpt: r.2.unwrap_or_default().chars().take(2048).collect(),
-            board: String::new(),
+            board: r.8,
             tags: vec![],
             author_handle: r.3,
             reply_count: r.4,

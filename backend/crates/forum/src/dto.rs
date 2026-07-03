@@ -12,6 +12,12 @@ pub struct BoardDto {
     pub id: String,
     pub slug: String,
     pub name: String,
+    pub parent_id: Option<String>,
+    pub description: Option<String>,
+    pub position: i32,
+    pub is_locked: bool,
+    pub min_trust_to_post: i16,
+    pub thread_count: i32,
 }
 
 /// Summary view of a thread (list responses).
@@ -25,17 +31,37 @@ pub struct ThreadDto {
     pub reply_count: i32,
     pub vote_count: i32,
     pub hot_score: Option<f64>,
+    pub tags: Vec<String>,
     pub created_at: i64,
     pub last_activity_at: i64,
 }
 
-/// Detail view of a thread — ThreadDto + optional body.
+/// Full thread detail matching OpenAPI `ThreadDetail`.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadDetailDto {
-    #[serde(flatten)]
-    pub base: ThreadDto,
+    pub id: String,
+    pub board_id: String,
+    pub author_handle: String,
+    pub author_id: String,
+    pub title: String,
     pub body: Option<String>,
+    pub reply_count: i32,
+    pub vote_count: i32,
+    pub hot_score: Option<f64>,
+    pub tags: Vec<String>,
+    pub status: String,
+    pub pinned_at: Option<i64>,
+    pub pinned_globally: bool,
+    pub closed_at: Option<i64>,
+    pub archived_at: Option<i64>,
+    pub deleted_at: Option<i64>,
+    pub edited_at: Option<i64>,
+    pub hidden_at: Option<i64>,
+    pub created_at: i64,
+    pub last_activity_at: i64,
+    pub my_last_read_comment_id: Option<String>,
+    pub my_subscription_level: Option<String>,
 }
 
 /// POST /forum/threads
@@ -45,6 +71,8 @@ pub struct ThreadInput {
     pub board_id: String,
     pub title: String,
     pub body: Option<String>,
+    #[serde(default)]
+    pub tags: Option<Vec<String>>,
 }
 
 /// Public-facing comment DTO.
@@ -56,8 +84,12 @@ pub struct CommentDto {
     pub parent_id: Option<String>,
     pub path: String,
     pub author_handle: String,
+    pub author_id: String,
     pub body: String,
     pub vote_count: i32,
+    pub is_deleted: bool,
+    pub is_hidden: bool,
+    pub edited_at: Option<i64>,
     pub created_at: i64,
 }
 
@@ -131,6 +163,7 @@ pub struct BookmarkDto {
 }
 
 /// POST /forum/posts/{id}/flag
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FlagInput {
@@ -197,6 +230,7 @@ pub struct NotificationPrefsDto {
 pub struct ThreadUpdateInput {
     pub title: Option<String>,
     pub body: Option<String>,
+    #[allow(dead_code)]
     pub tags: Option<Vec<String>>,
 }
 

@@ -178,23 +178,27 @@ pub async fn create_thread(
     // Auto-track: creator automatically subscribes to their thread.
     let _ = crate::repo::set_subscription(&state.db, auth.id, "thread", row.id, "tracking").await;
 
+    // Look up own handle for self-mention filtering.
+    let my_handle: String =
+        sqlx::query_scalar("SELECT handle FROM identity.accounts WHERE id = $1")
+            .bind(auth.id)
+            .fetch_one(&state.db)
+            .await
+            .unwrap_or_default();
+
     // Parse @mentions from body and notify mentioned users (fire-and-forget).
     if let Some(ref body_text) = body.body {
         let mention_re = regex::Regex::new(r"@([\p{L}\p{N}_-]+)").unwrap();
         let handles: Vec<String> = mention_re
             .captures_iter(body_text)
             .map(|c| c[1].to_string())
-            .filter(|h| {
-                let _ = &auth;
-                true
-            }) // self-mention filter placeholder
+            .filter(|h| h != &my_handle) // skip self-mentions
             .take(10)
             .collect();
 
         if !handles.is_empty() {
             let pool = state.db.clone();
-            let _ = &auth; // auth used for ownership
-            let thread_author = String::new(); // placeholder: will resolve from DB
+            let thread_author = row.author_handle.clone();
             let thread_body = row.body.clone().unwrap_or_default();
             let thread_body_excerpt = thread_body.chars().take(100).collect::<String>();
             let thread_id_val = row.id;
@@ -226,6 +230,13 @@ pub async fn create_thread(
         }
     }
 
+    // Look up board slug for Meilisearch.
+    let board_slug: String = sqlx::query_scalar("SELECT slug FROM forum.boards WHERE id = $1")
+        .bind(board_id)
+        .fetch_one(&state.db)
+        .await
+        .unwrap_or_default();
+
     // Sync to Meilisearch (fire-and-forget).
     let meili_url = state.meili_url.clone();
     let meili_key = state.meili_master_key.clone();
@@ -245,7 +256,7 @@ pub async fn create_thread(
                 id: thread_id.to_string(),
                 title: thread_title,
                 body_excerpt: thread_body.chars().take(2048).collect(),
-                board: String::new(),
+                board: board_slug,
                 tags: vec![],
                 author_handle: thread_author,
                 reply_count: thread_reply,
@@ -319,17 +330,22 @@ pub async fn update_thread(
     let within_grace = thread.created_at > now - chrono::Duration::minutes(5);
 
     // Save revision if outside grace period and body/title changed
-    if !within_grace {
-        if body.title.is_some() || body.body.is_some() {
-            let old_title = Some(thread.title.as_str());
-            let old_body = thread.body.as_deref().unwrap_or("");
-            repo::create_revision(&state.db, "thread", id, auth.id, old_title, old_body).await?;
-        }
+    if !within_grace && (body.title.is_some() || body.body.is_some()) {
+        let old_title = Some(thread.title.as_str());
+        let old_body = thread.body.as_deref().unwrap_or("");
+        repo::create_revision(&state.db, "thread", id, auth.id, old_title, old_body).await?;
     }
 
     // Update the thread
     let row =
         repo::update_thread(&state.db, id, body.title.as_deref(), body.body.as_deref()).await?;
+
+    // Look up board slug for Meilisearch.
+    let board_slug: String = sqlx::query_scalar("SELECT slug FROM forum.boards WHERE id = $1")
+        .bind(row.board_id)
+        .fetch_one(&state.db)
+        .await
+        .unwrap_or_default();
 
     // Re-sync to Meilisearch (fire-and-forget).
     let meili_url = state.meili_url.clone();
@@ -350,7 +366,7 @@ pub async fn update_thread(
                 id: thread_id.to_string(),
                 title: thread_title,
                 body_excerpt: thread_body.chars().take(2048).collect(),
-                board: String::new(),
+                board: board_slug,
                 tags: vec![],
                 author_handle: thread_author,
                 reply_count: thread_reply,

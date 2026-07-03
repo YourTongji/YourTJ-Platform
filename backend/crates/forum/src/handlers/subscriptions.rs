@@ -6,6 +6,7 @@ use axum::Json;
 use serde::Deserialize;
 use shared::{AppError, AppResult, AppState};
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SubscriptionsQuery {

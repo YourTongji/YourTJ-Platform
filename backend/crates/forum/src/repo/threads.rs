@@ -1,8 +1,7 @@
 use shared::AppResult;
 use sqlx::PgPool;
 
-use crate::dto::ThreadInput;
-use crate::models::ThreadRowJoined;
+use crate::models::{ThreadRowJoined, ThreadRowJoinedFull};
 
 use super::{base64_decode_i64, base64_encode_i64, decode_hot_cursor, encode_hot_cursor};
 
@@ -382,11 +381,13 @@ pub async fn list_threads_feed_following(
     Ok((items, next_cursor))
 }
 
-/// Find a single thread by id, joined with author handle.
-pub async fn find_thread(pool: &PgPool, id: i64) -> AppResult<Option<ThreadRowJoined>> {
-    let row = sqlx::query_as::<_, ThreadRowJoined>(
+/// Find a single thread by id, joined with author handle (full columns).
+pub async fn find_thread(pool: &PgPool, id: i64) -> AppResult<Option<ThreadRowJoinedFull>> {
+    let row = sqlx::query_as::<_, ThreadRowJoinedFull>(
         "SELECT t.id, t.board_id, t.author_id, t.title, t.body, \
                 t.reply_count, t.vote_count, t.hot_score, t.status, \
+                t.pinned_at, t.pinned_globally, t.closed_at, t.archived_at, \
+                t.deleted_at, t.deleted_by, t.edited_at, t.hidden_at, \
                 t.created_at, t.last_activity_at, \
                 a.handle AS author_handle \
          FROM forum.threads t \
@@ -399,22 +400,25 @@ pub async fn find_thread(pool: &PgPool, id: i64) -> AppResult<Option<ThreadRowJo
     Ok(row)
 }
 
-/// Insert a new thread. Returns the created thread joined with author handle.
+/// Insert a new thread. Returns the created thread joined with author handle (full columns).
 pub async fn create_thread(
     pool: &PgPool,
     board_id: i64,
     author_id: i64,
     input: &crate::dto::ThreadInput,
-) -> AppResult<ThreadRowJoined> {
-    let row = sqlx::query_as::<_, ThreadRowJoined>(
+) -> AppResult<ThreadRowJoinedFull> {
+    let row = sqlx::query_as::<_, ThreadRowJoinedFull>(
         "WITH inserted AS ( \
             INSERT INTO forum.threads (board_id, author_id, title, body) \
             VALUES ($1, $2, $3, $4) \
             RETURNING id, board_id, author_id, title, body, reply_count, vote_count, \
-                      hot_score, status, created_at, last_activity_at \
+                      hot_score, status, pinned_at, pinned_globally, closed_at, archived_at, \
+                      deleted_at, deleted_by, edited_at, hidden_at, created_at, last_activity_at \
          ) \
          SELECT t.id, t.board_id, t.author_id, t.title, t.body, \
                 t.reply_count, t.vote_count, t.hot_score, t.status, \
+                t.pinned_at, t.pinned_globally, t.closed_at, t.archived_at, \
+                t.deleted_at, t.deleted_by, t.edited_at, t.hidden_at, \
                 t.created_at, t.last_activity_at, \
                 a.handle AS author_handle \
          FROM inserted t \
@@ -429,14 +433,14 @@ pub async fn create_thread(
     Ok(row)
 }
 
-/// Update a thread's title and/or body. Returns the updated row joined with author handle.
+/// Update a thread's title and/or body. Returns the updated row joined with author handle (full columns).
 pub async fn update_thread(
     pool: &PgPool,
     id: i64,
     title: Option<&str>,
     body: Option<&str>,
-) -> AppResult<ThreadRowJoined> {
-    let row = sqlx::query_as::<_, ThreadRowJoined>(
+) -> AppResult<ThreadRowJoinedFull> {
+    let row = sqlx::query_as::<_, ThreadRowJoinedFull>(
         "WITH updated AS ( \
          UPDATE forum.threads SET \
          title = COALESCE($1, title), \
@@ -444,10 +448,13 @@ pub async fn update_thread(
          edited_at = now() \
          WHERE id = $3 \
          RETURNING id, board_id, author_id, title, body, reply_count, vote_count, \
-                   hot_score, status, created_at, last_activity_at \
+                   hot_score, status, pinned_at, pinned_globally, closed_at, archived_at, \
+                   deleted_at, deleted_by, edited_at, hidden_at, created_at, last_activity_at \
          ) \
          SELECT u.id, u.board_id, u.author_id, u.title, u.body, \
                 u.reply_count, u.vote_count, u.hot_score, u.status, \
+                u.pinned_at, u.pinned_globally, u.closed_at, u.archived_at, \
+                u.deleted_at, u.deleted_by, u.edited_at, u.hidden_at, \
                 u.created_at, u.last_activity_at, \
                 a.handle AS author_handle \
          FROM updated u \

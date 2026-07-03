@@ -44,6 +44,16 @@ pub async fn flag_post(
 
     let post_id: i64 = id_str.parse().map_err(|_| AppError::NotFound)?;
 
+    // Derive post_type by checking which table the ID exists in
+    let exists_thread: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM forum.threads WHERE id = $1)")
+            .bind(post_id)
+            .fetch_one(&state.db)
+            .await
+            .unwrap_or(false);
+
+    let target_type = if exists_thread { "thread" } else { "comment" };
+
     // Get reporter's trust level for weight
     let weight: f32 = match auth.role.as_str() {
         "admin" | "mod" => 3.0,
@@ -67,7 +77,7 @@ pub async fn flag_post(
 
     let threshold_reached = crate::repo::insert_flag(
         &state.db,
-        &body.post_type,
+        target_type,
         post_id,
         auth.id,
         &body.reason,
@@ -79,7 +89,7 @@ pub async fn flag_post(
     if threshold_reached {
         // Notify target author about auto-hide (fire-and-forget)
         let pool = state.db.clone();
-        let post_type = body.post_type.clone();
+        let post_type = target_type.to_string();
         let flag_post_id = post_id;
         tokio::spawn(async move {
             let author_id: Option<i64> = sqlx::query_scalar(if post_type == "thread" {

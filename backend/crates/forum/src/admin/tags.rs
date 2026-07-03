@@ -23,6 +23,7 @@ pub struct TagDto {
     pub created_at: i64,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateTagInput {
@@ -31,6 +32,7 @@ pub struct CreateTagInput {
     pub description: Option<String>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateTagInput {

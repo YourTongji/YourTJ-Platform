@@ -21,7 +21,7 @@ pub async fn list_comments(
     let rows = if let Some(ref cp) = cursor_path {
         sqlx::query_as::<_, CommentRowJoined>(
             "SELECT c.id, c.thread_id, c.parent_id, c.path, c.author_id, \
-                    c.body, c.vote_count, c.created_at, \
+                    c.body, c.vote_count, c.deleted_at, c.hidden_at, c.edited_at, c.created_at, \
                     a.handle AS author_handle \
              FROM forum.comments c \
              JOIN identity.accounts a ON a.id = c.author_id \
@@ -37,7 +37,7 @@ pub async fn list_comments(
     } else {
         sqlx::query_as::<_, CommentRowJoined>(
             "SELECT c.id, c.thread_id, c.parent_id, c.path, c.author_id, \
-                    c.body, c.vote_count, c.created_at, \
+                    c.body, c.vote_count, c.deleted_at, c.hidden_at, c.edited_at, c.created_at, \
                     a.handle AS author_handle \
              FROM forum.comments c \
              JOIN identity.accounts a ON a.id = c.author_id \
@@ -147,7 +147,7 @@ async fn insert_comment_tx(
             RETURNING id, thread_id, parent_id, path, author_id, body, vote_count, created_at \
          ) \
          SELECT c.id, c.thread_id, c.parent_id, c.path, c.author_id, \
-                c.body, c.vote_count, c.created_at, \
+                c.body, c.vote_count, c.deleted_at, c.hidden_at, c.edited_at, c.created_at, \
                 a.handle AS author_handle \
          FROM inserted c \
          JOIN identity.accounts a ON a.id = c.author_id",
@@ -192,7 +192,7 @@ pub fn next_sibling_index(max_child_path: &str, parent_path: &str) -> u32 {
 pub async fn find_comment(pool: &PgPool, id: i64) -> AppResult<Option<CommentRowJoined>> {
     let row = sqlx::query_as::<_, CommentRowJoined>(
         "SELECT c.id, c.thread_id, c.parent_id, c.path, c.author_id, \
-                c.body, c.vote_count, c.created_at, \
+                c.body, c.vote_count, c.deleted_at, c.hidden_at, c.edited_at, c.created_at, \
                 a.handle AS author_handle \
          FROM forum.comments c \
          JOIN identity.accounts a ON a.id = c.author_id \
@@ -212,7 +212,7 @@ pub async fn update_comment(pool: &PgPool, id: i64, body: &str) -> AppResult<Com
          RETURNING id, thread_id, parent_id, path, author_id, body, vote_count, created_at \
          ) \
          SELECT u.id, u.thread_id, u.parent_id, u.path, u.author_id, \
-                u.body, u.vote_count, u.created_at, \
+                u.body, u.vote_count, u.deleted_at, u.hidden_at, u.edited_at, u.created_at, \
                 a.handle AS author_handle \
          FROM updated u \
          JOIN identity.accounts a ON a.id = u.author_id",
