@@ -35,6 +35,8 @@ pub struct ThreadDto {
     pub tags: Vec<String>,
     pub created_at: i64,
     pub last_activity_at: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unread_count: Option<i32>,
 }
 
 /// Full thread detail matching OpenAPI `ThreadDetail`.

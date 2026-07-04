@@ -51,6 +51,7 @@ pub(crate) fn thread_to_dto(row: &crate::models::ThreadRowJoined) -> ThreadDto {
         tags: vec![],
         created_at: row.created_at.timestamp(),
         last_activity_at: row.last_activity_at.timestamp(),
+        unread_count: None,
     }
 }
 

@@ -7,7 +7,7 @@
 // cursor helpers
 // ---------------------------------------------------------------------------
 
-pub(crate) fn base64_encode_i64(val: i64) -> String {
+pub fn base64_encode_i64(val: i64) -> String {
     use base64::Engine;
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(val.to_string())
 }
@@ -65,7 +65,7 @@ pub mod subscriptions;
 pub mod tags;
 pub mod thread_state;
 
-pub use flags::{insert_flag, list_flag_queue, resolve_flag};
+pub use flags::{count_recent_auto_hides, insert_flag, list_flag_queue, resolve_flag};
 pub use mod_actions::{insert_mod_action, list_mod_actions};
 
 pub use boards::{find_board, list_boards};
@@ -89,7 +89,7 @@ pub use reads::{get_last_read_comment_id, get_unread_thread_ids, upsert_read_pos
 pub use revisions::{create_revision, list_revisions};
 pub use subscriptions::{
     delete_subscription, get_following_thread_ids, get_muted_ids, get_thread_subscription,
-    list_subscriptions, set_subscription,
+    get_watching_subscriber_ids, list_subscriptions, set_subscription,
 };
 pub use tags::{
     create_tag, delete_tag, find_tag, find_tag_by_slug, get_thread_tag_slugs, list_tags,
@@ -101,7 +101,7 @@ pub use thread_state::{
     unpin_thread,
 };
 pub use threads::{
-    create_thread, find_thread, list_threads, list_threads_feed, list_threads_feed_following,
-    update_thread,
+    create_thread, fetch_threads_by_ids, find_thread, list_threads, list_threads_feed,
+    list_threads_feed_following, update_thread,
 };
 pub use votes::vote_post;

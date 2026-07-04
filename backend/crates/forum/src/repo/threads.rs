@@ -284,6 +284,42 @@ async fn list_threads_feed_new(
     Ok((items, next_cursor))
 }
 
+/// Fetch full thread rows in order by a given list of IDs (preserving order).
+pub async fn fetch_threads_by_ids(
+    pool: &PgPool,
+    ids: &[i64],
+    current_user_id: Option<i64>,
+) -> AppResult<Vec<ThreadRowJoined>> {
+    if ids.is_empty() {
+        return Ok(vec![]);
+    }
+    let rows: Vec<ThreadRowJoined> = sqlx::query_as(
+        "SELECT t.id, t.board_id, t.author_id, t.title, t.body, \
+                t.reply_count, t.vote_count, t.hot_score, t.status, \
+                t.created_at, t.last_activity_at, \
+                a.handle AS author_handle \
+         FROM forum.threads t \
+         JOIN identity.accounts a ON a.id = t.author_id \
+         WHERE t.id = ANY($1) AND t.deleted_at IS NULL AND t.hidden_at IS NULL \
+           AND ($2::bigint IS NULL OR t.author_id <> ALL( \
+                SELECT ignored_account_id FROM forum.user_ignores WHERE account_id = $2 \
+           ))",
+    )
+    .bind(ids)
+    .bind(current_user_id)
+    .fetch_all(pool)
+    .await?;
+
+    // Preserve ZSET order by sorting in-memory
+    let mut ordered: Vec<ThreadRowJoined> = Vec::with_capacity(ids.len());
+    for id in ids {
+        if let Some(pos) = rows.iter().position(|r| r.id == *id) {
+            ordered.push(rows[pos].clone());
+        }
+    }
+    Ok(ordered)
+}
+
 async fn list_threads_feed_hot(
     pool: &PgPool,
     board_id: Option<i64>,

@@ -10,6 +10,7 @@ use crate::dto::{
     PollDto, PollOptionDto, RevisionDto, ThreadDetailDto, ThreadDto, ThreadInput, ThreadUpdateInput,
 };
 use crate::repo;
+use crate::repo::base64_encode_i64;
 
 use super::{default_limit, default_sort, thread_to_detail_dto, thread_to_dto};
 
@@ -128,6 +129,79 @@ pub async fn list_threads_feed(
     headers: HeaderMap,
     Query(q): Query<ThreadFeedQuery>,
 ) -> AppResult<Json<Page<ThreadDto>>> {
+    if q.sort == "unread" {
+        let auth = identity::auth_middleware::authenticate(
+            &headers,
+            &state.db,
+            &state.jwt_secret,
+            state.redis.as_ref(),
+        )
+        .await
+        .map_err(|_r| AppError::Unauthorized)?;
+
+        let cursor: Option<i64> = q.cursor.and_then(|c| c.parse().ok());
+        let (_rows, next_cursor) =
+            repo::get_unread_thread_ids(&state.db, auth.id, q.limit, cursor).await?;
+
+        let mut items: Vec<ThreadDto> = Vec::new();
+        for (thread_id, unread_count) in &_rows {
+            if let Ok(Some(row)) = repo::find_thread(&state.db, *thread_id).await {
+                items.push(ThreadDto {
+                    id: row.id.to_string(),
+                    board_id: row.board_id.to_string(),
+                    author_handle: row.author_handle,
+                    title: row.title,
+                    reply_count: row.reply_count,
+                    vote_count: row.vote_count,
+                    hot_score: row.hot_score,
+                    tags: vec![],
+                    created_at: row.created_at.timestamp(),
+                    last_activity_at: row.last_activity_at.timestamp(),
+                    unread_count: Some(*unread_count),
+                });
+            }
+        }
+        let next_str = next_cursor.map(|c| c.to_string());
+        return Ok(Json(Page::new(items, next_str)));
+    }
+
+    if q.sort == "hot" && q.board.is_none() && q.cursor.is_none() {
+        // G6: Try Redis ZSET first for global hot feed (no board filter, no cursor).
+        if let Some(ref redis_pool) = state.redis {
+            if let Ok(mut conn) = redis_pool.get().await {
+                let ids: Vec<i64> = redis::cmd("ZREVRANGE")
+                    .arg("hot:threads")
+                    .arg(0i64)
+                    .arg(q.limit - 1)
+                    .query_async(&mut conn)
+                    .await
+                    .unwrap_or_default();
+
+                if !ids.is_empty() {
+                    let current_user_id: Option<i64> = identity::auth_middleware::authenticate(
+                        &headers,
+                        &state.db,
+                        &state.jwt_secret,
+                        state.redis.as_ref(),
+                    )
+                    .await
+                    .ok()
+                    .map(|a| a.id);
+
+                    let rows = repo::fetch_threads_by_ids(&state.db, &ids, current_user_id).await?;
+                    let items: Vec<ThreadDto> = rows.iter().map(thread_to_dto).collect();
+                    let next = if ids.len() as i64 >= q.limit {
+                        Some(base64_encode_i64(q.limit))
+                    } else {
+                        None
+                    };
+                    return Ok(Json(Page::new(items, next)));
+                }
+            }
+        }
+        // Fall through to DB if Redis is unavailable or ZSET is empty
+    }
+
     if q.sort == "following" {
         let auth = identity::auth_middleware::authenticate(
             &headers,
@@ -197,19 +271,50 @@ pub async fn list_threads_feed(
 /// GET /api/v2/forum/threads/{id} — public
 pub async fn get_thread(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(id_str): Path<String>,
 ) -> AppResult<Json<ThreadDetailDto>> {
     let id: i64 = id_str.parse().map_err(|_| AppError::NotFound)?;
-    let detail =
-        shared::cache::cached_json(state.redis.as_ref(), "thread", &id.to_string(), 120, async {
-            let row = repo::find_thread(&state.db, id).await?.ok_or(AppError::NotFound)?;
-            let mut dto = thread_to_detail_dto(&row);
-            // Load poll data (best-effort — not all threads have polls).
-            attach_poll_to_detail(&state.db, id, &mut dto).await;
-            Ok::<_, AppError>(dto)
-        })
+
+    // Try soft auth — if the user is logged in, show their read position.
+    let current_user_id: Option<i64> = identity::auth_middleware::authenticate(
+        &headers,
+        &state.db,
+        &state.jwt_secret,
+        state.redis.as_ref(),
+    )
+    .await
+    .ok()
+    .map(|a| a.id);
+
+    if let Some(user_id) = current_user_id {
+        // Authenticated — skip the cache since the response is user-specific.
+        let row = repo::find_thread(&state.db, id).await?.ok_or(AppError::NotFound)?;
+        let mut dto = thread_to_detail_dto(&row);
+        attach_poll_to_detail(&state.db, id, &mut dto).await;
+        dto.my_last_read_comment_id = repo::get_last_read_comment_id(&state.db, user_id, id)
+            .await
+            .ok()
+            .flatten()
+            .map(|v| v.to_string());
+        Ok(Json(dto))
+    } else {
+        let detail = shared::cache::cached_json(
+            state.redis.as_ref(),
+            "thread",
+            &id.to_string(),
+            120,
+            async {
+                let row = repo::find_thread(&state.db, id).await?.ok_or(AppError::NotFound)?;
+                let mut dto = thread_to_detail_dto(&row);
+                // Load poll data (best-effort — not all threads have polls).
+                attach_poll_to_detail(&state.db, id, &mut dto).await;
+                Ok::<_, AppError>(dto)
+            },
+        )
         .await?;
-    Ok(Json(detail))
+        Ok(Json(detail))
+    }
 }
 
 /// POST /api/v2/forum/threads — auth required
@@ -263,6 +368,16 @@ pub async fn create_thread(
 
     let board_id: i64 = body.board_id.parse().map_err(|_| AppError::NotFound)?;
     let row = repo::create_thread(&state.db, board_id, auth.id, &body).await?;
+
+    // Store thread tags (request-scope, capped at 3).
+    if let Some(ref tag_slugs) = body.tags {
+        if !tag_slugs.is_empty() {
+            let capped: Vec<String> = tag_slugs.iter().take(3).cloned().collect();
+            let resolved = repo::resolve_tag_slugs(&state.db, &capped).await?;
+            let tag_ids: Vec<i64> = resolved.into_iter().map(|(id, _)| id).collect();
+            repo::set_thread_tags(&state.db, row.id, &tag_ids).await?;
+        }
+    }
 
     // Update user_stats: threads_created +1 (best-effort).
     let _ = sqlx::query(
@@ -351,6 +466,9 @@ pub async fn create_thread(
         .await
         .unwrap_or_default();
 
+    // Look up tag slugs for Meilisearch.
+    let tag_slugs = crate::repo::get_thread_tag_slugs(&state.db, row.id).await.unwrap_or_default();
+
     // Sync to Meilisearch (fire-and-forget).
     let meili_url = state.meili_url.clone();
     let meili_key = state.meili_master_key.clone();
@@ -371,7 +489,7 @@ pub async fn create_thread(
                 title: thread_title,
                 body_excerpt: thread_body.chars().take(2048).collect(),
                 board: board_slug,
-                tags: vec![],
+                tags: tag_slugs,
                 author_handle: thread_author,
                 reply_count: thread_reply,
                 vote_count: thread_vote,
@@ -489,6 +607,9 @@ pub async fn update_thread(
         .await
         .unwrap_or_default();
 
+    // Look up tag slugs for Meilisearch.
+    let tag_slugs = crate::repo::get_thread_tag_slugs(&state.db, row.id).await.unwrap_or_default();
+
     // Re-sync to Meilisearch (fire-and-forget).
     let meili_url = state.meili_url.clone();
     let meili_key = state.meili_master_key.clone();
@@ -509,7 +630,7 @@ pub async fn update_thread(
                 title: thread_title,
                 body_excerpt: thread_body.chars().take(2048).collect(),
                 board: board_slug,
-                tags: vec![],
+                tags: tag_slugs,
                 author_handle: thread_author,
                 reply_count: thread_reply,
                 vote_count: thread_vote,
