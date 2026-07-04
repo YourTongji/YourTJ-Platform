@@ -148,6 +148,65 @@ pub async fn run() -> anyhow::Result<()> {
         tracing::info!("forum email digest scheduled (every 7 days)");
     }
 
+    // 7. Badge credit mint bridge (every 60 seconds).
+    {
+        let db = state.db.clone();
+        let system_seed = state.system_private_key.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                let pending: Vec<(i64, i64, i64, String)> = match sqlx::query_as(
+                    "SELECT id, account_id, amount, idempotency_key \
+                     FROM platform.pending_mints WHERE minted_at IS NULL \
+                     ORDER BY id LIMIT 50",
+                )
+                .fetch_all(&db)
+                .await
+                {
+                    Ok(rows) => rows,
+                    Err(e) => {
+                        tracing::warn!(error = %e, "badge mint bridge: query failed");
+                        continue;
+                    }
+                };
+
+                for (id, account_id, amount, idempotency_key) in pending {
+                    match credit::mint_for_contribution(
+                        &db,
+                        account_id,
+                        amount,
+                        &idempotency_key,
+                        "badge award",
+                        &system_seed,
+                    )
+                    .await
+                    {
+                        Ok(_) => {
+                            let _ = sqlx::query(
+                                "UPDATE platform.pending_mints SET minted_at = now() WHERE id = $1",
+                            )
+                            .bind(id)
+                            .execute(&db)
+                            .await;
+                            tracing::info!(
+                                id,
+                                account_id,
+                                amount,
+                                idempotency_key,
+                                "badge mint completed"
+                            );
+                        }
+                        Err(e) => tracing::warn!(
+                            error = %e, id, account_id, idempotency_key,
+                            "badge mint failed (will retry)"
+                        ),
+                    }
+                }
+            }
+        });
+        tracing::info!("badge credit mint bridge scheduled (every 60s)");
+    }
+
     let app = build_router(state);
     let addr = SocketAddr::from(([0, 0, 0, 0], config.port));
     let listener = tokio::net::TcpListener::bind(addr).await?;

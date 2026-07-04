@@ -125,12 +125,17 @@ pub async fn award_first_thread_badge(pool: &PgPool, account_id: i64) -> anyhow:
     if newly_awarded {
         let mint_amount = badge_mint_amount(pool, badge_id).await;
         if mint_amount > 0 {
-            tracing::warn!(
-                account_id,
-                badge = "first-thread",
-                mint_amount,
-                "would mint credit here — credit crate not imported by forum"
-            );
+            let idempotency_key = format!("badge:first-thread:{account_id}");
+            let _ = sqlx::query(
+                "INSERT INTO platform.pending_mints (account_id, amount, idempotency_key, badge_slug) \
+                 VALUES ($1, $2, $3, 'first-thread') \
+                 ON CONFLICT (idempotency_key) DO NOTHING",
+            )
+            .bind(account_id)
+            .bind(mint_amount)
+            .bind(&idempotency_key)
+            .execute(pool)
+            .await;
         }
 
         // Spawn notification creation (fire-and-forget).
@@ -178,12 +183,17 @@ pub async fn award_quality_author_badge(
     if newly_awarded {
         let mint_amount = badge_mint_amount(pool, badge_id).await;
         if mint_amount > 0 {
-            tracing::warn!(
-                account_id,
-                badge = "quality-author",
-                mint_amount,
-                "would mint credit here — credit crate not imported by forum"
-            );
+            let idempotency_key = format!("badge:quality-author:{account_id}");
+            let _ = sqlx::query(
+                "INSERT INTO platform.pending_mints (account_id, amount, idempotency_key, badge_slug) \
+                 VALUES ($1, $2, $3, 'quality-author') \
+                 ON CONFLICT (idempotency_key) DO NOTHING",
+            )
+            .bind(account_id)
+            .bind(mint_amount)
+            .bind(&idempotency_key)
+            .execute(pool)
+            .await;
         }
 
         let pool = pool.clone();
@@ -238,12 +248,17 @@ pub async fn award_first_comment_badge(pool: &PgPool, account_id: i64) -> anyhow
     if newly_awarded {
         let mint_amount = badge_mint_amount(pool, badge_id).await;
         if mint_amount > 0 {
-            tracing::warn!(
-                account_id,
-                badge = "first-comment",
-                mint_amount,
-                "would mint credit here — credit crate not imported by forum"
-            );
+            let idempotency_key = format!("badge:first-comment:{account_id}");
+            let _ = sqlx::query(
+                "INSERT INTO platform.pending_mints (account_id, amount, idempotency_key, badge_slug) \
+                 VALUES ($1, $2, $3, 'first-comment') \
+                 ON CONFLICT (idempotency_key) DO NOTHING",
+            )
+            .bind(account_id)
+            .bind(mint_amount)
+            .bind(&idempotency_key)
+            .execute(pool)
+            .await;
         }
 
         let pool = pool.clone();
