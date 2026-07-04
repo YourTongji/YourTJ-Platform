@@ -46,7 +46,16 @@ pub async fn set_bookmark(
 
     let post_id: i64 = id_str.parse().map_err(|_| AppError::NotFound)?;
 
-    crate::repo::upsert_bookmark(&state.db, auth.id, "thread", post_id, body.note.as_deref())
+    // Detect target_type by checking whether the post_id exists in forum.threads
+    let exists_thread: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM forum.threads WHERE id = $1)")
+            .bind(post_id)
+            .fetch_one(&state.db)
+            .await
+            .unwrap_or(false);
+    let target_type = if exists_thread { "thread" } else { "comment" };
+
+    crate::repo::upsert_bookmark(&state.db, auth.id, target_type, post_id, body.note.as_deref())
         .await?;
 
     Ok(Json(json!({"ok": true})))
@@ -69,7 +78,16 @@ pub async fn remove_bookmark(
 
     let post_id: i64 = id_str.parse().map_err(|_| AppError::NotFound)?;
 
-    crate::repo::delete_bookmark(&state.db, auth.id, "thread", post_id).await?;
+    // Detect target_type by checking whether the post_id exists in forum.threads
+    let exists_thread: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM forum.threads WHERE id = $1)")
+            .bind(post_id)
+            .fetch_one(&state.db)
+            .await
+            .unwrap_or(false);
+    let target_type = if exists_thread { "thread" } else { "comment" };
+
+    crate::repo::delete_bookmark(&state.db, auth.id, target_type, post_id).await?;
 
     Ok(Json(json!({"ok": true})))
 }

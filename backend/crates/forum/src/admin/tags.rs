@@ -6,6 +6,7 @@ use axum::extract::{Path, State};
 use axum::http::HeaderMap;
 use axum::Json;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use shared::{AppError, AppResult, AppState};
 
 // ---------------------------------------------------------------------------
@@ -60,16 +61,26 @@ pub async fn list_tags_admin(
     .map_err(|_r| AppError::Unauthorized)?;
     auth.require_mod().map_err(|_| AppError::Forbidden)?;
 
-    // Stub — real implementation queries the tags table
-    let _ = auth;
-    Err(AppError::NotFound)
+    let rows = crate::repo::list_tags(&state.db).await?;
+    let items: Vec<TagDto> = rows
+        .into_iter()
+        .map(|r| TagDto {
+            id: r.id.to_string(),
+            slug: r.slug,
+            name: r.name,
+            description: r.description,
+            thread_count: r.thread_count,
+            created_at: r.created_at.timestamp(),
+        })
+        .collect();
+    Ok(Json(items))
 }
 
 /// POST /api/v2/admin/forum/tags — create a new tag
 pub async fn create_tag(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(_body): Json<CreateTagInput>,
+    Json(body): Json<CreateTagInput>,
 ) -> AppResult<Json<TagDto>> {
     let auth = identity::auth_middleware::authenticate(
         &headers,
@@ -81,8 +92,21 @@ pub async fn create_tag(
     .map_err(|_r| AppError::Unauthorized)?;
     auth.require_mod().map_err(|_| AppError::Forbidden)?;
 
-    // Stub — real implementation creates the tag in DB
-    Err(AppError::NotFound)
+    let row =
+        crate::repo::create_tag(&state.db, &body.slug, &body.name, body.description.as_deref())
+            .await?;
+
+    crate::repo::insert_mod_action(&state.db, auth.id, "create_tag", "tag", row.id, None, None)
+        .await?;
+
+    Ok(Json(TagDto {
+        id: row.id.to_string(),
+        slug: row.slug,
+        name: row.name,
+        description: row.description,
+        thread_count: row.thread_count,
+        created_at: row.created_at.timestamp(),
+    }))
 }
 
 /// PATCH /api/v2/admin/forum/tags/{id} — update a tag
@@ -90,7 +114,7 @@ pub async fn update_tag(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<String>,
-    Json(_body): Json<UpdateTagInput>,
+    Json(body): Json<UpdateTagInput>,
 ) -> AppResult<Json<TagDto>> {
     let auth = identity::auth_middleware::authenticate(
         &headers,
@@ -102,9 +126,28 @@ pub async fn update_tag(
     .map_err(|_r| AppError::Unauthorized)?;
     auth.require_mod().map_err(|_| AppError::Forbidden)?;
 
-    let _tag_id: i64 = id.parse().map_err(|_| AppError::NotFound)?;
-    // Stub — real implementation updates the tag in DB
-    Err(AppError::NotFound)
+    let tag_id: i64 = id.parse().map_err(|_| AppError::NotFound)?;
+
+    let row = crate::repo::update_tag(
+        &state.db,
+        tag_id,
+        body.slug.as_deref(),
+        body.name.as_deref(),
+        body.description.as_deref().map(Some),
+    )
+    .await?;
+
+    crate::repo::insert_mod_action(&state.db, auth.id, "update_tag", "tag", tag_id, None, None)
+        .await?;
+
+    Ok(Json(TagDto {
+        id: row.id.to_string(),
+        slug: row.slug,
+        name: row.name,
+        description: row.description,
+        thread_count: row.thread_count,
+        created_at: row.created_at.timestamp(),
+    }))
 }
 
 /// DELETE /api/v2/admin/forum/tags/{id} — delete a tag
@@ -123,7 +166,12 @@ pub async fn delete_tag(
     .map_err(|_r| AppError::Unauthorized)?;
     auth.require_mod().map_err(|_| AppError::Forbidden)?;
 
-    let _tag_id: i64 = id.parse().map_err(|_| AppError::NotFound)?;
-    // Stub — real implementation deletes the tag from DB
-    Err(AppError::NotFound)
+    let tag_id: i64 = id.parse().map_err(|_| AppError::NotFound)?;
+
+    crate::repo::delete_tag(&state.db, tag_id).await?;
+
+    crate::repo::insert_mod_action(&state.db, auth.id, "delete_tag", "tag", tag_id, None, None)
+        .await?;
+
+    Ok(Json(json!({"ok": true})))
 }
