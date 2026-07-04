@@ -4,7 +4,10 @@ use crate::models::FlagRow;
 use shared::AppResult;
 use sqlx::PgPool;
 
-/// Insert a flag. Returns true if this flag pushed the score over threshold (>= 3.0).
+/// Insert a flag.
+///
+/// Returns `Ok((true, Some(author_id)))` when threshold (>= 3.0) is reached,
+/// `Ok((false, None))` otherwise. The `author_id` is the target content author.
 pub async fn insert_flag(
     pool: &PgPool,
     target_type: &str,
@@ -13,7 +16,7 @@ pub async fn insert_flag(
     reason: &str,
     note: Option<&str>,
     weight: f32,
-) -> AppResult<bool> {
+) -> AppResult<(bool, Option<i64>)> {
     // UPSERT — one vote per user
     sqlx::query(
         "INSERT INTO forum.flags (target_type, target_id, reporter_id, reason, note, weight) \
@@ -43,7 +46,7 @@ pub async fn insert_flag(
 
     let threshold_reached = score.map(|s| s >= 3.0).unwrap_or(false);
 
-    if threshold_reached {
+    let author_id: Option<i64> = if threshold_reached {
         // Auto-hide the target
         if target_type == "thread" {
             sqlx::query(
@@ -60,9 +63,50 @@ pub async fn insert_flag(
             .execute(pool)
             .await?;
         }
-    }
 
-    Ok(threshold_reached)
+        // Look up the author of the hidden content
+        let aid: Option<i64> = if target_type == "thread" {
+            sqlx::query_scalar("SELECT author_id FROM forum.threads WHERE id = $1")
+                .bind(target_id)
+                .fetch_optional(pool)
+                .await?
+                .flatten()
+        } else {
+            sqlx::query_scalar("SELECT author_id FROM forum.comments WHERE id = $1")
+                .bind(target_id)
+                .fetch_optional(pool)
+                .await?
+                .flatten()
+        };
+        aid
+    } else {
+        None
+    };
+
+    Ok((threshold_reached, author_id))
+}
+
+/// Count how many times an author's content has been auto-hidden in the last 24 hours.
+pub async fn count_recent_auto_hides(pool: &PgPool, author_id: i64) -> AppResult<i64> {
+    let thread_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM forum.threads \
+         WHERE author_id = $1 AND hidden_at IS NOT NULL \
+         AND hidden_at > now() - interval '24 hours'",
+    )
+    .bind(author_id)
+    .fetch_one(pool)
+    .await?;
+
+    let comment_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM forum.comments \
+         WHERE author_id = $1 AND hidden_at IS NOT NULL \
+         AND hidden_at > now() - interval '24 hours'",
+    )
+    .bind(author_id)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(thread_count + comment_count)
 }
 
 /// List flags grouped by target, with weighted score.
@@ -147,6 +191,33 @@ pub async fn resolve_flag(
             .execute(pool)
             .await
             .ok();
+
+            // Increment flagged_upheld on the target content's author
+            let target_author: Option<i64> = if flag.target_type == "thread" {
+                sqlx::query_scalar("SELECT author_id FROM forum.threads WHERE id = $1")
+                    .bind(flag.target_id)
+                    .fetch_optional(pool)
+                    .await?
+                    .flatten()
+            } else {
+                sqlx::query_scalar("SELECT author_id FROM forum.comments WHERE id = $1")
+                    .bind(flag.target_id)
+                    .fetch_optional(pool)
+                    .await?
+                    .flatten()
+            };
+
+            if let Some(author_id) = target_author {
+                sqlx::query(
+                    "INSERT INTO forum.user_stats (account_id, flagged_upheld) \
+                     VALUES ($1, 1) \
+                     ON CONFLICT (account_id) \
+                     DO UPDATE SET flagged_upheld = forum.user_stats.flagged_upheld + 1",
+                )
+                .bind(author_id)
+                .execute(pool)
+                .await?;
+            }
         }
         "reject" => {
             // Clear hidden_at if it was auto-hidden

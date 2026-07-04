@@ -116,6 +116,34 @@ pub async fn get_muted_ids(pool: &PgPool, account_id: i64) -> AppResult<(Vec<i64
     Ok((muted_threads, muted_boards))
 }
 
+/// Get subscriber IDs who have a `watching` subscription on a thread (or its parent board).
+///
+/// Excludes any IDs in `exclude_ids` (e.g. the commenter and thread author).
+/// Capped at 200 to prevent fan-out storms (matching Discourse behavior).
+pub async fn get_watching_subscriber_ids(
+    pool: &PgPool,
+    thread_id: i64,
+    exclude_ids: &[i64],
+) -> AppResult<Vec<i64>> {
+    let ids: Vec<i64> = sqlx::query_scalar(
+        "SELECT s.account_id FROM forum.subscriptions s \
+         WHERE s.level = 'watching' \
+           AND ( \
+             (s.target_type = 'thread' AND s.target_id = $1) \
+             OR (s.target_type = 'board' AND s.target_id = ( \
+               SELECT board_id FROM forum.threads WHERE id = $1 \
+             )) \
+           ) \
+           AND s.account_id != ALL($2) \
+         LIMIT 200",
+    )
+    .bind(thread_id)
+    .bind(exclude_ids)
+    .fetch_all(pool)
+    .await?;
+    Ok(ids)
+}
+
 /// Get watching + tracking thread IDs for an account (for following feed).
 pub async fn get_following_thread_ids(
     pool: &PgPool,

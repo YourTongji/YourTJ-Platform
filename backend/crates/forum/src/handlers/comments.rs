@@ -199,6 +199,49 @@ pub async fn create_comment(
         });
     }
 
+    // Notify watching subscribers (fire-and-forget), excluding thread author and commenter.
+    {
+        let pool = state.db.clone();
+        let watcher_exclude = vec![thread_author_id, auth.id];
+        let watching_payload = serde_json::json!({
+            "threadId": thread_id.to_string(),
+            "commentId": row.id.to_string(),
+            "authorHandle": row.author_handle,
+            "bodyExcerpt": row.body.chars().take(100).collect::<String>(),
+        });
+        let comment_actor_id = auth.id;
+        tokio::spawn(async move {
+            let watcher_ids =
+                match crate::repo::get_watching_subscriber_ids(&pool, thread_id, &watcher_exclude)
+                    .await
+                {
+                    Ok(ids) => ids,
+                    Err(e) => {
+                        tracing::warn!(error = %e, thread_id, "failed to get watching subscribers");
+                        return;
+                    }
+                };
+            for watcher_id in watcher_ids {
+                if !crate::notification_hooks::is_notification_enabled(
+                    &pool, watcher_id, "watching",
+                )
+                .await
+                {
+                    continue;
+                }
+                crate::notification_hooks::create_notification(
+                    &pool,
+                    watcher_id,
+                    "watching",
+                    watching_payload.clone(),
+                    None,
+                    Some(comment_actor_id),
+                )
+                .await;
+            }
+        });
+    }
+
     // Notify quoted comment author (fire-and-forget).
     if let Some(qcid) = quoted_comment_id {
         let quoted_author_id: Option<i64> =
