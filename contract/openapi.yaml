@@ -434,6 +434,130 @@ components:
         - $ref: "#/components/schemas/Page"
         - { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/ModAction" } } } }
 
+    # ---- forum: DM ----
+    DmConversation:
+      type: object
+      properties:
+        id: { type: string }
+        otherAccountId: { type: string }
+        otherHandle: { type: string }
+        otherAvatarUrl: { type: string, nullable: true }
+        lastMessageBody: { type: string, nullable: true }
+        lastMessageAt: { type: integer, nullable: true }
+        unreadCount: { type: integer }
+        createdAt: { type: integer }
+    DmMessage:
+      type: object
+      properties:
+        id: { type: string }
+        conversationId: { type: string }
+        senderId: { type: string }
+        senderHandle: { type: string }
+        body: { type: string }
+        createdAt: { type: integer }
+    # ---- forum: polls ----
+    PollResult:
+      type: object
+      properties:
+        pollId: { type: string }
+        options:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string }
+              body: { type: string }
+              voteCount: { type: integer }
+        totalVotes: { type: integer }
+        myOptionId: { type: string, nullable: true }
+    # ---- identity: drafts ----
+    DraftOutput:
+      type: object
+      properties:
+        draftKey: { type: string }
+        payload: { type: object }
+        updatedAt: { type: integer }
+    DraftPayload:
+      type: object
+      required: [draftKey, payload]
+      properties:
+        draftKey: { type: string }
+        payload: { type: object }
+    # ---- identity: ignores ----
+    IgnoreUser:
+      type: object
+      properties:
+        accountId: { type: string }
+        handle: { type: string }
+        avatarUrl: { type: string, nullable: true }
+        createdAt: { type: integer }
+    # ---- identity: public profile ----
+    UserProfile:
+      type: object
+      properties:
+        handle: { type: string }
+        avatarUrl: { type: string, nullable: true }
+        role: { type: string, enum: [user, mod, admin] }
+        createdAt: { type: integer }
+    UserProfileWithStats:
+      allOf:
+        - $ref: "#/components/schemas/UserProfile"
+        - type: object
+          properties:
+            threadCount: { type: integer }
+            commentCount: { type: integer }
+    # ---- platform ----
+    OneboxResult:
+      type: object
+      properties:
+        url: { type: string }
+        title: { type: string, nullable: true }
+        description: { type: string, nullable: true }
+        image: { type: string, nullable: true }
+        siteName: { type: string, nullable: true }
+    # ---- admin ----
+    Badge:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        description: { type: string, nullable: true }
+        iconUrl: { type: string, nullable: true }
+        createdAt: { type: integer }
+    BadgeInput:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string }
+        description: { type: string }
+        iconUrl: { type: string }
+    FeaturedThreadResponse:
+      type: object
+      properties:
+        id: { type: string }
+        featuredAt: { type: integer }
+    # ---- typed pages (cont.) ----
+    DmConversationPage:
+      allOf:
+        - $ref: "#/components/schemas/Page"
+        - { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/DmConversation" } } } }
+    DmMessagePage:
+      allOf:
+        - $ref: "#/components/schemas/Page"
+        - { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/DmMessage" } } } }
+    DraftPage:
+      allOf:
+        - $ref: "#/components/schemas/Page"
+        - { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/DraftOutput" } } } }
+    IgnorePage:
+      allOf:
+        - $ref: "#/components/schemas/Page"
+        - { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/IgnoreUser" } } } }
+    BadgePage:
+      allOf:
+        - $ref: "#/components/schemas/Page"
+        - { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/Badge" } } } }
+
 paths:
   # ============ auth & identity ============
   /auth/email/request-code:
@@ -485,6 +609,66 @@ paths:
         content: { application/json: { schema: { type: object, properties: { handle: { type: string }, avatarUrl: { type: string } } } } }
       responses:
         "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Account" } } } }
+  /me/drafts:
+    get:
+      tags: [identity]
+      summary: List my drafts
+      parameters: [{ $ref: "#/components/parameters/Cursor" }, { $ref: "#/components/parameters/Limit" }]
+      responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/DraftPage" } } } } }
+    put:
+      tags: [identity]
+      summary: Save a draft
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/DraftPayload" } } } }
+      responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/DraftOutput" } } } } }
+  /me/drafts/{draft_key}:
+    get:
+      tags: [identity]
+      summary: Get a draft by key
+      parameters: [{ name: draft_key, in: path, required: true, schema: { type: string } }]
+      responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/DraftOutput" } } } } }
+    delete:
+      tags: [identity]
+      summary: Delete a draft
+      parameters: [{ name: draft_key, in: path, required: true, schema: { type: string } }]
+      responses: { "204": { description: deleted } }
+  /me/ignores/{account_id}:
+    put:
+      tags: [identity]
+      summary: Ignore a user
+      parameters: [{ name: account_id, in: path, required: true, schema: { type: string } }]
+      responses: { "204": { description: ok } }
+    delete:
+      tags: [identity]
+      summary: Unignore a user
+      parameters: [{ name: account_id, in: path, required: true, schema: { type: string } }]
+      responses: { "204": { description: ok } }
+  /me/ignores:
+    get:
+      tags: [identity]
+      summary: List ignored users
+      parameters: [{ $ref: "#/components/parameters/Cursor" }, { $ref: "#/components/parameters/Limit" }]
+      responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/IgnorePage" } } } } }
+  /users/{handle}:
+    get:
+      tags: [identity]
+      security: []
+      summary: Public user profile
+      parameters: [{ name: handle, in: path, required: true, schema: { type: string } }]
+      responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/UserProfileWithStats" } } } } }
+  /users/{handle}/threads:
+    get:
+      tags: [identity]
+      security: []
+      summary: User's threads
+      parameters: [{ name: handle, in: path, required: true, schema: { type: string } }, { $ref: "#/components/parameters/Cursor" }, { $ref: "#/components/parameters/Limit" }]
+      responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/ThreadFeedPage" } } } } }
+  /users/{handle}/comments:
+    get:
+      tags: [identity]
+      security: []
+      summary: User's comments
+      parameters: [{ name: handle, in: path, required: true, schema: { type: string } }, { $ref: "#/components/parameters/Cursor" }, { $ref: "#/components/parameters/Limit" }]
+      responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/CommentPage" } } } } }
 
   # ============ wallet (bind / claim / ledger) ============
   /wallet:
@@ -832,6 +1016,59 @@ paths:
     put: { tags: [forum], summary: Set subscription, requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/SubscriptionInput" } } } }, responses: { "204": { description: ok } } }
     delete: { tags: [forum], summary: Remove subscription, requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/UnsubscribeInput" } } } }, responses: { "204": { description: ok } } }
     get: { tags: [forum], summary: List subscriptions, parameters: [{ name: type, in: query, schema: { type: string, enum: [board, thread] } }, { $ref: "#/components/parameters/Cursor" }, { $ref: "#/components/parameters/Limit" }], responses: { "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Subscription" } } } } } } }
+  /forum/threads/unread:
+    get:
+      tags: [forum]
+      summary: List unread threads
+      parameters: [{ $ref: "#/components/parameters/Cursor" }, { $ref: "#/components/parameters/Limit" }]
+      responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/ThreadFeedPage" } } } } }
+  /forum/comments/{id}/solve:
+    post:
+      tags: [forum]
+      summary: Mark comment as solved answer (Q&A boards, thread author or mod)
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses: { "204": { description: ok } }
+    delete:
+      tags: [forum]
+      summary: Unmark solved answer
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses: { "204": { description: ok } }
+  /forum/dm/conversations:
+    get:
+      tags: [forum]
+      summary: List DM conversations
+      responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/DmConversationPage" } } } } }
+    post:
+      tags: [forum]
+      summary: Create or get DM conversation
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [recipientId], properties: { recipientId: { type: string } } } } } }
+      responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/DmConversation" } } } } }
+  /forum/dm/conversations/{id}/messages:
+    get:
+      tags: [forum]
+      summary: List messages in a conversation
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }, { $ref: "#/components/parameters/Cursor" }, { $ref: "#/components/parameters/Limit" }]
+      responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/DmMessagePage" } } } } }
+    post:
+      tags: [forum]
+      summary: Send a message
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [body], properties: { body: { type: string } } } } } }
+      responses: { "201": { description: created, content: { application/json: { schema: { $ref: "#/components/schemas/DmMessage" } } } } }
+  /forum/polls/{id}/vote:
+    post:
+      tags: [forum]
+      summary: Vote on a poll option
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [optionId], properties: { optionId: { type: string } } } } } }
+      responses: { "204": { description: ok } }
+  /forum/polls/{id}/results:
+    get:
+      tags: [forum]
+      security: []
+      summary: Get poll results
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/PollResult" } } } } }
 
   # ============ notifications ============
   /notifications:
@@ -844,6 +1081,15 @@ paths:
     post: { tags: [notifications], summary: Mark notifications read, requestBody: { content: { application/json: { schema: { type: object, properties: { ids: { type: array, items: { type: string } } } } } } }, responses: { "204": { description: ok } } }
   /notifications/unread-count:
     get: { tags: [notifications], summary: Unread notification count, responses: { "200": { description: ok, content: { application/json: { schema: { type: object, properties: { count: { type: integer } } } } } } } }
+  /notifications/stream:
+    get:
+      tags: [notifications]
+      summary: SSE stream for real-time notifications
+      responses:
+        "200":
+          description: SSE stream
+          content:
+            text/event-stream: { schema: { type: string } }
   /me/notification-prefs:
     get: { tags: [notifications], summary: Get notification preferences, responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/NotificationPrefs" } } } } } }
     put: { tags: [notifications], summary: Update notification preferences, requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/NotificationPrefsInput" } } } }, responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/NotificationPrefs" } } } } } }
@@ -862,6 +1108,13 @@ paths:
     get: { tags: [platform], security: [], summary: Public announcements, responses: { "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Announcement" } } } } } } }
   /settings:
     get: { tags: [platform], security: [], summary: Public runtime settings, responses: { "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Setting" } } } } } } }
+  /onebox:
+    get:
+      tags: [platform]
+      security: []
+      summary: Onebox URL preview
+      parameters: [{ name: url, in: query, required: true, schema: { type: string } }]
+      responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/OneboxResult" } } } } }
 
   # ============ admin (role: mod/admin) ============
   /admin/reviews:
@@ -964,6 +1217,8 @@ paths:
     post: { tags: [admin], summary: Hide thread, parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { "200": { description: ok } } }
   /admin/forum/threads/{id}/unhide:
     post: { tags: [admin], summary: Unhide thread, parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { "200": { description: ok } } }
+  /admin/forum/threads/{id}/feature:
+    post: { tags: [admin], summary: Feature a thread, parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/FeaturedThreadResponse" } } } } } }
   /admin/forum/flags:
     get: { tags: [admin], summary: Flag queue, parameters: [{ name: status, in: query, schema: { type: string, enum: [open, all], default: open } }, { $ref: "#/components/parameters/Cursor" }, { $ref: "#/components/parameters/Limit" }], responses: { "200": { description: ok } } }
   /admin/forum/flags/{id}/resolve:
@@ -983,3 +1238,6 @@ paths:
     post: { tags: [admin], summary: Revoke sanction, parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { "204": { description: revoked } } }
   /admin/users/{id}/sanctions:
     get: { tags: [admin], summary: List sanctions for user, parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { "200": { description: ok } } }
+  /admin/platform/badges:
+    get: { tags: [admin], summary: List all badges, responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/BadgePage" } } } } } }
+    post: { tags: [admin], summary: Create a badge, requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/BadgeInput" } } } }, responses: { "201": { description: created, content: { application/json: { schema: { $ref: "#/components/schemas/Badge" } } } } } }
