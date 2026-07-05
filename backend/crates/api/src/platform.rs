@@ -215,7 +215,7 @@ pub async fn admin_update_setting_handler(
 /// All platform-owned routes.
 pub fn routes(state: AppState) -> Router {
     Router::new()
-        .route("/health", get(health))
+        // /health is registered in bootstrap.rs
         .route("/announcements", get(list_announcements_handler))
         .route("/settings", get(list_settings_handler))
         .route("/startup/verify", post(startup_verify_handler))
@@ -227,7 +227,3 @@ pub fn routes(state: AppState) -> Router {
         .with_state(state)
 }
 
-/// Liveness probe used by SAE / load balancers.
-async fn health() -> Json<serde_json::Value> {
-    Json(serde_json::json!({ "status": "ok", "service": "yourtj-platform" }))
-}

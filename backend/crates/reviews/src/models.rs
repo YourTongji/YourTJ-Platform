@@ -48,7 +48,7 @@ pub struct ReviewReportRow {
 pub(crate) struct ReviewWithAuthorRow {
     pub id: i64,
     pub course_id: i64,
-    pub account_id: i64,
+    pub account_id: Option<i64>,
     pub rating: i32,
     pub comment: Option<String>,
     pub score: Option<String>,
@@ -58,6 +58,7 @@ pub(crate) struct ReviewWithAuthorRow {
     pub status: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
-    pub handle: String,
+    pub reviewer_name: Option<String>,
+    pub handle: Option<String>,
     pub avatar_url: Option<String>,
 }

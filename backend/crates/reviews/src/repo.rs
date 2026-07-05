@@ -35,7 +35,7 @@ fn row_to_dto(row: &ReviewWithAuthorRow) -> ReviewDto {
         comment: row.comment.clone(),
         score: row.score.clone(),
         semester: row.semester.clone(),
-        author_handle: row.handle.clone(),
+        author_handle: row.handle.clone().or_else(|| row.reviewer_name.clone()).unwrap_or_default(),
         author_avatar: row.avatar_url.clone(),
         approve_count: row.approve_count,
         status: row.status.clone(),
@@ -81,9 +81,12 @@ pub async fn list_reviews(
     let rows = if sort == Some("hot") {
         if let Some(c) = cursor {
             sqlx::query_as::<_, ReviewWithAuthorRow>(
-                "SELECT r.*, a.handle, a.avatar_url \
+                "SELECT r.id, r.course_id, r.account_id, r.rating, r.comment, r.score, \
+                 r.semester, r.approve_count, r.disapprove_count, \
+                 r.status::text, r.created_at, r.updated_at, \
+                 r.reviewer_name, a.handle, a.avatar_url \
                  FROM reviews.reviews r \
-                 JOIN identity.accounts a ON a.id = r.account_id \
+                 LEFT LEFT JOIN identity.accounts a ON a.id = r.account_id \
                  WHERE r.course_id = $1 AND r.status = 'visible' \
                    AND (r.approve_count, r.created_at) < ( \
                      SELECT rr.approve_count, rr.created_at \
@@ -99,9 +102,12 @@ pub async fn list_reviews(
             .await?
         } else {
             sqlx::query_as::<_, ReviewWithAuthorRow>(
-                "SELECT r.*, a.handle, a.avatar_url \
+                "SELECT r.id, r.course_id, r.account_id, r.rating, r.comment, r.score, \
+                 r.semester, r.approve_count, r.disapprove_count, \
+                 r.status::text, r.created_at, r.updated_at, \
+                 r.reviewer_name, a.handle, a.avatar_url \
                  FROM reviews.reviews r \
-                 JOIN identity.accounts a ON a.id = r.account_id \
+                 LEFT JOIN identity.accounts a ON a.id = r.account_id \
                  WHERE r.course_id = $1 AND r.status = 'visible' \
                  ORDER BY r.approve_count DESC, r.created_at DESC \
                  LIMIT $2",
@@ -114,9 +120,12 @@ pub async fn list_reviews(
     } else {
         if let Some(c) = cursor {
             sqlx::query_as::<_, ReviewWithAuthorRow>(
-                "SELECT r.*, a.handle, a.avatar_url \
+                "SELECT r.id, r.course_id, r.account_id, r.rating, r.comment, r.score, \
+                 r.semester, r.approve_count, r.disapprove_count, \
+                 r.status::text, r.created_at, r.updated_at, \
+                 r.reviewer_name, a.handle, a.avatar_url \
                  FROM reviews.reviews r \
-                 JOIN identity.accounts a ON a.id = r.account_id \
+                 LEFT JOIN identity.accounts a ON a.id = r.account_id \
                  WHERE r.course_id = $1 AND r.status = 'visible' AND r.id < $2 \
                  ORDER BY r.created_at DESC \
                  LIMIT $3",
@@ -128,9 +137,12 @@ pub async fn list_reviews(
             .await?
         } else {
             sqlx::query_as::<_, ReviewWithAuthorRow>(
-                "SELECT r.*, a.handle, a.avatar_url \
+                "SELECT r.id, r.course_id, r.account_id, r.rating, r.comment, r.score, \
+                 r.semester, r.approve_count, r.disapprove_count, \
+                 r.status::text, r.created_at, r.updated_at, \
+                 r.reviewer_name, a.handle, a.avatar_url \
                  FROM reviews.reviews r \
-                 JOIN identity.accounts a ON a.id = r.account_id \
+                 LEFT JOIN identity.accounts a ON a.id = r.account_id \
                  WHERE r.course_id = $1 AND r.status = 'visible' \
                  ORDER BY r.created_at DESC \
                  LIMIT $2",
@@ -376,9 +388,12 @@ pub async fn admin_list_reviews(
     let rows = if let Some(s) = status_filter {
         if let Some(c) = cursor {
             sqlx::query_as::<_, ReviewWithAuthorRow>(
-                "SELECT r.*, a.handle, a.avatar_url \
+                "SELECT r.id, r.course_id, r.account_id, r.rating, r.comment, r.score, \
+                 r.semester, r.approve_count, r.disapprove_count, \
+                 r.status::text, r.created_at, r.updated_at, \
+                 r.reviewer_name, a.handle, a.avatar_url \
                  FROM reviews.reviews r \
-                 JOIN identity.accounts a ON a.id = r.account_id \
+                 LEFT JOIN identity.accounts a ON a.id = r.account_id \
                  WHERE r.status = $1::reviews.review_status AND r.id < $2 \
                  ORDER BY r.id DESC \
                  LIMIT $3",
@@ -390,9 +405,12 @@ pub async fn admin_list_reviews(
             .await?
         } else {
             sqlx::query_as::<_, ReviewWithAuthorRow>(
-                "SELECT r.*, a.handle, a.avatar_url \
+                "SELECT r.id, r.course_id, r.account_id, r.rating, r.comment, r.score, \
+                 r.semester, r.approve_count, r.disapprove_count, \
+                 r.status::text, r.created_at, r.updated_at, \
+                 r.reviewer_name, a.handle, a.avatar_url \
                  FROM reviews.reviews r \
-                 JOIN identity.accounts a ON a.id = r.account_id \
+                 LEFT JOIN identity.accounts a ON a.id = r.account_id \
                  WHERE r.status = $1::reviews.review_status \
                  ORDER BY r.id DESC \
                  LIMIT $2",
@@ -405,9 +423,12 @@ pub async fn admin_list_reviews(
     } else {
         if let Some(c) = cursor {
             sqlx::query_as::<_, ReviewWithAuthorRow>(
-                "SELECT r.*, a.handle, a.avatar_url \
+                "SELECT r.id, r.course_id, r.account_id, r.rating, r.comment, r.score, \
+                 r.semester, r.approve_count, r.disapprove_count, \
+                 r.status::text, r.created_at, r.updated_at, \
+                 r.reviewer_name, a.handle, a.avatar_url \
                  FROM reviews.reviews r \
-                 JOIN identity.accounts a ON a.id = r.account_id \
+                 LEFT JOIN identity.accounts a ON a.id = r.account_id \
                  WHERE r.id < $1 \
                  ORDER BY r.id DESC \
                  LIMIT $2",
@@ -418,9 +439,12 @@ pub async fn admin_list_reviews(
             .await?
         } else {
             sqlx::query_as::<_, ReviewWithAuthorRow>(
-                "SELECT r.*, a.handle, a.avatar_url \
+                "SELECT r.id, r.course_id, r.account_id, r.rating, r.comment, r.score, \
+                 r.semester, r.approve_count, r.disapprove_count, \
+                 r.status::text, r.created_at, r.updated_at, \
+                 r.reviewer_name, a.handle, a.avatar_url \
                  FROM reviews.reviews r \
-                 JOIN identity.accounts a ON a.id = r.account_id \
+                 LEFT JOIN identity.accounts a ON a.id = r.account_id \
                  ORDER BY r.id DESC \
                  LIMIT $1",
             )
