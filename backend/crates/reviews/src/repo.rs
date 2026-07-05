@@ -86,7 +86,7 @@ pub async fn list_reviews(
                  r.status::text, r.created_at, r.updated_at, \
                  r.reviewer_name, a.handle, a.avatar_url \
                  FROM reviews.reviews r \
-                 LEFT LEFT JOIN identity.accounts a ON a.id = r.account_id \
+                 LEFT JOIN identity.accounts a ON a.id = r.account_id \
                  WHERE r.course_id = $1 AND r.status = 'visible' \
                    AND (r.approve_count, r.created_at) < ( \
                      SELECT rr.approve_count, rr.created_at \

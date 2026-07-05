@@ -36,9 +36,8 @@ brew services start postgresql@16
 ```
 
 ### 第 1 步：从 D1 导出 SQLite
-
 ```bash
-python3 d1_export.py
+python3 tools/d1/d1_export.py
 # 输出: d1_export.db (~28 MB, 26 张表, ~200k 行)
 ```
 
@@ -68,8 +67,7 @@ done
 ### 第 3 步：导入 Raw PK 数据
 
 ```bash
-python3 d1_import_pg.py  # 仅执行 step1_raw()
-```
+python3 tools/d1/d1_import_pg.py
 
 从 `d1_export.db` 读数据 → `INSERT INTO selection.pk_*`。
 13 张表，约 141k 行。
@@ -77,7 +75,8 @@ python3 d1_import_pg.py  # 仅执行 step1_raw()
 ### 第 4 步：物化 courses.* & selection.*
 
 ```bash
-psql "$DATABASE_URL" -f backend/migrations/materialize.sql
+psql "$DATABASE_URL" -f backend/ops/materialize_courses.sql
+psql "$DATABASE_URL" -f backend/ops/materialize_selection.sql
 ```
 
 使用两个 SQL 脚本：
@@ -99,8 +98,7 @@ psql "$DATABASE_URL" -f backend/migrations/materialize.sql
 ### 第 5 步：导入 Reviews 数据
 
 ```bash
-python3 gen_reviews_sql.py | psql "$DATABASE_URL" -f -
-```
+python3 tools/d1/gen_reviews_sql.py | psql "$DATABASE_URL" -f -
 
 由于 `reviews.reviews.id` 是 `GENERATED ALWAYS AS IDENTITY`，需 `OVERRIDING SYSTEM VALUE`。
 由于 `account_id` 是 FK 指向 `identity.accounts`（D1 没有此表），导入时填 `NULL`。
@@ -149,6 +147,13 @@ Raw PG 表与 selection 标准表不是 1:1：
 
 ## Appendix: 快速重建命令
 
+### 决策记录
+
+5. **`public.categories`**：D1 的 `categories` 表当前导入到 `public.categories`（无主 schema）。
+   归属未定（大概率 courses 域）。后续迁移应将其移到 `courses.categories`，导入脚本同步调整。
+   在此之前，`public.categories` 只作历史参考，不作为任何 API 数据源。
+6. **`edit_token`**：D1 的无账号匿名编辑凭证已导入（`reviews.reviews.edit_token`），
+   但 v2 后端**不**实现 `edit_token` 编辑功能 — 与 v2 账号体系冲突。列保留作历史参考。
 ```bash
 # 1. 清理所有物化数据
 psql "$DATABASE_URL" <<'EOSQL'
@@ -168,16 +173,15 @@ TRUNCATE reviews.review_reports CASCADE;
 TRUNCATE reviews.review_likes CASCADE;
 TRUNCATE reviews.reviews CASCADE;
 EOSQL
-
 # 2. 重新导入 Raw PK（如果已经清空）
-python3 d1_import_pg.py
+python3 tools/d1/d1_import_pg.py
 
 # 3. 物化 courses.*
-psql "$DATABASE_URL" -f materialize_courses.sql
+psql "$DATABASE_URL" -f backend/ops/materialize_courses.sql
 
 # 4. 物化 selection.*
-psql "$DATABASE_URL" -f materialize_selection.sql
+psql "$DATABASE_URL" -f backend/ops/materialize_selection.sql
 
 # 5. 导入 reviews
-python3 gen_reviews_sql.py | psql "$DATABASE_URL" -f -
+python3 tools/d1/gen_reviews_sql.py | psql "$DATABASE_URL" -f -
 ```
