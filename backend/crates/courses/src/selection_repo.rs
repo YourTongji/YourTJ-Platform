@@ -81,7 +81,7 @@ pub async fn list_courses_by_major(
     grade: &str,
 ) -> Result<Vec<SelectionCourseRow>, CoursesError> {
     let rows = sqlx::query_as::<_, SelectionCourseRow>(
-        "SELECT c.id, c.code, c.name, c.credit, c.nature_id, c.campus_id, c.teacher_name \
+        "SELECT c.id, c.code, c.name, c.credit, c.nature_id, c.campus_id, c.teacher_name, c.teacher_names \
          FROM selection.courses c \
          JOIN selection.major_courses mc ON mc.course_id = c.id \
          WHERE mc.major_id = $1 AND mc.grade = $2 \
@@ -100,7 +100,7 @@ pub async fn list_courses_by_nature(
     nature_id: i64,
 ) -> Result<Vec<SelectionCourseRow>, CoursesError> {
     let rows = sqlx::query_as::<_, SelectionCourseRow>(
-        "SELECT id, code, name, credit, nature_id, campus_id, teacher_name \
+        "SELECT id, code, name, credit, nature_id, campus_id, teacher_name, teacher_names \
          FROM selection.courses \
          WHERE nature_id = $1 \
          ORDER BY code",
@@ -117,7 +117,7 @@ pub async fn find_selection_course_by_code(
     code: &str,
 ) -> Result<Option<SelectionCourseRow>, CoursesError> {
     let row = sqlx::query_as::<_, SelectionCourseRow>(
-        "SELECT id, code, name, credit, nature_id, campus_id, teacher_name \
+        "SELECT id, code, name, credit, nature_id, campus_id, teacher_name, teacher_names \
          FROM selection.courses \
          WHERE code = $1",
     )

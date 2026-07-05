@@ -131,6 +131,7 @@ pub async fn selection_courses_by_major(
             nature_id: r.nature_id.map(|v| v.to_string()),
             campus_id: r.campus_id.map(|v| v.to_string()),
             teacher_name: r.teacher_name,
+            teacher_names: r.teacher_names.unwrap_or_default(),
         })
         .collect();
     Ok(Json(items))
@@ -158,6 +159,7 @@ pub async fn selection_courses_by_nature(
             nature_id: r.nature_id.map(|v| v.to_string()),
             campus_id: r.campus_id.map(|v| v.to_string()),
             teacher_name: r.teacher_name,
+            teacher_names: r.teacher_names.unwrap_or_default(),
         })
         .collect();
     Ok(Json(items))
@@ -179,6 +181,7 @@ pub async fn selection_course_by_code(
         nature_id: row.nature_id.map(|v| v.to_string()),
         campus_id: row.campus_id.map(|v| v.to_string()),
         teacher_name: row.teacher_name,
+        teacher_names: row.teacher_names.unwrap_or_default(),
     }))
 }
 
@@ -208,6 +211,7 @@ pub async fn selection_courses_search(
             nature_id: r.nature_id.map(|v| v.to_string()),
             campus_id: r.campus_id.map(|v| v.to_string()),
             teacher_name: r.teacher_name,
+            teacher_names: r.teacher_names.unwrap_or_default(),
         })
         .collect();
     Ok(Json(items))

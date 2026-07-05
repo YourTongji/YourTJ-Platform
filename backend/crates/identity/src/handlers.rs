@@ -389,18 +389,17 @@ pub async fn claim_challenge(
 /// canonical payload `{ accountId, challengeId, legacyUserHash, nonce }`.
 ///
 /// Runs in a single transaction that locks the challenge and legacy wallet
-/// link rows, validates all conditions, then mints any legacy balance into
-/// the credit ledger.
+/// link rows, validates all conditions, then auto-assigns legacy reviews
+/// by `wallet_user_hash`, mints any legacy balance into the credit ledger,
+/// and commits.
 ///
-/// NOTE: This handler directly queries/inserts into `credit.ledger` and
-/// `credit.wallets` — an intentional exception to the domain-boundary rule
-/// that "identity must not query credit tables." The cross-domain access is
-/// architecturally necessary because this is a one-time legacy-claim flow
-/// that must atomically transfer balance from the old system into the new
-/// ledger. Moving it to the credit crate would create circular dependencies
-/// (credit needs identity data for the claim). The tight coupling here is
-/// confined to this single handler and is not used as a precedent for other
-/// identity → credit queries.
+/// NOTE: This handler directly accesses `credit.ledger`, `credit.wallets`,
+/// and `reviews.reviews` — an intentional exception to the domain-boundary
+/// rule. The cross-domain access is architecturally necessary because this
+/// is a one-time legacy-claim flow that must atomically link legacy data
+/// into the new system. The tight coupling is confined to this single
+/// handler and is not used as a precedent for other identity → cross-domain
+/// queries.
 #[tracing::instrument(skip(state, headers))]
 pub async fn claim_wallet(
     State(state): State<AppState>,
@@ -491,6 +490,21 @@ pub async fn claim_wallet(
     .bind(auth.id)
     .execute(&mut *tx)
     .await?;
+
+    // Auto-assign legacy reviews (by wallet_user_hash) to the claimed account.
+    let claimed_review_count = sqlx::query(
+        "UPDATE reviews.reviews SET account_id = $1 \
+         WHERE wallet_user_hash = $2 AND account_id IS NULL",
+    )
+    .bind(auth.id)
+    .bind(&body.legacy_user_hash)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+    if claimed_review_count > 0 {
+        tracing::info!(account_id = auth.id, legacy_user_hash = %body.legacy_user_hash,
+            count = claimed_review_count, "claimed legacy reviews");
+    }
 
     // If there is a legacy balance, mint points into the credit ledger.
     if link.legacy_balance > 0 {

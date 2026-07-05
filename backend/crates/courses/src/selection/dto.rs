@@ -59,6 +59,7 @@ pub struct SelectionCourseDto {
     pub nature_id: Option<String>,
     pub campus_id: Option<String>,
     pub teacher_name: Option<String>,
+    pub teacher_names: Vec<String>,
 }
 
 /// A time-slot for a selection course.

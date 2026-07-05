@@ -667,3 +667,32 @@ pub async fn resolve_report(pool: &PgPool, report_id: i64, note: Option<&str>) -
     }
     Ok(())
 }
+
+/// Claim legacy reviews by linking them to an account.
+///
+/// Updates all reviews whose `wallet_user_hash` matches and whose `account_id`
+/// is still NULL, setting them to the provided `account_id`. Returns the number
+/// of reviews that were claimed.
+///
+/// This is designed to be called after a successful `/wallet/claim` flow so
+/// legacy reviews originally associated with an anonymous wallet hash become
+/// properly linked to the user's account.
+#[tracing::instrument(skip(executor), fields(account_id, wallet_user_hash))]
+pub async fn claim_legacy_reviews(
+    executor: impl sqlx::PgExecutor<'_>,
+    account_id: i64,
+    wallet_user_hash: &str,
+) -> AppResult<u64> {
+    let rows = sqlx::query(
+        "UPDATE reviews.reviews SET account_id = $1 \
+         WHERE wallet_user_hash = $2 AND account_id IS NULL",
+    )
+    .bind(account_id)
+    .bind(wallet_user_hash)
+    .execute(executor)
+    .await?;
+
+    let count = rows.rows_affected();
+    tracing::info!(account_id, wallet_user_hash, count, "claimed legacy reviews");
+    Ok(count)
+}

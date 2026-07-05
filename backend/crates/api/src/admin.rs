@@ -6,17 +6,18 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::routing::post;
 use axum::{Json, Router};
 use shared::{AppResult, AppState};
+use uuid::Uuid;
 
 // ---------------------------------------------------------------------------
-// Stub handlers
+// Selection sync
 // ---------------------------------------------------------------------------
 
-/// POST /api/v2/admin/selection/sync — stub (queued)
+/// POST /api/v2/admin/selection/sync — trigger selection data sync pipeline
 pub async fn selection_sync_handler(
     headers: HeaderMap,
     State(state): State<AppState>,
 ) -> AppResult<(StatusCode, Json<serde_json::Value>)> {
-    let _auth = identity::auth_middleware::authenticate(
+    let auth = identity::auth_middleware::authenticate(
         &headers,
         &state.db,
         &state.jwt_secret,
@@ -24,8 +25,31 @@ pub async fn selection_sync_handler(
     )
     .await
     .map_err(|_| shared::AppError::Unauthorized)?;
-    // require_mod is handled by the courses/admin handlers now
-    Ok((StatusCode::ACCEPTED, Json(serde_json::json!({ "status": "queued" }))))
+    auth.require_mod().map_err(|_| shared::AppError::Forbidden)?;
+
+    let job_id = Uuid::new_v4().to_string();
+    let job_id_resp = job_id.clone();
+    let meili_url = state.meili_url.clone();
+    let meili_key = state.meili_master_key.clone();
+    let pool = state.db.clone();
+    let redis = state.redis.clone();
+
+    tokio::spawn(async move {
+        if let Err(e) =
+            courses::sync::run_selection_sync(&pool, &meili_url, &meili_key, redis.as_ref()).await
+        {
+            tracing::error!(error = %e, job_id, "selection sync failed");
+        }
+    });
+
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(serde_json::json!({
+            "status": "queued",
+            "message": "selection sync started",
+            "jobId": job_id_resp,
+        })),
+    ))
 }
 
 /// POST /api/v2/admin/reviews/reindex — stub (queued)

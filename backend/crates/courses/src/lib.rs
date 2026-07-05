@@ -17,6 +17,7 @@ pub mod repo;
 pub mod selection;
 pub(crate) mod selection_handlers;
 pub mod selection_repo;
+pub mod sync;
 
 use axum::routing::{get, put};
 use axum::Router;

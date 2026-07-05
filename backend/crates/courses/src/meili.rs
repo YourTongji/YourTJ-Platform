@@ -153,7 +153,7 @@ pub async fn setup_selection_index(url: &str, api_key: &str) -> Result<(), Strin
 
     let index = client.index("selection_courses");
     index
-        .set_searchable_attributes(&["code", "name", "teacherName"])
+        .set_searchable_attributes(&["code", "name", "teacherName", "teacherNames"])
         .await
         .map_err(|e| format!("Meili searchable attrs: {e}"))?;
 
@@ -176,6 +176,7 @@ pub struct SelectionCourseDocument {
     pub nature_id: Option<i64>,
     pub campus_id: Option<i64>,
     pub teacher_name: Option<String>,
+    pub teacher_names: Option<Vec<String>>,
     pub kind: String,
 }
 
@@ -215,12 +216,13 @@ struct SelectionCourseRow {
     nature_id: Option<i64>,
     campus_id: Option<i64>,
     teacher_name: Option<String>,
+    teacher_names: Option<Vec<String>>,
 }
 
 /// Sync all selection courses to Meilisearch.
 pub async fn sync_selection_courses_to_meili(url: &str, api_key: &str, pool: &PgPool) {
     let rows: Vec<SelectionCourseRow> = match sqlx::query_as::<_, SelectionCourseRow>(
-        "SELECT id, code, name, credit, nature_id, campus_id, teacher_name \
+        "SELECT id, code, name, credit, nature_id, campus_id, teacher_name, teacher_names \
          FROM selection.courses ORDER BY id",
     )
     .fetch_all(pool)
@@ -244,6 +246,7 @@ pub async fn sync_selection_courses_to_meili(url: &str, api_key: &str, pool: &Pg
                 "natureId": r.nature_id,
                 "campusId": r.campus_id,
                 "teacherName": r.teacher_name,
+                "teacherNames": r.teacher_names.unwrap_or_default(),
                 "kind": "selection_course",
             })
         })

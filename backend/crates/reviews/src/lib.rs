@@ -14,6 +14,7 @@ pub(crate) mod repo;
 
 use axum::routing::{get, patch, post};
 use axum::Router;
+pub use repo::claim_legacy_reviews;
 use shared::AppState;
 
 /// All routes owned by the reviews domain.

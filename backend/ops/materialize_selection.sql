@@ -5,20 +5,24 @@ BEGIN;
 ALTER SEQUENCE IF EXISTS selection.timeslots_id_seq RESTART;
 
 -- Calendars
+-- is_current: uses MAX(calendar_id) as a proxy for "most recent semester."
+-- Assumption: higher calendar_id = newer calendar. If upstream ever assigns
+-- IDs non-monotonically, switch to the most recent fetch log timestamp instead.
 INSERT INTO selection.calendars (id, name, is_current)
 SELECT calendar_id, calendar_name, false FROM selection.pk_calendars
 ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name;
 UPDATE selection.calendars SET is_current = true WHERE id = (SELECT MAX(calendar_id) FROM selection.pk_calendars);
 
--- Campuses
-INSERT INTO selection.campuses (id, name)
-SELECT ROW_NUMBER() OVER (ORDER BY campus), campus FROM selection.pk_campuses
-ON CONFLICT (id) DO NOTHING;
+-- Campuses — natural-key upsert by name; ID is stable via sequence default.
+-- New campuses get auto-generated IDs without renumbering existing ones.
+INSERT INTO selection.campuses (name)
+SELECT DISTINCT campus FROM selection.pk_campuses
+ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name;
 
--- Faculties
-INSERT INTO selection.faculties (id, name, campus_id)
-SELECT ROW_NUMBER() OVER (ORDER BY faculty), COALESCE(faculty_i18n, faculty), NULL FROM selection.pk_faculties
-ON CONFLICT (id) DO NOTHING;
+-- Faculties — natural-key upsert by name; ID is stable via sequence default.
+INSERT INTO selection.faculties (name, campus_id)
+SELECT DISTINCT COALESCE(faculty_i18n, faculty), NULL FROM selection.pk_faculties
+ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name;
 
 -- Majors
 INSERT INTO selection.majors (id, name, faculty_id, grade)
@@ -40,18 +44,23 @@ DELETE FROM selection.timeslots;
 DELETE FROM selection.major_courses;
 DELETE FROM selection.courses;
 
-INSERT INTO selection.courses (id, code, name, credit, nature_id, calendar_id, campus_id, teacher_name)
-SELECT DISTINCT ON (cd.id)
-       cd.id,
+INSERT INTO selection.courses (id, code, name, credit, nature_id, calendar_id, campus_id, teacher_name, teacher_names)
+SELECT cd.id,
        COALESCE(NULLIF(TRIM(cd.course_code), ''), cd.code),
        COALESCE(NULLIF(TRIM(cd.course_name), ''), NULLIF(TRIM(cd.name), ''), cd.code),
        cd.credit, cd.course_label_id, cd.calendar_id,
        camp.id AS campus_id,
-       TRIM(t.teacher_name) AS teacher_name
+       (SELECT TRIM(t.teacher_name) FROM selection.pk_teachers_raw t
+        WHERE t.teaching_class_id = cd.id ORDER BY t.id LIMIT 1) AS teacher_name,
+       COALESCE(tn.names, ARRAY[]::TEXT[]) AS teacher_names
 FROM selection.pk_course_details cd
-LEFT JOIN selection.pk_teachers_raw t ON t.teaching_class_id = cd.id
-LEFT JOIN selection.campuses camp ON camp.name = cd.campus
-ORDER BY cd.id, t.id;
+LEFT JOIN LATERAL (
+    SELECT array_agg(TRIM(t.teacher_name) ORDER BY t.id)
+           FILTER (WHERE t.teacher_name IS NOT NULL AND TRIM(t.teacher_name) != '') AS names
+    FROM selection.pk_teachers_raw t
+    WHERE t.teaching_class_id = cd.id
+) tn ON true
+LEFT JOIN selection.campuses camp ON camp.name = cd.campus;
 
 -- Major courses
 INSERT INTO selection.major_courses (major_id, course_id, grade)
