@@ -22,6 +22,8 @@ anyhow.workspace = true
 redis.workspace = true
 deadpool-redis.workspace = true
 tracing.workspace = true
+argon2.workspace = true
+zxcvbn.workspace = true
 
 credit.workspace = true
 

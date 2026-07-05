@@ -19,6 +19,39 @@ pub struct VerifyEmailInput {
     pub email: String,
     pub code: String,
     pub handle: Option<String>,
+    pub password: Option<String>,
+}
+
+/// POST /auth/password/login
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PasswordLoginInput {
+    pub email: String,
+    pub password: String,
+}
+
+/// POST /auth/password/forgot
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PasswordForgotInput {
+    pub email: String,
+}
+
+/// POST /auth/password/reset
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PasswordResetInput {
+    pub email: String,
+    pub code: String,
+    pub new_password: String,
+}
+
+/// POST /auth/password/change
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PasswordChangeInput {
+    pub current_password: String,
+    pub new_password: String,
 }
 
 /// Returned on successful verification / refresh.

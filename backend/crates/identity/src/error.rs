@@ -61,6 +61,19 @@ pub enum IdentityError {
 
     #[error("invalid signature")]
     InvalidSignature,
+
+    // Password auth errors
+    #[error("account already has a password set")]
+    AlreadyHasPassword,
+
+    #[error("password does not meet strength requirements")]
+    InvalidPassword,
+
+    #[error("wrong password")]
+    WrongPassword,
+
+    #[error("no password set on this account")]
+    NoPasswordSet,
 }
 
 impl From<IdentityError> for AppError {
@@ -85,6 +98,10 @@ impl From<IdentityError> for AppError {
             | IdentityError::InvalidSignature
             | IdentityError::ChallengeAlreadyUsed => AppError::BadRequest(err.to_string()),
             IdentityError::ChallengeExpired => AppError::BadRequest(err.to_string()),
+            IdentityError::AlreadyHasPassword => AppError::BadRequest(err.to_string()),
+            IdentityError::InvalidPassword => AppError::BadRequest(err.to_string()),
+            IdentityError::WrongPassword => AppError::Unauthorized,
+            IdentityError::NoPasswordSet => AppError::BadRequest(err.to_string()),
         }
     }
 }

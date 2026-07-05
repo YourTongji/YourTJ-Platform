@@ -15,6 +15,9 @@ pub struct AccountRow {
     #[allow(dead_code)]
     pub status: String,
     pub trust_level: i16,
+    #[allow(dead_code)]
+    #[sqlx(default)]
+    pub password_hash: Option<String>,
     pub created_at: DateTime<Utc>,
 }
 

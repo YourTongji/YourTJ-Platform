@@ -278,6 +278,32 @@ pub async fn insert_account_key(pool: &PgPool, account_id: i64, public_key: &str
 }
 
 // ---------------------------------------------------------------------------
+// password_hash
+// ---------------------------------------------------------------------------
+
+/// Update (or set) the password hash for an account.
+pub async fn update_password_hash(pool: &PgPool, account_id: i64, hash: &str) -> AppResult<()> {
+    sqlx::query("UPDATE identity.accounts SET password_hash = $1 WHERE id = $2")
+        .bind(hash)
+        .bind(account_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Look up the password hash for an account by email, returning None if the
+/// account has no password set (email-code-only user).
+pub async fn find_password_hash(pool: &PgPool, email: &str) -> AppResult<Option<String>> {
+    let hash: Option<String> =
+        sqlx::query_scalar("SELECT password_hash FROM identity.accounts WHERE email = $1")
+            .bind(email)
+            .fetch_optional(pool)
+            .await?
+            .flatten();
+    Ok(hash)
+}
+
+// ---------------------------------------------------------------------------
 // wallet claim challenges
 // ---------------------------------------------------------------------------
 

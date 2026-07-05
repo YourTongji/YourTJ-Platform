@@ -11,6 +11,7 @@ pub mod auth_middleware;
 mod email_code;
 mod handlers;
 mod ledger;
+mod password;
 mod repo;
 pub mod sanctions;
 
@@ -30,6 +31,10 @@ pub fn routes(state: AppState) -> Router {
         .route("/api/v2/auth/email/verify", post(handlers::verify_email))
         .route("/api/v2/auth/refresh", post(handlers::refresh))
         .route("/api/v2/auth/logout", post(handlers::logout))
+        .route("/api/v2/auth/password/login", post(handlers::password_login))
+        .route("/api/v2/auth/password/forgot", post(handlers::password_forgot))
+        .route("/api/v2/auth/password/reset", post(handlers::password_reset))
+        .route("/api/v2/auth/password/change", post(handlers::password_change))
         // Profile
         .route("/api/v2/me", get(handlers::get_me).patch(handlers::update_me))
         .route("/api/v2/users/{handle}", get(handlers::get_user_profile))

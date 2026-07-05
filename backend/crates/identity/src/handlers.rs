@@ -15,11 +15,13 @@ use shared::{AppResult, AppState};
 
 use crate::auth::{create_access_token, generate_refresh_token};
 use crate::dto::{
-    AccountDto, AuthTokensOutput, BindKeyInput, ClaimChallengeOutput, ClaimInput, RefreshInput,
+    AccountDto, AuthTokensOutput, BindKeyInput, ClaimChallengeOutput, ClaimInput,
+    PasswordChangeInput, PasswordForgotInput, PasswordLoginInput, PasswordResetInput, RefreshInput,
     RequestCodeInput, UpdateMeInput, UserBadgeDto, UserProfileDto, VerifyEmailInput, WalletDto,
 };
 use crate::email_code::{generate_code, hash_code, verify_code};
 use crate::error::IdentityError;
+use crate::password;
 use crate::repo;
 
 // Rate limiting is now handled by shared::ratelimit::check_token_bucket (Redis-backed).
@@ -129,7 +131,18 @@ pub async fn verify_email(
 
     // Find or create the account.
     let account = match repo::find_account_by_email(&state.db, &email).await? {
-        Some(acct) => acct,
+        Some(acct) => {
+            // Existing account: set password if provided and no password is set.
+            if let Some(pw) = body.password.as_deref() {
+                let current_hash = repo::find_password_hash(&state.db, &email).await?;
+                if current_hash.is_none() {
+                    password::validate(pw, &email)?;
+                    let hash = password::hash(pw)?;
+                    repo::update_password_hash(&state.db, acct.id, &hash).await?;
+                }
+            }
+            acct
+        }
         None => {
             // First login — auto-provision.
             let handle_opt = body.handle.as_deref();
@@ -137,7 +150,14 @@ pub async fn verify_email(
             if let Some(h) = handle_opt {
                 validate_handle(h)?;
             }
-            repo::insert_account(&state.db, &email, handle_opt).await?
+            let account = repo::insert_account(&state.db, &email, handle_opt).await?;
+            // Set password if provided in same registration step.
+            if let Some(pw) = body.password.as_deref() {
+                password::validate(pw, &email)?;
+                let hash = password::hash(pw)?;
+                repo::update_password_hash(&state.db, account.id, &hash).await?;
+            }
+            account
         }
     };
 
@@ -875,4 +895,204 @@ pub async fn list_user_comments(
         .collect();
 
     Ok(Json(items))
+}
+
+// ---------------------------------------------------------------------------
+// Password auth handlers
+// ---------------------------------------------------------------------------
+
+/// POST /auth/password/login
+///
+/// Logs in with email + password. Returns the same JWT token pair as
+/// email-code login. Rate-limited: 5 attempts per email per 5 minutes.
+#[tracing::instrument(skip(state))]
+pub async fn password_login(
+    State(state): State<AppState>,
+    Json(body): Json<PasswordLoginInput>,
+) -> AppResult<Json<AuthTokensOutput>> {
+    let email = body.email.trim().to_lowercase();
+    if !email.ends_with("@tongji.edu.cn") {
+        return Err(IdentityError::InvalidEmailDomain.into());
+    }
+
+    // Rate-limit: 5 login attempts per email per 5 minutes.
+    shared::ratelimit::check_token_bucket(state.redis.as_ref(), "password_login", &email, 5, 300)
+        .await?;
+
+    // Look up the account.
+    let account = repo::find_account_by_email(&state.db, &email)
+        .await?
+        .ok_or(shared::AppError::Unauthorized)?;
+
+    // Verify password.
+    let phc =
+        repo::find_password_hash(&state.db, &email).await?.ok_or(IdentityError::NoPasswordSet)?;
+
+    if !password::verify(&body.password, &phc) {
+        return Err(IdentityError::WrongPassword.into());
+    }
+
+    // Issue tokens.
+    let access_token = create_access_token(account.id, &state.jwt_secret, state.jwt_ttl)
+        .map_err(|e| shared::AppError::Internal(anyhow::anyhow!(e)))?;
+    let (refresh_plain, refresh_hash) = generate_refresh_token();
+    let refresh_expires = Utc::now() + chrono::Duration::seconds(state.refresh_ttl as i64);
+
+    let session_id =
+        repo::insert_session(&state.db, account.id, &refresh_hash, refresh_expires).await?;
+
+    let combined_refresh = format!("{session_id:x}:{refresh_plain}");
+
+    Ok(Json(AuthTokensOutput {
+        access_token,
+        refresh_token: combined_refresh,
+        account: row_to_dto(&account),
+    }))
+}
+
+/// POST /auth/password/forgot
+///
+/// Sends a 6-digit verification code to the email for password reset.
+/// Rate-limited: 1 request per email per 60 seconds (reuses email_code bucket).
+#[tracing::instrument(skip(state))]
+pub async fn password_forgot(
+    State(state): State<AppState>,
+    Json(body): Json<PasswordForgotInput>,
+) -> AppResult<StatusCode> {
+    let email = body.email.trim().to_lowercase();
+    if !email.ends_with("@tongji.edu.cn") {
+        return Err(IdentityError::InvalidEmailDomain.into());
+    }
+
+    // Must have a password set to reset it.
+    let hash = repo::find_password_hash(&state.db, &email).await?;
+    if hash.is_none() {
+        return Err(IdentityError::NoPasswordSet.into());
+    }
+
+    // Rate-limit: 1 per 60 seconds per email (same bucket as request_code).
+    shared::ratelimit::check_token_bucket(state.redis.as_ref(), "email_code", &email, 1, 60)
+        .await?;
+
+    let code = generate_code();
+    let code_hash = hash_code(&code);
+    let expires_at = Utc::now() + chrono::Duration::minutes(10);
+
+    repo::insert_email_code(&state.db, &email, &code_hash, expires_at).await?;
+
+    shared::email::send_email(
+        &state.config,
+        &email,
+        "YourTJ 密码重置",
+        &format!("您的密码重置验证码是：{code}，10 分钟内有效。如非本人操作，请忽略此邮件。"),
+    )
+    .await;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// POST /auth/password/reset
+///
+/// Verifies the code and updates the password hash. Does NOT automatically
+/// log the user in — they must use /auth/password/login afterwards.
+#[tracing::instrument(skip(state))]
+pub async fn password_reset(
+    State(state): State<AppState>,
+    Json(body): Json<PasswordResetInput>,
+) -> AppResult<StatusCode> {
+    let email = body.email.trim().to_lowercase();
+    if !email.ends_with("@tongji.edu.cn") {
+        return Err(IdentityError::InvalidEmailDomain.into());
+    }
+
+    // Must have a password set to reset it (can't reset a non-existent password).
+    let current_hash = repo::find_password_hash(&state.db, &email).await?;
+    if current_hash.is_none() {
+        return Err(IdentityError::NoPasswordSet.into());
+    }
+
+    // Look up the live code row.
+    let code_row =
+        repo::find_email_code(&state.db, &email).await?.ok_or(IdentityError::CodeExpired)?;
+
+    if code_row.attempts >= 5 {
+        return Err(IdentityError::CodeExhausted.into());
+    }
+
+    let is_valid = verify_code(&body.code, &code_row.code_hash);
+    repo::increment_code_attempts(&state.db, &email).await?;
+
+    if !is_valid {
+        return Err(IdentityError::InvalidCode.into());
+    }
+
+    // Validate and hash the new password.
+    password::validate(&body.new_password, &email)?;
+    let new_hash = password::hash(&body.new_password)?;
+
+    // Find account to get its id.
+    let account =
+        repo::find_account_by_email(&state.db, &email).await?.ok_or(shared::AppError::NotFound)?;
+
+    repo::update_password_hash(&state.db, account.id, &new_hash).await?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// POST /auth/password/change
+///
+/// Changes the password for the authenticated account. Requires the current
+/// password and a valid Bearer token.
+/// Rate-limited: 3 attempts per account per minute.
+#[tracing::instrument(skip(state, headers))]
+pub async fn password_change(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<PasswordChangeInput>,
+) -> AppResult<StatusCode> {
+    let auth = crate::auth_middleware::authenticate(
+        &headers,
+        &state.db,
+        &state.jwt_secret,
+        state.redis.as_ref(),
+    )
+    .await
+    .map_err(|_r| shared::AppError::Unauthorized)?;
+
+    // Rate-limit: 3 changes per account per minute.
+    shared::ratelimit::check_token_bucket(
+        state.redis.as_ref(),
+        "password_change",
+        &auth.id.to_string(),
+        3,
+        60,
+    )
+    .await?;
+
+    // Look up account to get the email for password validation.
+    let account_row = sqlx::query_as::<_, crate::models::AccountRow>(
+        "SELECT id, email::text, handle, avatar_url, role::text, status::text, trust_level, created_at \
+         FROM identity.accounts WHERE id = $1",
+    )
+    .bind(auth.id)
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or(shared::AppError::NotFound)?;
+
+    let phc = repo::find_password_hash(&state.db, &account_row.email)
+        .await?
+        .ok_or(IdentityError::NoPasswordSet)?;
+
+    // Verify current password.
+    if !password::verify(&body.current_password, &phc) {
+        return Err(IdentityError::WrongPassword.into());
+    }
+
+    // Validate and set new password.
+    password::validate(&body.new_password, &account_row.email)?;
+    let new_hash = password::hash(&body.new_password)?;
+
+    repo::update_password_hash(&state.db, auth.id, &new_hash).await?;
+
+    Ok(StatusCode::NO_CONTENT)
 }

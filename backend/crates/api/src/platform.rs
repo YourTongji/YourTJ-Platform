@@ -226,4 +226,3 @@ pub fn routes(state: AppState) -> Router {
         )
         .with_state(state)
 }
-

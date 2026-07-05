@@ -16,6 +16,7 @@ repository = "https://github.com/YourTongji/YourTJ-Platform"
 aho-corasick = "1"
 anyhow = "1"
 arc-swap = "1"
+argon2 = { version = "0.5", features = ["password-hash"] }
 async-trait = "0.1"
 axum = "0.8"
 base64 = "0.22"
@@ -46,6 +47,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 futures = "0.3"
 tokio-stream = { version = "0.1", features = ["sync"] }
 uuid = { version = "1", features = ["v4"] }
+zxcvbn = "3"
 
 # Internal crates (domain boundaries).
 shared = { path = "crates/shared" }
