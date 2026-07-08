@@ -9,7 +9,7 @@ use sqlx::FromRow;
 pub struct ReviewRow {
     pub id: i64,
     pub course_id: i64,
-    pub account_id: i64,
+    pub account_id: Option<i64>,
     pub rating: i32,
     pub comment: Option<String>,
     pub score: Option<String>,
@@ -19,6 +19,8 @@ pub struct ReviewRow {
     pub status: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    pub reviewer_name: Option<String>,
+    pub reviewer_avatar: Option<String>,
 }
 
 /// A row from `reviews.review_likes`.
@@ -59,6 +61,7 @@ pub(crate) struct ReviewWithAuthorRow {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub reviewer_name: Option<String>,
+    pub reviewer_avatar: Option<String>,
     pub handle: Option<String>,
     pub avatar_url: Option<String>,
 }

@@ -28,3 +28,15 @@ __pycache__/
 .vscode/
 *.swp
 .archive/
+
+# Python (extended)
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+*.pyc
+
+# Python environments
+.venv/
+venv/
+*.egg-info/
+.python-version

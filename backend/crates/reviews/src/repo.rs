@@ -27,6 +27,9 @@ fn check_rating(rating: i32) -> Result<(), ReviewsError> {
 }
 
 /// Build a ReviewDto from a joined row.
+///
+/// Falls back to `reviewer_name` and `reviewer_avatar` for legacy reviews
+/// that have no matching account (NULL `account_id`).
 fn row_to_dto(row: &ReviewWithAuthorRow) -> ReviewDto {
     ReviewDto {
         id: row.id.to_string(),
@@ -36,7 +39,7 @@ fn row_to_dto(row: &ReviewWithAuthorRow) -> ReviewDto {
         score: row.score.clone(),
         semester: row.semester.clone(),
         author_handle: row.handle.clone().or_else(|| row.reviewer_name.clone()).unwrap_or_default(),
-        author_avatar: row.avatar_url.clone(),
+        author_avatar: row.avatar_url.clone().or_else(|| row.reviewer_avatar.clone()),
         approve_count: row.approve_count,
         status: row.status.clone(),
         created_at: row.created_at.timestamp(),
@@ -44,7 +47,14 @@ fn row_to_dto(row: &ReviewWithAuthorRow) -> ReviewDto {
 }
 
 /// Look up author handle and avatar, then build a DTO from a raw ReviewRow.
+///
+/// Falls back to `reviewer_name` / `reviewer_avatar` when the review has no
+/// linked account (legacy reviews, NULL `account_id`).
 fn row_to_dto_with_author(row: &ReviewRow, handle: &str, avatar_url: Option<&str>) -> ReviewDto {
+    let effective_handle =
+        if handle.is_empty() { row.reviewer_name.as_deref().unwrap_or("") } else { handle };
+    let effective_avatar =
+        if avatar_url.is_none() { row.reviewer_avatar.as_deref() } else { avatar_url };
     ReviewDto {
         id: row.id.to_string(),
         course_id: row.course_id.to_string(),
@@ -52,8 +62,8 @@ fn row_to_dto_with_author(row: &ReviewRow, handle: &str, avatar_url: Option<&str
         comment: row.comment.clone(),
         score: row.score.clone(),
         semester: row.semester.clone(),
-        author_handle: handle.to_string(),
-        author_avatar: avatar_url.map(|a| a.to_string()),
+        author_handle: effective_handle.to_string(),
+        author_avatar: effective_avatar.map(|a| a.to_string()),
         approve_count: row.approve_count,
         status: row.status.clone(),
         created_at: row.created_at.timestamp(),
@@ -84,7 +94,7 @@ pub async fn list_reviews(
                 "SELECT r.id, r.course_id, r.account_id, r.rating, r.comment, r.score, \
                  r.semester, r.approve_count, r.disapprove_count, \
                  r.status::text, r.created_at, r.updated_at, \
-                 r.reviewer_name, a.handle, a.avatar_url \
+                 r.reviewer_name, r.reviewer_avatar, a.handle, a.avatar_url \
                  FROM reviews.reviews r \
                  LEFT JOIN identity.accounts a ON a.id = r.account_id \
                  WHERE r.course_id = $1 AND r.status = 'visible' \
@@ -105,7 +115,7 @@ pub async fn list_reviews(
                 "SELECT r.id, r.course_id, r.account_id, r.rating, r.comment, r.score, \
                  r.semester, r.approve_count, r.disapprove_count, \
                  r.status::text, r.created_at, r.updated_at, \
-                 r.reviewer_name, a.handle, a.avatar_url \
+                 r.reviewer_name, r.reviewer_avatar, a.handle, a.avatar_url \
                  FROM reviews.reviews r \
                  LEFT JOIN identity.accounts a ON a.id = r.account_id \
                  WHERE r.course_id = $1 AND r.status = 'visible' \
@@ -123,7 +133,7 @@ pub async fn list_reviews(
                 "SELECT r.id, r.course_id, r.account_id, r.rating, r.comment, r.score, \
                  r.semester, r.approve_count, r.disapprove_count, \
                  r.status::text, r.created_at, r.updated_at, \
-                 r.reviewer_name, a.handle, a.avatar_url \
+                 r.reviewer_name, r.reviewer_avatar, a.handle, a.avatar_url \
                  FROM reviews.reviews r \
                  LEFT JOIN identity.accounts a ON a.id = r.account_id \
                  WHERE r.course_id = $1 AND r.status = 'visible' AND r.id < $2 \
@@ -140,7 +150,7 @@ pub async fn list_reviews(
                 "SELECT r.id, r.course_id, r.account_id, r.rating, r.comment, r.score, \
                  r.semester, r.approve_count, r.disapprove_count, \
                  r.status::text, r.created_at, r.updated_at, \
-                 r.reviewer_name, a.handle, a.avatar_url \
+                 r.reviewer_name, r.reviewer_avatar, a.handle, a.avatar_url \
                  FROM reviews.reviews r \
                  LEFT JOIN identity.accounts a ON a.id = r.account_id \
                  WHERE r.course_id = $1 AND r.status = 'visible' \
@@ -241,7 +251,8 @@ pub async fn update_review(
             .await?
             .ok_or(ReviewsError::ReviewNotFound)?;
 
-    if existing.account_id != account_id {
+    // Legacy reviews (NULL account_id) cannot be edited by anyone via this path.
+    if existing.account_id != Some(account_id) {
         return Err(ReviewsError::NotOwnReview.into());
     }
 
@@ -391,7 +402,7 @@ pub async fn admin_list_reviews(
                 "SELECT r.id, r.course_id, r.account_id, r.rating, r.comment, r.score, \
                  r.semester, r.approve_count, r.disapprove_count, \
                  r.status::text, r.created_at, r.updated_at, \
-                 r.reviewer_name, a.handle, a.avatar_url \
+                 r.reviewer_name, r.reviewer_avatar, a.handle, a.avatar_url \
                  FROM reviews.reviews r \
                  LEFT JOIN identity.accounts a ON a.id = r.account_id \
                  WHERE r.status = $1::reviews.review_status AND r.id < $2 \
@@ -408,7 +419,7 @@ pub async fn admin_list_reviews(
                 "SELECT r.id, r.course_id, r.account_id, r.rating, r.comment, r.score, \
                  r.semester, r.approve_count, r.disapprove_count, \
                  r.status::text, r.created_at, r.updated_at, \
-                 r.reviewer_name, a.handle, a.avatar_url \
+                 r.reviewer_name, r.reviewer_avatar, a.handle, a.avatar_url \
                  FROM reviews.reviews r \
                  LEFT JOIN identity.accounts a ON a.id = r.account_id \
                  WHERE r.status = $1::reviews.review_status \
@@ -426,7 +437,7 @@ pub async fn admin_list_reviews(
                 "SELECT r.id, r.course_id, r.account_id, r.rating, r.comment, r.score, \
                  r.semester, r.approve_count, r.disapprove_count, \
                  r.status::text, r.created_at, r.updated_at, \
-                 r.reviewer_name, a.handle, a.avatar_url \
+                 r.reviewer_name, r.reviewer_avatar, a.handle, a.avatar_url \
                  FROM reviews.reviews r \
                  LEFT JOIN identity.accounts a ON a.id = r.account_id \
                  WHERE r.id < $1 \
@@ -442,7 +453,7 @@ pub async fn admin_list_reviews(
                 "SELECT r.id, r.course_id, r.account_id, r.rating, r.comment, r.score, \
                  r.semester, r.approve_count, r.disapprove_count, \
                  r.status::text, r.created_at, r.updated_at, \
-                 r.reviewer_name, a.handle, a.avatar_url \
+                 r.reviewer_name, r.reviewer_avatar, a.handle, a.avatar_url \
                  FROM reviews.reviews r \
                  LEFT JOIN identity.accounts a ON a.id = r.account_id \
                  ORDER BY r.id DESC \
@@ -557,6 +568,9 @@ pub async fn admin_toggle_review_visibility(pool: &PgPool, review_id: i64) -> Ap
 }
 
 /// Admin: edit any review with transactional course aggregate update.
+///
+/// For legacy reviews (NULL `account_id`), uses `reviewer_name` /
+/// `reviewer_avatar` as the author display fallback.
 pub async fn admin_edit_review(
     pool: &PgPool,
     review_id: i64,
@@ -607,11 +621,17 @@ pub async fn admin_edit_review(
         .await?;
     }
 
-    let (handle, avatar_url): (String, Option<String>) =
-        sqlx::query_as("SELECT handle, avatar_url FROM identity.accounts WHERE id = $1")
-            .bind(account_id)
-            .fetch_one(&mut *tx)
-            .await?;
+    // For legacy reviews (NULL account_id), use reviewer_name/reviewer_avatar.
+    let (handle, avatar_url) = if let Some(aid) = account_id {
+        let (h, a): (String, Option<String>) =
+            sqlx::query_as("SELECT handle, avatar_url FROM identity.accounts WHERE id = $1")
+                .bind(aid)
+                .fetch_one(&mut *tx)
+                .await?;
+        (h, a)
+    } else {
+        (String::new(), None)
+    };
 
     tx.commit().await?;
 
