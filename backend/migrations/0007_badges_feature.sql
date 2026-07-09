@@ -1,6 +1,7 @@
--- 0007_badges_feature.sql — Add featured_at column for thread featuring
+-- 0007_badges_feature.sql — Thread featuring column (moved to 0006; retained as no-op)
+--
+-- The `threads.featured_at` column was already added in migration 0006
+-- (forum_f2_f3.sql §2.9). This migration is intentionally empty to keep the
+-- migration sequence intact for environments that have already recorded it.
 --
 -- Append-only: never edit an applied migration.
-
-ALTER TABLE forum.threads
-  ADD COLUMN featured_at TIMESTAMPTZ;
