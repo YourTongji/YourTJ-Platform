@@ -35,32 +35,6 @@ fn map_auth_err(response: axum::response::Response) -> shared::AppError {
     }
 }
 
-/// Verify the `X-Wallet-Sig` header against the account's bound Ed25519 public key.
-async fn verify_wallet_sig(
-    state: &AppState,
-    auth_id: i64,
-    headers: &HeaderMap,
-    canonical_payload: &str,
-) -> AppResult<()> {
-    let pk_row: Option<(String,)> =
-        sqlx::query_as("SELECT public_key FROM identity.account_keys WHERE account_id = $1")
-            .bind(auth_id)
-            .fetch_optional(&state.db)
-            .await?;
-
-    let (public_key,) = pk_row.ok_or(CreditError::WalletNotBound)?;
-
-    let sig_b64 = headers
-        .get("x-wallet-sig")
-        .and_then(|v| v.to_str().ok())
-        .ok_or(CreditError::InvalidSignature)?;
-
-    if !verify_signature(canonical_payload, sig_b64, &public_key) {
-        return Err(CreditError::InvalidSignature.into());
-    }
-    Ok(())
-}
-
 // ---------------------------------------------------------------------------
 // Wallet
 // ---------------------------------------------------------------------------

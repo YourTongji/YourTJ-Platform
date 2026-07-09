@@ -301,11 +301,12 @@ pub async fn verify_full_ledger(
 
 /// Read the wallet balance for an account.
 pub async fn get_wallet(pool: &PgPool, account_id: i64) -> AppResult<WalletDto> {
-    let balance: i64 = sqlx::query_scalar("SELECT balance FROM credit.wallets WHERE account_id = $1")
-        .bind(account_id)
-        .fetch_optional(pool)
-        .await?
-        .unwrap_or(0);
+    let balance: i64 =
+        sqlx::query_scalar("SELECT balance FROM credit.wallets WHERE account_id = $1")
+            .bind(account_id)
+            .fetch_optional(pool)
+            .await?
+            .unwrap_or(0);
 
     Ok(WalletDto { account_id: account_id.to_string(), balance })
 }

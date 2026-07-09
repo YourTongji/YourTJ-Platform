@@ -71,6 +71,6 @@ jobs:
         env:
           DATABASE_URL: postgres://yourtj:yourtj@localhost:5432/yourtj_test
       - name: run integration tests
-        run: cargo test --all -- --nocapture
+        run: cargo test --all -- --nocapture --test-threads=1
         env:
           DATABASE_URL: postgres://yourtj:yourtj@localhost:5432/yourtj_test
