@@ -6,6 +6,19 @@ use serde_json::Value;
 use shared::AppState;
 use sqlx::PgPool;
 
+/// Deterministic Ed25519 seed for test key pairs. Derived public key (raw bytes) is:
+/// `[59, 22, 28, 150, 64, 16, 195, 128, 100, 184, 219, 238, 79, 162, 89, 186, 103, 190, 89, 2, 84, 213, 105, 250, 74, 129, 166, 173, 156, 222, 227, 245]`
+const TEST_KEY_SEED: [u8; 32] = [1u8; 32];
+
+/// Base64 public key matching TEST_KEY_SEED.
+const TEST_PUBLIC_KEY_B64: &str = "OxYclkAQw4BkuNvuT6JZume+WQJU1Wn6SoGmrZze4/U=";
+
+/// Ed25519 signature (base64) for the escrow_hold canonical payload
+/// produced by `build_wallet_sig_for_escrow`.
+fn sign_escrow_hold(payload: &str) -> String {
+    credit::ledger::sign_with_seed(payload, &TEST_KEY_SEED)
+}
+
 /// Create a complete test application with credit routes.
 pub async fn create_test_app() -> (PgPool, axum::Router) {
     let url = std::env::var("DATABASE_URL")
@@ -78,7 +91,7 @@ pub async fn read_json(resp: Response<Body>) -> Value {
     serde_json::from_slice(&bytes).expect("failed to parse JSON response")
 }
 
-/// Insert a test account and return its id.
+/// Insert a test account with a bound Ed25519 wallet key, and return its id.
 pub async fn create_test_account(pool: &PgPool, email: &str, handle: &str) -> i64 {
     let row: (i64,) = sqlx::query_as(
         "INSERT INTO identity.accounts (email, handle, role, status) \
@@ -90,6 +103,17 @@ pub async fn create_test_account(pool: &PgPool, email: &str, handle: &str) -> i6
     .fetch_one(pool)
     .await
     .expect("create test account");
+
+    // Bind the test Ed25519 public key so X-Wallet-Sig verification passes.
+    sqlx::query(
+        "INSERT INTO identity.account_keys (account_id, public_key, algo) \
+         VALUES ($1, $2, 'ed25519') ON CONFLICT (account_id, public_key) DO NOTHING",
+    )
+    .bind(row.0)
+    .bind(TEST_PUBLIC_KEY_B64)
+    .execute(pool)
+    .await
+    .ok();
 
     // Ensure wallet exists.
     sqlx::query(
@@ -129,7 +153,6 @@ pub async fn mint_to_account(pool: &PgPool, account_id: i64, amount: i64) {
         "0000000000000000000000000000000000000000000000000000000000000000".to_string()
     });
     let hash = credit::ledger::compute_hash(&canonical, &prev_hash);
-
     let metadata = serde_json::json!({"reason": "test mint"});
 
     sqlx::query(
@@ -177,4 +200,15 @@ pub async fn create_token(pool: &PgPool, email: &str) -> String {
 
     create_access_token(account_id, "integration-test-secret-32bytes!", 3600)
         .expect("create test access token")
+}
+
+/// Sign a canonical payload with the test key and return the base64 signature.
+/// Use this to set the `X-Wallet-Sig` header on escrow-holding requests.
+pub fn sign_test_payload(payload: &str) -> String {
+    sign_escrow_hold(payload)
+}
+
+/// Compute a test public key (base64) from the test seed.
+pub fn test_public_key() -> String {
+    TEST_PUBLIC_KEY_B64.to_string()
 }

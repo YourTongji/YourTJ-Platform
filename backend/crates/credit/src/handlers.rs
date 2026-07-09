@@ -320,7 +320,6 @@ pub async fn create_task(
         "system",
         created_at,
     );
-    verify_wallet_sig(&state, auth.id, &headers, &canonical).await?;
 
     // Sign the system payload with the system private key.
     let system_sig = crate::ledger::sign_with_seed(&canonical, &state.system_private_key);
@@ -442,7 +441,6 @@ pub async fn action_task(
                     "system",
                     created_at,
                 );
-                verify_wallet_sig(&state, auth.id, &headers, &canonical).await?;
                 let system_sig =
                     crate::ledger::sign_with_seed(&canonical, &state.system_private_key);
 
@@ -498,7 +496,6 @@ pub async fn action_task(
                     "system",
                     created_at,
                 );
-                verify_wallet_sig(&state, auth.id, &headers, &canonical).await?;
                 let system_sig =
                     crate::ledger::sign_with_seed(&canonical, &state.system_private_key);
 
@@ -695,7 +692,6 @@ pub async fn purchase_product(
         "system",
         created_at,
     );
-    verify_wallet_sig(&state, auth.id, &headers, &canonical).await?;
 
     let system_sig = crate::ledger::sign_with_seed(&canonical, &state.system_private_key);
 
@@ -840,7 +836,6 @@ pub async fn action_purchase(
                     "system",
                     created_at,
                 );
-                verify_wallet_sig(&state, auth.id, &headers, &canonical).await?;
                 let system_sig =
                     crate::ledger::sign_with_seed(&canonical, &state.system_private_key);
 
@@ -895,7 +890,6 @@ pub async fn action_purchase(
                     "system",
                     created_at,
                 );
-                verify_wallet_sig(&state, auth.id, &headers, &canonical).await?;
                 let system_sig =
                     crate::ledger::sign_with_seed(&canonical, &state.system_private_key);
 

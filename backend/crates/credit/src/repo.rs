@@ -301,14 +301,13 @@ pub async fn verify_full_ledger(
 
 /// Read the wallet balance for an account.
 pub async fn get_wallet(pool: &PgPool, account_id: i64) -> AppResult<WalletDto> {
-    let row: (i64,) =
-        sqlx::query_scalar("SELECT balance FROM credit.wallets WHERE account_id = $1")
-            .bind(account_id)
-            .fetch_optional(pool)
-            .await?
-            .unwrap_or((0,));
+    let balance: i64 = sqlx::query_scalar("SELECT balance FROM credit.wallets WHERE account_id = $1")
+        .bind(account_id)
+        .fetch_optional(pool)
+        .await?
+        .unwrap_or(0);
 
-    Ok(WalletDto { account_id: account_id.to_string(), balance: row.0 })
+    Ok(WalletDto { account_id: account_id.to_string(), balance })
 }
 
 /// Ensure a wallet row exists for `account_id` (idempotent).
@@ -520,7 +519,7 @@ pub async fn update_task_status(
     new_status: &str,
     caller_id: i64,
 ) -> AppResult<()> {
-    if !matches!(new_status, "submit" | "confirm" | "cancel" | "reject" | "delete") {
+    if !matches!(new_status, "submitted" | "completed" | "cancelled" | "rejected" | "delete") {
         return Err(CreditError::InvalidAction(format!("unknown task action: {new_status}")).into());
     }
 
@@ -544,7 +543,7 @@ pub async fn update_task_status_tx(
     id: i64,
     new_status: &str,
 ) -> AppResult<()> {
-    if !matches!(new_status, "submit" | "confirm" | "cancel" | "reject" | "delete") {
+    if !matches!(new_status, "submitted" | "completed" | "cancelled" | "rejected" | "delete") {
         return Err(CreditError::InvalidAction(format!("unknown task action: {new_status}")).into());
     }
 
