@@ -372,3 +372,82 @@ async fn purchase_flow_releases_escrow() {
             .unwrap();
     assert_eq!(seller_balance.0, 100);
 }
+
+#[tokio::test]
+async fn task_delete_open_refunds_escrow_and_removes_row() {
+    let (pool, app) = create_test_app().await;
+    let creator = create_test_account(&pool, "delcreator@tongji.edu.cn", "delcreator").await;
+    mint_to_account(&pool, creator, 500).await;
+
+    // Create a task — escrow_hold deducts 150.
+    let token = create_token(&pool, "delcreator@tongji.edu.cn").await;
+    let body = json!({ "title": "Deletable Bounty", "rewardAmount": 150 });
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v2/credit/tasks")
+                .method("POST")
+                .header("Authorization", format!("Bearer {token}"))
+                .header("Content-Type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let task = read_json(resp).await;
+    let task_id = task["id"].as_str().unwrap().to_string();
+
+    let held: (i64,) = sqlx::query_as("SELECT balance FROM credit.wallets WHERE account_id = $1")
+        .bind(creator)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(held.0, 350);
+
+    // Delete the open task — must refund the escrow and remove the row.
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/v2/credit/tasks/{task_id}/action"))
+                .method("POST")
+                .header("Authorization", format!("Bearer {token}"))
+                .header("Content-Type", "application/json")
+                .body(Body::from(r#"{"action":"delete"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+    // Creator is made whole again.
+    let refunded: (i64,) =
+        sqlx::query_as("SELECT balance FROM credit.wallets WHERE account_id = $1")
+            .bind(creator)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(refunded.0, 500);
+
+    // The task row is gone.
+    let remaining: (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM credit.tasks WHERE id = $1::bigint")
+            .bind(task_id.parse::<i64>().unwrap())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(remaining.0, 0);
+
+    // Ledger still verifies after a hold + release pair.
+    let resp = app
+        .oneshot(
+            Request::builder().uri("/api/v2/wallet/ledger/verify").body(Body::empty()).unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let verify = read_json(resp).await;
+    assert!(verify["ok"].as_bool().unwrap(), "ledger verify failed: {verify}");
+}

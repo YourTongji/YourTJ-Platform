@@ -67,9 +67,11 @@ jobs:
       - name: install sqlx-cli
         run: cargo install sqlx-cli --no-default-features --features postgres --locked
       - name: run migrations
-        run: sqlx migrate run
+        run: sqlx migrate run --source migrations
         env:
           DATABASE_URL: postgres://yourtj:yourtj@localhost:5432/yourtj_test
+      # --test-threads=1 serialises the integration tests: they share one
+      # Postgres database and reset shared tables between cases.
       - name: run integration tests
         run: cargo test --all -- --nocapture --test-threads=1
         env:

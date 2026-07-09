@@ -1,0 +1,305 @@
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Flame, Plus, Send, ThumbsUp } from "lucide-react";
+import * as React from "react";
+import { Link, useSearchParams } from "react-router";
+import { toast } from "sonner";
+
+import { PageHeader } from "@/components/common/page-header";
+import { EmptyState, ErrorState, LoadingState } from "@/components/common/states";
+import { TeaBadge } from "@/components/common/tea-badge";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Textarea } from "@/components/ui/textarea";
+import { useAuth } from "@/context/auth-provider";
+import { api } from "@/lib/api/endpoints";
+import type { Board, ThreadFeed } from "@/lib/api/types";
+import { formatNumber, formatUnixTime } from "@/lib/format";
+
+function ThreadCard({ thread, boards }: { thread: ThreadFeed; boards: Board[] }) {
+  const board = boards.find((item) => item.id === thread.boardId);
+  return (
+    <Link to={`/forum/threads/${thread.id}`} className="block">
+      <Card className="transition-shadow hover:shadow-md">
+        <CardContent className="p-5">
+          <div className="flex items-start justify-between gap-4">
+            <div className="min-w-0">
+              <div className="mb-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                <span className="font-medium text-foreground">{thread.authorHandle}</span>
+                <TeaBadge level={2} />
+                <span>{formatUnixTime(thread.lastActivityAt ?? thread.createdAt)}</span>
+                {board ? <Badge variant="outline">{board.name}</Badge> : null}
+                {thread.unreadCount ? <Badge>{thread.unreadCount} 未读</Badge> : null}
+              </div>
+              <h2 className="line-clamp-2 text-lg font-semibold">{thread.title}</h2>
+              <div className="mt-3 flex flex-wrap gap-1.5">
+                {(thread.tags ?? []).map((tag) => (
+                  <Badge key={tag} variant="secondary">#{tag}</Badge>
+                ))}
+              </div>
+            </div>
+            <div className="hidden shrink-0 grid-cols-2 gap-3 text-center sm:grid">
+              <div>
+                <p className="text-lg font-semibold">{formatNumber(thread.voteCount)}</p>
+                <p className="text-xs text-muted-foreground">热度</p>
+              </div>
+              <div>
+                <p className="text-lg font-semibold">{formatNumber(thread.replyCount)}</p>
+                <p className="text-xs text-muted-foreground">回复</p>
+              </div>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+    </Link>
+  );
+}
+
+function CreateThreadDialog({ boards }: { boards: Board[] }) {
+  const { isAuthenticated } = useAuth();
+  const queryClient = useQueryClient();
+  const [open, setOpen] = React.useState(false);
+  const [boardId, setBoardId] = React.useState("");
+  const [title, setTitle] = React.useState("");
+  const [body, setBody] = React.useState("");
+  const [tags, setTags] = React.useState("");
+  const [pollQuestion, setPollQuestion] = React.useState("");
+  const [pollOptions, setPollOptions] = React.useState("");
+  const mutation = useMutation({
+    mutationFn: () =>
+      api.createThread({
+        boardId,
+        title,
+        body: body || undefined,
+        tags: tags
+          .split(/[,\s，、]+/)
+          .map((tag) => tag.trim())
+          .filter(Boolean)
+          .slice(0, 3),
+        poll:
+          pollQuestion.trim() && pollOptions.split(/\n+/).filter(Boolean).length >= 2
+            ? {
+                question: pollQuestion.trim(),
+                options: pollOptions
+                  .split(/\n+/)
+                  .map((option) => option.trim())
+                  .filter(Boolean)
+                  .slice(0, 20),
+              }
+            : undefined,
+      }),
+    onSuccess: async (thread) => {
+      toast.success("帖子已发布");
+      setOpen(false);
+      setTitle("");
+      setBody("");
+      setTags("");
+      setPollQuestion("");
+      setPollOptions("");
+      await queryClient.invalidateQueries({ queryKey: ["forum", "threads"] });
+      if (thread.id) {
+        window.location.href = `/forum/threads/${thread.id}`;
+      }
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : "发帖失败"),
+  });
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <Button disabled={!isAuthenticated}>
+          <Plus className="h-4 w-4" />
+          发帖
+        </Button>
+      </DialogTrigger>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>发布新帖</DialogTitle>
+        </DialogHeader>
+        {!isAuthenticated ? (
+          <p className="text-sm text-muted-foreground">请先登录再发帖。</p>
+        ) : (
+          <div className="space-y-3">
+            <div className="space-y-2">
+              <Label>板块</Label>
+              <Select value={boardId} onValueChange={setBoardId}>
+                <SelectTrigger>
+                  <SelectValue placeholder="选择板块" />
+                </SelectTrigger>
+                <SelectContent>
+                  {boards.map((board) => (
+                    <SelectItem key={board.id} value={board.id ?? ""} disabled={board.isLocked}>
+                      {board.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label>标题</Label>
+              <Input value={title} onChange={(event) => setTitle(event.target.value)} maxLength={120} />
+            </div>
+            <div className="space-y-2">
+              <Label>正文</Label>
+              <Textarea value={body} onChange={(event) => setBody(event.target.value)} />
+            </div>
+            <div className="space-y-2">
+              <Label>标签</Label>
+              <Input value={tags} onChange={(event) => setTags(event.target.value)} placeholder="最多 3 个，用空格分隔" />
+            </div>
+            <div className="space-y-2">
+              <Label>投票问题</Label>
+              <Input value={pollQuestion} onChange={(event) => setPollQuestion(event.target.value)} placeholder="可选" />
+            </div>
+            <div className="space-y-2">
+              <Label>投票选项</Label>
+              <Textarea
+                value={pollOptions}
+                onChange={(event) => setPollOptions(event.target.value)}
+                placeholder="可选，每行一个选项，至少 2 个"
+              />
+            </div>
+          </div>
+        )}
+        <DialogFooter>
+          <Button onClick={() => mutation.mutate()} disabled={!boardId || !title || mutation.isPending}>
+            <Send className="h-4 w-4" />
+            发布
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+export function ForumPage() {
+  const [params, setParams] = useSearchParams();
+  const feed = (params.get("feed") as "hot" | "new" | "following" | "unread" | null) ?? "hot";
+  const board = params.get("board") ?? "all";
+  const boards = useQuery({ queryKey: ["forum", "boards"], queryFn: api.boards });
+  const tags = useQuery({ queryKey: ["forum", "tags"], queryFn: api.tags });
+  const threads = useQuery({
+    queryKey: ["forum", "threads", feed, board],
+    queryFn: () => api.threads({ feed, board: board === "all" ? undefined : board }),
+  });
+
+  function update(next: Record<string, string | null>) {
+    const copy = new URLSearchParams(params);
+    for (const [key, value] of Object.entries(next)) {
+      if (!value || value === "all") {
+        copy.delete(key);
+      } else {
+        copy.set(key, value);
+      }
+    }
+    setParams(copy);
+  }
+
+  const boardItems = boards.data ?? [];
+
+  return (
+    <div>
+      <PageHeader
+        eyebrow="Forum"
+        title="你济论坛"
+        description="校园公共讨论区。信息流、板块、发帖、评论、投票和通知都接入 Rust v2 forum 域。"
+        actions={<CreateThreadDialog boards={boardItems} />}
+      />
+
+      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_18rem]">
+        <div>
+          <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <Tabs value={feed} onValueChange={(value) => update({ feed: value })}>
+              <TabsList>
+                <TabsTrigger value="hot">热门</TabsTrigger>
+                <TabsTrigger value="new">最新</TabsTrigger>
+                <TabsTrigger value="following">关注</TabsTrigger>
+                <TabsTrigger value="unread">未读</TabsTrigger>
+              </TabsList>
+            </Tabs>
+            <Select value={board} onValueChange={(value) => update({ board: value })}>
+              <SelectTrigger className="w-full md:w-56">
+                <SelectValue placeholder="全部板块" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">全部板块</SelectItem>
+                {boardItems.map((item) => (
+                  <SelectItem key={item.id} value={item.id ?? ""}>
+                    {item.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          {threads.isLoading ? (
+            <LoadingState />
+          ) : threads.isError ? (
+            <ErrorState error={threads.error} onRetry={() => void threads.refetch()} />
+          ) : (threads.data?.items ?? []).length === 0 ? (
+            <EmptyState title="还没有帖子" description="切换板块或发布第一条讨论。" />
+          ) : (
+            <div className="space-y-3">
+              {(threads.data?.items ?? []).map((thread) => (
+                <ThreadCard key={thread.id} thread={thread} boards={boardItems} />
+              ))}
+            </div>
+          )}
+        </div>
+
+        <aside className="space-y-4">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Flame className="h-4 w-4 text-primary" />
+                板块
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              {boards.isLoading ? (
+                <p className="text-sm text-muted-foreground">加载中...</p>
+              ) : (
+                boardItems.map((item) => (
+                  <button
+                    key={item.id}
+                    onClick={() => update({ board: item.id ?? null })}
+                    className="flex w-full items-center justify-between rounded-md px-2 py-2 text-left text-sm transition-colors hover:bg-accent"
+                  >
+                    <span>{item.name}</span>
+                    <span className="text-xs text-muted-foreground">{formatNumber(item.threadCount)}</span>
+                  </button>
+                ))
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>热门标签</CardTitle>
+              <CardDescription>后端 tag 查询已接入；当前 Rust feed 暂未按 tag 过滤。</CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-wrap gap-2">
+              {(tags.data ?? []).slice(0, 18).map((tag) => (
+                <Badge key={tag.id} variant="secondary">#{tag.name}</Badge>
+              ))}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardContent className="flex items-center gap-3 p-4">
+              <ThumbsUp className="h-5 w-5 text-primary" />
+              <p className="text-sm text-muted-foreground">
+                热榜由后端 Redis ZSET 优先，Redis 不可用时回退数据库排序。
+              </p>
+            </CardContent>
+          </Card>
+        </aside>
+      </div>
+    </div>
+  );
+}

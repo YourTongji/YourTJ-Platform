@@ -116,8 +116,11 @@ pub struct CommentInput {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VoteInput {
-    pub value: String,     // "up" or "down"
-    pub post_type: String, // "thread" or "comment"
+    pub value: String, // "up" or "down"
+    /// Optional per the API contract (which only requires `value`). When
+    /// omitted the handler infers whether the id is a thread or a comment.
+    #[serde(default)]
+    pub post_type: Option<String>, // "thread" or "comment"
 }
 
 /// Tag DTO.
