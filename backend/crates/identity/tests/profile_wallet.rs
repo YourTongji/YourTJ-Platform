@@ -155,81 +155,13 @@ async fn test_update_avatar_url_succeeds() {
     assert_eq!(body["avatarUrl"], "https://example.com/avatar.png");
 }
 
-/// ── get wallet ─────────────────────────────────────────────────────────
-
-#[tokio::test]
-async fn test_get_wallet_returns_balance() {
-    let (pool, _) = create_test_app().await;
-
-    sqlx::query("INSERT INTO identity.accounts (email, handle) VALUES ($1, $2)")
-        .bind("sam@tongji.edu.cn")
-        .bind("sam")
-        .execute(&pool)
-        .await
-        .unwrap();
-
-    let account_id: i64 = sqlx::query_scalar("SELECT id FROM identity.accounts WHERE email = $1")
-        .bind("sam@tongji.edu.cn")
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-
-    sqlx::query("INSERT INTO credit.wallets (account_id, balance) VALUES ($1, 100)")
-        .bind(account_id)
-        .execute(&pool)
-        .await
-        .unwrap();
-
-    let (token, _) = helpers::create_access_token_for("sam@tongji.edu.cn", &pool).await;
-    let app = create_test_app_with_pool(pool).await;
-
-    let resp = app
-        .oneshot(
-            Request::builder()
-                .method(Method::GET)
-                .uri("/api/v2/wallet")
-                .header(header::AUTHORIZATION, format!("Bearer {token}"))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(resp.status(), StatusCode::OK);
-    let body: Value = helpers::read_json(resp).await;
-    assert_eq!(body["balance"], 100);
-}
-
-#[tokio::test]
-async fn test_get_wallet_for_new_account_returns_zero() {
-    let (pool, _) = create_test_app().await;
-
-    sqlx::query("INSERT INTO identity.accounts (email, handle) VALUES ($1, $2)")
-        .bind("tina@tongji.edu.cn")
-        .bind("tina")
-        .execute(&pool)
-        .await
-        .unwrap();
-
-    let (token, _) = helpers::create_access_token_for("tina@tongji.edu.cn", &pool).await;
-    let app = create_test_app_with_pool(pool).await;
-
-    let resp = app
-        .oneshot(
-            Request::builder()
-                .method(Method::GET)
-                .uri("/api/v2/wallet")
-                .header(header::AUTHORIZATION, format!("Bearer {token}"))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(resp.status(), StatusCode::OK);
-    let body: Value = helpers::read_json(resp).await;
-    assert_eq!(body["balance"], 0);
-}
+// ── get wallet ─────────────────────────────────────────────────────────
+//
+// `GET /api/v2/wallet` (read wallet balance) is owned by the credit crate and
+// composed into the app in `api::bootstrap`; the identity router does not serve
+// it. Balance-read behaviour is covered by `credit::tests::wallet_tests`, so
+// there are intentionally no wallet-read tests mounted on `identity::routes`
+// here (they would always 404).
 
 /// ── bind key ───────────────────────────────────────────────────────────
 

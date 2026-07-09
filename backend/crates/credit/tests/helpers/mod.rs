@@ -15,6 +15,14 @@ pub async fn create_test_app() -> (PgPool, axum::Router) {
 
     run_migrations(&pool).await;
 
+    // Deterministic test system key: seed [0u8; 32]. The public key must be the
+    // real Ed25519 public key derived from that seed, otherwise system-signed
+    // ledger entries fail verification in `/wallet/ledger/verify`.
+    let seed = [0u8; 32];
+    let public_key_bytes = credit::ledger::derive_public_key(&seed);
+    let public_key_b64 =
+        base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &public_key_bytes);
+
     let state = AppState {
         db: pool.clone(),
         config: shared::Config::from_env().expect("test Config::from_env"),
@@ -24,8 +32,8 @@ pub async fn create_test_app() -> (PgPool, axum::Router) {
         meili_url: String::new(),
         meili_master_key: String::new(),
         redis: None,
-        system_private_key: vec![0u8; 32],
-        system_public_key_b64: "test-public-key".into(),
+        system_private_key: seed.to_vec(),
+        system_public_key_b64: public_key_b64,
         sse_tx: None,
     };
 
@@ -67,7 +75,10 @@ async fn run_migrations(pool: &PgPool) {
     sqlx::query("DELETE FROM identity.sessions").execute(pool).await.ok();
     sqlx::query("DELETE FROM identity.email_codes").execute(pool).await.ok();
     sqlx::query("DELETE FROM identity.account_keys").execute(pool).await.ok();
-    sqlx::query("DELETE FROM identity.accounts").execute(pool).await.ok();
+    // TRUNCATE ... CASCADE removes accounts and every row referencing them
+    // (across crates), so leftover FK references never block cleanup and cause
+    // cross-suite email collisions. Plain DELETE silently fails on such refs.
+    sqlx::query("TRUNCATE identity.accounts CASCADE").execute(pool).await.ok();
 }
 
 /// Read the JSON body from a response.
@@ -104,66 +115,17 @@ pub async fn create_test_account(pool: &PgPool, email: &str, handle: &str) -> i6
     row.0
 }
 
-/// Mint points to an account via the system-signed mint ledger entry.
+/// Mint points to an account via the production system-signed mint path.
+///
+/// Uses the deterministic test key seed (`[0u8; 32]`) so the resulting ledger
+/// entry verifies against the system public key wired into `create_test_app`.
+/// `mint_points` appends the hash-chained, signed ledger entry and updates the
+/// wallet balance in one transaction.
 pub async fn mint_to_account(pool: &PgPool, account_id: i64, amount: i64) {
-    let tx_id = uuid::Uuid::new_v4().to_string();
-    let nonce = uuid::Uuid::new_v4().to_string();
-    let payload = serde_json::json!({
-        "tx_id": tx_id,
-        "type": "mint",
-        "from_account": null,
-        "to_account": account_id.to_string(),
-        "amount": amount,
-        "nonce": nonce,
-        "metadata": {"reason": "test mint"},
-        "signer": "system",
-        "timestamp": chrono::Utc::now().timestamp(),
-    });
-    let canonical = credit::ledger::canonicalize(&payload);
-    let prev_hash: Option<String> =
-        sqlx::query_scalar("SELECT hash FROM credit.ledger ORDER BY seq DESC LIMIT 1")
-            .fetch_optional(pool)
-            .await
-            .unwrap_or(None);
-    let prev_hash = prev_hash.unwrap_or_else(|| {
-        "0000000000000000000000000000000000000000000000000000000000000000".to_string()
-    });
-    let hash = credit::ledger::compute_hash(&canonical, &prev_hash);
-
-    let metadata = serde_json::json!({"reason": "test mint"});
-
-    sqlx::query(
-        "INSERT INTO credit.ledger \
-         (tx_id, type, from_account, to_account, amount, nonce, metadata, \
-          signer, signature, prev_hash, hash) \
-         VALUES ($1, $2, NULL, $3, $4, $5, $6, $7, $8, $9, $10)",
-    )
-    .bind(&tx_id)
-    .bind("mint")
-    .bind(account_id)
-    .bind(amount)
-    .bind(&nonce)
-    .bind(&metadata)
-    .bind("system")
-    .bind("system-signed")
-    .bind(&prev_hash)
-    .bind(&hash)
-    .execute(pool)
-    .await
-    .expect("mint test points");
-
-    // Update wallet balance.
-    sqlx::query(
-        "INSERT INTO credit.wallets (account_id, balance, last_seq) \
-         VALUES ($1, $2, 1) \
-         ON CONFLICT (account_id) \
-         DO UPDATE SET balance = credit.wallets.balance + $2",
-    )
-    .bind(account_id)
-    .bind(amount)
-    .execute(pool)
-    .await
-    .ok();
+    let seed = [0u8; 32];
+    credit::repo::mint_points(pool, account_id, amount, "test mint", &seed)
+        .await
+        .expect("mint test points");
 }
 
 /// Create a JWT access token for the given email.

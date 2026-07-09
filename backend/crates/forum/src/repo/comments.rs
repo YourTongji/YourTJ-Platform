@@ -171,7 +171,7 @@ async fn insert_comment_tx(
         "WITH inserted AS ( \
             INSERT INTO forum.comments (thread_id, parent_id, path, author_id, body, quoted_comment_id) \
             VALUES ($1, $2, $3, $4, $5, $6) \
-            RETURNING id, thread_id, parent_id, path, author_id, body, vote_count, created_at, quoted_comment_id \
+            RETURNING id, thread_id, parent_id, path, author_id, body, vote_count, deleted_at, hidden_at, edited_at, created_at, quoted_comment_id \
          ) \
          SELECT c.id, c.thread_id, c.parent_id, c.path, c.author_id, \
                 c.body, c.vote_count, c.deleted_at, c.hidden_at, c.edited_at, c.created_at, \

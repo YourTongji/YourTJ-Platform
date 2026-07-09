@@ -110,7 +110,9 @@ async fn test_vote_thread_down() {
         .fetch_one(&pool)
         .await
         .unwrap();
-    assert_eq!(vote_count, 0);
+    // One-vote-per-user with no stacking: switching up → down yields -1
+    // (see docs/ARCH_REVIEW_AND_E2E_PLAN.md §vote).
+    assert_eq!(vote_count, -1);
 }
 
 /// ── vote on comment ──────────────────────────────────────────────────────

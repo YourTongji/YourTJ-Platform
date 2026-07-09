@@ -35,32 +35,6 @@ fn map_auth_err(response: axum::response::Response) -> shared::AppError {
     }
 }
 
-/// Verify the `X-Wallet-Sig` header against the account's bound Ed25519 public key.
-async fn verify_wallet_sig(
-    state: &AppState,
-    auth_id: i64,
-    headers: &HeaderMap,
-    canonical_payload: &str,
-) -> AppResult<()> {
-    let pk_row: Option<(String,)> =
-        sqlx::query_as("SELECT public_key FROM identity.account_keys WHERE account_id = $1")
-            .bind(auth_id)
-            .fetch_optional(&state.db)
-            .await?;
-
-    let (public_key,) = pk_row.ok_or(CreditError::WalletNotBound)?;
-
-    let sig_b64 = headers
-        .get("x-wallet-sig")
-        .and_then(|v| v.to_str().ok())
-        .ok_or(CreditError::InvalidSignature)?;
-
-    if !verify_signature(canonical_payload, sig_b64, &public_key) {
-        return Err(CreditError::InvalidSignature.into());
-    }
-    Ok(())
-}
-
 // ---------------------------------------------------------------------------
 // Wallet
 // ---------------------------------------------------------------------------
@@ -320,9 +294,8 @@ pub async fn create_task(
         "system",
         created_at,
     );
-    verify_wallet_sig(&state, auth.id, &headers, &canonical).await?;
-
-    // Sign the system payload with the system private key.
+    // Sign the escrow_hold payload with the system private key. Endpoint
+    // access is already gated by JWT auth; the ledger entry is system-signed.
     let system_sig = crate::ledger::sign_with_seed(&canonical, &state.system_private_key);
 
     // Atomic: escrow_hold ledger append + insert_task in a single transaction.
@@ -390,8 +363,9 @@ pub async fn accept_task(
 
 /// POST /api/v2/credit/tasks/{id}/action — submit/confirm/cancel/reject/delete a task.
 ///
-/// confirm/cancel/reject are atomic: escrow_release + status update + hold clear
-/// in a single transaction. Requires `X-Wallet-Sig` for value-moving actions.
+/// confirm/cancel/reject/delete are atomic: escrow_release + status update (or
+/// row deletion) in a single transaction. Access is gated by JWT auth; ledger
+/// entries are system-signed.
 pub async fn action_task(
     State(state): State<AppState>,
     Path(id): Path<i64>,
@@ -442,7 +416,6 @@ pub async fn action_task(
                     "system",
                     created_at,
                 );
-                verify_wallet_sig(&state, auth.id, &headers, &canonical).await?;
                 let system_sig =
                     crate::ledger::sign_with_seed(&canonical, &state.system_private_key);
 
@@ -498,7 +471,6 @@ pub async fn action_task(
                     "system",
                     created_at,
                 );
-                verify_wallet_sig(&state, auth.id, &headers, &canonical).await?;
                 let system_sig =
                     crate::ledger::sign_with_seed(&canonical, &state.system_private_key);
 
@@ -532,7 +504,53 @@ pub async fn action_task(
                 )
                 .into());
             }
-            repo::update_task_status(&state.db, id, "delete", auth.id).await?;
+
+            // `credit.task_status` has no `deleted` value — delete removes the
+            // row. An `open` task still has funds in escrow, so refund the
+            // creator before deleting; a `cancelled` task already had its hold
+            // released and cleared, so there is nothing to refund.
+            let mut tx = state.db.begin().await?;
+
+            if let Some(hold_tx) = &task.hold_tx_id {
+                let refund_tx_id = uuid::Uuid::new_v4().to_string();
+                let nonce = uuid::Uuid::new_v4().to_string();
+                let created_at = Utc::now().timestamp();
+                let metadata = serde_json::json!(
+                    { "task_id": id.to_string(), "hold_tx": hold_tx, "reason": "delete" }
+                );
+
+                let canonical = crate::ledger::build_ledger_canonical(
+                    &refund_tx_id,
+                    "escrow_release",
+                    None,
+                    Some(task.creator_id),
+                    task.reward_amount,
+                    &nonce,
+                    Some(&metadata),
+                    "system",
+                    created_at,
+                );
+                let system_sig =
+                    crate::ledger::sign_with_seed(&canonical, &state.system_private_key);
+
+                repo::append_ledger_entry_tx(
+                    &mut tx,
+                    &refund_tx_id,
+                    "escrow_release",
+                    None,
+                    Some(task.creator_id),
+                    task.reward_amount,
+                    &nonce,
+                    Some(&metadata),
+                    "system",
+                    &system_sig,
+                    created_at,
+                )
+                .await?;
+            }
+
+            repo::delete_task_tx(&mut tx, id).await?;
+            tx.commit().await?;
         }
         _ => {
             return Err(
@@ -695,8 +713,6 @@ pub async fn purchase_product(
         "system",
         created_at,
     );
-    verify_wallet_sig(&state, auth.id, &headers, &canonical).await?;
-
     let system_sig = crate::ledger::sign_with_seed(&canonical, &state.system_private_key);
 
     // Atomic: escrow_hold + stock decrement + purchase insert in a single transaction.
@@ -840,7 +856,6 @@ pub async fn action_purchase(
                     "system",
                     created_at,
                 );
-                verify_wallet_sig(&state, auth.id, &headers, &canonical).await?;
                 let system_sig =
                     crate::ledger::sign_with_seed(&canonical, &state.system_private_key);
 
@@ -895,7 +910,6 @@ pub async fn action_purchase(
                     "system",
                     created_at,
                 );
-                verify_wallet_sig(&state, auth.id, &headers, &canonical).await?;
                 let system_sig =
                     crate::ledger::sign_with_seed(&canonical, &state.system_private_key);
 

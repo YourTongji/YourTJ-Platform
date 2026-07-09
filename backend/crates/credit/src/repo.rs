@@ -60,11 +60,18 @@ pub async fn append_ledger_entry_tx(
     );
     let hash = compute_hash(&canonical, &prev_hash);
 
+    // Persist the exact `created_at` that was hashed/signed (seconds precision),
+    // not the DB `now()`. Otherwise `verify_full_ledger` recomputes the canonical
+    // from a different timestamp than the one baked into `hash` and fails.
+    let created_at_ts = chrono::DateTime::from_timestamp(created_at, 0).ok_or_else(|| {
+        AppError::Internal(anyhow::anyhow!("append_ledger_entry_tx: invalid created_at timestamp"))
+    })?;
+
     let row: LedgerEntryRow = sqlx::query_as(
         "INSERT INTO credit.ledger \
          (tx_id, type, from_account, to_account, amount, nonce, metadata, \
-          signer, signature, prev_hash, hash) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) \
+          signer, signature, prev_hash, hash, created_at) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) \
          RETURNING seq, tx_id, type, from_account, to_account, amount, \
                    nonce, metadata, signer, signature, prev_hash, hash, created_at",
     )
@@ -79,6 +86,7 @@ pub async fn append_ledger_entry_tx(
     .bind(signature)
     .bind(&prev_hash)
     .bind(&hash)
+    .bind(created_at_ts)
     .fetch_one(&mut *conn)
     .await?;
 
@@ -301,14 +309,14 @@ pub async fn verify_full_ledger(
 
 /// Read the wallet balance for an account.
 pub async fn get_wallet(pool: &PgPool, account_id: i64) -> AppResult<WalletDto> {
-    let row: (i64,) =
+    let balance: i64 =
         sqlx::query_scalar("SELECT balance FROM credit.wallets WHERE account_id = $1")
             .bind(account_id)
             .fetch_optional(pool)
             .await?
-            .unwrap_or((0,));
+            .unwrap_or(0);
 
-    Ok(WalletDto { account_id: account_id.to_string(), balance: row.0 })
+    Ok(WalletDto { account_id: account_id.to_string(), balance })
 }
 
 /// Ensure a wallet row exists for `account_id` (idempotent).
@@ -336,7 +344,9 @@ async fn ensure_wallet_exists_tx(conn: &mut sqlx::PgConnection, account_id: i64)
 }
 
 /// System-signed mint: creates a ledger entry with `type = "mint"`.
-/// Signs the payload using the system private key seed.
+/// Signs the payload using the system private key seed. Generates a fresh
+/// random `tx_id`; use [`mint_points_with_tx_id`] when the caller needs the
+/// `tx_id` to be a stable idempotency key.
 #[tracing::instrument(skip(pool, system_seed))]
 pub async fn mint_points(
     pool: &PgPool,
@@ -346,12 +356,29 @@ pub async fn mint_points(
     system_seed: &[u8],
 ) -> AppResult<LedgerEntryRow> {
     let tx_id = uuid::Uuid::new_v4().to_string();
+    mint_points_with_tx_id(pool, to_account_id, amount, &tx_id, reason, system_seed).await
+}
+
+/// System-signed mint with a caller-supplied `tx_id`.
+///
+/// The ledger's `tx_id` is `UNIQUE`, so passing a stable idempotency key here
+/// makes the mint safe to retry: a duplicate call either short-circuits on the
+/// caller's pre-check or fails the unique constraint instead of double-minting.
+#[tracing::instrument(skip(pool, system_seed))]
+pub async fn mint_points_with_tx_id(
+    pool: &PgPool,
+    to_account_id: i64,
+    amount: i64,
+    tx_id: &str,
+    reason: &str,
+    system_seed: &[u8],
+) -> AppResult<LedgerEntryRow> {
     let nonce = uuid::Uuid::new_v4().to_string();
     let metadata = serde_json::json!({ "reason": reason });
     let created_at = Utc::now().timestamp();
 
     let canonical = crate::ledger::build_ledger_canonical(
-        &tx_id,
+        tx_id,
         "mint",
         None,
         Some(to_account_id),
@@ -366,7 +393,7 @@ pub async fn mint_points(
     let mut tx = pool.begin().await?;
     let row = append_ledger_entry_tx(
         &mut tx,
-        &tx_id,
+        tx_id,
         "mint",
         None,
         Some(to_account_id),
@@ -513,15 +540,20 @@ pub async fn accept_task(pool: &PgPool, id: i64, acceptor_id: i64) -> AppResult<
     Ok(())
 }
 
-/// Transition a task's status (submit, confirm, cancel, reject, delete).
+/// Transition a task to a new `credit.task_status` value.
+///
+/// `new_status` must be a valid enum value that a caller legitimately sets
+/// through this function (`submitted`, `completed`, `cancelled`); `open` and
+/// `in_progress` are set by insert/accept, not here. Task removal goes through
+/// [`delete_task_tx`], not a status transition — there is no `deleted` status.
 pub async fn update_task_status(
     pool: &PgPool,
     id: i64,
     new_status: &str,
     caller_id: i64,
 ) -> AppResult<()> {
-    if !matches!(new_status, "submit" | "confirm" | "cancel" | "reject" | "delete") {
-        return Err(CreditError::InvalidAction(format!("unknown task action: {new_status}")).into());
+    if !matches!(new_status, "submitted" | "completed" | "cancelled") {
+        return Err(CreditError::InvalidAction(format!("unknown task status: {new_status}")).into());
     }
 
     sqlx::query(
@@ -544,8 +576,8 @@ pub async fn update_task_status_tx(
     id: i64,
     new_status: &str,
 ) -> AppResult<()> {
-    if !matches!(new_status, "submit" | "confirm" | "cancel" | "reject" | "delete") {
-        return Err(CreditError::InvalidAction(format!("unknown task action: {new_status}")).into());
+    if !matches!(new_status, "submitted" | "completed" | "cancelled") {
+        return Err(CreditError::InvalidAction(format!("unknown task status: {new_status}")).into());
     }
 
     sqlx::query(
@@ -577,6 +609,15 @@ pub async fn clear_task_hold_tx(conn: &mut sqlx::PgConnection, id: i64) -> AppRe
         .bind(id)
         .execute(&mut *conn)
         .await?;
+
+    Ok(())
+}
+
+/// Transaction-internal hard delete of a task row. There is no `deleted`
+/// status in `credit.task_status`; the `delete` action removes the record
+/// entirely (any active escrow hold must be refunded first by the caller).
+pub async fn delete_task_tx(conn: &mut sqlx::PgConnection, id: i64) -> AppResult<()> {
+    sqlx::query("DELETE FROM credit.tasks WHERE id = $1").bind(id).execute(&mut *conn).await?;
 
     Ok(())
 }

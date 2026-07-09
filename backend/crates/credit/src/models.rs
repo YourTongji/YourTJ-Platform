@@ -9,6 +9,7 @@ use sqlx::FromRow;
 pub struct LedgerEntryRow {
     pub seq: i64,
     pub tx_id: String,
+    #[sqlx(rename = "type")]
     pub type_: String,
     pub from_account: Option<i64>,
     pub to_account: Option<i64>,

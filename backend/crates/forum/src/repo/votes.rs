@@ -57,9 +57,10 @@ pub async fn vote_post(
     .execute(&mut *tx)
     .await?;
 
-    // Recompute the vote_count for the post by summing votes.
+    // Recompute the vote_count for the post by summing votes. `SUM(smallint)`
+    // returns bigint in Postgres, so cast back to int to decode into i32.
     let new_vote_count: i32 = sqlx::query_scalar(
-        "SELECT COALESCE(SUM(value), 0) FROM forum.votes WHERE post_type = $1 AND post_id = $2",
+        "SELECT COALESCE(SUM(value), 0)::int FROM forum.votes WHERE post_type = $1 AND post_id = $2",
     )
     .bind(post_type)
     .bind(post_id)

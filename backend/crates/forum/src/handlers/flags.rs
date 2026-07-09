@@ -59,7 +59,7 @@ pub async fn flag_post(
         "admin" | "mod" => 3.0,
         _ => {
             let tl: i16 = sqlx::query_scalar(
-                "SELECT COALESCE(trust_level, 0) FROM identity.accounts WHERE id = $1",
+                "SELECT COALESCE(trust_level, 0)::smallint FROM identity.accounts WHERE id = $1",
             )
             .bind(auth.id)
             .fetch_one(&state.db)

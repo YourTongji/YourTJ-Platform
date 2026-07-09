@@ -64,7 +64,10 @@ async fn run_migrations(pool: &PgPool) {
     sqlx::query("DELETE FROM identity.account_keys").execute(pool).await.ok();
     sqlx::query("DELETE FROM credit.wallets").execute(pool).await.ok();
     sqlx::query("DELETE FROM credit.ledger").execute(pool).await.ok();
-    sqlx::query("DELETE FROM identity.accounts").execute(pool).await.ok();
+    // TRUNCATE ... CASCADE removes accounts and every row referencing them
+    // (across crates), so leftover FK references never block cleanup and cause
+    // cross-suite email collisions. Plain DELETE silently fails on such refs.
+    sqlx::query("TRUNCATE identity.accounts CASCADE").execute(pool).await.ok();
     sqlx::query("DELETE FROM courses.course_aliases").execute(pool).await.ok();
     // Reset course stats.
     sqlx::query("UPDATE courses.courses SET review_count = 0, review_avg = 0")
@@ -94,16 +97,42 @@ pub async fn seed_account(pool: &PgPool, email: &str, handle: &str) -> i64 {
 }
 
 /// Seed a test course, returning course_id.
+///
+/// `courses.courses.code` is intentionally not unique (production upserts with
+/// `ON CONFLICT DO NOTHING`), so an `ON CONFLICT (code)` upsert is invalid here.
+/// Reuse an existing row for the code if present, otherwise insert one, to stay
+/// idempotent across test runs (the cleanup does not delete courses). The
+/// existing row is reused as-is — the courses-test suite seeds some of these
+/// codes and asserts their names, so this helper must not mutate them.
 pub async fn seed_course(pool: &PgPool, code: &str, name: &str) -> i64 {
-    let row: (i64,) = sqlx::query_as(
-        "INSERT INTO courses.courses (code, name) VALUES ($1, $2) \
-         ON CONFLICT (code) DO UPDATE SET name = $2 RETURNING id",
+    if let Some(row) =
+        sqlx::query_as::<_, (i64,)>("SELECT id FROM courses.courses WHERE code = $1 LIMIT 1")
+            .bind(code)
+            .fetch_optional(pool)
+            .await
+            .expect("lookup course")
+    {
+        return row.0;
+    }
+
+    // Other suites (courses tests) insert courses with explicit ids via
+    // OVERRIDING SYSTEM VALUE, which leaves the IDENTITY sequence behind the
+    // real MAX(id). Resync it so the IDENTITY insert below does not collide.
+    sqlx::query(
+        "SELECT setval(pg_get_serial_sequence('courses.courses', 'id'), \
+         GREATEST((SELECT COALESCE(MAX(id), 0) FROM courses.courses), 1))",
     )
-    .bind(code)
-    .bind(name)
-    .fetch_one(pool)
+    .execute(pool)
     .await
-    .expect("seed course");
+    .expect("resync courses id sequence");
+
+    let row: (i64,) =
+        sqlx::query_as("INSERT INTO courses.courses (code, name) VALUES ($1, $2) RETURNING id")
+            .bind(code)
+            .bind(name)
+            .fetch_one(pool)
+            .await
+            .expect("seed course");
     row.0
 }
 

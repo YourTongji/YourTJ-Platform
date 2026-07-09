@@ -135,13 +135,16 @@ pub async fn get_trust_level(
         }
     }
 
-    // Fallback to DB
-    let tl: i16 =
-        sqlx::query_scalar("SELECT COALESCE(trust_level, 0) FROM identity.accounts WHERE id = $1")
-            .bind(account_id)
-            .fetch_optional(pool)
-            .await?
-            .unwrap_or(0);
+    // Fallback to DB. `trust_level` is smallint, but `COALESCE(trust_level, 0)`
+    // unifies with the int4 literal `0` and yields int4, which does not decode
+    // into i16 — cast the result back to smallint.
+    let tl: i16 = sqlx::query_scalar(
+        "SELECT COALESCE(trust_level, 0)::smallint FROM identity.accounts WHERE id = $1",
+    )
+    .bind(account_id)
+    .fetch_optional(pool)
+    .await?
+    .unwrap_or(0);
 
     // Cache result
     if let Some(r) = redis {
