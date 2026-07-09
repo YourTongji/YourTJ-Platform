@@ -44,8 +44,36 @@ pub async fn vote_post(
 
     let post_id: i64 = post_id_str.parse().map_err(|_| AppError::NotFound)?;
 
-    let vote_count =
-        repo::vote_post(&state.db, &body.post_type, post_id, auth.id, &body.value).await?;
+    // The URL carries only the post id; `postType` is optional per the contract.
+    // Trust it when it is a valid value, otherwise infer whether the id is a
+    // thread or a comment — returning 404 when it is neither.
+    let post_type = match body.post_type.as_deref() {
+        Some("thread") => "thread".to_string(),
+        Some("comment") => "comment".to_string(),
+        _ => {
+            let is_thread: bool =
+                sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM forum.threads WHERE id = $1)")
+                    .bind(post_id)
+                    .fetch_one(&state.db)
+                    .await?;
+            if is_thread {
+                "thread".to_string()
+            } else {
+                let is_comment: bool =
+                    sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM forum.comments WHERE id = $1)")
+                        .bind(post_id)
+                        .fetch_one(&state.db)
+                        .await?;
+                if is_comment {
+                    "comment".to_string()
+                } else {
+                    return Err(AppError::NotFound);
+                }
+            }
+        }
+    };
+
+    let vote_count = repo::vote_post(&state.db, &post_type, post_id, auth.id, &body.value).await?;
 
     // Update user_stats: votes_cast +1 (the voter) — best-effort.
     let _ = sqlx::query(
@@ -59,7 +87,7 @@ pub async fn vote_post(
     .await;
 
     // Look up post author for notification.
-    let post_author_id: Option<i64> = sqlx::query_scalar(if body.post_type == "thread" {
+    let post_author_id: Option<i64> = sqlx::query_scalar(if post_type == "thread" {
         "SELECT author_id FROM forum.threads WHERE id = $1"
     } else {
         "SELECT author_id FROM forum.comments WHERE id = $1"
@@ -72,7 +100,7 @@ pub async fn vote_post(
     if let Some(author_id) = post_author_id {
         if author_id != auth.id && body.value == "up" {
             let pool = state.db.clone();
-            let vote_type = body.post_type.clone();
+            let vote_type = post_type.clone();
             let vote_post_id = post_id;
             let voter_id = auth.id;
             tokio::spawn(async move {

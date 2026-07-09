@@ -166,14 +166,14 @@ pub async fn update_account(
     if set.is_empty() {
         return find_account_by_id(pool, id).await?.ok_or(shared::AppError::NotFound);
     }
-    // Always bump updated_at.
-    idx += 1;
-    set.push((format!("updated_at = ${idx}"), "now()".to_string()));
 
-    // Positional: parameters come from set, then id as last.
+    // Positional: parameters come from set, then id as last. `updated_at` is set
+    // to the SQL `now()` function directly — it must not be a bound parameter,
+    // as the text "now()" is not a valid timestamptz literal.
     let mut sql = String::from("UPDATE identity.accounts SET ");
     let parts: Vec<&str> = set.iter().map(|(c, _)| c.as_str()).collect();
     sql.push_str(&parts.join(", "));
+    sql.push_str(", updated_at = now()");
     idx += 1;
     sql.push_str(&format!(" WHERE id = ${idx} RETURNING id, email::text, handle, avatar_url, role::text, status::text, trust_level, created_at"));
 

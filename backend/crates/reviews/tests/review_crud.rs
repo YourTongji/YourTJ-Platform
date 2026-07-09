@@ -27,7 +27,8 @@ async fn test_list_reviews_empty_course() {
 
     assert_eq!(resp.status(), StatusCode::OK);
     let body: Value = read_json(resp).await;
-    assert!(body.as_array().unwrap().is_empty());
+    // GET returns a paginated ReviewPage object, not a bare array.
+    assert!(body["items"].as_array().unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -91,7 +92,8 @@ async fn test_create_and_list_review() {
 
     assert_eq!(resp.status(), StatusCode::OK);
     let body: Value = read_json(resp).await;
-    let items = body.as_array().unwrap();
+    // GET returns a paginated ReviewPage object, not a bare array.
+    let items = body["items"].as_array().unwrap();
     assert_eq!(items.len(), 1);
     assert_eq!(items[0]["rating"], 5);
     assert_eq!(items[0]["authorHandle"], "reviewer");

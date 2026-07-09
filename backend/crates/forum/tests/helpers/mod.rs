@@ -65,9 +65,19 @@ async fn run_migrations(pool: &PgPool) {
     sqlx::query("DELETE FROM identity.sessions").execute(pool).await.ok();
     sqlx::query("DELETE FROM identity.email_codes").execute(pool).await.ok();
     sqlx::query("DELETE FROM identity.account_keys").execute(pool).await.ok();
-    sqlx::query("DELETE FROM identity.accounts").execute(pool).await.ok();
+    // TRUNCATE ... CASCADE removes accounts and every row referencing them
+    // (forum.user_stats, forum.subscriptions, votes, etc.), so leftover FK
+    // references never block cleanup and leak accounts into other test suites.
+    sqlx::query("TRUNCATE identity.accounts CASCADE").execute(pool).await.ok();
 
-    // Seed a default board.
+    // Seed a default board with a deterministic id. `forum.boards.id` is
+    // GENERATED ALWAYS AS IDENTITY and the sequence is not reset by DELETE, so
+    // restart it to 1 before seeding. The forum tests reference `board_id = 1`,
+    // which only holds if the seeded board is reliably id 1 on every run.
+    sqlx::query("ALTER TABLE forum.boards ALTER COLUMN id RESTART WITH 1")
+        .execute(pool)
+        .await
+        .expect("restart boards identity");
     sqlx::query("INSERT INTO forum.boards (slug, name) VALUES ('general', 'General')")
         .execute(pool)
         .await

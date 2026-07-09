@@ -194,7 +194,9 @@ pub async fn create_review(
     let row = sqlx::query_as::<_, ReviewRow>(
         "INSERT INTO reviews.reviews (course_id, account_id, rating, comment, semester, score) \
          VALUES ($1, $2, $3, $4, $5, $6) \
-         RETURNING *",
+         RETURNING id, course_id, account_id, rating, comment, score, semester, \
+                   approve_count, disapprove_count, status::text, created_at, updated_at, \
+                   reviewer_name, reviewer_avatar",
     )
     .bind(course_id)
     .bind(account_id)
@@ -213,10 +215,15 @@ pub async fn create_review(
             .await?;
 
     // Incrementally update course stats.
+    // In a single UPDATE the right-hand side sees the pre-increment
+    // `review_count`, so compute the new average from the OLD count/avg:
+    // new_avg = (old_avg * old_count + rating) / (old_count + 1). Using the
+    // post-increment count in the denominator would divide by zero on the
+    // first review of a course.
     sqlx::query(
         "UPDATE courses.courses \
          SET review_count = review_count + 1, \
-             review_avg = ((review_avg * (review_count - 1) + $2) / review_count::float8) \
+             review_avg = (review_avg * review_count + $2) / (review_count + 1)::float8 \
          WHERE id = $1",
     )
     .bind(course_id)
@@ -244,12 +251,16 @@ pub async fn update_review(
     let mut tx = pool.begin().await?;
 
     // Fetch the existing review with row lock to verify ownership.
-    let existing =
-        sqlx::query_as::<_, ReviewRow>("SELECT * FROM reviews.reviews WHERE id = $1 FOR UPDATE")
-            .bind(review_id)
-            .fetch_optional(&mut *tx)
-            .await?
-            .ok_or(ReviewsError::ReviewNotFound)?;
+    let existing = sqlx::query_as::<_, ReviewRow>(
+        "SELECT id, course_id, account_id, rating, comment, score, semester, \
+                approve_count, disapprove_count, status::text, created_at, updated_at, \
+                reviewer_name, reviewer_avatar \
+         FROM reviews.reviews WHERE id = $1 FOR UPDATE",
+    )
+    .bind(review_id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or(ReviewsError::ReviewNotFound)?;
 
     // Legacy reviews (NULL account_id) cannot be edited by anyone via this path.
     if existing.account_id != Some(account_id) {
@@ -263,7 +274,9 @@ pub async fn update_review(
         "UPDATE reviews.reviews \
          SET rating = $2, comment = $3, semester = $4, score = $5, updated_at = now() \
          WHERE id = $1 \
-         RETURNING *",
+         RETURNING id, course_id, account_id, rating, comment, score, semester, \
+                   approve_count, disapprove_count, status::text, created_at, updated_at, \
+                   reviewer_name, reviewer_avatar",
     )
     .bind(review_id)
     .bind(rating)
@@ -379,10 +392,15 @@ pub async fn report_review(
 /// Look up a single review by id (for admin or ownership checks).
 #[allow(dead_code)]
 pub async fn find_review_by_id(pool: &PgPool, review_id: i64) -> AppResult<Option<ReviewRow>> {
-    let row = sqlx::query_as::<_, ReviewRow>("SELECT * FROM reviews.reviews WHERE id = $1")
-        .bind(review_id)
-        .fetch_optional(pool)
-        .await?;
+    let row = sqlx::query_as::<_, ReviewRow>(
+        "SELECT id, course_id, account_id, rating, comment, score, semester, \
+                approve_count, disapprove_count, status::text, created_at, updated_at, \
+                reviewer_name, reviewer_avatar \
+         FROM reviews.reviews WHERE id = $1",
+    )
+    .bind(review_id)
+    .fetch_optional(pool)
+    .await?;
     Ok(row)
 }
 
@@ -482,12 +500,16 @@ pub async fn admin_list_reviews(
 pub async fn admin_soft_delete_review(pool: &PgPool, review_id: i64) -> AppResult<()> {
     let mut tx = pool.begin().await?;
 
-    let existing =
-        sqlx::query_as::<_, ReviewRow>("SELECT * FROM reviews.reviews WHERE id = $1 FOR UPDATE")
-            .bind(review_id)
-            .fetch_optional(&mut *tx)
-            .await?
-            .ok_or(ReviewsError::ReviewNotFound)?;
+    let existing = sqlx::query_as::<_, ReviewRow>(
+        "SELECT id, course_id, account_id, rating, comment, score, semester, \
+                approve_count, disapprove_count, status::text, created_at, updated_at, \
+                reviewer_name, reviewer_avatar \
+         FROM reviews.reviews WHERE id = $1 FOR UPDATE",
+    )
+    .bind(review_id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or(ReviewsError::ReviewNotFound)?;
 
     if existing.status == "visible" {
         // Decrement review_count and recompute average.
@@ -519,12 +541,16 @@ pub async fn admin_soft_delete_review(pool: &PgPool, review_id: i64) -> AppResul
 pub async fn admin_toggle_review_visibility(pool: &PgPool, review_id: i64) -> AppResult<()> {
     let mut tx = pool.begin().await?;
 
-    let existing =
-        sqlx::query_as::<_, ReviewRow>("SELECT * FROM reviews.reviews WHERE id = $1 FOR UPDATE")
-            .bind(review_id)
-            .fetch_optional(&mut *tx)
-            .await?
-            .ok_or(ReviewsError::ReviewNotFound)?;
+    let existing = sqlx::query_as::<_, ReviewRow>(
+        "SELECT id, course_id, account_id, rating, comment, score, semester, \
+                approve_count, disapprove_count, status::text, created_at, updated_at, \
+                reviewer_name, reviewer_avatar \
+         FROM reviews.reviews WHERE id = $1 FOR UPDATE",
+    )
+    .bind(review_id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or(ReviewsError::ReviewNotFound)?;
 
     let new_status = if existing.status == "visible" { "hidden" } else { "visible" };
 
@@ -544,11 +570,13 @@ pub async fn admin_toggle_review_visibility(pool: &PgPool, review_id: i64) -> Ap
         .execute(&mut *tx)
         .await?;
     } else if existing.status == "hidden" && new_status == "visible" {
-        // Showing: increment count, add rating to average.
+        // Showing: increment count, add rating to average. Use the OLD count on
+        // the right-hand side (new_avg = (old_avg * old_count + rating) /
+        // (old_count + 1)) so unhiding into an empty course does not divide by 0.
         sqlx::query(
             "UPDATE courses.courses \
              SET review_count = review_count + 1, \
-                 review_avg = ((review_avg * (review_count - 1)::float8 + $2) / review_count::float8) \
+                 review_avg = (review_avg * review_count + $2) / (review_count + 1)::float8 \
              WHERE id = $1",
         )
         .bind(existing.course_id)
@@ -583,12 +611,16 @@ pub async fn admin_edit_review(
 
     let mut tx = pool.begin().await?;
 
-    let existing =
-        sqlx::query_as::<_, ReviewRow>("SELECT * FROM reviews.reviews WHERE id = $1 FOR UPDATE")
-            .bind(review_id)
-            .fetch_optional(&mut *tx)
-            .await?
-            .ok_or(ReviewsError::ReviewNotFound)?;
+    let existing = sqlx::query_as::<_, ReviewRow>(
+        "SELECT id, course_id, account_id, rating, comment, score, semester, \
+                approve_count, disapprove_count, status::text, created_at, updated_at, \
+                reviewer_name, reviewer_avatar \
+         FROM reviews.reviews WHERE id = $1 FOR UPDATE",
+    )
+    .bind(review_id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or(ReviewsError::ReviewNotFound)?;
 
     let old_rating = existing.rating;
     let account_id = existing.account_id;
@@ -598,7 +630,9 @@ pub async fn admin_edit_review(
         "UPDATE reviews.reviews \
          SET rating = $2, comment = $3, semester = $4, score = $5, updated_at = now() \
          WHERE id = $1 \
-         RETURNING *",
+         RETURNING id, course_id, account_id, rating, comment, score, semester, \
+                   approve_count, disapprove_count, status::text, created_at, updated_at, \
+                   reviewer_name, reviewer_avatar",
     )
     .bind(review_id)
     .bind(rating)

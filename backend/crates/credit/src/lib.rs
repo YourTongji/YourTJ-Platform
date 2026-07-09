@@ -55,8 +55,11 @@ pub async fn mint_for_contribution(
         return Ok(row);
     }
 
-    // Not yet minted — proceed
-    repo::mint_points(pool, account_id, amount, reason, system_seed).await
+    // Not yet minted — mint with the idempotency key as the ledger `tx_id` so
+    // the pre-check above matches on retry and the `tx_id` UNIQUE constraint is
+    // a hard backstop against double-minting.
+    repo::mint_points_with_tx_id(pool, account_id, amount, idempotency_key, reason, system_seed)
+        .await
 }
 
 /// All routes owned by the credit domain.
