@@ -15,6 +15,7 @@ use tower_http::request_id::{MakeRequestUuid, SetRequestIdLayer};
 use tower_http::set_header::SetResponseHeaderLayer;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
+static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("../../migrations");
 
 /// Full bootstrap: init tracing, load config, connect DB, build and serve.
 pub async fn run() -> anyhow::Result<()> {
@@ -29,6 +30,7 @@ pub async fn run() -> anyhow::Result<()> {
     }
 
     let db = sqlx::PgPool::connect(&config.database_url).await?;
+    run_migrations(&db).await?;
     tracing::info!("connected to database");
 
     // Connect Redis (optional — app degrades gracefully if unavailable).
@@ -265,6 +267,72 @@ async fn health() -> Json<Value> {
     Json(json!({ "status": "ok", "service": "yourtj-platform", "version": "2.0.0" }))
 }
 
+async fn run_migrations(pool: &sqlx::PgPool) -> anyhow::Result<()> {
+    baseline_legacy_database(pool).await?;
+    MIGRATOR.run(pool).await?;
+    Ok(())
+}
+
+async fn baseline_legacy_database(pool: &sqlx::PgPool) -> anyhow::Result<()> {
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS _sqlx_migrations ( \
+            version BIGINT PRIMARY KEY, \
+            description TEXT NOT NULL, \
+            installed_on TIMESTAMPTZ NOT NULL DEFAULT now(), \
+            success BOOLEAN NOT NULL, \
+            checksum BYTEA NOT NULL, \
+            execution_time BIGINT NOT NULL \
+        )",
+    )
+    .execute(pool)
+    .await?;
+
+    for migration in MIGRATOR.iter() {
+        if legacy_marker_exists(pool, migration.version).await? {
+            sqlx::query(
+                "INSERT INTO _sqlx_migrations (version, description, success, checksum, execution_time) \
+                 VALUES ($1, $2, TRUE, $3, 0) \
+                 ON CONFLICT (version) DO NOTHING",
+            )
+            .bind(migration.version)
+            .bind(migration.description.as_ref())
+            .bind(migration.checksum.as_ref())
+            .execute(pool)
+            .await?;
+        }
+    }
+
+    Ok(())
+}
+
+async fn legacy_marker_exists(pool: &sqlx::PgPool, version: i64) -> anyhow::Result<bool> {
+    let Some(query) = legacy_marker_query(version) else {
+        return Ok(false);
+    };
+
+    let exists = sqlx::query_scalar(query).fetch_one(pool).await?;
+    Ok(exists)
+}
+
+fn legacy_marker_query(version: i64) -> Option<&'static str> {
+    match version {
+        1 => Some("SELECT to_regclass('identity.accounts') IS NOT NULL"),
+        2 => Some("SELECT to_regtype('credit.task_status') IS NOT NULL"),
+        3 => Some("SELECT to_regclass('platform.announcements') IS NOT NULL"),
+        4 => Some("SELECT to_regclass('forum.votes') IS NOT NULL"),
+        5 => Some("SELECT to_regclass('forum.tags') IS NOT NULL"),
+        6 => Some("SELECT to_regclass('platform.badges') IS NOT NULL"),
+        7 => Some("SELECT to_regclass('forum.threads') IS NOT NULL"),
+        8 => Some("SELECT to_regclass('platform.pending_mints') IS NOT NULL"),
+        9 => Some("SELECT to_regclass('selection.pk_calendars') IS NOT NULL"),
+        10 => Some("SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'reviews' AND table_name = 'reviews' AND column_name = 'reviewer_name')"),
+        11 => Some("SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'identity' AND table_name = 'accounts' AND column_name = 'password_hash')"),
+        12 => Some("SELECT to_regclass('selection.campuses_id_seq') IS NOT NULL"),
+        13 => Some("SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'selection' AND table_name = 'courses' AND column_name = 'teacher_names')"),
+        _ => None,
+    }
+}
+
 fn init_tracing() {
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     tracing_subscriber::fmt().with_env_filter(filter).with_target(true).init();
@@ -290,4 +358,23 @@ fn derive_system_key(hex_key: &str) -> anyhow::Result<(Vec<u8>, String)> {
     use base64::Engine as _;
     let pk_b64 = base64::engine::general_purpose::STANDARD.encode(key_pair.public_key().as_ref());
     Ok((seed, pk_b64))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::legacy_marker_query;
+
+    #[test]
+    fn legacy_marker_query_only_baselines_pre_migrator_schema() {
+        assert_eq!(
+            legacy_marker_query(1),
+            Some("SELECT to_regclass('identity.accounts') IS NOT NULL")
+        );
+        assert_eq!(legacy_marker_query(4), Some("SELECT to_regclass('forum.votes') IS NOT NULL"));
+        assert_eq!(
+            legacy_marker_query(9),
+            Some("SELECT to_regclass('selection.pk_calendars') IS NOT NULL")
+        );
+        assert_eq!(legacy_marker_query(14), None);
+    }
 }

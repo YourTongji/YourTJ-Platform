@@ -111,7 +111,7 @@ pub async fn update_setting(pool: &PgPool, key: &str, value: &str) -> AppResult<
 // Handlers
 // ---------------------------------------------------------------------------
 
-/// GET /announcements — public
+/// GET /api/v2/announcements — public
 pub async fn list_announcements_handler(
     State(state): State<AppState>,
 ) -> AppResult<Json<Vec<AnnouncementDto>>> {
@@ -128,7 +128,7 @@ pub async fn list_announcements_handler(
     Ok(Json(items))
 }
 
-/// GET /settings — public (returns safe subset of settings)
+/// GET /api/v2/settings — public (returns safe subset of settings)
 pub async fn list_settings_handler(
     State(state): State<AppState>,
 ) -> AppResult<Json<Vec<SettingDto>>> {
@@ -142,7 +142,7 @@ pub async fn list_settings_handler(
     Ok(Json(items))
 }
 
-/// POST /startup/verify — captcha stub (accept any token, return 200)
+/// POST /api/v2/startup/verify — captcha stub (accept any token, return 200)
 pub async fn startup_verify_handler() -> AppResult<Json<serde_json::Value>> {
     Ok(Json(serde_json::json!({ "ok": true })))
 }
@@ -215,14 +215,54 @@ pub async fn admin_update_setting_handler(
 /// All platform-owned routes.
 pub fn routes(state: AppState) -> Router {
     Router::new()
-        // /health is registered in bootstrap.rs
-        .route("/announcements", get(list_announcements_handler))
-        .route("/settings", get(list_settings_handler))
-        .route("/startup/verify", post(startup_verify_handler))
+        .route("/api/v2/announcements", get(list_announcements_handler))
+        .route("/api/v2/settings", get(list_settings_handler))
+        .route("/api/v2/startup/verify", post(startup_verify_handler))
         .route("/api/v2/admin/settings", get(admin_list_settings_handler))
         .route(
             "/api/v2/admin/settings/{key}",
             get(admin_get_setting_handler).put(admin_update_setting_handler),
         )
         .with_state(state)
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::body::Body;
+    use axum::http::{Method, Request, StatusCode};
+    use shared::AppState;
+    use tower::ServiceExt;
+
+    use super::routes;
+
+    #[tokio::test]
+    async fn startup_verify_is_mounted_under_api_v2() {
+        let state = AppState {
+            db: sqlx::PgPool::connect_lazy("postgres://user:password@localhost/test")
+                .expect("valid lazy postgres URL"),
+            config: shared::Config::from_env().expect("test Config::from_env"),
+            jwt_secret: "integration-test-secret-32bytes!".into(),
+            jwt_ttl: 900,
+            refresh_ttl: 604800,
+            meili_url: String::new(),
+            meili_master_key: String::new(),
+            redis: None,
+            system_private_key: vec![0u8; 32],
+            system_public_key_b64: String::new(),
+            sse_tx: None,
+        };
+
+        let response = routes(state)
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/api/v2/startup/verify")
+                    .body(Body::empty())
+                    .expect("request builds"),
+            )
+            .await
+            .expect("request succeeds");
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
 }
