@@ -85,7 +85,7 @@ pub async fn search_threads(
 /// Rebuild the entire forum_threads index from the database.
 /// Requires access to the PgPool to query all visible threads.
 #[allow(dead_code)]
-#[allow(clippy::type_complexity)]
+#[allow(clippy::type_complexity)] // reason: reindex query returns 10-column tuple; a dedicated struct would duplicate ForumThreadDoc fields
 pub async fn reindex_forum(pool: &sqlx::PgPool, meili_url: &str, meili_key: &str) -> AppResult<()> {
     let rows: Vec<(
         i64,

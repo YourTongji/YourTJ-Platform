@@ -251,7 +251,7 @@ pub async fn block_upload(
     // Update status to blocked.
     repo::update_status(&state.db, id, "blocked").await?;
 
-    // TODO: Delete the object from OSS when real integration is wired.
+    // Deferred: Delete the object from OSS when real integration is wired (issue #oss-delete).
     // oss::delete_object(&oss_config, &row.oss_key).await?;
 
     tracing::info!(upload_id = id, moderator_id = auth.id, "upload blocked");

@@ -27,7 +27,7 @@ pub struct AuthAccount {
 }
 
 impl AuthAccount {
-    #[allow(clippy::result_large_err)]
+    #[allow(clippy::result_large_err)] // reason: require_mod returns tower Response directly for middleware-like guards; boxing would add indirection without benefit
     pub fn require_mod(&self) -> Result<(), Response> {
         if self.role == "mod" || self.role == "admin" {
             Ok(())
@@ -36,7 +36,7 @@ impl AuthAccount {
         }
     }
 
-    #[allow(clippy::result_large_err)]
+    #[allow(clippy::result_large_err)] // reason: require_admin returns tower Response directly for middleware-like guards; boxing would add indirection without benefit
     pub fn require_admin(&self) -> Result<(), Response> {
         if self.role == "admin" {
             Ok(())
@@ -47,7 +47,7 @@ impl AuthAccount {
 }
 
 /// Verify a JWT access token and return the parsed claims.
-#[allow(clippy::result_large_err)]
+#[allow(clippy::result_large_err)] // reason: verify_jwt returns a tower Response on failure so it can be used directly as an Axum extractor; boxing would not improve this
 pub fn verify_jwt(token: &str, secret: &str) -> Result<JwtClaims, Response> {
     use jsonwebtoken::{decode, DecodingKey, Validation};
     let mut v = Validation::new(jsonwebtoken::Algorithm::HS256);

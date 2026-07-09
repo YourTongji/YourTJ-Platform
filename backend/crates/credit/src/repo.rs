@@ -6,7 +6,7 @@
 
 use chrono::Utc;
 use serde_json::Value;
-use shared::{AppResult, Page};
+use shared::{AppError, AppResult, Page};
 use sqlx::PgPool;
 
 use crate::dto::{LedgerEntryDto, LedgerVerify, WalletDto};
@@ -24,7 +24,7 @@ const GENESIS_HASH: &str = "0000000000000000000000000000000000000000000000000000
 /// transaction. Takes the advisory lock, computes `prev_hash`, builds the
 /// canonical payload using the deterministic `created_at`, inserts the row,
 /// and updates wallet balances. Does NOT commit or roll back.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)] // reason: append_ledger_entry_tx mirrors the full ledger column set; packing into a struct would obscure the required fields
 pub async fn append_ledger_entry_tx(
     conn: &mut sqlx::PgConnection,
     tx_id: &str,
@@ -113,6 +113,7 @@ pub async fn append_ledger_entry_tx(
 /// Append a ledger entry inside its own transaction. Uses `Utc::now()` for
 /// the timestamp. Delegates to [`append_ledger_entry_tx`].
 #[allow(clippy::too_many_arguments)]
+// reason: ledger entries require all fields for hash-chain integrity; a builder would hide which fields are mandatory
 #[tracing::instrument(skip(pool))]
 pub async fn append_ledger_entry(
     pool: &PgPool,
@@ -288,7 +289,9 @@ pub async fn verify_full_ledger(
         expected_prev = row.hash.clone();
     }
 
-    let last = rows.last().unwrap();
+    let last = rows.last().ok_or_else(|| {
+        AppError::Internal(anyhow::anyhow!("ledger verification: empty rows after non-empty check"))
+    })?;
     Ok(LedgerVerify { ok: true, latest_seq: Some(last.seq), latest_hash: Some(last.hash.clone()) })
 }
 

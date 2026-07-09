@@ -8,6 +8,7 @@ edition = "2021"
 license = "Proprietary"
 rust-version = "1.80"
 repository = "https://github.com/YourTongji/YourTJ-Platform"
+publish = false
 
 # Centralised dependency versions. A workspace dependency is only compiled when a
 # member crate references it via `<name>.workspace = true`, so declaring future
@@ -50,13 +51,13 @@ uuid = { version = "1", features = ["v4"] }
 zxcvbn = "3"
 
 # Internal crates (domain boundaries).
-shared = { path = "crates/shared" }
-identity = { path = "crates/identity" }
-courses = { path = "crates/courses" }
-reviews = { path = "crates/reviews" }
-credit = { path = "crates/credit" }
-forum = { path = "crates/forum" }
-media = { path = "crates/media" }
+shared = { version = "0.1.0", path = "crates/shared" }
+identity = { version = "0.1.0", path = "crates/identity" }
+courses = { version = "0.1.0", path = "crates/courses" }
+reviews = { version = "0.1.0", path = "crates/reviews" }
+credit = { version = "0.1.0", path = "crates/credit" }
+forum = { version = "0.1.0", path = "crates/forum" }
+media = { version = "0.1.0", path = "crates/media" }
 
 [profile.release]
 opt-level = 3
