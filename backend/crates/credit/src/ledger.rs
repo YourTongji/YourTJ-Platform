@@ -15,7 +15,7 @@ pub fn canonicalize(payload: &serde_json::Value) -> String {
 
 /// Build the canonical payload for a ledger entry. Returns the canonical JSON string
 /// ready for hashing or signing.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)] // reason: canonical form must include all ledger fields for deterministic hashing; collapsing them would risk reorder bugs
 pub fn build_ledger_canonical(
     tx_id: &str,
     type_: &str,

@@ -6,6 +6,7 @@
 use shared::AppError;
 
 #[allow(clippy::enum_variant_names)]
+// reason: suffix "Missing" consistently describes each missing-entity error; renaming to diverge would reduce readability
 #[derive(Debug, thiserror::Error)]
 pub enum ForumError {
     #[error("board not found")]

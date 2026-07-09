@@ -13,8 +13,11 @@ use sqlx::PgPool;
 use shared::AppResult;
 
 #[allow(dead_code)]
-static WATCHED_WORDS_MATCHER: Lazy<ArcSwap<AhoCorasick>> =
-    Lazy::new(|| ArcSwap::from_pointee(AhoCorasick::new([] as [&str; 0]).unwrap()));
+static WATCHED_WORDS_MATCHER: Lazy<ArcSwap<AhoCorasick>> = Lazy::new(|| {
+    ArcSwap::from_pointee(
+        AhoCorasick::new(&[] as &[&str]).expect("empty pattern set must be valid"),
+    )
+});
 
 #[allow(dead_code)]
 static WATCHED_WORDS_ACTIONS: Lazy<ArcSwap<std::collections::HashMap<String, String>>> =

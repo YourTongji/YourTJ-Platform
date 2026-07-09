@@ -415,7 +415,8 @@ pub async fn create_thread(
 
     // Parse @mentions from body and notify mentioned users (fire-and-forget).
     if let Some(ref body_text) = body.body {
-        let mention_re = regex::Regex::new(r"@([\p{L}\p{N}_-]+)").unwrap();
+        let mention_re =
+            regex::Regex::new(r"@([\p{L}\p{N}_-]+)").expect("mention regex is statically valid");
         let handles: Vec<String> = mention_re
             .captures_iter(body_text)
             .map(|c| c[1].to_string())

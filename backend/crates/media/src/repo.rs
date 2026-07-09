@@ -7,7 +7,7 @@ use crate::error::MediaError;
 use crate::models::UploadRow;
 
 /// Insert a new upload row with status `pending`.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)] // reason: insert_upload mirrors the full upload column set; enforcing fields via individual params prevents accidental omission
 pub async fn insert_upload(
     pool: &PgPool,
     account_id: i64,

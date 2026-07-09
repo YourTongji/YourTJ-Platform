@@ -291,7 +291,8 @@ pub async fn create_comment(
             .unwrap_or_default();
 
     // Parse @mentions from body and notify mentioned users (fire-and-forget).
-    let mention_re = regex::Regex::new(r"@([\p{L}\p{N}_-]+)").unwrap();
+    let mention_re =
+        regex::Regex::new(r"@([\p{L}\p{N}_-]+)").expect("mention regex is statically valid");
     let handles: Vec<String> = mention_re
         .captures_iter(&body.body)
         .map(|c| c[1].to_string())
