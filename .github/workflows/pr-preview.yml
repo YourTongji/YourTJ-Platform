@@ -1,0 +1,203 @@
+name: pr-preview
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+    paths:
+      - "web/**"
+      - "backend/**"
+      - "contract/openapi.yaml"
+      - ".github/workflows/pr-preview.yml"
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "PR number to deploy"
+        required: true
+
+concurrency:
+  group: pr-preview-${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+  cancel-in-progress: true
+
+jobs:
+  # ── Detect changed paths ──
+  changes:
+    if: github.event.action != 'closed'
+    runs-on: ubuntu-latest
+    outputs:
+      backend: ${{ steps.filter.outputs.backend }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            backend:
+              - "backend/**"
+              - "contract/openapi.yaml"
+            frontend:
+              - "web/**"
+              - "contract/openapi.yaml"
+
+  # ── Build backend Docker image ──
+  backend:
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: build backend image
+        uses: docker/build-push-action@v6
+        with:
+          context: backend
+          file: backend/Dockerfile
+          load: true
+          tags: yourtj-api:pr-${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+          cache-from: type=gha,scope=backend-pr
+          cache-to: type=gha,scope=backend-pr,mode=max
+      - run: docker save yourtj-api:pr-${{ github.event.pull_request.number || github.event.inputs.pr_number }} -o /tmp/api-image.tar
+      - uses: actions/upload-artifact@v4
+        with:
+          name: api-image-${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+          path: /tmp/api-image.tar
+          retention-days: 1
+
+  # ── Build frontend ──
+  frontend:
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: "11.11.0"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - name: build
+        env:
+          VITE_API_BASE_URL: /pr-${{ github.event.pull_request.number || github.event.inputs.pr_number }}/api/v2
+        run: pnpm run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist-${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+          path: web/dist
+          retention-days: 1
+
+  # ── Deploy to test server ──
+  # always() so deploy runs even when one of backend/frontend was skipped
+  # (the build jobs only run when their code actually changed).
+  deploy:
+    if: always() && github.event.action != 'closed'
+    needs: [changes, backend, frontend]
+    timeout-minutes: 10
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: |
+            api-image-${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+            frontend-dist-${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+          merge-multiple: false
+        continue-on-error: true
+
+      - name: setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.PREVIEW_SSH_KEY }}" > ~/.ssh/preview_key
+          chmod 600 ~/.ssh/preview_key
+          cat >> ~/.ssh/config << 'EOF'
+          Host preview
+            HostName ${{ secrets.PREVIEW_HOST }}
+            Port ${{ secrets.PREVIEW_PORT }}
+            User ${{ secrets.PREVIEW_USER }}
+            IdentityFile ~/.ssh/preview_key
+            StrictHostKeyChecking no
+            UserKnownHostsFile /dev/null
+          EOF
+
+      - name: transfer backend image
+        if: always()
+        run: |
+          ART="api-image-${{ github.event.pull_request.number || github.event.inputs.pr_number }}"
+          TAR="${ART}/api-image.tar"
+          if [ -f "$TAR" ]; then
+            scp "$TAR" preview:/tmp/api-image-pr-${{ github.event.pull_request.number || github.event.inputs.pr_number }}.tar
+            ssh preview "docker load < /tmp/api-image-pr-${{ github.event.pull_request.number || github.event.inputs.pr_number }}.tar && rm /tmp/api-image-pr-${{ github.event.pull_request.number || github.event.inputs.pr_number }}.tar"
+          else
+            echo "(no backend image)"
+          fi
+
+      - name: transfer frontend dist
+        if: always()
+        run: |
+          ART="frontend-dist-${{ github.event.pull_request.number || github.event.inputs.pr_number }}"
+          FE_DIR="/opt/yourtj-preview/pr/${{ github.event.pull_request.number || github.event.inputs.pr_number }}/frontend"
+          if [ -d "$ART" ]; then
+            ssh preview "mkdir -p ${FE_DIR} && rm -rf ${FE_DIR}/*"
+            scp -r "$ART"/* preview:${FE_DIR}/
+          else
+            echo "(no frontend dist)"
+          fi
+
+      - name: run deploy script
+        if: always()
+        run: |
+          PR="${{ github.event.pull_request.number || github.event.inputs.pr_number }}"
+          FE_DIR="/opt/yourtj-preview/pr/${PR}/frontend"
+          ssh preview "/opt/yourtj-preview/deploy-pr.sh ${PR} ${FE_DIR}"
+
+      - name: summary
+        if: always()
+        run: |
+          PR="${{ github.event.pull_request.number || github.event.inputs.pr_number }}"
+          echo "### :rocket: PR Preview Deployed" >> $GITHUB_STEP_SUMMARY
+          echo "| | URL |" >> $GITHUB_STEP_SUMMARY
+          echo "|---|---|" >> $GITHUB_STEP_SUMMARY
+          echo "| Frontend | http://${{ secrets.PREVIEW_HOST }}:8080/pr-${PR}/ |" >> $GITHUB_STEP_SUMMARY
+          echo "| Backend  | http://${{ secrets.PREVIEW_HOST }}:8080/pr-${PR}/api/v2/health |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo ":warning: Preview auto-expires after 24 hours. Re-run this workflow to redeploy." >> $GITHUB_STEP_SUMMARY
+
+  # ── Cleanup on PR close ──
+  cleanup:
+    if: github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.PREVIEW_SSH_KEY }}" > ~/.ssh/preview_key
+          chmod 600 ~/.ssh/preview_key
+          cat >> ~/.ssh/config << 'EOF'
+          Host preview
+            HostName ${{ secrets.PREVIEW_HOST }}
+            Port ${{ secrets.PREVIEW_PORT }}
+            User ${{ secrets.PREVIEW_USER }}
+            IdentityFile ~/.ssh/preview_key
+            StrictHostKeyChecking no
+            UserKnownHostsFile /dev/null
+          EOF
+
+      - name: cleanup
+        run: |
+          PR="${{ github.event.pull_request.number }}"
+          ssh preview "
+            docker stop pr-${PR}-fe pr-${PR}-be 2>/dev/null || true
+            docker rm pr-${PR}-fe pr-${PR}-be 2>/dev/null || true
+            docker rmi yourtj-api:pr-${PR} 2>/dev/null || true
+            rm -rf /opt/yourtj-preview/pr/${PR}
+            PGPASSWORD=preview_pass_2026 psql -h 127.0.0.1 -p 5433 -U yourtj_preview -d postgres \
+              -c \"DROP DATABASE IF EXISTS yourtj_pr_${PR}\" 2>/dev/null || true
+          "
+          echo "### :broom: PR Preview Cleaned Up" >> $GITHUB_STEP_SUMMARY
