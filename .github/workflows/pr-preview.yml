@@ -104,10 +104,11 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          pattern: |
-            api-image-${{ github.event.pull_request.number || github.event.inputs.pr_number }}
-            frontend-dist-${{ github.event.pull_request.number || github.event.inputs.pr_number }}
-          merge-multiple: false
+          name: api-image-${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+        continue-on-error: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist-${{ github.event.pull_request.number || github.event.inputs.pr_number }}
         continue-on-error: true
 
       - name: setup SSH
