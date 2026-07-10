@@ -220,26 +220,24 @@ pub async fn verify_full_ledger(
         return Ok(LedgerVerify { ok: true, latest_seq: None, latest_hash: None });
     }
 
-    // Batch-load public keys for all non-system signers in a single query.
     let signer_ids: Vec<i64> = rows
         .iter()
-        .filter(|r| r.signer != "system")
-        .filter_map(|r| r.signer.parse::<i64>().ok())
+        .filter(|row| row.signer != "system")
+        .filter_map(|row| row.signer.parse::<i64>().ok())
         .collect::<std::collections::HashSet<_>>()
         .into_iter()
         .collect();
 
-    let mut pk_map: HashMap<i64, String> = HashMap::new();
+    let mut pk_map: HashMap<i64, Vec<String>> = HashMap::new();
     if !signer_ids.is_empty() {
         let key_rows: Vec<(i64, String)> = sqlx::query_as(
-            "SELECT account_id, public_key FROM identity.account_keys \
-             WHERE account_id = ANY($1)",
+            "SELECT account_id, public_key FROM identity.account_keys WHERE account_id = ANY($1)",
         )
         .bind(&signer_ids)
         .fetch_all(pool)
         .await?;
         for (account_id, public_key) in key_rows {
-            pk_map.insert(account_id, public_key);
+            pk_map.entry(account_id).or_default().push(public_key);
         }
     }
 
@@ -283,15 +281,48 @@ pub async fn verify_full_ledger(
                 });
             }
         } else if let Ok(account_id) = row.signer.parse::<i64>() {
-            if let Some(pk) = pk_map.get(&account_id) {
-                if !crate::ledger::verify_signature(&canonical, &row.signature, pk) {
+            let public_keys = match pk_map.get(&account_id) {
+                Some(public_keys) => public_keys,
+                None => {
                     return Ok(LedgerVerify {
                         ok: false,
                         latest_seq: Some(row.seq),
                         latest_hash: Some(row.hash.clone()),
                     });
                 }
+            };
+            let intent_signing_bytes: Option<String> = match row
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("signing_intent_id"))
+                .and_then(Value::as_str)
+            {
+                Some(intent_id) => {
+                    sqlx::query_scalar(
+                        "SELECT signing_bytes FROM credit.signing_intents WHERE id::text = $1",
+                    )
+                    .bind(intent_id)
+                    .fetch_optional(pool)
+                    .await?
+                }
+                None => None,
+            };
+            let signed_bytes = intent_signing_bytes.as_deref().unwrap_or(&canonical);
+            if !public_keys.iter().any(|public_key| {
+                crate::ledger::verify_signature(signed_bytes, &row.signature, public_key)
+            }) {
+                return Ok(LedgerVerify {
+                    ok: false,
+                    latest_seq: Some(row.seq),
+                    latest_hash: Some(row.hash.clone()),
+                });
             }
+        } else {
+            return Ok(LedgerVerify {
+                ok: false,
+                latest_seq: Some(row.seq),
+                latest_hash: Some(row.hash.clone()),
+            });
         }
 
         expected_prev = row.hash.clone();

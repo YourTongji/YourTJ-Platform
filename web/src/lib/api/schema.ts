@@ -802,6 +802,49 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/credit/signing-intents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create a request- and snapshot-bound one-time wallet signing intent */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["SigningIntentInput"];
+                };
+            };
+            responses: {
+                /** @description exact bytes to sign */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["SigningIntent"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/credit/tip": {
         parameters: {
             query?: never;
@@ -816,9 +859,11 @@ export interface paths {
             parameters: {
                 query?: never;
                 header: {
-                    /** @description Base64 Ed25519 signature over canonical(payload)+timestamp+nonce */
+                    /** @description One-time signing intent returned by POST /credit/signing-intents */
+                    "X-Wallet-Intent": components["parameters"]["WalletIntent"];
+                    /** @description Base64 Ed25519 signature over the intent's exact signingBytes */
                     "X-Wallet-Sig": components["parameters"]["WalletSig"];
-                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                    "Idempotency-Key": components["parameters"]["WalletIdempotencyKey"];
                 };
                 path?: never;
                 cookie?: never;
@@ -867,7 +912,7 @@ export interface paths {
             parameters: {
                 query?: never;
                 header: {
-                    /** @description Base64 Ed25519 signature over canonical(payload)+timestamp+nonce */
+                    /** @description Base64 Ed25519 signature over the intent's exact signingBytes */
                     "X-Wallet-Sig": components["parameters"]["WalletSig"];
                 };
                 path?: never;
@@ -919,7 +964,7 @@ export interface paths {
             parameters: {
                 query?: never;
                 header: {
-                    /** @description Base64 Ed25519 signature over canonical(payload)+timestamp+nonce */
+                    /** @description Base64 Ed25519 signature over the intent's exact signingBytes */
                     "X-Wallet-Sig": components["parameters"]["WalletSig"];
                 };
                 path: {
@@ -983,8 +1028,11 @@ export interface paths {
             parameters: {
                 query?: never;
                 header: {
-                    /** @description Base64 Ed25519 signature over canonical(payload)+timestamp+nonce */
+                    /** @description One-time signing intent returned by POST /credit/signing-intents */
+                    "X-Wallet-Intent": components["parameters"]["WalletIntent"];
+                    /** @description Base64 Ed25519 signature over the intent's exact signingBytes */
                     "X-Wallet-Sig": components["parameters"]["WalletSig"];
+                    "Idempotency-Key": components["parameters"]["WalletIdempotencyKey"];
                 };
                 path?: never;
                 cookie?: never;
@@ -1073,8 +1121,11 @@ export interface paths {
             parameters: {
                 query?: never;
                 header: {
-                    /** @description Base64 Ed25519 signature over canonical(payload)+timestamp+nonce */
+                    /** @description One-time signing intent returned by POST /credit/signing-intents */
+                    "X-Wallet-Intent": components["parameters"]["WalletIntent"];
+                    /** @description Base64 Ed25519 signature over the intent's exact signingBytes */
                     "X-Wallet-Sig": components["parameters"]["WalletSig"];
+                    "Idempotency-Key": components["parameters"]["WalletIdempotencyKey"];
                 };
                 path: {
                     id: string;
@@ -1182,8 +1233,11 @@ export interface paths {
             parameters: {
                 query?: never;
                 header: {
-                    /** @description Base64 Ed25519 signature over canonical(payload)+timestamp+nonce */
+                    /** @description One-time signing intent returned by POST /credit/signing-intents */
+                    "X-Wallet-Intent": components["parameters"]["WalletIntent"];
+                    /** @description Base64 Ed25519 signature over the intent's exact signingBytes */
                     "X-Wallet-Sig": components["parameters"]["WalletSig"];
+                    "Idempotency-Key": components["parameters"]["WalletIdempotencyKey"];
                 };
                 path: {
                     id: string;
@@ -1272,8 +1326,11 @@ export interface paths {
             parameters: {
                 query?: never;
                 header: {
-                    /** @description Base64 Ed25519 signature over canonical(payload)+timestamp+nonce */
+                    /** @description One-time signing intent returned by POST /credit/signing-intents */
+                    "X-Wallet-Intent": components["parameters"]["WalletIntent"];
+                    /** @description Base64 Ed25519 signature over the intent's exact signingBytes */
                     "X-Wallet-Sig": components["parameters"]["WalletSig"];
+                    "Idempotency-Key": components["parameters"]["WalletIdempotencyKey"];
                 };
                 path: {
                     id: string;
@@ -5201,6 +5258,18 @@ export interface components {
             latestSeq?: number;
             latestHash?: string;
         };
+        SigningIntentInput: {
+            /** @enum {string} */
+            action: "credit.tip" | "credit.task.create" | "credit.task.action" | "credit.product.purchase" | "credit.purchase.action";
+            request: Record<string, never>;
+        };
+        SigningIntent: {
+            /** Format: uuid */
+            intentId: string;
+            signingBytes: string;
+            /** Format: int64 */
+            expiresAt: number;
+        };
         TipInput: {
             toAccountId: string;
             amount: number;
@@ -5720,9 +5789,12 @@ export interface components {
         /** @description Opaque pagination cursor */
         Cursor: string;
         Limit: number;
-        /** @description Base64 Ed25519 signature over canonical(payload)+timestamp+nonce */
+        /** @description One-time signing intent returned by POST /credit/signing-intents */
+        WalletIntent: string;
+        /** @description Base64 Ed25519 signature over the intent's exact signingBytes */
         WalletSig: string;
         IdempotencyKey: string;
+        WalletIdempotencyKey: string;
     };
     requestBodies: never;
     headers: never;

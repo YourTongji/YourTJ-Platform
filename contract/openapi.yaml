@@ -6,9 +6,9 @@ info:
     The single source of truth for the v2 HTTP contract. Client type bindings
     (TS / Swift / Dart) are generated from this file — change the API here first,
     then implement and regenerate. Conventions: bearer JWT auth; money/escrow
-    writes additionally require `X-Wallet-Sig` (Ed25519); cursor pagination on
-    public lists; the error envelope `{ error: { code, message } }`; timestamps
-    are Unix seconds.
+    writes use one-time signing intents and require `X-Wallet-Intent`,
+    `X-Wallet-Sig`, and the same `Idempotency-Key`; cursor pagination on public
+    lists; the error envelope `{ error: { code, message } }`; timestamps are Unix seconds.
 servers:
   - url: https://api.yourtj.de/api/v2
 
@@ -36,17 +36,28 @@ components:
   parameters:
     Cursor: { name: cursor, in: query, schema: { type: string }, description: Opaque pagination cursor }
     Limit: { name: limit, in: query, schema: { type: integer, default: 20, maximum: 100 } }
+    WalletIntent:
+      name: X-Wallet-Intent
+      in: header
+      required: true
+      schema: { type: string, format: uuid }
+      description: One-time signing intent returned by POST /credit/signing-intents
     WalletSig:
       name: X-Wallet-Sig
       in: header
       required: true
       schema: { type: string }
-      description: Base64 Ed25519 signature over canonical(payload)+timestamp+nonce
+      description: Base64 Ed25519 signature over the intent's exact signingBytes
     IdempotencyKey:
       name: Idempotency-Key
       in: header
       required: false
-      schema: { type: string }
+      schema: { type: string, minLength: 1, maxLength: 128 }
+    WalletIdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema: { type: string, minLength: 1, maxLength: 128 }
 
   responses:
     BadRequest:   { description: Bad request, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
@@ -176,6 +187,21 @@ components:
         ok: { type: boolean }
         latestSeq: { type: integer }
         latestHash: { type: string }
+    SigningIntentInput:
+      type: object
+      required: [action, request]
+      properties:
+        action:
+          type: string
+          enum: [credit.tip, credit.task.create, credit.task.action, credit.product.purchase, credit.purchase.action]
+        request: { type: object }
+    SigningIntent:
+      type: object
+      required: [intentId, signingBytes, expiresAt]
+      properties:
+        intentId: { type: string, format: uuid }
+        signingBytes: { type: string }
+        expiresAt: { type: integer, format: int64 }
     TipInput:
       type: object
       required: [toAccountId, amount, targetType, targetId]
@@ -713,11 +739,20 @@ paths:
       responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/LedgerVerify" } } } } }
 
   # ============ credit: controlled money ops (NO free transfer — design §6.3) ============
+  /credit/signing-intents:
+    post:
+      tags: [credit]
+      summary: Create a request- and snapshot-bound one-time wallet signing intent
+      parameters: [{ $ref: "#/components/parameters/WalletIdempotencyKey" }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/SigningIntentInput" } } } }
+      responses:
+        "200": { description: exact bytes to sign, content: { application/json: { schema: { $ref: "#/components/schemas/SigningIntent" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
   /credit/tip:
     post:
       tags: [credit]
       summary: Tip — controlled transfer bound to a specific piece of content
-      parameters: [{ $ref: "#/components/parameters/WalletSig" }, { $ref: "#/components/parameters/IdempotencyKey" }]
+      parameters: [{ $ref: "#/components/parameters/WalletIntent" }, { $ref: "#/components/parameters/WalletSig" }, { $ref: "#/components/parameters/WalletIdempotencyKey" }]
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/TipInput" } } } }
       responses:
         "200": { description: ok }
@@ -751,7 +786,7 @@ paths:
     post:
       tags: [credit]
       summary: Publish a task (escrow_hold of the reward)
-      parameters: [{ $ref: "#/components/parameters/WalletSig" }]
+      parameters: [{ $ref: "#/components/parameters/WalletIntent" }, { $ref: "#/components/parameters/WalletSig" }, { $ref: "#/components/parameters/WalletIdempotencyKey" }]
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/TaskInput" } } } }
       responses:
         "201": { description: created, content: { application/json: { schema: { $ref: "#/components/schemas/Task" } } } }
@@ -766,7 +801,7 @@ paths:
     post:
       tags: [credit]
       summary: Two-phase confirm — submit / confirm(release) / cancel / reject / delete
-      parameters: [{ name: id, in: path, required: true, schema: { type: string } }, { $ref: "#/components/parameters/WalletSig" }]
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }, { $ref: "#/components/parameters/WalletIntent" }, { $ref: "#/components/parameters/WalletSig" }, { $ref: "#/components/parameters/WalletIdempotencyKey" }]
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/TaskAction" } } } }
       responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Task" } } } } }
 
@@ -786,7 +821,7 @@ paths:
     post:
       tags: [credit]
       summary: Buy a product (escrow_hold of the price)
-      parameters: [{ name: id, in: path, required: true, schema: { type: string } }, { $ref: "#/components/parameters/WalletSig" }]
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }, { $ref: "#/components/parameters/WalletIntent" }, { $ref: "#/components/parameters/WalletSig" }, { $ref: "#/components/parameters/WalletIdempotencyKey" }]
       responses:
         "201": { description: created, content: { application/json: { schema: { $ref: "#/components/schemas/Purchase" } } } }
         "402": { description: insufficient balance, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
@@ -800,7 +835,7 @@ paths:
     post:
       tags: [credit]
       summary: Escrow steps — accept / deliver / confirm(release)
-      parameters: [{ name: id, in: path, required: true, schema: { type: string } }, { $ref: "#/components/parameters/WalletSig" }]
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }, { $ref: "#/components/parameters/WalletIntent" }, { $ref: "#/components/parameters/WalletSig" }, { $ref: "#/components/parameters/WalletIdempotencyKey" }]
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/PurchaseAction" } } } }
       responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Purchase" } } } } }
 

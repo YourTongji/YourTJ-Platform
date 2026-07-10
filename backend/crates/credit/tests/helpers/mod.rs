@@ -50,13 +50,21 @@ async fn run_migrations(pool: &PgPool) {
     .await
     .unwrap_or(false);
     if is_fresh {
-        let migrations: [&str; 6] = [
+        let migrations: [&str; 14] = [
             include_str!("../../../../migrations/0001_init.sql"),
             include_str!("../../../../migrations/0002_escrow_selection.sql"),
             include_str!("../../../../migrations/0003_platform.sql"),
             include_str!("../../../../migrations/0004_review_remediation.sql"),
             include_str!("../../../../migrations/0005_forum_parity.sql"),
             include_str!("../../../../migrations/0006_forum_f2_f3.sql"),
+            include_str!("../../../../migrations/0007_badges_feature.sql"),
+            include_str!("../../../../migrations/0008_badge_mint_bridge.sql"),
+            include_str!("../../../../migrations/0009_selection_raw_pk.sql"),
+            include_str!("../../../../migrations/0010_selection_raw_normalized.sql"),
+            include_str!("../../../../migrations/0011_password_auth.sql"),
+            include_str!("../../../../migrations/0012_natural_key_upsert.sql"),
+            include_str!("../../../../migrations/0013_teacher_names.sql"),
+            include_str!("../../../../migrations/0014_credit_signing_intents.sql"),
         ];
         for (i, sql) in migrations.iter().enumerate() {
             sqlx::raw_sql(sql)
@@ -70,6 +78,7 @@ async fn run_migrations(pool: &PgPool) {
     sqlx::query("DELETE FROM credit.purchases").execute(pool).await.ok();
     sqlx::query("DELETE FROM credit.products").execute(pool).await.ok();
     sqlx::query("DELETE FROM credit.tasks").execute(pool).await.ok();
+    sqlx::query("DELETE FROM credit.signing_intents").execute(pool).await.ok();
     sqlx::query("DELETE FROM credit.ledger").execute(pool).await.ok();
     sqlx::query("DELETE FROM credit.wallets").execute(pool).await.ok();
     sqlx::query("DELETE FROM identity.sessions").execute(pool).await.ok();

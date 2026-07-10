@@ -12,10 +12,9 @@ use shared::{AppResult, AppState, Page};
 
 use crate::dto::{
     LedgerEntryDto, LedgerVerify, ProductDto, ProductInput, PurchaseAction, PurchaseDto,
-    TaskAction, TaskDto, TaskInput, TipInput, WalletDto,
+    SigningIntentInput, SigningIntentOutput, TaskAction, TaskDto, TaskInput, TipInput, WalletDto,
 };
 use crate::error::CreditError;
-use crate::ledger::verify_signature;
 use crate::repo;
 
 // ---------------------------------------------------------------------------
@@ -33,6 +32,23 @@ fn map_auth_err(response: axum::response::Response) -> shared::AppError {
     } else {
         shared::AppError::Forbidden
     }
+}
+
+/// POST /api/v2/credit/signing-intents — return exact bytes for wallet signing.
+pub async fn create_signing_intent(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<SigningIntentInput>,
+) -> AppResult<Json<SigningIntentOutput>> {
+    let auth = crate::auth::authenticate(&headers, &state.db, &state.jwt_secret)
+        .await
+        .map_err(map_auth_err)?;
+    let idempotency_key = headers
+        .get("idempotency-key")
+        .and_then(|header| header.to_str().ok())
+        .filter(|header| !header.is_empty())
+        .ok_or(CreditError::IntentUnavailable)?;
+    Ok(Json(crate::signing::create_intent(&state.db, auth.id, &body, idempotency_key).await?))
 }
 
 // ---------------------------------------------------------------------------
@@ -122,72 +138,47 @@ pub async fn tip(
         return Err(shared::AppError::BadRequest("amount must be positive".into()));
     }
 
-    // Fetch the signer's Ed25519 public key.
-    let pk_row: Option<(String,)> =
-        sqlx::query_as("SELECT public_key FROM identity.account_keys WHERE account_id = $1")
-            .bind(auth.id)
-            .fetch_optional(&state.db)
-            .await?;
-
-    let (public_key,) = pk_row.ok_or(CreditError::WalletNotBound)?;
-
-    // Extract X-Wallet-Sig header.
-    let sig_b64 = headers
-        .get("x-wallet-sig")
-        .and_then(|v| v.to_str().ok())
-        .ok_or(CreditError::InvalidSignature)?;
-
+    let request = serde_json::to_value(&body)
+        .map_err(|error| shared::AppError::Internal(anyhow::Error::new(error)))?;
+    let mut tx = state.db.begin().await?;
+    let signature =
+        crate::signing::consume_intent(&mut tx, &headers, auth.id, "credit.tip", &request).await?;
+    let wallet_balance: i64 = sqlx::query_scalar(
+        "SELECT COALESCE((SELECT balance FROM credit.wallets WHERE account_id = $1 FOR UPDATE), 0)",
+    )
+    .bind(auth.id)
+    .fetch_one(&mut *tx)
+    .await?;
+    if wallet_balance < body.amount {
+        return Err(CreditError::InsufficientBalance.into());
+    }
     let tx_id = uuid::Uuid::new_v4().to_string();
     let nonce = uuid::Uuid::new_v4().to_string();
     let timestamp = Utc::now().timestamp();
-
-    // Build the canonical payload that the wallet app signed.
-    let payload = serde_json::json!({
-        "tx_id": tx_id,
-        "type": "tip",
-        "from": auth.id.to_string(),
-        "to": to_account_id.to_string(),
-        "amount": body.amount,
-        "target_type": body.target_type,
-        "target_id": body.target_id,
-        "nonce": nonce,
-        "timestamp": timestamp,
-    });
-    let canonical = crate::ledger::canonicalize(&payload);
-
-    // Verify signature.
-    if !verify_signature(&canonical, sig_b64, &public_key) {
-        return Err(CreditError::InvalidSignature.into());
-    }
-
-    // Check balance.
-    let wallet = repo::get_wallet(&state.db, auth.id).await?;
-    if wallet.balance < body.amount {
-        return Err(CreditError::InsufficientBalance.into());
-    }
-
-    // Ensure recipient wallet exists.
-    repo::ensure_wallet_exists(&state.db, to_account_id).await?;
-
+    let intent_id = headers
+        .get("x-wallet-intent")
+        .and_then(|header| header.to_str().ok())
+        .ok_or(CreditError::IntentUnavailable)?;
     let metadata = serde_json::json!({
         "target_type": body.target_type,
         "target_id": body.target_id,
+        "signing_intent_id": intent_id,
     });
-
-    // Append the ledger entry.
-    repo::append_ledger_entry(
-        &state.db,
+    repo::append_ledger_entry_tx(
+        &mut tx,
         &tx_id,
         "tip",
         Some(auth.id),
         Some(to_account_id),
         body.amount,
         &nonce,
-        Some(metadata),
+        Some(&metadata),
         &auth.id.to_string(),
-        sig_b64,
+        &signature,
+        timestamp,
     )
     .await?;
+    tx.commit().await?;
 
     tracing::info!(from = auth.id, to = to_account_id, amount = body.amount, "tip processed");
 
@@ -272,35 +263,32 @@ pub async fn create_task(
         return Err(shared::AppError::BadRequest("reward_amount must be positive".into()));
     }
 
-    let wallet = repo::get_wallet(&state.db, auth.id).await?;
-    if wallet.balance < body.reward_amount {
-        return Err(CreditError::InsufficientBalance.into());
-    }
-
+    let request = serde_json::to_value(&body)
+        .map_err(|error| shared::AppError::Internal(anyhow::Error::new(error)))?;
     let tx_id = uuid::Uuid::new_v4().to_string();
     let nonce = uuid::Uuid::new_v4().to_string();
     let created_at = Utc::now().timestamp();
-    let metadata = serde_json::json!({ "title": body.title });
-
-    // Build the canonical payload for wallet-signature verification.
-    let canonical = crate::ledger::build_ledger_canonical(
-        &tx_id,
-        "escrow_hold",
-        Some(auth.id),
-        None,
-        body.reward_amount,
-        &nonce,
-        Some(&metadata),
-        "system",
-        created_at,
-    );
-    // Sign the escrow_hold payload with the system private key. Endpoint
-    // access is already gated by JWT auth; the ledger entry is system-signed.
-    let system_sig = crate::ledger::sign_with_seed(&canonical, &state.system_private_key);
-
-    // Atomic: escrow_hold ledger append + insert_task in a single transaction.
     let mut tx = state.db.begin().await?;
-
+    let signature =
+        crate::signing::consume_intent(&mut tx, &headers, auth.id, "credit.task.create", &request)
+            .await?;
+    let wallet_balance: i64 = sqlx::query_scalar(
+        "SELECT COALESCE((SELECT balance FROM credit.wallets WHERE account_id = $1 FOR UPDATE), 0)",
+    )
+    .bind(auth.id)
+    .fetch_one(&mut *tx)
+    .await?;
+    if wallet_balance < body.reward_amount {
+        return Err(CreditError::InsufficientBalance.into());
+    }
+    let intent_id = headers
+        .get("x-wallet-intent")
+        .and_then(|header| header.to_str().ok())
+        .ok_or(CreditError::IntentUnavailable)?;
+    let metadata = serde_json::json!({
+        "title": body.title,
+        "signing_intent_id": intent_id,
+    });
     repo::append_ledger_entry_tx(
         &mut tx,
         &tx_id,
@@ -310,8 +298,8 @@ pub async fn create_task(
         body.reward_amount,
         &nonce,
         Some(&metadata),
-        "system",
-        &system_sig,
+        &auth.id.to_string(),
+        &signature,
         created_at,
     )
     .await?;
@@ -398,6 +386,15 @@ pub async fn action_task(
 
             // Atomic: escrow_release + status update + hold clear.
             let mut tx = state.db.begin().await?;
+            let request = serde_json::json!({ "id": id.to_string(), "action": body.action });
+            crate::signing::consume_intent(
+                &mut tx,
+                &headers,
+                auth.id,
+                "credit.task.action",
+                &request,
+            )
+            .await?;
 
             if let Some(hold_tx) = &task.hold_tx_id {
                 let release_tx_id = uuid::Uuid::new_v4().to_string();
@@ -451,6 +448,15 @@ pub async fn action_task(
 
             // Atomic: escrow_release refund + status update + hold clear.
             let mut tx = state.db.begin().await?;
+            let request = serde_json::json!({ "id": id.to_string(), "action": body.action });
+            crate::signing::consume_intent(
+                &mut tx,
+                &headers,
+                auth.id,
+                "credit.task.action",
+                &request,
+            )
+            .await?;
 
             if let Some(hold_tx) = &task.hold_tx_id {
                 let refund_tx_id = uuid::Uuid::new_v4().to_string();
@@ -510,6 +516,17 @@ pub async fn action_task(
             // creator before deleting; a `cancelled` task already had its hold
             // released and cleared, so there is nothing to refund.
             let mut tx = state.db.begin().await?;
+            if task.hold_tx_id.is_some() {
+                let request = serde_json::json!({ "id": id.to_string(), "action": body.action });
+                crate::signing::consume_intent(
+                    &mut tx,
+                    &headers,
+                    auth.id,
+                    "credit.task.action",
+                    &request,
+                )
+                .await?;
+            }
 
             if let Some(hold_tx) = &task.hold_tx_id {
                 let refund_tx_id = uuid::Uuid::new_v4().to_string();
@@ -680,44 +697,40 @@ pub async fn purchase_product(
     .await?;
 
     let product = repo::find_product(&state.db, id).await?.ok_or(CreditError::ProductNotFound)?;
-
-    if product.status != "on_sale" {
-        return Err(CreditError::InvalidAction("product is not on_sale".into()).into());
-    }
-    if product.stock <= 0 {
-        return Err(CreditError::InvalidAction("product is sold out".into()).into());
-    }
     if product.seller_id == auth.id {
         return Err(CreditError::InvalidAction("cannot purchase your own product".into()).into());
     }
-
-    let wallet = repo::get_wallet(&state.db, auth.id).await?;
-    if wallet.balance < product.price {
-        return Err(CreditError::InsufficientBalance.into());
-    }
-
+    let request = serde_json::json!({ "productId": id.to_string() });
     let tx_id = uuid::Uuid::new_v4().to_string();
     let nonce = uuid::Uuid::new_v4().to_string();
     let created_at = Utc::now().timestamp();
-    let metadata = serde_json::json!({ "product_id": id.to_string(), "title": product.title });
-
-    // Build the canonical payload for wallet-signature verification.
-    let canonical = crate::ledger::build_ledger_canonical(
-        &tx_id,
-        "escrow_hold",
-        Some(auth.id),
-        None,
-        product.price,
-        &nonce,
-        Some(&metadata),
-        "system",
-        created_at,
-    );
-    let system_sig = crate::ledger::sign_with_seed(&canonical, &state.system_private_key);
-
-    // Atomic: escrow_hold + stock decrement + purchase insert in a single transaction.
     let mut tx = state.db.begin().await?;
-
+    let signature = crate::signing::consume_intent(
+        &mut tx,
+        &headers,
+        auth.id,
+        "credit.product.purchase",
+        &request,
+    )
+    .await?;
+    let wallet_balance: i64 = sqlx::query_scalar(
+        "SELECT COALESCE((SELECT balance FROM credit.wallets WHERE account_id = $1 FOR UPDATE), 0)",
+    )
+    .bind(auth.id)
+    .fetch_one(&mut *tx)
+    .await?;
+    if wallet_balance < product.price {
+        return Err(CreditError::InsufficientBalance.into());
+    }
+    let intent_id = headers
+        .get("x-wallet-intent")
+        .and_then(|header| header.to_str().ok())
+        .ok_or(CreditError::IntentUnavailable)?;
+    let metadata = serde_json::json!({
+        "product_id": id.to_string(),
+        "title": product.title,
+        "signing_intent_id": intent_id,
+    });
     repo::append_ledger_entry_tx(
         &mut tx,
         &tx_id,
@@ -727,8 +740,8 @@ pub async fn purchase_product(
         product.price,
         &nonce,
         Some(&metadata),
-        "system",
-        &system_sig,
+        &auth.id.to_string(),
+        &signature,
         created_at,
     )
     .await?;
@@ -737,11 +750,9 @@ pub async fn purchase_product(
     if product.stock <= 1 {
         repo::update_product_status_tx(&mut tx, id, "sold_out").await?;
     }
-
     let purchase =
         repo::insert_purchase_tx(&mut tx, id, auth.id, product.seller_id, product.price, &tx_id)
             .await?;
-
     tx.commit().await?;
 
     Ok(Json(PurchaseDto {
@@ -837,6 +848,15 @@ pub async fn action_purchase(
 
             // Atomic: escrow_release + status update.
             let mut tx = state.db.begin().await?;
+            let request = serde_json::json!({ "id": id.to_string(), "action": body.action });
+            crate::signing::consume_intent(
+                &mut tx,
+                &headers,
+                auth.id,
+                "credit.purchase.action",
+                &request,
+            )
+            .await?;
 
             if let Some(hold_tx) = &purchase.hold_tx_id {
                 let release_tx_id = uuid::Uuid::new_v4().to_string();
@@ -890,6 +910,15 @@ pub async fn action_purchase(
 
             // Atomic: escrow_release refund + status update.
             let mut tx = state.db.begin().await?;
+            let request = serde_json::json!({ "id": id.to_string(), "action": body.action });
+            crate::signing::consume_intent(
+                &mut tx,
+                &headers,
+                auth.id,
+                "credit.purchase.action",
+                &request,
+            )
+            .await?;
 
             if let Some(hold_tx) = &purchase.hold_tx_id {
                 let refund_tx_id = uuid::Uuid::new_v4().to_string();

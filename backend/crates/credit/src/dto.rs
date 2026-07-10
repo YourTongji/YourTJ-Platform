@@ -5,6 +5,23 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Request for exact bytes authorizing one credit operation.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SigningIntentInput {
+    pub action: String,
+    pub request: serde_json::Value,
+}
+
+/// One-time signing challenge bound to the authenticated account and request.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SigningIntentOutput {
+    pub intent_id: String,
+    pub signing_bytes: String,
+    pub expires_at: i64,
+}
+
 /// GET /wallet
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -43,7 +60,7 @@ pub struct LedgerVerify {
 }
 
 /// POST /wallet/tip
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TipInput {
     pub to_account_id: String,
@@ -68,7 +85,7 @@ pub struct TaskDto {
 }
 
 /// POST /credit/tasks
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TaskInput {
     pub title: String,
@@ -78,7 +95,7 @@ pub struct TaskInput {
 }
 
 /// POST /credit/tasks/{id}/action
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TaskAction {
     pub action: String,
@@ -100,7 +117,7 @@ pub struct ProductDto {
 }
 
 /// POST /credit/products
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProductInput {
     pub title: String,
@@ -123,7 +140,7 @@ pub struct PurchaseDto {
 }
 
 /// POST /credit/purchases/{id}/action
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PurchaseAction {
     pub action: String,

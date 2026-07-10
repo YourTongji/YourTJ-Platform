@@ -12,7 +12,7 @@
 |---|---|
 | Base | `/api/v2` |
 | 鉴权 | `Authorization: Bearer <access_jwt>`（15min）；refresh 走 `/auth/refresh` |
-| 资金签名 | 资金/escrow 写操作额外带 `X-Wallet-Sig: <base64(ed25519)>`，签名对象 = 规范化 JSON（按 key 排序）+ `timestamp`+`nonce`；公钥由 `account_id` 反查 `account_keys` |
+| 资金签名 | 资金/escrow 用户发起写操作先 `POST /api/v2/credit/signing-intents` 取得服务端规范化 `signingBytes`；提交写操作时必须同时带 `X-Wallet-Intent`、`X-Wallet-Sig`、同一个 `Idempotency-Key`。意图绑定 account/key/action/request/snapshot/TTL，并在同一事务中一次性消费。|
 | 分页 | 游标优先：`?cursor=<opaque>&limit=20` → `{ items, next_cursor, has_more }`；管理后台允许 `page/limit` |
 | 幂等 | 写操作支持 `Idempotency-Key` 头（发帖/转账/点赞防重放）|
 | 错误 | `{ "error": { "code": "REVIEW_DUPLICATE", "message": "...", "details": {} } }`，HTTP 状态 + 稳定 code |
