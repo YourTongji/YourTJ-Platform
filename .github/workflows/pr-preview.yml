@@ -173,7 +173,8 @@ jobs:
 
   # ── Cleanup on PR close ──
   cleanup:
-    if: github.event.action == 'closed'
+    # Only clean up when PR is closed without merging (merged → deploy-main handles it)
+    if: github.event.action == 'closed' && github.event.pull_request.merged == false
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
