@@ -6,28 +6,29 @@
 @custom-variant dark (&:is(.dark *));
 
 :root {
-  --font-sans: "Inter", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
-  --background: #f2f7f5;
-  --foreground: #0e2420;
+  --font-sans: "HarmonyOS Sans SC", "PingFang SC", "Noto Sans SC", "Microsoft YaHei", system-ui, sans-serif;
+  --font-display: "Geist", "HarmonyOS Sans SC", "PingFang SC", system-ui, sans-serif;
+  --background: #f8faf8;
+  --foreground: #1a1a1a;
   --card: #ffffff;
-  --card-foreground: #0e2420;
+  --card-foreground: #1a1a1a;
   --popover: #ffffff;
-  --popover-foreground: #0e2420;
-  --primary: #00a08a;
+  --popover-foreground: #1a1a1a;
+  --primary: #009688;
   --primary-foreground: #ffffff;
-  --secondary: #ddf0eb;
-  --secondary-foreground: #0a4035;
-  --muted: #e8f2ef;
-  --muted-foreground: #5a7d77;
-  --accent: #ccebe5;
-  --accent-foreground: #0a4035;
+  --secondary: #f0fdfa;
+  --secondary-foreground: #00796b;
+  --muted: #f3f4f6;
+  --muted-foreground: #6b7280;
+  --accent: #f3f4f6;
+  --accent-foreground: #1a1a1a;
   --destructive: #d4183d;
   --destructive-foreground: #ffffff;
-  --border: rgba(0, 80, 60, 0.11);
-  --input: rgba(0, 80, 60, 0.12);
-  --ring: #00a08a;
-  --radius: 0.5rem;
-  --chart-1: #00a08a;
+  --border: #e5e7eb;
+  --input: #e5e7eb;
+  --ring: #009688;
+  --radius: 0.75rem;
+  --chart-1: #009688;
   --chart-2: #c9a227;
   --chart-3: #4f87a0;
   --chart-4: #7ca86e;
@@ -58,6 +59,7 @@
 
 @theme inline {
   --font-sans: var(--font-sans);
+  --font-display: var(--font-display);
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -100,6 +102,7 @@
 
   body {
     @apply bg-background text-foreground antialiased;
+    min-width: 320px;
     margin: 0;
   }
 
@@ -128,5 +131,13 @@
     -webkit-line-clamp: 3;
     -webkit-box-orient: vertical;
     overflow: hidden;
+  }
+
+  .scrollbar-none {
+    scrollbar-width: none;
+  }
+
+  .scrollbar-none::-webkit-scrollbar {
+    display: none;
   }
 }
