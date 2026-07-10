@@ -10,9 +10,10 @@ env:
   RUST_LOG: info
   JWT_SECRET: ci-test-secret
   CREDIT_SYSTEM_PRIVATE_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+  PNPM_VERSION: "11.11.0"
 
 jobs:
-  # Step 1: quick checks — fmt, clippy, and unit tests (no DB needed).
+  # ── Backend: quick checks — fmt, clippy, and unit tests (no DB needed) ──
   lint:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -34,7 +35,7 @@ jobs:
       - name: unit tests
         run: cargo test --lib
 
-  # Step 2: integration tests with a real Postgres database.
+  # ── Backend: integration tests with a real Postgres database ──
   integration:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -76,3 +77,33 @@ jobs:
         run: cargo test --all -- --nocapture --test-threads=1
         env:
           DATABASE_URL: postgres://yourtj:yourtj@localhost:5432/yourtj_test
+
+  # ── Frontend: lint, typecheck, and build ──
+  web:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - name: install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: verify generated API types
+        run: |
+          pnpm run generate:api
+          git diff --exit-code
+      - name: lint
+        run: pnpm run lint
+      - name: typecheck
+        run: pnpm run typecheck
+      - name: build
+        run: pnpm run build
