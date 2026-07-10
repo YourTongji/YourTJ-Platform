@@ -95,10 +95,11 @@ jobs:
           retention-days: 1
 
   # ── Deploy to test server ──
+  # always() so deploy runs even when one of backend/frontend was skipped
+  # (the build jobs only run when their code actually changed).
   deploy:
-    if: github.event.action != 'closed'
+    if: always() && github.event.action != 'closed'
     needs: [changes, backend, frontend]
-    runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/download-artifact@v4
