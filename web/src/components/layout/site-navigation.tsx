@@ -1,11 +1,10 @@
 import {
   Bell,
-  BookOpen,
   Bookmark,
+  BookOpen,
   CalendarDays,
   CircleHelp,
   Home,
-  Landmark,
   MessageSquare,
   Settings,
   Shield,
@@ -34,9 +33,13 @@ const adminNavigation = { to: "/admin", label: "社区管理", icon: Shield };
 
 export function Brand({ compact = false }: { compact?: boolean }) {
   return (
-    <Link to="/" className="flex shrink-0 items-center gap-2" aria-label="YourTJ 社区首页">
-      <span className="flex size-8 items-center justify-center rounded-full border border-blue-500/60 bg-blue-50 text-blue-600">
-        <Landmark className="size-[18px]" strokeWidth={1.8} />
+    <Link
+      to="/"
+      className="flex shrink-0 items-center gap-2"
+      aria-label="YourTJ 社区首页"
+    >
+      <span className="flex size-8 items-center justify-center rounded-full overflow-hidden">
+        <img src="/icon.png" alt="YourTJ" className="size-full object-cover" />
       </span>
       <span
         className={cn(
@@ -85,8 +88,12 @@ function NavigationGroup({
 function PromotionSlot() {
   return (
     <div className="rounded-lg border border-primary/20 bg-primary/10 px-3 py-3 text-center">
-      <p className="text-[10px] font-medium tracking-[0.1em] text-primary">ADVERTISEMENT</p>
-      <p className="mt-1 text-xs text-[#374151] dark:text-foreground">社区推广位</p>
+      <p className="text-[10px] font-medium tracking-[0.1em] text-primary">
+        ADVERTISEMENT
+      </p>
+      <p className="mt-1 text-xs text-[#374151] dark:text-foreground">
+        社区推广位
+      </p>
     </div>
   );
 }
@@ -128,7 +135,10 @@ export function SiteSidebar({ onNavigate }: { onNavigate?: () => void }) {
         </a>
       </div>
 
-      <footer id="site-footer" className="mt-6 px-3 text-xs leading-4 text-[#9ca3af]">
+      <footer
+        id="site-footer"
+        className="mt-6 px-3 text-xs leading-4 text-[#9ca3af]"
+      >
         <div className="flex flex-wrap gap-x-3 gap-y-1 text-primary">
           <a href="mailto:hello@yourtj.de">关于我们</a>
           <Link to="/forum">社区规则</Link>
