@@ -15,6 +15,35 @@ export function formatUnixTime(value?: number | string | null) {
   }).format(date);
 }
 
+export function formatRelativeTime(value?: number | string | null) {
+  if (value === undefined || value === null || value === "") {
+    return "刚刚";
+  }
+
+  const date = typeof value === "number" ? new Date(value * 1000) : new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "刚刚";
+  }
+
+  const seconds = Math.round((date.getTime() - Date.now()) / 1000);
+  const formatter = new Intl.RelativeTimeFormat("zh-CN", { numeric: "auto" });
+  const ranges: Array<[Intl.RelativeTimeFormatUnit, number]> = [
+    ["year", 60 * 60 * 24 * 365],
+    ["month", 60 * 60 * 24 * 30],
+    ["day", 60 * 60 * 24],
+    ["hour", 60 * 60],
+    ["minute", 60],
+  ];
+
+  for (const [unit, size] of ranges) {
+    if (Math.abs(seconds) >= size) {
+      return formatter.format(Math.round(seconds / size), unit);
+    }
+  }
+
+  return "刚刚";
+}
+
 export function formatDate(value?: number | string | null) {
   if (value === undefined || value === null || value === "") {
     return "未知";
