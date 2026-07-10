@@ -1,0 +1,171 @@
+name: project-automation
+
+on:
+  issues:
+    types: [opened, labeled, unlabeled]
+  pull_request:
+    types: [opened, converted_to_draft, ready_for_review, closed]
+
+env:
+  PROJECT_NUMBER: "1"
+  PROJECT_ID: PVT_kwDODzOQt84Bc_ag
+  FIELD_ID: PVTSSF_lADODzOQt84Bc_agzhXkOf8
+
+  # ── Status option IDs (from YourTJ RPD Status field) ──
+  # Change these if you re-order the Status options in project settings.
+  OPT_INBOX: f75ad846
+  OPT_TODO: f40dc2c9
+  OPT_IN_PROGRESS: 47fc9ee4
+  OPT_REVIEW: 776878bb
+  OPT_DONE: 98236657
+  OPT_BLOCKED: 4f2883c3
+
+jobs:
+  automate:
+    # ── Only run for repo-owned PRs (not forks). Issue events always run. ──
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - name: determine target action and status
+        id: plan
+        run: |
+          EVENT="${{ github.event_name }}"
+          ACTION="${{ github.event.action }}"
+
+          case "$EVENT:$ACTION" in
+            # ── ① Issue opened → add to project + set Inbox ──
+            "issues:opened")
+              echo "mode=add_then_set" >> $GITHUB_OUTPUT
+              echo "option_id=$OPT_INBOX" >> $GITHUB_OUTPUT
+              ;;
+
+            # ── ② "blocked" label added → Blocked ──
+            "issues:labeled")
+              if [ "${{ github.event.label.name }}" = "blocked" ]; then
+                echo "mode=set" >> $GITHUB_OUTPUT
+                echo "option_id=$OPT_BLOCKED" >> $GITHUB_OUTPUT
+              else
+                echo "mode=skip" >> $GITHUB_OUTPUT
+              fi
+              ;;
+
+            # ── ③ "blocked" label removed → back to In Progress ──
+            "issues:unlabeled")
+              if [ "${{ github.event.label.name }}" = "blocked" ]; then
+                echo "mode=set" >> $GITHUB_OUTPUT
+                echo "option_id=$OPT_IN_PROGRESS" >> $GITHUB_OUTPUT
+              else
+                echo "mode=skip" >> $GITHUB_OUTPUT
+              fi
+              ;;
+
+            # ── ④ PR opened or converted to draft → linked issues → In Progress ──
+            "pull_request:opened"|"pull_request:converted_to_draft")
+              echo "mode=set_linked" >> $GITHUB_OUTPUT
+              echo "option_id=$OPT_IN_PROGRESS" >> $GITHUB_OUTPUT
+              ;;
+
+            # ── ⑤ PR marked ready for review → linked issues → Review ──
+            "pull_request:ready_for_review")
+              echo "mode=set_linked" >> $GITHUB_OUTPUT
+              echo "option_id=$OPT_REVIEW" >> $GITHUB_OUTPUT
+              ;;
+
+            # ── ⑥ PR merged → linked issues → Done ──
+            # ── ⑦ PR closed without merge → linked issues → Todo ──
+            "pull_request:closed")
+              if [ "${{ github.event.pull_request.merged }}" = "true" ]; then
+                echo "mode=set_linked" >> $GITHUB_OUTPUT
+                echo "option_id=$OPT_DONE" >> $GITHUB_OUTPUT
+              else
+                echo "mode=set_linked" >> $GITHUB_OUTPUT
+                echo "option_id=$OPT_TODO" >> $GITHUB_OUTPUT
+              fi
+              ;;
+
+            *)
+              echo "mode=skip" >> $GITHUB_OUTPUT
+              ;;
+          esac
+
+      # ──────────────────────────────────────────────────────────────
+      # Step A: Add new issue to project (mode = add_then_set)
+      # ──────────────────────────────────────────────────────────────
+      - name: add issue to project
+        if: steps.plan.outputs.mode == 'add_then_set'
+        env:
+          GH_TOKEN: ${{ secrets.PROJECT_PAT }}
+        run: |
+          gh project item-add "$PROJECT_NUMBER" \
+            --owner YourTongji \
+            --url "${{ github.event.issue.html_url }}"
+
+      # ──────────────────────────────────────────────────────────────
+      # Step B: Set status on an issue (mode = set / add_then_set)
+      # ──────────────────────────────────────────────────────────────
+      - name: set issue status
+        if: steps.plan.outputs.mode == 'set' || steps.plan.outputs.mode == 'add_then_set'
+        env:
+          GH_TOKEN: ${{ secrets.PROJECT_PAT }}
+        run: |
+          ISSUE_URL="${{ github.event.issue.html_url }}"
+          ITEMS=$(gh project item-list "$PROJECT_NUMBER" --owner YourTongji --format json --limit 200)
+
+          ITEM_ID=$(echo "$ITEMS" | jq -r --arg url "$ISSUE_URL" \
+            '.items[]? | select(.content.url == $url) | .id' | head -1)
+
+          if [ -n "$ITEM_ID" ] && [ "$ITEM_ID" != "null" ]; then
+            gh project item-edit \
+              --id "$ITEM_ID" \
+              --field-id "$FIELD_ID" \
+              --project-id "$PROJECT_ID" \
+              --single-select-option-id "${{ steps.plan.outputs.option_id }}"
+            echo "✓ issue → option ${{ steps.plan.outputs.option_id }}"
+          else
+            echo "⚠ issue not found in project (was it added?)"
+          fi
+
+      # ──────────────────────────────────────────────────────────────
+      # Step C: Set status on issues linked from PR (mode = set_linked)
+      # ──────────────────────────────────────────────────────────────
+      - name: set linked issue status
+        if: steps.plan.outputs.mode == 'set_linked'
+        env:
+          GH_TOKEN: ${{ secrets.PROJECT_PAT }}
+        run: |
+          PR_BODY="${{ github.event.pull_request.body }}"
+          BRANCH="${{ github.event.pull_request.head.ref }}"
+
+          # 1. Try PR body: "Closes #123" / "Fixes #45" / "Resolves #67"
+          ISSUE_REFS=$(echo "$PR_BODY" | grep -oP \
+            '(?:[Cc]loses?|[Ff]ixes?|[Rr]esolves?)\s+#\d+' \
+            | grep -oP '#\d+' | sed 's/#//' || true)
+
+          # 2. Fallback: branch name like "feat/xxx-123"
+          if [ -z "$ISSUE_REFS" ]; then
+            ISSUE_REFS=$(echo "$BRANCH" | grep -oP '\d+' | head -1 || true)
+          fi
+
+          if [ -z "$ISSUE_REFS" ]; then
+            echo "⚠ no linked issues found in PR body or branch name"
+            exit 0
+          fi
+
+          ITEMS=$(gh project item-list "$PROJECT_NUMBER" --owner YourTongji --format json --limit 200)
+
+          for ISSUE_NUM in $ISSUE_REFS; do
+            ISSUE_URL="https://github.com/${{ github.repository }}/issues/$ISSUE_NUM"
+            ITEM_ID=$(echo "$ITEMS" | jq -r --arg url "$ISSUE_URL" \
+              '.items[]? | select(.content.url == $url) | .id' | head -1)
+
+            if [ -n "$ITEM_ID" ] && [ "$ITEM_ID" != "null" ]; then
+              gh project item-edit \
+                --id "$ITEM_ID" \
+                --field-id "$FIELD_ID" \
+                --project-id "$PROJECT_ID" \
+                --single-select-option-id "${{ steps.plan.outputs.option_id }}"
+              echo "✓ issue #$ISSUE_NUM → option ${{ steps.plan.outputs.option_id }}"
+            else
+              echo "⚠ issue #$ISSUE_NUM not found in project"
+            fi
+          done
