@@ -105,10 +105,12 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: api-image-${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+          path: ./api-image-${{ github.event.pull_request.number || github.event.inputs.pr_number }}
         continue-on-error: true
       - uses: actions/download-artifact@v4
         with:
           name: frontend-dist-${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+          path: ./frontend-dist-${{ github.event.pull_request.number || github.event.inputs.pr_number }}
         continue-on-error: true
 
       - name: setup SSH
