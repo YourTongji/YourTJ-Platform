@@ -132,8 +132,8 @@ jobs:
         if: steps.plan.outputs.mode == 'set_linked'
         env:
           GH_TOKEN: ${{ secrets.PROJECT_PAT }}
+          PR_BODY: ${{ github.event.pull_request.body }}
         run: |
-          PR_BODY="${{ github.event.pull_request.body }}"
           BRANCH="${{ github.event.pull_request.head.ref }}"
 
           # 1. Try PR body: "Closes #123" / "Fixes #45" / "Resolves #67"
