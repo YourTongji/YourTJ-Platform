@@ -1,6 +1,9 @@
 name: pr-preview
 
 on:
+  # Explicit push with empty branches → prevents phantom push runs
+  push:
+    branches: []
   pull_request:
     types: [opened, synchronize, reopened, closed]
     paths:
