@@ -1,0 +1,120 @@
+name: deploy-main
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "web/**"
+      - "backend/**"
+      - "contract/openapi.yaml"
+      - ".github/workflows/deploy-main.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-main
+  cancel-in-progress: true
+
+jobs:
+  # ── Build backend Docker image ──
+  backend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: build backend image
+        uses: docker/build-push-action@v6
+        with:
+          context: backend
+          file: backend/Dockerfile
+          load: true
+          tags: yourtj-api:main
+          cache-from: type=gha,scope=backend-main
+          cache-to: type=gha,scope=backend-main,mode=max
+      - run: docker save yourtj-api:main -o /tmp/api-image.tar
+      - uses: actions/upload-artifact@v4
+        with:
+          name: api-image-main
+          path: /tmp/api-image.tar
+          retention-days: 1
+
+  # ── Build frontend ──
+  frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: "11.11.0"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - name: build
+        env:
+          VITE_API_BASE_URL: /api/v2
+        run: pnpm run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist-main
+          path: web/dist
+          retention-days: 1
+
+  # ── Deploy to test server ──
+  deploy:
+    needs: [backend, frontend]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: |
+            api-image-main
+            frontend-dist-main
+          merge-multiple: false
+
+      - name: setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.PREVIEW_SSH_KEY }}" > ~/.ssh/preview_key
+          chmod 600 ~/.ssh/preview_key
+          cat >> ~/.ssh/config << 'EOF'
+          Host preview
+            HostName ${{ secrets.PREVIEW_HOST }}
+            Port ${{ secrets.PREVIEW_PORT }}
+            User ${{ secrets.PREVIEW_USER }}
+            IdentityFile ~/.ssh/preview_key
+            StrictHostKeyChecking no
+            UserKnownHostsFile /dev/null
+          EOF
+
+      - name: transfer backend image
+        run: |
+          scp api-image-main/api-image.tar preview:/tmp/api-image-main.tar
+
+      - name: transfer frontend dist
+        run: |
+          FE_DIR="/opt/yourtj-preview/pr/main/frontend"
+          ssh preview "mkdir -p ${FE_DIR} && rm -rf ${FE_DIR}/*"
+          scp -r frontend-dist-main/* preview:${FE_DIR}/
+
+      - name: run deploy script
+        run: |
+          ssh preview "/opt/yourtj-preview/deploy-main.sh /opt/yourtj-preview/pr/main/frontend /tmp/api-image-main.tar"
+
+      - name: summary
+        if: always()
+        run: |
+          echo "### :rocket: Main Deployed" >> $GITHUB_STEP_SUMMARY
+          echo "| | URL |" >> $GITHUB_STEP_SUMMARY
+          echo "|---|---|" >> $GITHUB_STEP_SUMMARY
+          echo "| Frontend | http://${{ secrets.PREVIEW_HOST }}:8080/ |" >> $GITHUB_STEP_SUMMARY
+          echo "| Backend  | http://${{ secrets.PREVIEW_HOST }}:8080/api/v2/health |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo ":infinity: Main deployment has no TTL — persists until next deploy." >> $GITHUB_STEP_SUMMARY
