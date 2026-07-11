@@ -4,15 +4,18 @@
 //! established pattern: extract `State<AppState>`, authenticate, validate,
 //! call repo/oss, build DTO, return `AppResult<Json<…>>`.
 
+use std::sync::Arc;
+
 use axum::extract::{OriginalUri, Path, Query, State};
 use axum::http::{HeaderMap, Uri};
-use axum::Json;
+use axum::{Extension, Json};
 use serde::Deserialize;
 use shared::pagination::Page;
 use shared::{AppError, AppResult, AppState};
 
 use crate::dto::{UploadCredentialsDto, UploadDto, UploadIntentInput, UploadUrlDto};
-use crate::oss::{self, AliyunOssClient, AliyunStsProvider, ObjectStore, OssConfig};
+use crate::oss::{self, AliyunStsProvider, OssConfig};
+use crate::quarantine::{quarantine_upload, require_independent_moderator, UploadObjectStore};
 use crate::repo;
 use crate::{error::MediaError, models::UploadRow};
 
@@ -122,48 +125,6 @@ async fn moderate_upload(
     Ok(())
 }
 
-async fn block_upload_with_store(
-    state: &AppState,
-    auth: &shared::AuthAccount,
-    upload_id: i64,
-    reason: &str,
-    object_store: &dyn ObjectStore,
-) -> AppResult<()> {
-    let mut tx = state.db.begin().await?;
-    let upload: Option<(String, String, i64)> = sqlx::query_as(
-        "SELECT status, oss_key, account_id FROM media.uploads WHERE id = $1 FOR UPDATE",
-    )
-    .bind(upload_id)
-    .fetch_optional(&mut *tx)
-    .await?;
-    let (current_status, oss_key, owner_id) = upload.ok_or(MediaError::NotFound)?;
-    require_independent_moderator(auth, owner_id)?;
-    if current_status != "pending" {
-        return Err(AppError::Conflict(format!("upload is already {current_status}")));
-    }
-
-    let oss_config = require_oss_config(state)?;
-    object_store.delete_object(&oss_config, &oss_key).await?;
-
-    sqlx::query("UPDATE media.uploads SET status = 'blocked' WHERE id = $1")
-        .bind(upload_id)
-        .execute(&mut *tx)
-        .await?;
-    let metadata = serde_json::json!({ "oldStatus": current_status, "newStatus": "blocked" });
-    governance::record_account_event_tx(
-        &mut tx,
-        governance::AccountActor { account_id: auth.id, role: &auth.role },
-        "media.upload.blocked",
-        "upload",
-        &upload_id.to_string(),
-        reason,
-        Some(&metadata),
-    )
-    .await?;
-    tx.commit().await?;
-    Ok(())
-}
-
 fn can_read_upload_url(auth: &shared::AuthAccount, upload: &UploadRow) -> bool {
     match upload.status.as_str() {
         "clean" => true,
@@ -174,13 +135,6 @@ fn can_read_upload_url(auth: &shared::AuthAccount, upload: &UploadRow) -> bool {
         "blocked" => false,
         _ => false,
     }
-}
-
-fn require_independent_moderator(auth: &shared::AuthAccount, owner_id: i64) -> AppResult<()> {
-    if auth.id == owner_id {
-        return Err(AppError::Forbidden);
-    }
-    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -417,6 +371,7 @@ pub async fn approve_upload(
 /// POST /api/v2/admin/media/uploads/{id}/block — block a pending upload
 pub async fn block_upload(
     State(state): State<AppState>,
+    Extension(object_store): Extension<Arc<dyn UploadObjectStore>>,
     Path(id_str): Path<String>,
     headers: HeaderMap,
     Json(body): Json<ModerateUploadInput>,
@@ -434,8 +389,7 @@ pub async fn block_upload(
 
     let id: i64 = id_str.parse().map_err(|_| AppError::NotFound)?;
     let reason = validate_moderation_reason(&body.reason)?;
-    let object_store = AliyunOssClient::default();
-    block_upload_with_store(&state, &auth, id, reason, &object_store).await?;
+    quarantine_upload(&state, &auth, id, reason, object_store.as_ref()).await?;
 
     tracing::info!(upload_id = id, moderator_id = auth.id, "upload blocked");
     Ok(Json(serde_json::json!({ "ok": true })))
@@ -443,45 +397,11 @@ pub async fn block_upload(
 
 #[cfg(test)]
 mod tests {
-    use axum::extract::{Path, State};
-    use axum::http::{header, HeaderMap};
     use chrono::Utc;
-    use shared::{AppState, AuthAccount};
-    use sqlx::PgPool;
+    use shared::AuthAccount;
 
-    use super::{
-        block_upload_with_store, can_read_upload_url, require_independent_moderator, ObjectStore,
-        OssConfig, UploadRow,
-    };
-    use crate::error::MediaError;
-
-    static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("../../migrations");
-
-    struct FailingObjectStore;
-
-    #[async_trait::async_trait]
-    impl ObjectStore for FailingObjectStore {
-        async fn delete_object(
-            &self,
-            _config: &OssConfig,
-            _oss_key: &str,
-        ) -> Result<(), MediaError> {
-            Err(MediaError::Unavailable("simulated OSS failure".into()))
-        }
-    }
-
-    struct SuccessfulObjectStore;
-
-    #[async_trait::async_trait]
-    impl ObjectStore for SuccessfulObjectStore {
-        async fn delete_object(
-            &self,
-            _config: &OssConfig,
-            _oss_key: &str,
-        ) -> Result<(), MediaError> {
-            Ok(())
-        }
-    }
+    use super::{can_read_upload_url, UploadRow};
+    use crate::quarantine::require_independent_moderator;
 
     fn account(id: i64, role: &str) -> AuthAccount {
         AuthAccount { id, role: role.into(), status: "active".into() }
@@ -530,136 +450,5 @@ mod tests {
             Err(shared::AppError::Forbidden)
         ));
         assert!(require_independent_moderator(&account(11, "mod"), 10).is_ok());
-    }
-
-    #[tokio::test]
-    async fn failed_object_quarantine_leaves_upload_pending() {
-        let database_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| {
-            "postgres://postgres:postgres@localhost:5432/yourtj_test".to_string()
-        });
-        let pool = PgPool::connect(&database_url).await.expect("media test database");
-        MIGRATOR.run(&pool).await.expect("media test migrations");
-        let suffix = uuid::Uuid::new_v4().simple().to_string();
-        let moderator_id: i64 = sqlx::query_scalar(
-            "INSERT INTO identity.accounts (email, handle, role) \
-             VALUES ($1, $2, 'mod') RETURNING id",
-        )
-        .bind(format!("media-mod-{suffix}@tongji.edu.cn"))
-        .bind(format!("media-mod-{suffix}"))
-        .fetch_one(&pool)
-        .await
-        .expect("seed media moderator");
-        let owner_id: i64 = sqlx::query_scalar(
-            "INSERT INTO identity.accounts (email, handle) VALUES ($1, $2) RETURNING id",
-        )
-        .bind(format!("media-owner-{suffix}@tongji.edu.cn"))
-        .bind(format!("media-owner-{suffix}"))
-        .fetch_one(&pool)
-        .await
-        .expect("seed media owner");
-        let upload_id: i64 = sqlx::query_scalar(
-            "INSERT INTO media.uploads \
-             (account_id, kind, oss_key, url, bytes, mime, sha256) \
-             VALUES ($1, 'image', $2, $3, 10, 'image/png', $4) RETURNING id",
-        )
-        .bind(owner_id)
-        .bind(format!("uploads/{owner_id}/image/{suffix}.png"))
-        .bind(format!("https://example.invalid/{suffix}.png"))
-        .bind("a".repeat(64))
-        .fetch_one(&pool)
-        .await
-        .expect("seed pending upload");
-        let mut config = shared::Config::from_env().expect("media test config");
-        config.oss_region = "cn-shanghai".into();
-        config.oss_bucket = "yourtj-test".into();
-        config.oss_access_key_id = "test-ak".into();
-        config.oss_access_key_secret = "test-secret".into();
-        config.oss_role_arn = "acs:ram::1:role/upload".into();
-        config.oss_callback_base_url = "https://api.example.test".into();
-        let state = AppState {
-            db: pool.clone(),
-            config,
-            jwt_secret: "integration-test-secret-32bytes!".into(),
-            jwt_ttl: 900,
-            refresh_ttl: 604800,
-            meili_url: String::new(),
-            meili_master_key: String::new(),
-            redis: None,
-            system_private_key: vec![0; 32],
-            system_public_key_b64: String::new(),
-            email_encryption: None,
-            captcha_verifier: None,
-            sse_tx: None,
-        };
-        let moderator = account(moderator_id, "mod");
-        let owner_token =
-            identity::auth::create_access_token(owner_id, "integration-test-secret-32bytes!", 3600)
-                .expect("media owner token");
-        let mut owner_headers = HeaderMap::new();
-        owner_headers.insert(
-            header::AUTHORIZATION,
-            format!("Bearer {owner_token}").parse().expect("owner authorization header"),
-        );
-        let pending_url = super::get_url(
-            State(state.clone()),
-            Path(upload_id.to_string()),
-            owner_headers.clone(),
-        )
-        .await
-        .expect("owner can inspect pending upload");
-        assert!(pending_url.0.url.contains(&suffix));
-
-        let failure = block_upload_with_store(
-            &state,
-            &moderator,
-            upload_id,
-            "confirmed malicious upload",
-            &FailingObjectStore,
-        )
-        .await;
-        assert!(failure.is_err());
-        let pending_status: String =
-            sqlx::query_scalar("SELECT status FROM media.uploads WHERE id = $1")
-                .bind(upload_id)
-                .fetch_one(&pool)
-                .await
-                .expect("status after failed quarantine");
-        assert_eq!(pending_status, "pending");
-
-        block_upload_with_store(
-            &state,
-            &moderator,
-            upload_id,
-            "confirmed malicious upload",
-            &SuccessfulObjectStore,
-        )
-        .await
-        .expect("successful quarantine");
-        let blocked_status: String =
-            sqlx::query_scalar("SELECT status FROM media.uploads WHERE id = $1")
-                .bind(upload_id)
-                .fetch_one(&pool)
-                .await
-                .expect("status after successful quarantine");
-        assert_eq!(blocked_status, "blocked");
-        let blocked_url =
-            super::get_url(State(state.clone()), Path(upload_id.to_string()), owner_headers).await;
-        assert!(matches!(blocked_url, Err(shared::AppError::NotFound)));
-
-        sqlx::query("DELETE FROM governance.audit_events WHERE actor_account_id = $1")
-            .bind(moderator_id)
-            .execute(&pool)
-            .await
-            .ok();
-        sqlx::query("DELETE FROM media.uploads WHERE id = $1")
-            .bind(upload_id)
-            .execute(&pool)
-            .await
-            .ok();
-        sqlx::query("DELETE FROM identity.accounts WHERE id = ANY($1)")
-            .bind(vec![moderator_id, owner_id])
-            .execute(&pool)
-            .await
-            .ok();
     }
 }
