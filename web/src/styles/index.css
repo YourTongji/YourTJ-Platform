@@ -7,25 +7,25 @@
 
 :root {
   --font-sans: "HarmonyOS Sans SC", "PingFang SC", "Noto Sans SC", "Microsoft YaHei", system-ui, sans-serif;
-  --font-display: "Geist", "HarmonyOS Sans SC", "PingFang SC", system-ui, sans-serif;
+  --font-display: "HarmonyOS Sans SC", "PingFang SC", "Noto Sans SC", system-ui, sans-serif;
   --background: #f8faf8;
-  --foreground: #1a1a1a;
-  --card: #ffffff;
-  --card-foreground: #1a1a1a;
+  --foreground: #191c1b;
+  --card: #f2f4f2;
+  --card-foreground: #191c1b;
   --popover: #ffffff;
   --popover-foreground: #1a1a1a;
   --primary: #009688;
   --primary-foreground: #ffffff;
   --secondary: #f0fdfa;
   --secondary-foreground: #00796b;
-  --muted: #f3f4f6;
-  --muted-foreground: #6b7280;
-  --accent: #f3f4f6;
-  --accent-foreground: #1a1a1a;
+  --muted: #eceeec;
+  --muted-foreground: #596562;
+  --accent: #eceeec;
+  --accent-foreground: #191c1b;
   --destructive: #d4183d;
   --destructive-foreground: #ffffff;
-  --border: #e5e7eb;
-  --input: #e5e7eb;
+  --border: #e1e3e1;
+  --input: #bcc9c6;
   --ring: #009688;
   --radius: 0.75rem;
   --chart-1: #009688;

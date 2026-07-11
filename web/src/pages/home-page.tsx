@@ -21,8 +21,8 @@ export function HomePage() {
   const threadItems = threads.data?.items ?? [];
 
   return (
-    <div className="2xl:grid 2xl:grid-cols-[minmax(0,800px)_320px]">
-      <div className="px-4 py-5 sm:px-6 sm:py-6 2xl:px-8">
+    <div className="min-[1240px]:grid min-[1240px]:grid-cols-[minmax(0,640px)_320px]">
+      <div className="px-4 py-5 sm:px-6 sm:py-6 min-[1360px]:!px-8">
         <CommunityFeed
           mode={feedMode}
           onModeChange={setFeedMode}
@@ -33,7 +33,7 @@ export function HomePage() {
         />
       </div>
 
-      <div className="hidden pb-16 pl-6 pt-8 2xl:block">
+      <div className="hidden pb-16 pl-6 pt-6 min-[1240px]:block">
         <CommunitySidebar
           account={account}
           threads={threadItems}

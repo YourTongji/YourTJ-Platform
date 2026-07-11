@@ -50,11 +50,16 @@ export function AppLayout() {
   return (
     <TooltipProvider>
       <div className="min-h-screen bg-background">
-        <header className="sticky top-0 z-40 h-16 border-b bg-card/95 backdrop-blur">
-          <div className="relative mx-auto flex h-full max-w-[1440px] items-center gap-3 px-4 sm:px-6">
+        <header className="sticky top-0 z-40 h-16 border-b border-border/60 bg-white/95 backdrop-blur dark:bg-card/95">
+          <div className="relative mx-auto flex h-full max-w-[1280px] items-center gap-3 px-4 sm:px-6">
             <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
               <SheetTrigger asChild>
-                <Button variant="ghost" size="icon" className="xl:hidden" aria-label="打开导航">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="min-[1240px]:hidden"
+                  aria-label="打开导航"
+                >
                   <Menu className="size-5" />
                 </Button>
               </SheetTrigger>
@@ -68,11 +73,11 @@ export function AppLayout() {
 
             <Brand />
 
-            <div className="absolute left-1/2 hidden w-[448px] -translate-x-1/2 lg:block 2xl:left-[calc(50%-47px)]">
+            <div className="absolute left-[calc(50%-48px)] hidden w-[448px] -translate-x-1/2 lg:block">
               <button
                 type="button"
                 onClick={() => setSearchOpen(true)}
-                className="flex h-8 w-full items-center rounded-full border bg-[#f9fafb] px-3 text-left text-sm text-[#6b7280] transition-colors hover:bg-[#f3f4f6] dark:bg-background dark:hover:bg-accent"
+                className="flex h-[34px] w-full items-center rounded-full border border-input bg-card px-3 text-left text-sm text-muted-foreground transition-colors hover:border-primary/40 hover:bg-muted dark:bg-background dark:hover:bg-accent"
               >
                 <Search className="mr-2 size-[18px] shrink-0" />
                 <span className="truncate">搜索帖子、课程、资料、WIKI...</span>
@@ -80,7 +85,7 @@ export function AppLayout() {
               </button>
             </div>
 
-            <div className="ml-auto flex items-center gap-1 sm:gap-2">
+            <div className="ml-auto flex items-center gap-1 sm:gap-3 lg:gap-4">
               <Button
                 variant="ghost"
                 size="icon"
@@ -142,9 +147,9 @@ export function AppLayout() {
           </div>
         </header>
 
-        <div className="mx-auto max-w-[1440px] px-4 xl:px-8">
-          <div className="xl:grid xl:grid-cols-[256px_minmax(0,1fr)]">
-            <aside className="scrollbar-none sticky top-16 hidden h-[calc(100vh-4rem)] overflow-y-auto border-r xl:block">
+        <div className="mx-auto max-w-[1280px] px-4 sm:px-6 min-[1360px]:!px-8">
+          <div className="min-[1240px]:grid min-[1240px]:grid-cols-[256px_minmax(0,1fr)]">
+            <aside className="scrollbar-none sticky top-16 hidden h-[calc(100vh-4rem)] overflow-y-auto border-r min-[1240px]:block">
               <SiteSidebar />
             </aside>
             <main className={cn("min-w-0", !isHome && "px-1 py-6 sm:px-4 lg:px-8")}>

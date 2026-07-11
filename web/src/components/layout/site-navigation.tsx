@@ -39,11 +39,15 @@ export function Brand({ compact = false }: { compact?: boolean }) {
       aria-label="YourTJ 社区首页"
     >
       <span className="flex size-8 items-center justify-center rounded-full overflow-hidden">
-        <img src="/icon.png" alt="YourTJ" className="size-full object-cover" />
+        <img
+          src={`${import.meta.env.BASE_URL}icon.png`}
+          alt="YourTJ"
+          className="size-full object-cover"
+        />
       </span>
       <span
         className={cn(
-          "font-display font-bold text-[#1a1a1a] dark:text-foreground",
+          "font-sans font-bold text-foreground",
           compact ? "text-base" : "hidden text-xl sm:inline",
         )}
       >
@@ -72,8 +76,8 @@ function NavigationGroup({
             cn(
               "flex h-10 items-center gap-3 rounded-lg px-3 text-base font-medium transition-colors",
               isActive
-                ? "bg-[#f3f4f6] text-primary dark:bg-secondary"
-                : "text-[#6b7280] hover:bg-[#f3f4f6] hover:text-foreground dark:text-muted-foreground dark:hover:bg-accent",
+                ? "bg-muted text-primary dark:bg-secondary"
+                : "text-[#3d4947] hover:bg-muted hover:text-foreground dark:text-muted-foreground dark:hover:bg-accent",
             )
           }
         >
@@ -87,7 +91,7 @@ function NavigationGroup({
 
 function PromotionSlot() {
   return (
-    <div className="rounded-lg border border-primary/20 bg-primary/10 px-3 py-3 text-center">
+    <div className="rounded-lg border border-primary/25 bg-primary/10 p-[13px] text-center">
       <p className="text-[10px] font-medium tracking-[0.1em] text-primary">
         ADVERTISEMENT
       </p>
@@ -109,7 +113,7 @@ export function SiteSidebar({ onNavigate }: { onNavigate?: () => void }) {
     <div className="flex min-h-full flex-col pb-8 pr-6 pt-2">
       <NavigationGroup items={primaryNavigation} onNavigate={onNavigate} />
 
-      <div className="my-4 border-t" />
+      <div className="my-4 border-t border-border/40" />
       <NavigationGroup items={secondaryItems} onNavigate={onNavigate} />
 
       <div className="mt-4 space-y-4 px-3">
