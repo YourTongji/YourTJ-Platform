@@ -77,6 +77,8 @@ pub struct UploadDto {
     pub usage: Option<String>,
     pub image_width: Option<i32>,
     pub image_height: Option<i32>,
+    pub approval_requirement: String,
+    pub deletion_state: Option<String>,
     pub created_at: i64,
 }
 

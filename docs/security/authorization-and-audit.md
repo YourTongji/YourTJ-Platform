@@ -47,7 +47,7 @@
 
 | Capability | mod | admin | 主要用途 |
 |---|:---:|:---:|---|
-| `moderation.content` | yes | yes | forum/review/media/reported-DM 审核与恢复 |
+| `moderation.content` | yes | yes | forum/review/media/reported-DM 审核与恢复；所有用户目标仍受 strict lower-role 与 no-self 约束 |
 | `users.search` | yes | yes | 隐私安全的用户目录与制裁历史 |
 | `users.silence` | yes | yes | 对 lower-role 限时禁言与撤销 |
 | `audit.read` | yes | yes | 中央审计查询 |

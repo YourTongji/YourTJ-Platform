@@ -14,15 +14,18 @@ use serde::Deserialize;
 use shared::pagination::Page;
 use shared::{AppError, AppResult, AppState};
 
+use crate::deletion::schedule_upload_deletion;
 use crate::dto::{
     MediaUsage, MyUploadDto, ProfileAssetInput, UploadCredentialsDto, UploadDto, UploadIntentInput,
     UploadUrlDto,
 };
+use crate::error::MediaError;
+use crate::models::{ModerationUploadRow, UploadRow};
+use crate::moderation::require_strictly_lower_owner;
 use crate::oss::{self, AliyunStsProvider, OssConfig};
 use crate::preview::{consume_preview_grant, create_preview_grant, PREVIEW_TOKEN_HEADER};
-use crate::quarantine::{quarantine_upload, require_independent_moderator, UploadObjectStore};
+use crate::quarantine::UploadObjectStore;
 use crate::repo;
-use crate::{error::MediaError, models::UploadRow};
 
 // ---------------------------------------------------------------------------
 // constants
@@ -40,6 +43,7 @@ pub struct UploadListQuery {
     cursor: Option<String>,
     #[serde(default = "default_limit")]
     limit: i64,
+    status: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -65,7 +69,16 @@ fn default_limit() -> i64 {
 // helpers
 // ---------------------------------------------------------------------------
 
-fn upload_to_dto(row: &UploadRow) -> UploadDto {
+fn upload_to_dto(row: &ModerationUploadRow) -> UploadDto {
+    let approval_requirement = if row.status != "pending" {
+        "none"
+    } else if row.kind != "image" {
+        "scanner"
+    } else if row.has_reviewer_evidence {
+        "satisfied"
+    } else {
+        "image_preview"
+    };
     UploadDto {
         id: row.id.to_string(),
         account_id: row.account_id.to_string(),
@@ -76,6 +89,8 @@ fn upload_to_dto(row: &UploadRow) -> UploadDto {
         usage: row.usage.clone(),
         image_width: row.image_width,
         image_height: row.image_height,
+        approval_requirement: approval_requirement.into(),
+        deletion_state: row.deletion_state.clone(),
         created_at: row.created_at.timestamp(),
     }
 }
@@ -125,6 +140,15 @@ fn validate_page_limit(limit: i64) -> AppResult<i64> {
     }
 }
 
+fn validate_moderation_status(status: Option<&str>) -> AppResult<&str> {
+    let status = status.unwrap_or("pending");
+    if matches!(status, "pending" | "clean" | "quarantined" | "blocked") {
+        Ok(status)
+    } else {
+        Err(AppError::BadRequest("invalid media moderation status".into()))
+    }
+}
+
 fn validate_moderation_reason(reason: &str) -> AppResult<&str> {
     let reason = reason.trim();
     if !(3..=500).contains(&reason.chars().count()) {
@@ -137,30 +161,54 @@ async fn moderate_upload(
     state: &AppState,
     auth: &shared::AuthAccount,
     upload_id: i64,
-    new_status: &str,
     reason: &str,
 ) -> AppResult<()> {
     let mut tx = state.db.begin().await?;
-    let upload: Option<(String, i64)> =
-        sqlx::query_as("SELECT status, account_id FROM media.uploads WHERE id = $1 FOR UPDATE")
-            .bind(upload_id)
-            .fetch_optional(&mut *tx)
-            .await?;
-    let (current_status, owner_id) = upload.ok_or(MediaError::NotFound)?;
-    require_independent_moderator(auth, owner_id)?;
+    let upload: Option<(String, i64, String, String, bool)> = sqlx::query_as(
+        "SELECT upload.status, upload.account_id, owner.role::text, upload.kind, \
+                EXISTS ( \
+                  SELECT 1 FROM media.moderation_evidence evidence \
+                  WHERE evidence.upload_id = upload.id \
+                    AND evidence.evidence_kind = 'trusted_image_preview' \
+                    AND evidence.actor_account_id = $2 \
+                ) \
+         FROM media.uploads upload \
+         JOIN identity.accounts owner ON owner.id = upload.account_id \
+         WHERE upload.id = $1 FOR UPDATE OF upload, owner",
+    )
+    .bind(upload_id)
+    .bind(auth.id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let (current_status, owner_id, owner_role, kind, has_reviewer_evidence) =
+        upload.ok_or(MediaError::NotFound)?;
+    require_strictly_lower_owner(auth, owner_id, &owner_role)?;
     if current_status != "pending" {
         return Err(AppError::Conflict(format!("upload is already {current_status}")));
     }
-    sqlx::query("UPDATE media.uploads SET status = $1 WHERE id = $2")
-        .bind(new_status)
+    if kind != "image" {
+        return Err(AppError::Conflict(
+            "file approval requires malware and sandbox scanner evidence".into(),
+        ));
+    }
+    if !has_reviewer_evidence {
+        return Err(AppError::Conflict(
+            "the approving moderator must complete a trusted image preview first".into(),
+        ));
+    }
+    sqlx::query("UPDATE media.uploads SET status = 'clean' WHERE id = $1")
         .bind(upload_id)
         .execute(&mut *tx)
         .await?;
-    let metadata = serde_json::json!({ "oldStatus": current_status, "newStatus": new_status });
+    let metadata = serde_json::json!({
+        "oldStatus": current_status,
+        "newStatus": "clean",
+        "evidence": "trusted_image_preview",
+    });
     governance::record_account_event_tx(
         &mut tx,
         governance::AccountActor { account_id: auth.id, role: &auth.role },
-        if new_status == "clean" { "media.upload.approved" } else { "media.upload.blocked" },
+        "media.upload.approved",
         "upload",
         &upload_id.to_string(),
         reason,
@@ -502,7 +550,10 @@ pub async fn list_uploads(
         .map_err(|_| AppError::Forbidden)?;
 
     let limit = validate_page_limit(q.limit)?;
-    let (rows, next_cursor) = repo::list_pending(&state.db, q.cursor.as_deref(), limit).await?;
+    let status = validate_moderation_status(q.status.as_deref())?;
+    let (rows, next_cursor) =
+        repo::list_moderatable(&state.db, auth.id, &auth.role, status, q.cursor.as_deref(), limit)
+            .await?;
 
     let items: Vec<UploadDto> = rows.iter().map(upload_to_dto).collect();
     Ok(Json(Page::new(items, next_cursor)))
@@ -599,7 +650,7 @@ pub async fn approve_upload(
 
     let id: i64 = id_str.parse().map_err(|_| AppError::NotFound)?;
     let reason = validate_moderation_reason(&body.reason)?;
-    moderate_upload(&state, &auth, id, "clean", reason).await?;
+    moderate_upload(&state, &auth, id, reason).await?;
     tracing::info!(upload_id = id, moderator_id = auth.id, "upload approved");
 
     Ok(Json(serde_json::json!({ "ok": true })))
@@ -608,11 +659,10 @@ pub async fn approve_upload(
 /// POST /api/v2/admin/media/uploads/{id}/block — block a pending upload
 pub async fn block_upload(
     State(state): State<AppState>,
-    Extension(object_store): Extension<Arc<dyn UploadObjectStore>>,
     Path(id_str): Path<String>,
     headers: HeaderMap,
     Json(body): Json<ModerateUploadInput>,
-) -> AppResult<Json<serde_json::Value>> {
+) -> AppResult<StatusCode> {
     let auth = identity::auth_middleware::authenticate(
         &headers,
         &state.db,
@@ -626,10 +676,10 @@ pub async fn block_upload(
 
     let id: i64 = id_str.parse().map_err(|_| AppError::NotFound)?;
     let reason = validate_moderation_reason(&body.reason)?;
-    quarantine_upload(&state, &auth, id, reason, object_store.as_ref()).await?;
+    schedule_upload_deletion(&state, &auth, id, reason).await?;
 
-    tracing::info!(upload_id = id, moderator_id = auth.id, "upload blocked");
-    Ok(Json(serde_json::json!({ "ok": true })))
+    tracing::info!(upload_id = id, moderator_id = auth.id, "upload quarantined for deletion");
+    Ok(StatusCode::ACCEPTED)
 }
 
 #[cfg(test)]
@@ -638,7 +688,7 @@ mod tests {
     use shared::AuthAccount;
 
     use super::{can_read_upload_url, validate_upload_usage, MediaUsage, UploadRow};
-    use crate::quarantine::require_independent_moderator;
+    use crate::moderation::require_strictly_lower_owner;
 
     fn account(id: i64, role: &str) -> AuthAccount {
         AuthAccount { id, role: role.into(), status: "active".into() }
@@ -692,9 +742,11 @@ mod tests {
     #[test]
     fn staff_cannot_moderate_their_own_upload() {
         assert!(matches!(
-            require_independent_moderator(&account(10, "admin"), 10),
+            require_strictly_lower_owner(&account(10, "admin"), 10, "user"),
             Err(shared::AppError::Forbidden)
         ));
-        assert!(require_independent_moderator(&account(11, "mod"), 10).is_ok());
+        assert!(require_strictly_lower_owner(&account(11, "mod"), 10, "user").is_ok());
+        assert!(require_strictly_lower_owner(&account(11, "mod"), 12, "mod").is_err());
+        assert!(require_strictly_lower_owner(&account(13, "admin"), 12, "mod").is_ok());
     }
 }

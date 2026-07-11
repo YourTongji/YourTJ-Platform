@@ -48,19 +48,20 @@ import { formatNumber, formatRating, formatUnixTime } from "@/lib/format";
 function MediaQueue() {
   const queryClient = useQueryClient();
   const [cursorStack, setCursorStack] = React.useState<Array<string | null>>([null]);
+  const [status, setStatus] = React.useState<"pending" | "clean" | "quarantined" | "blocked">("pending");
   const [decision, setDecision] = React.useState<{ upload: Upload; action: "approve" | "block" } | null>(null);
   const [previewDecision, setPreviewDecision] = React.useState<Upload | null>(null);
   const [previewObject, setPreviewObject] = React.useState<{ uploadId: string; url: string } | null>(null);
   const cursor = cursorStack.at(-1);
   const uploads = useQuery({
-    queryKey: ["admin", "media", "pending", cursor],
-    queryFn: () => api.adminMediaUploads(cursor),
+    queryKey: ["admin", "media", status, cursor],
+    queryFn: () => api.adminMediaUploads(cursor, status),
   });
   const moderate = useMutation({
     mutationFn: ({ id, action, reason }: { id: string; action: "approve" | "block"; reason: string }) =>
       api.moderateAdminMediaUpload(id, action, reason),
-    onSuccess: async () => {
-      toast.success("媒体审核状态已更新");
+    onSuccess: async (_data, variables) => {
+      toast.success(variables.action === "block" ? "媒体已隔离并进入删除队列" : "媒体已批准");
       setDecision(null);
       setPreviewObject(null);
       await queryClient.invalidateQueries({ queryKey: ["admin", "media"] });
@@ -86,17 +87,42 @@ function MediaQueue() {
     return () => URL.revokeObjectURL(previewObject.url);
   }, [previewObject]);
 
-  if (uploads.isLoading) return <LoadingState label="加载待审媒体" />;
-  if (uploads.isError) return <ErrorState error={uploads.error} onRetry={() => void uploads.refetch()} />;
-  if ((uploads.data?.items ?? []).length === 0) return <EmptyState title="没有待审媒体" />;
-
   return (
     <div className="space-y-3">
       <Card className="border-primary/30 bg-primary/5">
         <CardContent className="p-4 text-xs leading-5 text-muted-foreground">
-          预览使用 60 秒、一次性的同源代理授权并记录证据读取原因；批准与阻止也必须填写原因。界面不会暴露 object key、hash 或持久 URL。
+          图片必须由当前审核员完成一次安全预览后才能批准；通用文件在恶意软件与沙箱扫描接入前不能批准。阻止会先隔离公开访问，再由持久任务删除 OSS 对象。界面不会暴露 object key、hash 或持久 URL。
         </CardContent>
       </Card>
+      <div className="grid grid-cols-2 gap-1 rounded-lg bg-muted p-1 sm:grid-cols-4" role="group" aria-label="媒体状态筛选">
+        {([
+          ["pending", "待审核"],
+          ["clean", "已发布"],
+          ["quarantined", "删除中"],
+          ["blocked", "已阻止"],
+        ] as const).map(([value, label]) => (
+          <Button
+            key={value}
+            type="button"
+            size="sm"
+            variant={status === value ? "secondary" : "ghost"}
+            aria-pressed={status === value}
+            onClick={() => {
+              setStatus(value);
+              setCursorStack([null]);
+              setDecision(null);
+              setPreviewObject(null);
+            }}
+          >
+            {label}
+          </Button>
+        ))}
+      </div>
+      {uploads.isLoading ? <LoadingState label="加载媒体审核队列" /> : null}
+      {uploads.isError ? <ErrorState error={uploads.error} onRetry={() => void uploads.refetch()} /> : null}
+      {!uploads.isLoading && !uploads.isError && (uploads.data?.items ?? []).length === 0 ? (
+        <EmptyState title="当前状态下没有可审核媒体" />
+      ) : null}
       {uploads.data?.items?.map((upload) => (
         <Card key={upload.id}>
           <CardContent className="flex flex-col gap-3 p-4 lg:flex-row lg:items-center lg:justify-between">
@@ -105,6 +131,7 @@ function MediaQueue() {
                 <FileWarning className="size-4 text-primary" aria-hidden="true" />
                 <AdminStatusBadge value={upload.status} />
                 <Badge variant="outline">{upload.kind ?? "file"}</Badge>
+                {upload.deletionState ? <Badge variant="outline">删除 {upload.deletionState}</Badge> : null}
                 <span className="text-xs text-muted-foreground">{upload.mime} · {formatNumber(upload.bytes)} B</span>
               </div>
               <p className="mt-2 truncate text-sm">上传 #{upload.id} · 账号 {upload.accountId}</p>
@@ -127,15 +154,31 @@ function MediaQueue() {
               ) : null}
             </div>
             <div className="flex flex-wrap gap-2">
-              {upload.kind === "image" ? (
+              {upload.status === "pending" && upload.kind === "image" ? (
                 <Button type="button" size="sm" variant="outline" onClick={() => setPreviewDecision(upload)}>
                   <Eye className="size-4" />安全预览
                 </Button>
-              ) : (
-                <span className="self-center text-xs text-muted-foreground">文件预览未开放</span>
-              )}
-              <Button type="button" size="sm" onClick={() => setDecision({ upload, action: "approve" })}><Check className="size-4" />批准</Button>
-              <Button type="button" variant="destructive" size="sm" onClick={() => setDecision({ upload, action: "block" })}><X className="size-4" />阻止</Button>
+              ) : null}
+              {upload.status === "pending" && upload.kind !== "image" ? (
+                <span className="self-center text-xs text-muted-foreground">等待扫描器，暂不可批准</span>
+              ) : null}
+              {upload.status === "pending" ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  disabled={upload.approvalRequirement !== "satisfied"}
+                  title={upload.approvalRequirement === "image_preview" ? "请先完成安全预览" : undefined}
+                  onClick={() => setDecision({ upload, action: "approve" })}
+                >
+                  <Check className="size-4" />批准
+                </Button>
+              ) : null}
+              {upload.status === "pending" || upload.status === "clean" ? (
+                <Button type="button" variant="destructive" size="sm" onClick={() => setDecision({ upload, action: "block" })}><X className="size-4" />隔离并删除</Button>
+              ) : null}
+              {upload.status === "quarantined" && upload.deletionState === "dead_letter" ? (
+                <Button type="button" variant="destructive" size="sm" onClick={() => setDecision({ upload, action: "block" })}><X className="size-4" />重试删除</Button>
+              ) : null}
             </div>
           </CardContent>
         </Card>
@@ -160,8 +203,8 @@ function MediaQueue() {
         onOpenChange={(open) => !open && setDecision(null)}
         title={decision?.action === "approve" ? "批准媒体对象" : "阻止媒体对象"}
         description={decision?.action === "approve"
-          ? "批准后对象可进入正常使用流程，决定和原因会进入治理审计。"
-          : "阻止会永久删除 OSS 对象，再提交 blocked 状态与治理审计；该操作无法撤销。"}
+          ? "只有完成当前审核员安全预览的图片才能批准；决定和原因会进入治理审计。"
+          : "对象会立即进入不可公开访问的隔离状态，随后由持久任务删除 OSS 对象；失败会自动重试并可人工重新排队。"}
         confirmLabel={decision?.action === "approve" ? "确认批准" : "确认阻止"}
         destructive={decision?.action === "block"}
         isPending={moderate.isPending}

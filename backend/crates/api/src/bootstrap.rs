@@ -222,6 +222,13 @@ pub async fn run() -> anyhow::Result<()> {
         tracing::info!("promotion event receipt retention scheduled (hourly)");
     }
 
+    // Durable media object deletion never holds a database lock across provider I/O.
+    {
+        let worker_state = state.clone();
+        tokio::spawn(media::run_deletion_worker(worker_state));
+        tracing::info!("media object deletion worker scheduled");
+    }
+
     // 8. Badge credit mint bridge (every 60 seconds).
     {
         let db = state.db.clone();

@@ -15,6 +15,7 @@ const apiMocks = vi.hoisted(() => ({
 }));
 const originalCreateObjectURL = URL.createObjectURL;
 const originalRevokeObjectURL = URL.revokeObjectURL;
+let previewEvidenceRecorded = false;
 
 vi.mock("@/lib/api/endpoints", () => ({
   api: {
@@ -35,22 +36,31 @@ const upload = {
   usage: "forum_thread" as const,
   imageWidth: null,
   imageHeight: null,
+  approvalRequirement: "image_preview" as const,
+  deletionState: null,
   createdAt: 1_700_000_000,
 };
 
 describe("ResourcesPanel media moderation", () => {
   beforeEach(() => {
-    apiMocks.listUploads.mockReset().mockResolvedValue({
-      items: [upload],
+    previewEvidenceRecorded = false;
+    apiMocks.listUploads.mockReset().mockImplementation(async () => ({
+      items: [{
+        ...upload,
+        approvalRequirement: previewEvidenceRecorded ? "satisfied" as const : "image_preview" as const,
+      }],
       nextCursor: null,
       hasMore: false,
-    });
+    }));
     apiMocks.createPreviewGrant.mockReset().mockResolvedValue({
       token: "a".repeat(43),
       expiresAt: 1_700_000_060,
     });
-    apiMocks.preview.mockReset().mockResolvedValue(new Blob(["png"], { type: "image/png" }));
-    apiMocks.moderate.mockReset();
+    apiMocks.preview.mockReset().mockImplementation(async () => {
+      previewEvidenceRecorded = true;
+      return new Blob(["png"], { type: "image/png" });
+    });
+    apiMocks.moderate.mockReset().mockResolvedValue({ ok: true });
     Object.defineProperty(URL, "createObjectURL", {
       configurable: true,
       value: vi.fn(() => "blob:moderation-preview"),
@@ -99,5 +109,34 @@ describe("ResourcesPanel media moderation", () => {
     expect(view.container).not.toHaveTextContent("sha256");
     expect(view.container).not.toHaveTextContent("aliyuncs.com");
     await expectNoAccessibilityViolations(view.container);
+  });
+
+  it("keeps approval disabled until the same reviewer records trusted preview evidence", async () => {
+    const user = userEvent.setup();
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <ResourcesPanel capabilities={new Set(["moderation.content"])} />
+      </QueryClientProvider>,
+    );
+
+    const approve = await screen.findByRole("button", { name: "批准" });
+    expect(approve).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "安全预览" }));
+    await user.type(screen.getByLabelText("操作原因"), "检查图片完整内容");
+    await user.click(screen.getByRole("button", { name: "生成并读取预览" }));
+    await waitFor(() => expect(approve).toBeEnabled());
+
+    await user.click(approve);
+    await user.type(screen.getByLabelText("操作原因"), "图片符合社区内容规范");
+    await user.click(screen.getByRole("button", { name: "确认批准" }));
+    await waitFor(() => {
+      expect(apiMocks.moderate).toHaveBeenCalledWith("42", "approve", "图片符合社区内容规范");
+    });
+
+    await user.click(screen.getByRole("button", { name: "已发布" }));
+    await waitFor(() => expect(apiMocks.listUploads).toHaveBeenCalledWith(null, "clean"));
   });
 });

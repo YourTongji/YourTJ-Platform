@@ -9,8 +9,9 @@ use uuid::Uuid;
 
 use crate::dto::ModerationPreviewGrantDto;
 use crate::error::MediaError;
+use crate::moderation::require_strictly_lower_owner;
 use crate::oss;
-use crate::quarantine::{require_independent_moderator, UploadObjectPreview, UploadObjectStore};
+use crate::quarantine::{UploadObjectPreview, UploadObjectStore};
 
 pub(crate) const PREVIEW_TOKEN_HEADER: &str = "x-media-preview-token";
 const PREVIEW_GRANT_TTL_SECONDS: i64 = 60;
@@ -21,6 +22,7 @@ const PREVIEW_MAX_PIXELS: u64 = 40_000_000;
 #[derive(Debug, FromRow)]
 struct PreviewableUploadRow {
     account_id: i64,
+    owner_role: String,
     kind: String,
     mime: String,
     bytes: i64,
@@ -30,10 +32,19 @@ struct PreviewableUploadRow {
 #[derive(Debug, FromRow)]
 struct PreviewGrantRow {
     grant_id: i64,
+    account_id: i64,
+    owner_role: String,
     oss_key: String,
     mime: String,
     bytes: i64,
     reason: String,
+}
+
+#[derive(Debug, FromRow)]
+struct FinalizePreviewUploadRow {
+    account_id: i64,
+    owner_role: String,
+    status: String,
     image_width: Option<i32>,
     image_height: Option<i32>,
 }
@@ -78,14 +89,17 @@ pub(crate) async fn create_preview_grant(
 ) -> AppResult<ModerationPreviewGrantDto> {
     let mut transaction = state.db.begin().await?;
     let upload = sqlx::query_as::<_, PreviewableUploadRow>(
-        "SELECT account_id, kind, mime, bytes, status FROM media.uploads \
-         WHERE id = $1 FOR SHARE",
+        "SELECT upload.account_id, owner.role::text AS owner_role, upload.kind, upload.mime, \
+                upload.bytes, upload.status \
+         FROM media.uploads upload \
+         JOIN identity.accounts owner ON owner.id = upload.account_id \
+         WHERE upload.id = $1 FOR SHARE OF upload, owner",
     )
     .bind(upload_id)
     .fetch_optional(&mut *transaction)
     .await?
     .ok_or(MediaError::NotFound)?;
-    require_independent_moderator(auth, upload.account_id)?;
+    require_strictly_lower_owner(auth, upload.account_id, &upload.owner_role)?;
     validate_previewable_upload(&upload)?;
 
     sqlx::query(
@@ -125,15 +139,16 @@ pub(crate) async fn consume_preview_grant(
     let token_hash = preview_token_hash(token)?;
     let mut transaction = state.db.begin().await?;
     let grant = sqlx::query_as::<_, PreviewGrantRow>(
-        "SELECT preview_grant.id AS grant_id, upload.oss_key, upload.mime, upload.bytes, \
-                preview_grant.reason, upload.image_width, upload.image_height \
+        "SELECT preview_grant.id AS grant_id, upload.account_id, owner.role::text AS owner_role, \
+                upload.oss_key, upload.mime, upload.bytes, preview_grant.reason \
          FROM media.moderation_preview_grants preview_grant \
          JOIN media.uploads upload ON upload.id = preview_grant.upload_id \
+         JOIN identity.accounts owner ON owner.id = upload.account_id \
          WHERE preview_grant.token_hash = $1 AND preview_grant.upload_id = $2 \
            AND preview_grant.moderator_account_id = $3 AND preview_grant.consumed_at IS NULL \
            AND preview_grant.expires_at > now() AND upload.status = 'pending' \
            AND upload.kind = 'image' AND upload.bytes BETWEEN 1 AND $4 \
-         FOR UPDATE OF preview_grant, upload",
+         FOR UPDATE OF preview_grant, upload, owner",
     )
     .bind(token_hash)
     .bind(upload_id)
@@ -142,6 +157,7 @@ pub(crate) async fn consume_preview_grant(
     .fetch_optional(&mut *transaction)
     .await?
     .ok_or(AppError::NotFound)?;
+    require_strictly_lower_owner(auth, grant.account_id, &grant.owner_role)?;
     if oss::validate_content_type("image", &grant.mime).is_err() {
         return Err(AppError::NotFound);
     }
@@ -150,6 +166,7 @@ pub(crate) async fn consume_preview_grant(
         .bind(grant.grant_id)
         .execute(&mut *transaction)
         .await?;
+    transaction.commit().await?;
     let preview = object_store
         .read_image_for_moderation(
             &grant.oss_key,
@@ -180,7 +197,23 @@ pub(crate) async fn consume_preview_grant(
         .map_err(|_| AppError::BadRequest("invalid preview width".into()))?;
     let preview_height = i32::try_from(preview.image_height)
         .map_err(|_| AppError::BadRequest("invalid preview height".into()))?;
-    match (grant.image_width, grant.image_height) {
+    let mut transaction = state.db.begin().await?;
+    let upload = sqlx::query_as::<_, FinalizePreviewUploadRow>(
+        "SELECT upload.account_id, owner.role::text AS owner_role, upload.status, \
+                upload.image_width, upload.image_height \
+         FROM media.uploads upload \
+         JOIN identity.accounts owner ON owner.id = upload.account_id \
+         WHERE upload.id = $1 FOR UPDATE OF upload, owner",
+    )
+    .bind(upload_id)
+    .fetch_optional(&mut *transaction)
+    .await?
+    .ok_or(MediaError::NotFound)?;
+    require_strictly_lower_owner(auth, upload.account_id, &upload.owner_role)?;
+    if upload.status != "pending" {
+        return Err(AppError::Conflict("upload left the pending review state".into()));
+    }
+    match (upload.image_width, upload.image_height) {
         (Some(width), Some(height)) if width == preview_width && height == preview_height => {}
         (None, None) => {
             sqlx::query(
@@ -205,6 +238,19 @@ pub(crate) async fn consume_preview_grant(
         "imageWidth": preview.image_width,
         "imageHeight": preview.image_height,
     });
+    sqlx::query(
+        "INSERT INTO media.moderation_evidence \
+         (upload_id, evidence_kind, verdict, actor_account_id, observed_mime, \
+          image_width, image_height) \
+         VALUES ($1, 'trusted_image_preview', 'observed', $2, $3, $4, $5)",
+    )
+    .bind(upload_id)
+    .bind(auth.id)
+    .bind(&grant.mime)
+    .bind(preview_width)
+    .bind(preview_height)
+    .execute(&mut *transaction)
+    .await?;
     governance::record_account_event_tx(
         &mut transaction,
         governance::AccountActor { account_id: auth.id, role: &auth.role },

@@ -81,6 +81,9 @@ describe("media upload boundary", () => {
       "uploads/1/image/intent.png",
       file,
       expect.objectContaining({
+        headers: expect.objectContaining({
+          "x-oss-forbid-overwrite": "true",
+        }),
         callback: expect.objectContaining({
           url: "https://api.example.test/api/v2/media/callback",
           contentType: "application/json",

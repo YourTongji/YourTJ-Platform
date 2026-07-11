@@ -6,7 +6,7 @@ use sqlx::{PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
 use crate::error::MediaError;
-use crate::models::UploadRow;
+use crate::models::{ModerationUploadRow, UploadRow};
 
 /// Server-issued upload authorization row.
 #[derive(Debug, Clone, sqlx::FromRow)]
@@ -190,15 +190,18 @@ pub async fn find_clean_image_urls(
     Ok(urls)
 }
 
-/// List pending uploads with cursor-based pagination.
+/// List uploads one actor may moderate with cursor-based pagination.
 ///
 /// The cursor is the opaque base64-encoded `(created_at_timestamp, id)` pair.
 /// Returns `(rows, next_cursor)`.
-pub async fn list_pending(
+pub async fn list_moderatable(
     pool: &PgPool,
+    actor_id: i64,
+    actor_role: &str,
+    status: &str,
     cursor: Option<&str>,
     limit: i64,
-) -> AppResult<(Vec<UploadRow>, Option<String>)> {
+) -> AppResult<(Vec<ModerationUploadRow>, Option<String>)> {
     let (created_at_bound, id_bound) = if let Some(cursor) = cursor {
         let decoded = decode_upload_cursor(cursor)?;
         (Some(decoded.0), Some(decoded.1))
@@ -206,16 +209,32 @@ pub async fn list_pending(
         (None, None)
     };
 
-    let rows = sqlx::query_as::<_, UploadRow>(
-        "SELECT id, account_id, kind, oss_key, bytes, mime, status, usage, \
-                image_width, image_height, created_at \
-         FROM media.uploads \
-         WHERE status = 'pending' \
-           AND ($1::timestamptz IS NULL OR created_at < $1::timestamptz \
-                OR (created_at = $1::timestamptz AND id < $2::bigint)) \
-         ORDER BY created_at DESC, id DESC \
-         LIMIT $3",
+    let rows = sqlx::query_as::<_, ModerationUploadRow>(
+        "SELECT upload.id, upload.account_id, upload.kind, upload.bytes, upload.mime, \
+                upload.status, upload.usage, upload.image_width, upload.image_height, \
+                upload.created_at, \
+                EXISTS ( \
+                  SELECT 1 FROM media.moderation_evidence evidence \
+                  WHERE evidence.upload_id = upload.id \
+                    AND evidence.evidence_kind = 'trusted_image_preview' \
+                    AND evidence.actor_account_id = $1 \
+                ) AS has_reviewer_evidence, \
+                deletion.status AS deletion_state \
+         FROM media.uploads upload \
+         JOIN identity.accounts owner ON owner.id = upload.account_id \
+         LEFT JOIN media.object_deletion_jobs deletion ON deletion.upload_id = upload.id \
+         WHERE upload.status = $3 \
+           AND upload.account_id <> $1 \
+           AND (($2 = 'mod' AND owner.role = 'user') \
+                OR ($2 = 'admin' AND owner.role IN ('user', 'mod'))) \
+           AND ($4::timestamptz IS NULL OR upload.created_at < $4::timestamptz \
+                OR (upload.created_at = $4::timestamptz AND upload.id < $5::bigint)) \
+         ORDER BY upload.created_at DESC, upload.id DESC \
+         LIMIT $6",
     )
+    .bind(actor_id)
+    .bind(actor_role)
+    .bind(status)
     .bind(created_at_bound)
     .bind(id_bound)
     .bind(limit + 1)

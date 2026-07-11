@@ -7609,6 +7609,8 @@ export interface paths {
                     /** @description Opaque pagination cursor */
                     cursor?: components["parameters"]["Cursor"];
                     limit?: components["parameters"]["Limit"];
+                    /** @description Moderation state selected before hierarchy-safe pagination. */
+                    status?: "pending" | "clean" | "quarantined" | "blocked";
                 };
                 header?: never;
                 path?: never;
@@ -7744,7 +7746,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Approve a pending upload */
+        /**
+         * Approve an evidence-backed pending image
+         * @description Requires strict role hierarchy and a trusted image preview completed by the same moderator. Generic files cannot be approved until malware and sandbox scanner evidence exists.
+         */
         post: {
             parameters: {
                 query?: never;
@@ -7787,7 +7792,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Block a pending upload */
+        /**
+         * Quarantine an upload and enqueue durable provider deletion
+         * @description Supports pending and already-published clean uploads under strict role hierarchy. The database becomes non-public before any provider I/O; deletion is retried from a durable queue and finalizes the blocked state.
+         */
         post: {
             parameters: {
                 query?: never;
@@ -7803,8 +7811,8 @@ export interface paths {
                 };
             };
             responses: {
-                /** @description blocked */
-                200: {
+                /** @description quarantined and deletion queued */
+                202: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -10895,10 +10903,20 @@ export interface components {
             bytes: number;
             mime: string;
             /** @enum {string} */
-            status: "pending" | "clean" | "blocked";
+            status: "pending" | "clean" | "quarantined" | "blocked";
             usage: components["schemas"]["MediaUsage"] | null;
             imageWidth: number | null;
             imageHeight: number | null;
+            /**
+             * @description Actor-specific evidence gate. Files remain scanner-gated; image approval requires this moderator's trusted preview.
+             * @enum {string}
+             */
+            approvalRequirement: "none" | "image_preview" | "scanner" | "satisfied";
+            /**
+             * @description Durable provider deletion state, present after an upload enters quarantine.
+             * @enum {string|null}
+             */
+            deletionState: "queued" | "leased" | "succeeded" | "dead_letter" | null;
             createdAt: number;
         };
         /** @description Owner-safe upload status; storage keys, hashes, and object URLs are intentionally omitted. */
@@ -10910,7 +10928,7 @@ export interface components {
             bytes: number;
             mime: string;
             /** @enum {string} */
-            status: "pending" | "clean" | "blocked";
+            status: "pending" | "clean" | "quarantined" | "blocked";
             imageWidth: number | null;
             imageHeight: number | null;
             createdAt: number;

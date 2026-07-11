@@ -76,7 +76,10 @@ export async function uploadMedia(
   });
   const result = await client.put(credentials.ossKey, file, {
     mime: file.type,
-    headers: { "Content-Type": file.type },
+    headers: {
+      "Content-Type": file.type,
+      "x-oss-forbid-overwrite": "true",
+    },
     callback: {
       url: credentials.callbackUrl,
       body: credentials.callbackBody,

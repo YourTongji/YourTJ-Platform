@@ -1440,8 +1440,13 @@ export const api = {
     });
   },
 
-  adminMediaUploads(cursor?: string | null) {
-    return apiRequest<Page<Upload>>("/admin/media/uploads", { query: { cursor, limit: 30 } });
+  adminMediaUploads(
+    cursor?: string | null,
+    status: "pending" | "clean" | "quarantined" | "blocked" = "pending",
+  ) {
+    return apiRequest<Page<Upload>>("/admin/media/uploads", {
+      query: { cursor, limit: 30, status },
+    });
   },
 
   createAdminMediaPreviewGrant(id: string, reason: string) {

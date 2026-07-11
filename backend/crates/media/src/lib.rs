@@ -8,11 +8,13 @@
 
 use std::sync::Arc;
 
+mod deletion;
 mod dto;
 mod error;
 mod handlers;
 mod image_header;
 mod models;
+mod moderation;
 mod oss;
 mod preview;
 mod quarantine;
@@ -25,6 +27,7 @@ use axum::{Extension, Router};
 use shared::{AppResult, AppState};
 use sqlx::PgPool;
 
+pub use deletion::{process_one_deletion_job, process_upload_deletion_job, run_deletion_worker};
 pub use quarantine::{UploadObjectPreview, UploadObjectStore};
 
 /// Return whether an upload is a clean image owned by the specified account.

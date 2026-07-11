@@ -1860,7 +1860,7 @@ components:
         expiration: { type: integer, description: Unix seconds }
     Upload:
       type: object
-      required: [id, accountId, kind, bytes, mime, status, usage, imageWidth, imageHeight, createdAt]
+      required: [id, accountId, kind, bytes, mime, status, usage, imageWidth, imageHeight, approvalRequirement, deletionState, createdAt]
       description: Moderation-safe metadata. Storage key, object URL, and content hash are deliberately omitted.
       properties:
         id: { type: string }
@@ -1868,12 +1868,21 @@ components:
         kind: { type: string, enum: [image, file] }
         bytes: { type: integer }
         mime: { type: string }
-        status: { type: string, enum: [pending, clean, blocked] }
+        status: { type: string, enum: [pending, clean, quarantined, blocked] }
         usage:
           allOf: [{ $ref: "#/components/schemas/MediaUsage" }]
           nullable: true
         imageWidth: { type: integer, minimum: 1, maximum: 20000, nullable: true }
         imageHeight: { type: integer, minimum: 1, maximum: 20000, nullable: true }
+        approvalRequirement:
+          type: string
+          enum: [none, image_preview, scanner, satisfied]
+          description: Actor-specific evidence gate. Files remain scanner-gated; image approval requires this moderator's trusted preview.
+        deletionState:
+          type: string
+          enum: [queued, leased, succeeded, dead_letter]
+          nullable: true
+          description: Durable provider deletion state, present after an upload enters quarantine.
         createdAt: { type: integer }
     MyUpload:
       type: object
@@ -1887,7 +1896,7 @@ components:
           nullable: true
         bytes: { type: integer, minimum: 1 }
         mime: { type: string }
-        status: { type: string, enum: [pending, clean, blocked] }
+        status: { type: string, enum: [pending, clean, quarantined, blocked] }
         imageWidth: { type: integer, minimum: 1, maximum: 20000, nullable: true }
         imageHeight: { type: integer, minimum: 1, maximum: 20000, nullable: true }
         createdAt: { type: integer }
@@ -3745,7 +3754,10 @@ paths:
     get:
       tags: [admin, media]
       summary: Pending media moderation queue
-      parameters: [{ $ref: "#/components/parameters/Cursor" }, { $ref: "#/components/parameters/Limit" }]
+      parameters:
+        - { $ref: "#/components/parameters/Cursor" }
+        - { $ref: "#/components/parameters/Limit" }
+        - { name: status, in: query, schema: { type: string, enum: [pending, clean, quarantined, blocked], default: pending }, description: Moderation state selected before hierarchy-safe pagination. }
       responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/UploadPage" } } } }, "403": { $ref: "#/components/responses/Forbidden" } }
   /admin/media/uploads/{id}/preview-grants:
     post:
@@ -3774,17 +3786,19 @@ paths:
   /admin/media/uploads/{id}/approve:
     post:
       tags: [admin, media]
-      summary: Approve a pending upload
+      summary: Approve an evidence-backed pending image
+      description: Requires strict role hierarchy and a trusted image preview completed by the same moderator. Generic files cannot be approved until malware and sandbox scanner evidence exists.
       parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/AdminReasonInput" } } } }
       responses: { "200": { description: approved }, "403": { $ref: "#/components/responses/Forbidden" }, "404": { $ref: "#/components/responses/NotFound" }, "409": { $ref: "#/components/responses/Conflict" } }
   /admin/media/uploads/{id}/block:
     post:
       tags: [admin, media]
-      summary: Block a pending upload
+      summary: Quarantine an upload and enqueue durable provider deletion
+      description: Supports pending and already-published clean uploads under strict role hierarchy. The database becomes non-public before any provider I/O; deletion is retried from a durable queue and finalizes the blocked state.
       parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/AdminReasonInput" } } } }
-      responses: { "200": { description: blocked }, "403": { $ref: "#/components/responses/Forbidden" }, "404": { $ref: "#/components/responses/NotFound" }, "409": { $ref: "#/components/responses/Conflict" } }
+      responses: { "202": { description: quarantined and deletion queued }, "403": { $ref: "#/components/responses/Forbidden" }, "404": { $ref: "#/components/responses/NotFound" }, "409": { $ref: "#/components/responses/Conflict" } }
   /admin/selection/sync:
     post: { tags: [admin], summary: Trigger 一系统 sync job, requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/AdminReasonInput" } } } }, responses: { "202": { description: queued } } }
   /admin/courses/reindex:
