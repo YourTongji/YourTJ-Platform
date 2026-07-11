@@ -945,10 +945,6 @@ export const api = {
     });
   },
 
-  mediaUrl(id: string) {
-    return apiRequest<UploadUrl>(`/media/${encodeURIComponent(id)}/url`);
-  },
-
   adminCourses(cursor?: string | null) {
     return apiRequest<Page<Course>>("/admin/courses", { query: { cursor, limit: 30 } });
   },
