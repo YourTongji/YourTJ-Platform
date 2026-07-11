@@ -191,7 +191,7 @@ async fn test_email_flow_stores_only_encrypted_account_email() {
     let app =
         create_test_app_with_pool_and_encryption(pool.clone(), Some(encryption.clone())).await;
     let email = format!("encrypted-{}@tongji.edu.cn", uuid::Uuid::new_v4());
-    let handle = format!("user-{}", uuid::Uuid::new_v4());
+    let handle = format!("u{}", &uuid::Uuid::new_v4().to_string().replace('-', "")[..24]);
     let captcha_token = format!("request-{}", uuid::Uuid::new_v4());
 
     let response = app
@@ -261,9 +261,20 @@ async fn test_email_flow_stores_only_encrypted_account_email() {
 
 #[tokio::test]
 async fn test_verify_wrong_code_fails() {
-    let (_, app) = create_test_app().await;
+    let (pool, _) = create_test_app().await;
     let email = format!("dave-{}@tongji.edu.cn", uuid::Uuid::new_v4());
+    let handle = email.split('@').next().unwrap_or("dave");
     let captcha_token = format!("request-{}", uuid::Uuid::new_v4());
+
+    // Pre-create the account so verify (login-only) can find it.
+    sqlx::query("INSERT INTO identity.accounts (email, handle) VALUES ($1, $2)")
+        .bind(&email)
+        .bind(handle)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let app = create_test_app_with_pool(pool).await;
 
     app.clone()
         .oneshot(
@@ -300,6 +311,14 @@ async fn test_verify_wrong_code_fails() {
 async fn test_verify_code_expired_rejects() {
     let (pool, _) = create_test_app().await;
     let email = "eve@tongji.edu.cn";
+
+    // Pre-create the account so verify (login-only) can find it.
+    sqlx::query("INSERT INTO identity.accounts (email, handle) VALUES ($1, $2)")
+        .bind(email)
+        .bind("eve")
+        .execute(&pool)
+        .await
+        .unwrap();
 
     sqlx::query(
         "INSERT INTO identity.email_codes (email, code_hash, expires_at, attempts) \
@@ -365,6 +384,14 @@ async fn test_verify_existing_account_returns_tokens() {
 async fn test_verify_code_exhausted_after_5_attempts() {
     let (pool, _) = create_test_app().await;
     let email = "grace@tongji.edu.cn";
+
+    // Pre-create the account so verify (login-only) can find it.
+    sqlx::query("INSERT INTO identity.accounts (email, handle) VALUES ($1, $2)")
+        .bind(email)
+        .bind("grace")
+        .execute(&pool)
+        .await
+        .unwrap();
 
     let code_hash = hex::encode(sha2::Sha256::digest("111111"));
     sqlx::query(
@@ -684,10 +711,11 @@ async fn test_new_account_has_user_role() {
         .oneshot(
             Request::builder()
                 .method(Method::POST)
-                .uri("/api/v2/auth/email/verify")
+                .uri("/api/v2/auth/register")
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(Body::from(
-                    json!({ "email": "mike@tongji.edu.cn", "code": "333333" }).to_string(),
+                    json!({ "email": "mike@tongji.edu.cn", "code": "333333", "handle": "mike" })
+                        .to_string(),
                 ))
                 .unwrap(),
         )
