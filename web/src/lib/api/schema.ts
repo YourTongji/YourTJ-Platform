@@ -26,6 +26,8 @@ export interface paths {
                     "application/json": {
                         /** Format: email */
                         email: string;
+                        /** @enum {string} */
+                        purpose: "login" | "registration" | "password_reset";
                         captchaToken: string;
                     };
                 };

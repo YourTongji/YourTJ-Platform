@@ -27,6 +27,7 @@
 - 密码重置或修改后没有撤销其他 refresh session。
 - 账号不存在、无密码和密码错误的响应可被用来枚举账号。
 - 未填写 handle 时可能使用邮箱前缀，形成公开身份关联风险。
+- 验证码已实现 purpose 绑定与原子消费（AUTH-001）。
 - access 与 refresh token 都保存在 localStorage；富文本上线前必须重新评估 XSS 后果。
 - 没有设备中心、recent-auth、条款版本确认、onboarding、导出或自助删除。
 
