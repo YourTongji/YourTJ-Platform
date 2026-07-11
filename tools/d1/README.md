@@ -1,6 +1,8 @@
-# tools/d1 — D1 data import toolchain
+# tools/d1 — D1 selection snapshot import toolchain
 
-Scripts for importing production data from Cloudflare D1 into local PostgreSQL.
+Scripts for importing the Cloudflare D1 selection snapshot into isolated PostgreSQL Raw PK tables.
+This is not a complete production-data migration. Read the canonical
+[`docs/operations/data-import.md`](../../docs/operations/data-import.md) before running it.
 
 ## Prerequisites
 
@@ -19,7 +21,6 @@ export DATABASE_URL=postgres://yourtj:yourtj@localhost:5432/yourtj
 | `d1_export.py` | Export all tables from D1 → local SQLite (`d1_export.db`) |
 | `d1_import_pg.py` | First-load `selection.pk_*` with explicit D1→PG column mapping |
 | `gen_reviews_sql.py` | Generate `OVERRIDING SYSTEM VALUE` INSERTs for `reviews.*` |
-| `make_sample.py` | Sample rows from d1_export.db preserving edge-case shapes |
 
 ## Full import workflow (manual)
 
@@ -46,10 +47,12 @@ python3 d1_import_pg.py --source d1_export.db --emit-copy | psql "$DATABASE_URL"
 ```
 
 Historical reviews, likes, reports, wallet hashes, and anonymous edit tokens are not part of the
-selection first-load. They require a separate identity, foreign-key, and privacy migration.
+selection first-load. Do not run `gen_reviews_sql.py` against a shared environment without the
+identity, course-mapping, moderation, privacy, idempotency, and rollback decisions in the operations
+runbook.
 
-## Automated workflow (via admin API)
+## Admin sync boundary
 
-After `POST /api/v2/admin/selection/sync` is implemented, the backend handles
-steps 1–4 internally (pull→stage→mat→post). These scripts remain as the
-escape-hatch for local debugging and disaster recovery.
+`POST /api/v2/admin/selection/sync` triggers materialization/search/cache work for data already present in
+PostgreSQL. It does not export D1 or first-load the Raw tables, and the current job has no durable
+progress/retry record. These scripts remain the explicit local/recovery import path.

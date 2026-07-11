@@ -1,10 +1,8 @@
 //! Trust level computation and daily promotion/demotion task.
 //!
-//! TL0→TL1: registered ≥ 2 days, posts+comments ≥ 3, read ≥ 10 topics
-//! TL1→TL2: registered ≥ 15 days, active days ≥ 8, votes_received ≥ 10, no upheld flags
-//! TL2→TL3: registered ≥ 60 days, active ≥ 20 in 60d, votes_received ≥ 50, flags_upheld ≥ 3
-//!
-//! Demotion: TL2/TL3 with an upheld flag → drop one level.
+//! The current thresholds and known promotion/demotion policy mismatches are documented in
+//! `docs/product/trust-safety-and-administration.md`. Keep that product inventory synchronized
+//! when this scheduler changes.
 
 use sqlx::PgPool;
 

@@ -3,8 +3,8 @@
 //! This crate handles STS credential issuance for direct-to-OSS uploads,
 //! OSS callbacks, and the moderation queue for uploaded files.
 //!
-//! Currently uses placeholder OSS integration. See `oss.rs` for the stubs
-//! that should be replaced with real SDK calls.
+//! STS, callback verification, and moderation object deletion use the concrete
+//! Alibaba Cloud HTTP protocols behind testable provider/object-store boundaries.
 
 use std::sync::Arc;
 

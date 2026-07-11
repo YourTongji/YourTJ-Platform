@@ -1,6 +1,7 @@
 //! Credit domain — Web2.5 closed-loop points.
 //!
-//! HARD COMPLIANCE RULES (闭环虚拟权益, see `docs/REWRITE_V2_DESIGN.md` §6.3):
+//! HARD COMPLIANCE RULES (闭环虚拟权益, see `AGENTS.md` and
+//! `docs/architecture/contracts-and-data.md`):
 //! - NO recharge, NO withdrawal, NO fiat conversion, NO cashout.
 //! - NO unrestricted peer transfer — value only moves inside controlled flows
 //!   (tip / bounty / escrow). Do NOT add a free `transfer` endpoint.

@@ -10,6 +10,7 @@ Rust backend under `/api/v2`.
 pnpm install
 pnpm generate:api
 pnpm dev
+pnpm lint
 pnpm typecheck
 pnpm build
 ```
@@ -21,5 +22,7 @@ Set `VITE_CAPTCHA_URL` to override the TongjiCaptcha service base. It defaults t
 `https://captcha.07211024.xyz`; the browser calls `/api/captcha` for a challenge and
 `/api/verify` for the single-use pass token sent to protected backend writes.
 
-See `FRONTEND_ARCHITECTURE.md` for feature routing, endpoint coverage, and known
-backend protocol gaps.
+See the repository [development guide](../docs/development/README.md),
+[testing guide](../docs/development/testing.md), and
+[current product inventory](../docs/product/current-state-and-roadmap.md). The source and generated
+OpenAPI types are authoritative for current route coverage; do not maintain a second feature matrix here.

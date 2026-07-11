@@ -1,7 +1,7 @@
 //! Identity domain: campus-email accounts, verification codes, JWT sessions, and
 //! the account-bound Ed25519 keys used to sign credit operations.
 //!
-//! Invariants (see `docs/REWRITE_V2_DESIGN.md`):
+//! Invariants (see `docs/product/identity-and-access.md` and `AGENTS.md`):
 //! - The public handle is shown to users; the real email is server-only (moderation).
 //! - The server stores only Ed25519 *public* keys — never private keys or secrets.
 //! - Old wallets are merged via a signed challenge (`/wallet/claim`), not by import.

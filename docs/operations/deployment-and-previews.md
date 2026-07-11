@@ -1,0 +1,109 @@
+# 部署与 PR Preview
+
+> 文档类型：运维 runbook
+>
+> 状态：Active
+>
+> 负责人：Platform maintainers
+>
+> 最近核验：2026-07-11，`origin/main@33584db`
+
+本文件描述仓库当前 GitHub Actions 行为，不把目标 Aliyun 架构写成已上线生产事实。Workflow
+或服务器脚本变化时必须在同一 PR 更新本 runbook。
+
+## 环境
+
+| 环境 | 当前入口 | 用途 |
+|---|---|---|
+| Local | Web `localhost:5173`、API `localhost:8080` | 开发与测试 |
+| PR preview | `http://<preview-host>:8080/pr-<N>/` | 同仓 PR 集成预览 |
+| Main staging | `http://<preview-host>:8080/` | main 当前共享测试部署 |
+| Target production | Aliyun 无状态容器 + PolarDB/Redis/Meili/OSS | 尚未由仓库 IaC 交付 |
+
+Preview/main host 不是已经完成 SLO、备份、域名和 secret manager 的正式生产声明。
+
+## CI 与部署是两条独立流水线
+
+- `.github/workflows/ci.yml` 对 PR 和 main 运行 backend lint/tests 与 Web generated types/lint/build。
+- `.github/workflows/pr-preview.yml` 构建并部署 PR preview。
+- `.github/workflows/deploy-main.yml` 在 main 的运行代码路径变化时部署 main staging。
+
+当前 deploy workflow 没有显式依赖 CI。交付人必须同时确认 CI 和 deploy jobs 真实成功，不能只看
+GitHub summary 文案或可打开的旧页面。
+
+## PR preview 触发与构建
+
+以下路径变化会触发 preview：
+
+- `web/**`
+- `backend/**`
+- `contract/openapi.yaml`
+- preview workflow 本身
+
+无论只改 Web 还是只改 backend，preview 都同时构建并部署前端和后端，避免前端对着 main backend
+或 backend 对着旧前端产生假预览。Docs-only PR 不触发 runtime preview。
+
+Workflow 当前只接受不超过两位数的 PR number，这是已知临时限制，应在达到上限前移除。Fork PR
+通常拿不到 deployment secrets，不能承诺自动 preview。
+
+## Preview 流程
+
+1. Checkout PR revision 并验证 PR number。
+2. 构建 backend Docker image `yourtj-api:pr-<N>`。
+3. 安装 Web 依赖，以 `/pr-<N>/api/v2` 和 `/pr-<N>/` base path 构建静态资源。
+4. 通过 SSH 传输 image 和 frontend dist。
+5. 服务器 `/opt/yourtj-preview/deploy-pr.sh` 创建/更新对应 preview。
+6. 从服务器本机验证 frontend root 与 `/api/v2/health`。
+
+Review 时还要从浏览器实际访问页面、检查 API 请求、console、登录态和本次功能。Health 只证明进程
+可响应，不证明 migration、search、email、OSS 或业务旅程正确。
+
+## 数据与 secret 隔离
+
+- Preview server contract 要求每个 PR 使用独立数据库/容器命名空间，不连接生产数据库或对象存储。
+  `/opt/yourtj-preview/deploy-pr.sh` 不在本仓库，operator 必须验证实际脚本满足该约束，不能只凭
+  workflow 的命名和 cleanup 命令推断隔离已经成立。
+- Preview backend 不注入生产 Cloudflare email token；邮件使用 redacted log/test provider。
+- 不把 SSH、数据库、邮件、OSS 或 JWT credential 写入 workflow、文档、PR、日志或截图。
+- 当前 workflow 中仍有需要迁入 GitHub secrets 的 preview database credential，并且 main SSH
+  host-key policy 需要收紧；在完成前把它们视为 P0 deployment hardening。
+- Preview 不导入真实 D1/用户/DM 数据；测试资料使用合成 fixture。
+
+## Main staging 部署
+
+`deploy-main.yml` 在 main 的 `web/**`、`backend/**`、contract 或 workflow 变化时构建前后端并通过
+SSH 部署。Docs-only 合并不会重新部署。部署后应验证：
+
+```text
+GET /                 -> 当前 Web revision
+GET /api/v2/health    -> backend health
+```
+
+还需执行本次变更的关键 smoke journey。当前 workflow 缺完整 main health gate、自动 rollback 和
+release manifest；失败时不要仅依赖 summary 判断“已部署”。
+
+## 关闭、过期与清理
+
+- 未合并 PR 关闭时 workflow 停止容器、删除 image/frontend 和 preview database。
+- 合并 PR 依赖 main deployment 接管，但 repository workflow 未提供完整 orphan/TTL reconciliation。
+- Workflow summary 声称 preview 24 小时过期，但仓库没有 schedule 保证这一点；不能依赖该文案。
+- 需要补定时清理：枚举 open PR 与服务器资源，dry-run 后移除 orphan，并输出审计/指标。
+
+## 变更与回滚
+
+- Migration 必须 forward-compatible；preview 成功不代表 shared main data 可以安全回滚。
+- Web/API breaking change 使用 additive contract、双读/双写或明确 cutover，避免前后端窗口不兼容。
+- 当前回滚依赖重新部署已知良好 revision；没有自动 release promotion/rollback。执行前确认 migration
+  和外部副作用允许回退。
+- Email 与 OSS 分别按[邮件 runbook](email-delivery.md)和[媒体存储 runbook](media-storage.md)处理；
+  Meili/Redis 按架构中的事实源/投影语义降级。后两者的独立 incident runbook 仍需补齐，不能临时
+  绕过可见性、授权或数据完整性。
+
+## 部署完成条件
+
+- CI 与 deploy jobs 真实通过。
+- Frontend 和 backend revision 对应同一 commit。
+- Health、关键 API 和本次用户旅程已验证，无新增 console/server error。
+- Migration、search index、scheduled/outbox work 的状态可观察。
+- Secret/PII 未进入 artifact 或日志，preview 与 main 数据隔离。
+- PR 中记录 preview URL、验证步骤、已知限制和回滚方法。
