@@ -79,7 +79,7 @@ pub async fn create_board(
         "INSERT INTO forum.boards (slug, name) \
          VALUES ($1, $2) \
          RETURNING id, slug, name, parent_id, description, position, \
-                   is_locked, min_trust_to_post, thread_count",
+                   is_locked, is_qa, min_trust_to_post, thread_count",
     )
     .bind(slug)
     .bind(name)
@@ -144,7 +144,7 @@ pub async fn update_board(
          SET slug = COALESCE($1, slug), name = COALESCE($2, name) \
          WHERE id = $3 \
          RETURNING id, slug, name, parent_id, description, position, \
-                   is_locked, min_trust_to_post, thread_count",
+                   is_locked, is_qa, min_trust_to_post, thread_count",
     )
     .bind(slug)
     .bind(name)

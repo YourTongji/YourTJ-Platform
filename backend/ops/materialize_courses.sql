@@ -16,23 +16,43 @@ FROM selection.pk_teachers_raw t
 WHERE TRIM(COALESCE(t.teacher_name, '')) != ''
 ON CONFLICT DO NOTHING;
 
--- Courses: aggregate pk_course_details by course_code (canonical course, not teaching class)
+-- Courses: aggregate to exactly one canonical row per course code. When historical
+-- teaching classes disagree on the display name, prefer the newest calendar/class.
+WITH normalized_courses AS (
+  SELECT COALESCE(NULLIF(TRIM(cd.course_code), ''), cd.code) AS code,
+         COALESCE(NULLIF(TRIM(cd.course_name), ''), NULLIF(TRIM(cd.name), ''), cd.code) AS name,
+         cd.credit,
+         cd.calendar_id,
+         cd.id
+  FROM selection.pk_course_details cd
+  WHERE COALESCE(NULLIF(TRIM(cd.course_code), ''), cd.code) IS NOT NULL
+), canonical_courses AS (
+  SELECT code,
+         (ARRAY_AGG(name ORDER BY calendar_id DESC NULLS LAST, id DESC))[1] AS name,
+         AVG(credit) FILTER (WHERE credit IS NOT NULL) AS credit
+  FROM normalized_courses
+  GROUP BY code
+)
 INSERT INTO courses.courses (id, code, name, credit, department, review_count, review_avg,
                               name_pinyin, name_initials, search_keywords, is_legacy)
-SELECT ROW_NUMBER() OVER (ORDER BY COALESCE(NULLIF(TRIM(cd.course_code), ''), cd.code)) + 1000000,
-       COALESCE(NULLIF(TRIM(cd.course_code), ''), cd.code),
-       COALESCE(NULLIF(TRIM(cd.course_name), ''), NULLIF(TRIM(cd.name), ''), cd.code),
-       AVG(cd.credit) FILTER (WHERE cd.credit IS NOT NULL),
+OVERRIDING SYSTEM VALUE
+SELECT ROW_NUMBER() OVER (ORDER BY course.code) + 1000000,
+       course.code,
+       course.name,
+       course.credit,
        NULL AS department,
        0,
        0,
        NULL, NULL, NULL,
        1
-FROM selection.pk_course_details cd
-WHERE COALESCE(NULLIF(TRIM(cd.course_code), ''), cd.code) IS NOT NULL
-GROUP BY COALESCE(NULLIF(TRIM(cd.course_code), ''), cd.code),
-         COALESCE(NULLIF(TRIM(cd.course_name), ''), NULLIF(TRIM(cd.name), ''), cd.code)
+FROM canonical_courses course
 ON CONFLICT DO NOTHING;
+
+SELECT setval(
+  pg_get_serial_sequence('courses.courses', 'id'),
+  COALESCE((SELECT MAX(id) FROM courses.courses), 1),
+  EXISTS (SELECT 1 FROM courses.courses)
+);
 
 -- Course aliases: map all code variants (code, course_code, new_code, new_course_code) to courses
 INSERT INTO courses.course_aliases (course_id, alias)

@@ -21,12 +21,12 @@ ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name;
 
 -- Faculties — natural-key upsert by name; ID is stable via sequence default.
 INSERT INTO selection.faculties (name, campus_id)
-SELECT DISTINCT COALESCE(faculty_i18n, faculty), NULL FROM selection.pk_faculties
+SELECT DISTINCT COALESCE(faculty_i18n, faculty), NULL::BIGINT FROM selection.pk_faculties
 ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name;
 
 -- Majors
 INSERT INTO selection.majors (id, name, faculty_id, grade)
-SELECT id, name, NULL, grade::TEXT FROM selection.pk_majors
+SELECT id, name, NULL::BIGINT, grade::TEXT FROM selection.pk_majors
 WHERE TRIM(COALESCE(name, '')) != ''
 ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name;
 

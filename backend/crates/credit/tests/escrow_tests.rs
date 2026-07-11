@@ -105,6 +105,51 @@ async fn task_list_requires_auth() {
 }
 
 #[tokio::test]
+async fn task_list_treats_all_as_no_filter_and_rejects_unknown_status() {
+    let (pool, app) = create_test_app().await;
+    let account_id = create_test_account(&pool, "task-filter@tongji.edu.cn", "task-filter").await;
+    let token = create_token(&pool, "task-filter@tongji.edu.cn").await;
+    sqlx::query(
+        "INSERT INTO credit.tasks \
+         (creator_id, title, reward_amount, hold_tx_id) VALUES ($1, $2, $3, $4)",
+    )
+    .bind(account_id)
+    .bind("Filterable task")
+    .bind(10_i64)
+    .bind("filter-test-hold")
+    .execute(&pool)
+    .await
+    .expect("seed filterable task");
+
+    let all_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v2/credit/tasks?status=all")
+                .header("Authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .expect("all tasks request"),
+        )
+        .await
+        .expect("all tasks response");
+    assert_eq!(all_response.status(), StatusCode::OK);
+    let all_tasks = read_json(all_response).await;
+    assert_eq!(all_tasks["items"].as_array().expect("task items").len(), 1);
+
+    let invalid_response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v2/credit/tasks?status=unknown")
+                .header("Authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .expect("invalid tasks request"),
+        )
+        .await
+        .expect("invalid tasks response");
+    assert_eq!(invalid_response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
 async fn task_accept_and_submit_flow() {
     let (pool, app) = create_test_app().await;
     let creator = create_test_account(&pool, "flowcreator@tongji.edu.cn", "flowcreator").await;
