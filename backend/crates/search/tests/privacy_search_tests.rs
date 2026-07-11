@@ -187,6 +187,9 @@ async fn user_search_rehydrates_ranked_candidates_without_leaking_private_or_hid
     assert_eq!(users[1]["id"], public_id.to_string());
     assert_eq!(users[1]["following"], true);
     assert_eq!(users[1]["followerCount"], 1);
+    assert_eq!(authenticated["hasMore"], false);
+    assert!(authenticated["nextCursor"].is_null());
+    assert!(authenticated["failedScopes"].as_array().expect("failed scopes").is_empty());
     assert!(authenticated["courses"].as_array().expect("course results").is_empty());
     assert!(authenticated["boards"].as_array().expect("board results").is_empty());
 
@@ -225,6 +228,7 @@ async fn user_search_rehydrates_ranked_candidates_without_leaking_private_or_hid
     assert_eq!(board_search["boards"][0]["name"], "Study Search");
 
     let tag_search = app
+        .clone()
         .oneshot(
             Request::builder()
                 .uri("/api/v2/search?q=study&type=tag")
@@ -238,5 +242,71 @@ async fn user_search_rehydrates_ranked_candidates_without_leaking_private_or_hid
     assert_eq!(tag_search["tags"].as_array().expect("tags").len(), 1);
     assert_eq!(tag_search["tags"][0]["id"], tag_id.to_string());
     assert_eq!(tag_search["tags"][0]["name"], "Study Tag");
+
+    let partial_search = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v2/search?q=study&type=all&limit=1")
+                .header(header::AUTHORIZATION, format!("Bearer {viewer_token}"))
+                .body(Body::empty())
+                .expect("build partial all-scope search"),
+        )
+        .await
+        .expect("partial all-scope response");
+    assert_eq!(partial_search.status(), StatusCode::OK);
+    let partial_search = read_json(partial_search).await;
+    assert_eq!(partial_search["failedScopes"], serde_json::json!(["course", "review", "thread"]));
+    assert_eq!(partial_search["users"].as_array().expect("partial users").len(), 1);
+    assert_eq!(partial_search["boards"].as_array().expect("partial boards").len(), 1);
+    assert_eq!(partial_search["tags"].as_array().expect("partial tags").len(), 1);
+    assert_eq!(partial_search["hasMoreScopes"], serde_json::json!(["user"]));
+
+    let first_user_page = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v2/search?q=result&type=user&limit=1")
+                .header(header::AUTHORIZATION, format!("Bearer {viewer_token}"))
+                .body(Body::empty())
+                .expect("build first cursor page"),
+        )
+        .await
+        .expect("first cursor page response");
+    assert_eq!(first_user_page.status(), StatusCode::OK);
+    let first_user_page = read_json(first_user_page).await;
+    assert_eq!(first_user_page["users"].as_array().expect("first users").len(), 1);
+    assert_eq!(first_user_page["users"][0]["id"], campus_id.to_string());
+    assert_eq!(first_user_page["hasMore"], true);
+    let cursor = first_user_page["nextCursor"].as_str().expect("next cursor");
+
+    let second_user_page = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/v2/search?q=result&type=user&limit=1&cursor={cursor}"))
+                .header(header::AUTHORIZATION, format!("Bearer {viewer_token}"))
+                .body(Body::empty())
+                .expect("build second cursor page"),
+        )
+        .await
+        .expect("second cursor page response");
+    assert_eq!(second_user_page.status(), StatusCode::OK);
+    let second_user_page = read_json(second_user_page).await;
+    assert_eq!(second_user_page["users"].as_array().expect("second users").len(), 1);
+    assert_eq!(second_user_page["users"][0]["id"], public_id.to_string());
+    assert_eq!(second_user_page["hasMore"], false);
+
+    let mismatched_cursor = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/v2/search?q=changed&type=user&limit=1&cursor={cursor}"))
+                .header(header::AUTHORIZATION, format!("Bearer {viewer_token}"))
+                .body(Body::empty())
+                .expect("build mismatched cursor request"),
+        )
+        .await
+        .expect("mismatched cursor response");
+    assert_eq!(mismatched_cursor.status(), StatusCode::BAD_REQUEST);
     server.abort();
 }

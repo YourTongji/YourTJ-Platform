@@ -78,7 +78,8 @@
 - Avatar/banner 已完成 owner 上传、审核状态恢复、clean binding 和解除绑定；主题/评论等 UGC 仍没有
   asset binding，且 scanner/变体/EXIF/GC 尚未完成，因此 profile 子链路完成不等于媒体产品闭环。
 - 聚合搜索已有六类 typed 结果、有效 type filter、独立 Web 综合结果页与全局搜索入口；仍缺每类
-  cursor、highlight/纠错、局部失败，以及 transactional outbox 驱动的索引可靠更新。
+  highlight/纠错，以及 transactional outbox 驱动的索引可靠更新。单类 cursor、all 页“查看更多”
+  和局部失败状态已完成。
 - 推广尚无通用 `asset_usages` binding/GC、匿名 clean 图片交付和按日聚合 impression/click；这些缺口
   不影响无图片卡片和登录用户通过 media 授权 URL 显示 clean asset。
 
@@ -243,8 +244,13 @@ Feed 卡片只显示真实作者、正文摘要、asset、viewer state 和计数
 
 当前 `/api/v2/search` 支持 `course | teacher | review | thread | user | board | tag | all`，其中
 teacher 是课程文档的检索入口，不产生不完整的独立 teacher DTO；query 长度 2–100，单类 limit
-1–30。user 结果只允许已验证、discoverable、当前 viewer 可见且未被 block/mute 的 active 账号；
-board/tag 返回当前公开对象和实时计数。索引内部
+1–30。非 `all` 查询返回与规范化 query/type 绑定的 opaque cursor，并在最多 240 条可见结果的窗口内
+用 lookahead 准确声明 `hasMore`；错误 query/type、篡改 cursor 和越界窗口均返回 400。`all` 是每类
+最多 6 条的概览，用 `hasMoreScopes` 驱动单类“查看更多”，不使用一个游标混合推进六个不同排名。
+`failedScopes` 只声明局部不可用分类，不暴露内部错误，也不把失败伪装成“没有结果”。
+
+User 结果只允许已验证、discoverable、当前 viewer 可见且未被 block/mute 的 active 账号；board/tag
+返回当前公开对象和实时计数。索引内部
 `course-<id>` / `review-<id>` 前缀不得出现在 HTTP 结果，隐藏课评以及 hidden/deleted/archived/pending
 主题即使仍有陈旧 hit 也必须在回表阶段丢弃。
 

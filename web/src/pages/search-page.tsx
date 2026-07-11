@@ -1,5 +1,5 @@
-import { useQuery } from "@tanstack/react-query";
-import { BookOpen, Hash, LayoutGrid, MessageCircle, MessageSquare, Search, SearchX, UserRound } from "lucide-react";
+import { useInfiniteQuery } from "@tanstack/react-query";
+import { AlertTriangle, BookOpen, Hash, LayoutGrid, Loader2, MessageCircle, MessageSquare, Search, SearchX, UserRound } from "lucide-react";
 import * as React from "react";
 import { Link, useSearchParams } from "react-router";
 
@@ -25,15 +25,28 @@ const scopes: Array<{ value: SearchScope; label: string }> = [
   { value: "tag", label: "标签" },
 ];
 
+const scopeLabels: Record<Exclude<SearchScope, "all">, string> = {
+  course: "课程与教师",
+  review: "课评",
+  thread: "社区帖子",
+  user: "用户",
+  board: "板块",
+  tag: "标签",
+};
+
 export function SearchPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const query = searchParams.get("q")?.trim() ?? "";
   const rawScope = searchParams.get("type");
   const scope = scopes.some((item) => item.value === rawScope) ? rawScope as SearchScope : "all";
   const [draft, setDraft] = React.useState(query);
-  const result = useQuery({
+  const result = useInfiniteQuery({
     queryKey: ["search-page", query, scope],
-    queryFn: () => api.search(query, scope, 30),
+    queryFn: ({ pageParam }) => api.search(query, scope, scope === "all" ? 6 : 30, pageParam),
+    initialPageParam: null as string | null,
+    getNextPageParam: (page) => scope !== "all" && page.hasMore
+      ? page.nextCursor ?? undefined
+      : undefined,
     enabled: query.length >= 2,
   });
 
@@ -46,12 +59,15 @@ export function SearchPage() {
     setSearchParams(next);
   }
 
-  const courses = result.data?.courses ?? [];
-  const reviews = result.data?.reviews ?? [];
-  const threads = result.data?.threads ?? [];
-  const users = result.data?.users ?? [];
-  const boards = result.data?.boards ?? [];
-  const tags = result.data?.tags ?? [];
+  const pages = result.data?.pages ?? [];
+  const courses = pages.flatMap((page) => page.courses);
+  const reviews = pages.flatMap((page) => page.reviews);
+  const threads = pages.flatMap((page) => page.threads);
+  const users = pages.flatMap((page) => page.users);
+  const boards = pages.flatMap((page) => page.boards);
+  const tags = pages.flatMap((page) => page.tags);
+  const moreScopes = new Set(pages[0]?.hasMoreScopes ?? []);
+  const failedScopes = Array.from(new Set(pages.flatMap((page) => page.failedScopes)));
   const total = courses.length + reviews.length + threads.length + users.length + boards.length + tags.length;
 
   return (
@@ -118,6 +134,15 @@ export function SearchPage() {
               <Button type="button" variant="outline" onClick={() => void result.refetch()}>重试</Button>
             </CardContent>
           </Card>
+        ) : failedScopes.length > 0 && total === 0 ? (
+          <Card className="border-amber-500/30">
+            <CardContent className="flex min-h-56 flex-col items-center justify-center gap-3 text-center">
+              <AlertTriangle className="size-8 text-amber-600" aria-hidden="true" />
+              <p className="font-medium">相关搜索分类暂时不可用</p>
+              <p className="text-sm text-muted-foreground">没有用缓存或未经权限复核的数据代替实时结果。</p>
+              <Button type="button" variant="outline" onClick={() => void result.refetch()}>重试</Button>
+            </CardContent>
+          </Card>
         ) : total === 0 ? (
           <Card>
             <CardContent className="flex min-h-56 flex-col items-center justify-center gap-3 text-center">
@@ -128,6 +153,17 @@ export function SearchPage() {
           </Card>
         ) : (
           <div className="space-y-8">
+            {failedScopes.length > 0 ? (
+              <Card className="border-amber-500/30 bg-amber-500/5" role="status">
+                <CardContent className="flex items-start gap-3 p-4 text-sm">
+                  <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-600" aria-hidden="true" />
+                  <p>
+                    {failedScopes.map((item) => scopeLabels[item as Exclude<SearchScope, "all">]).join("、")}
+                    暂时不可用；其余结果仍已按当前权限复核。
+                  </p>
+                </CardContent>
+              </Card>
+            ) : null}
             <p className="text-sm text-muted-foreground">当前返回 {total} 条经可见性复核的结果</p>
 
             {(scope === "all" || scope === "course") && courses.length > 0 ? (
@@ -151,6 +187,11 @@ export function SearchPage() {
                     </Link>
                   ))}
                 </div>
+                {scope === "all" && moreScopes.has("course") ? (
+                  <Button type="button" variant="outline" className="mt-3 w-full" onClick={() => updateSearch(query, "course")}>
+                    查看更多课程与教师
+                  </Button>
+                ) : null}
               </section>
             ) : null}
 
@@ -177,6 +218,11 @@ export function SearchPage() {
                     </Link>
                   ))}
                 </div>
+                {scope === "all" && moreScopes.has("review") ? (
+                  <Button type="button" variant="outline" className="mt-3 w-full" onClick={() => updateSearch(query, "review")}>
+                    查看更多课评
+                  </Button>
+                ) : null}
               </section>
             ) : null}
 
@@ -209,6 +255,11 @@ export function SearchPage() {
                     </Link>
                   ))}
                 </div>
+                {scope === "all" && moreScopes.has("user") ? (
+                  <Button type="button" variant="outline" className="mt-3 w-full" onClick={() => updateSearch(query, "user")}>
+                    查看更多用户
+                  </Button>
+                ) : null}
               </section>
             ) : null}
 
@@ -233,6 +284,11 @@ export function SearchPage() {
                     </Link>
                   ))}
                 </div>
+                {scope === "all" && moreScopes.has("thread") ? (
+                  <Button type="button" variant="outline" className="mt-3 w-full" onClick={() => updateSearch(query, "thread")}>
+                    查看更多社区帖子
+                  </Button>
+                ) : null}
               </section>
             ) : null}
 
@@ -256,6 +312,11 @@ export function SearchPage() {
                     </Link>
                   ))}
                 </div>
+                {scope === "all" && moreScopes.has("board") ? (
+                  <Button type="button" variant="outline" className="mt-3 w-full" onClick={() => updateSearch(query, "board")}>
+                    查看更多板块
+                  </Button>
+                ) : null}
               </section>
             ) : null}
 
@@ -278,7 +339,25 @@ export function SearchPage() {
                     </Link>
                   ))}
                 </div>
+                {scope === "all" && moreScopes.has("tag") ? (
+                  <Button type="button" variant="outline" className="mt-3 w-full" onClick={() => updateSearch(query, "tag")}>
+                    查看更多标签
+                  </Button>
+                ) : null}
               </section>
+            ) : null}
+
+            {scope !== "all" && result.hasNextPage ? (
+              <Button
+                type="button"
+                variant="outline"
+                className="w-full rounded-full"
+                disabled={result.isFetchingNextPage}
+                onClick={() => void result.fetchNextPage()}
+              >
+                {result.isFetchingNextPage ? <Loader2 className="size-4 animate-spin" /> : null}
+                {result.isFetchingNextPage ? "正在加载" : `加载更多${scopeLabels[scope]}`}
+              </Button>
             ) : null}
           </div>
         )}

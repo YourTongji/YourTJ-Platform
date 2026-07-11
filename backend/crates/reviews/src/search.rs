@@ -100,7 +100,7 @@ pub async fn search_reviews(
         courses::meili::SearchDocumentKind::Review,
         limit,
     )
-    .await;
+    .await?;
     load_review_hits(pool, &candidate_ids, limit).await
 }
 

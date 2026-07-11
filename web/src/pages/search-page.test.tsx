@@ -27,7 +27,12 @@ function renderPage() {
 
 describe("SearchPage", () => {
   beforeEach(() => {
-    apiMocks.search.mockReset().mockImplementation(async (_query: string, scope: string) => ({
+    apiMocks.search.mockReset().mockImplementation(async (
+      _query: string,
+      scope: string,
+      _limit: number,
+      cursor?: string | null,
+    ) => ({
       courses: scope === "all" || scope === "course" ? [{
         id: "1",
         code: "CS101",
@@ -48,8 +53,8 @@ describe("SearchPage", () => {
         createdAt: 1_700_000_000,
       }] : [],
       threads: scope === "all" || scope === "thread" ? [{
-        id: "3",
-        title: "算法作业讨论",
+        id: cursor ? "30" : "3",
+        title: cursor ? "算法进阶讨论" : "算法作业讨论",
         bodyExcerpt: "一起梳理动态规划",
         board: "study",
         tags: [],
@@ -82,6 +87,10 @@ describe("SearchPage", () => {
         description: null,
         threadCount: 9,
       }] : [],
+      nextCursor: scope === "thread" && !cursor ? "thread-cursor-1" : null,
+      hasMore: scope === "thread" && !cursor,
+      hasMoreScopes: scope === "all" ? ["thread"] : scope === "thread" && !cursor ? ["thread"] : [],
+      failedScopes: [],
     }));
   });
 
@@ -96,8 +105,37 @@ describe("SearchPage", () => {
     expect(screen.getByRole("link", { name: /#算法/ })).toHaveAttribute("href", "/forum?tag=algorithm");
 
     await user.click(screen.getByRole("button", { name: "社区帖子" }));
-    await waitFor(() => expect(apiMocks.search).toHaveBeenLastCalledWith("算法", "thread", 30));
+    await waitFor(() => expect(apiMocks.search).toHaveBeenLastCalledWith("算法", "thread", 30, null));
     expect(screen.queryByText("讲解清晰")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "加载更多社区帖子" }));
+    expect(await screen.findByText("算法进阶讨论")).toBeVisible();
+    await waitFor(() => expect(apiMocks.search).toHaveBeenLastCalledWith(
+      "算法",
+      "thread",
+      30,
+      "thread-cursor-1",
+    ));
+    await expectNoAccessibilityViolations(view.container);
+  });
+
+  it("distinguishes an unavailable section from a genuine empty result", async () => {
+    apiMocks.search.mockReset().mockResolvedValue({
+      courses: [],
+      reviews: [],
+      threads: [],
+      users: [],
+      boards: [],
+      tags: [],
+      nextCursor: null,
+      hasMore: false,
+      hasMoreScopes: [],
+      failedScopes: ["thread"],
+    });
+    const view = renderPage();
+
+    expect(await screen.findByText("相关搜索分类暂时不可用")).toBeVisible();
+    expect(screen.queryByText(/没有找到/)).not.toBeInTheDocument();
     await expectNoAccessibilityViolations(view.container);
   });
 });

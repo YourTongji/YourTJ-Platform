@@ -292,7 +292,8 @@ fn order_public_documents(
 /// Searches forum threads while treating Meilisearch hits only as ranked candidates.
 ///
 /// Every returned document is reconstructed from a visibility-checked PostgreSQL
-/// row. Meilisearch failure degrades to an empty result; database failure is returned.
+/// row. Candidate-source and database failures are returned so federated search can
+/// distinguish an unavailable section from a genuine empty result.
 pub async fn search_threads(
     pool: &PgPool,
     meili_url: &str,
@@ -305,28 +306,20 @@ pub async fn search_threads(
         return Ok(Vec::new());
     }
 
-    let client = match Client::new(meili_url, meili_api_key(meili_key)) {
-        Ok(client) => client,
-        Err(error) => {
-            tracing::warn!(%error, "forum search meilisearch client creation failed");
-            return Ok(Vec::new());
-        }
-    };
+    let client = meili_client(meili_url, meili_key)?;
     let candidate_limit = limit.saturating_mul(4).min(1_000);
-    let hits = match client
+    let hits = client
         .index(FORUM_THREADS_INDEX)
         .search()
         .with_query(query)
         .with_limit(candidate_limit)
         .execute::<Value>()
         .await
-    {
-        Ok(results) => results.hits.into_iter().map(|hit| hit.result).collect::<Vec<_>>(),
-        Err(error) => {
-            tracing::warn!(%error, "forum thread search failed");
-            return Ok(Vec::new());
-        }
-    };
+        .map_err(|error| meili_failure("candidate search", error))?
+        .hits
+        .into_iter()
+        .map(|hit| hit.result)
+        .collect::<Vec<_>>();
 
     let candidate_ids = candidate_thread_ids(&hits);
     let documents = load_visible_thread_documents(pool, &candidate_ids, viewer_id).await?;

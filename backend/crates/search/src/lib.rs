@@ -8,12 +8,15 @@ use axum::extract::{Query, State};
 use axum::http::HeaderMap;
 use axum::routing::get;
 use axum::{Json, Router};
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use shared::{AppError, AppResult, AppState};
 
 const DEFAULT_LIMIT: usize = 10;
 const MAX_LIMIT: usize = 30;
+const MAX_VISIBLE_RESULTS: usize = 240;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SearchScope {
@@ -67,6 +70,31 @@ impl SearchScope {
     fn includes_tags(self) -> bool {
         matches!(self, Self::All | Self::Tag)
     }
+
+    const fn cursor_key(self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::Course => "course",
+            Self::Teacher => "teacher",
+            Self::Review => "review",
+            Self::Thread => "thread",
+            Self::User => "user",
+            Self::Board => "board",
+            Self::Tag => "tag",
+        }
+    }
+
+    const fn result_scope(self) -> Option<&'static str> {
+        match self {
+            Self::All => None,
+            Self::Course | Self::Teacher => Some("course"),
+            Self::Review => Some("review"),
+            Self::Thread => Some("thread"),
+            Self::User => Some("user"),
+            Self::Board => Some("board"),
+            Self::Tag => Some("tag"),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -77,6 +105,7 @@ struct SearchQuery {
     query_type: Option<String>,
     #[serde(default = "default_limit")]
     limit: usize,
+    cursor: Option<String>,
 }
 
 fn default_limit() -> usize {
@@ -87,6 +116,7 @@ struct ValidatedSearch<'a> {
     query: &'a str,
     scope: SearchScope,
     limit: usize,
+    offset: usize,
 }
 
 fn validate_query(params: &SearchQuery) -> Result<ValidatedSearch<'_>, String> {
@@ -98,11 +128,67 @@ fn validate_query(params: &SearchQuery) -> Result<ValidatedSearch<'_>, String> {
     if !(1..=MAX_LIMIT).contains(&params.limit) {
         return Err(format!("limit must be between 1 and {MAX_LIMIT}"));
     }
-    Ok(ValidatedSearch {
-        query,
-        scope: SearchScope::parse(params.query_type.as_deref())?,
-        limit: params.limit,
-    })
+    let scope = SearchScope::parse(params.query_type.as_deref())?;
+    let offset = match params.cursor.as_deref() {
+        Some(_) if scope == SearchScope::All => {
+            return Err("cursor requires a specific search type".into())
+        }
+        Some(cursor) => decode_cursor(cursor, query, scope)?,
+        None => 0,
+    };
+    let limit = params.limit.min(MAX_VISIBLE_RESULTS.saturating_sub(offset));
+    if limit == 0 {
+        return Err("cursor is outside the searchable result window".into());
+    }
+    Ok(ValidatedSearch { query, scope, limit, offset })
+}
+
+fn cursor_fingerprint(query: &str, scope: SearchScope) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(scope.cursor_key().as_bytes());
+    hasher.update([0]);
+    hasher.update(query.as_bytes());
+    let digest = hasher.finalize();
+    hex::encode(&digest[..12])
+}
+
+fn encode_cursor(query: &str, scope: SearchScope, offset: usize) -> String {
+    URL_SAFE_NO_PAD.encode(format!(
+        "1|{}|{offset}|{}",
+        scope.cursor_key(),
+        cursor_fingerprint(query, scope)
+    ))
+}
+
+fn decode_cursor(cursor: &str, query: &str, scope: SearchScope) -> Result<usize, String> {
+    if cursor.len() > 256 {
+        return Err("invalid search cursor".into());
+    }
+    let decoded = URL_SAFE_NO_PAD.decode(cursor).map_err(|_| "invalid search cursor")?;
+    let decoded = std::str::from_utf8(&decoded).map_err(|_| "invalid search cursor")?;
+    let mut parts = decoded.split('|');
+    let version = parts.next();
+    let cursor_scope = parts.next();
+    let offset = parts.next().and_then(|value| value.parse::<usize>().ok());
+    let fingerprint = parts.next();
+    if version != Some("1")
+        || cursor_scope != Some(scope.cursor_key())
+        || fingerprint != Some(cursor_fingerprint(query, scope).as_str())
+        || parts.next().is_some()
+    {
+        return Err("invalid search cursor".into());
+    }
+    let offset = offset.ok_or_else(|| "invalid search cursor".to_owned())?;
+    if offset >= MAX_VISIBLE_RESULTS {
+        return Err("search cursor exceeds the result window".into());
+    }
+    Ok(offset)
+}
+
+impl ValidatedSearch<'_> {
+    fn fetch_limit(&self) -> usize {
+        self.offset + self.limit + usize::from(self.offset + self.limit < MAX_VISIBLE_RESULTS)
+    }
 }
 
 /// Typed federated search response.
@@ -115,6 +201,46 @@ pub struct SearchResultDto {
     pub users: Vec<forum::discovery::UserSearchHit>,
     pub boards: Vec<forum::discovery::BoardSearchHit>,
     pub tags: Vec<forum::discovery::TagSearchHit>,
+    pub next_cursor: Option<String>,
+    pub has_more: bool,
+    pub has_more_scopes: Vec<String>,
+    pub failed_scopes: Vec<String>,
+}
+
+struct ResultPage<T> {
+    items: Vec<T>,
+    has_more: bool,
+}
+
+fn page_results<T>(items: Vec<T>, search: &ValidatedSearch<'_>) -> ResultPage<T> {
+    let mut items =
+        items.into_iter().skip(search.offset).take(search.limit + 1).collect::<Vec<_>>();
+    let has_more = items.len() > search.limit
+        && search.offset.saturating_add(search.limit) < MAX_VISIBLE_RESULTS;
+    if has_more {
+        items.truncate(search.limit);
+    }
+    ResultPage { items, has_more }
+}
+
+fn recover_section<T>(
+    result: AppResult<Vec<T>>,
+    is_included: bool,
+    scope: &'static str,
+    failed_scopes: &mut Vec<String>,
+) -> Vec<T> {
+    match result {
+        Ok(items) => items,
+        Err(error) if is_included => {
+            tracing::warn!(?error, search_scope = scope, "federated search section failed");
+            failed_scopes.push(scope.to_owned());
+            Vec::new()
+        }
+        Err(error) => {
+            tracing::warn!(?error, search_scope = scope, "excluded search section failed");
+            Vec::new()
+        }
+    }
 }
 
 fn rate_limit_key(headers: &HeaderMap) -> String {
@@ -140,7 +266,7 @@ async fn search_courses_if(
         &state.meili_url,
         &state.meili_master_key,
         search.query,
-        search.limit,
+        search.fetch_limit(),
     )
     .await
 }
@@ -157,7 +283,7 @@ async fn search_reviews_if(
         &state.meili_url,
         &state.meili_master_key,
         search.query,
-        search.limit,
+        search.fetch_limit(),
     )
     .await
 }
@@ -175,7 +301,7 @@ async fn search_threads_if(
         &state.meili_url,
         &state.meili_master_key,
         search.query,
-        search.limit,
+        search.fetch_limit(),
         viewer_id,
     )
     .await
@@ -193,10 +319,10 @@ async fn search_users_if(
         &state.meili_url,
         &state.meili_master_key,
         search.query,
-        search.limit,
+        search.fetch_limit(),
     )
     .await?;
-    forum::discovery::load_user_hits(&state.db, &candidates, viewer_id, search.limit).await
+    forum::discovery::load_user_hits(&state.db, &candidates, viewer_id, search.fetch_limit()).await
 }
 
 async fn search_boards_if(
@@ -211,7 +337,7 @@ async fn search_boards_if(
         &state.meili_url,
         &state.meili_master_key,
         search.query,
-        search.limit,
+        search.fetch_limit(),
     )
     .await
 }
@@ -228,7 +354,7 @@ async fn search_tags_if(
         &state.meili_url,
         &state.meili_master_key,
         search.query,
-        search.limit,
+        search.fetch_limit(),
     )
     .await
 }
@@ -265,13 +391,70 @@ async fn global_search(
         search_boards_if(&state, &search),
         search_tags_if(&state, &search),
     );
+    let mut failed_scopes = Vec::new();
+    let courses = page_results(
+        recover_section(courses, search.scope.includes_courses(), "course", &mut failed_scopes),
+        &search,
+    );
+    let reviews = page_results(
+        recover_section(reviews, search.scope.includes_reviews(), "review", &mut failed_scopes),
+        &search,
+    );
+    let threads = page_results(
+        recover_section(threads, search.scope.includes_threads(), "thread", &mut failed_scopes),
+        &search,
+    );
+    let users = page_results(
+        recover_section(users, search.scope.includes_users(), "user", &mut failed_scopes),
+        &search,
+    );
+    let boards = page_results(
+        recover_section(boards, search.scope.includes_boards(), "board", &mut failed_scopes),
+        &search,
+    );
+    let tags = page_results(
+        recover_section(tags, search.scope.includes_tags(), "tag", &mut failed_scopes),
+        &search,
+    );
+    let scoped_page = match search.scope.result_scope() {
+        Some("course") => Some((courses.has_more, courses.items.len())),
+        Some("review") => Some((reviews.has_more, reviews.items.len())),
+        Some("thread") => Some((threads.has_more, threads.items.len())),
+        Some("user") => Some((users.has_more, users.items.len())),
+        Some("board") => Some((boards.has_more, boards.items.len())),
+        Some("tag") => Some((tags.has_more, tags.items.len())),
+        _ => None,
+    };
+    let mut has_more_scopes = Vec::new();
+    for (scope, has_more) in [
+        ("course", courses.has_more),
+        ("review", reviews.has_more),
+        ("thread", threads.has_more),
+        ("user", users.has_more),
+        ("board", boards.has_more),
+        ("tag", tags.has_more),
+    ] {
+        if has_more {
+            has_more_scopes.push(scope.to_owned());
+        }
+    }
+    let (has_more, next_cursor) = scoped_page.map_or((false, None), |(has_more, item_count)| {
+        let cursor = has_more.then(|| {
+            encode_cursor(search.query, search.scope, search.offset.saturating_add(item_count))
+        });
+        (has_more, cursor)
+    });
     Ok(Json(SearchResultDto {
-        courses: courses?,
-        reviews: reviews?,
-        threads: threads?,
-        users: users?,
-        boards: boards?,
-        tags: tags?,
+        courses: courses.items,
+        reviews: reviews.items,
+        threads: threads.items,
+        users: users.items,
+        boards: boards.items,
+        tags: tags.items,
+        next_cursor,
+        has_more,
+        has_more_scopes,
+        failed_scopes,
     }))
 }
 
@@ -282,26 +465,91 @@ pub fn routes(state: AppState) -> Router {
 
 #[cfg(test)]
 mod tests {
-    use super::{validate_query, SearchQuery, SearchScope};
+    use super::{encode_cursor, page_results, validate_query, SearchQuery, SearchScope};
 
     #[test]
     fn validates_scope_query_and_limit() {
-        let valid =
-            SearchQuery {
-                q: "  数据结构  ".into(), query_type: Some("thread".into()), limit: 12
-            };
+        let valid = SearchQuery {
+            q: "  数据结构  ".into(),
+            query_type: Some("thread".into()),
+            limit: 12,
+            cursor: None,
+        };
         let search = validate_query(&valid).expect("valid search");
         assert_eq!(search.query, "数据结构");
         assert_eq!(search.scope, SearchScope::Thread);
         assert_eq!(search.limit, 12);
 
         for invalid in [
-            SearchQuery { q: "x".into(), query_type: None, limit: 10 },
-            SearchQuery { q: "valid".into(), query_type: Some("post".into()), limit: 10 },
-            SearchQuery { q: "valid".into(), query_type: None, limit: 31 },
+            SearchQuery { q: "x".into(), query_type: None, limit: 10, cursor: None },
+            SearchQuery {
+                q: "valid".into(),
+                query_type: Some("post".into()),
+                limit: 10,
+                cursor: None,
+            },
+            SearchQuery { q: "valid".into(), query_type: None, limit: 31, cursor: None },
         ] {
             assert!(validate_query(&invalid).is_err());
         }
+        assert!(validate_query(&SearchQuery {
+            q: "数据结构".into(),
+            query_type: Some("thread".into()),
+            limit: 12,
+            cursor: Some("x".repeat(257)),
+        })
+        .is_err());
+    }
+
+    #[test]
+    fn scoped_cursor_is_bound_to_query_scope_and_bounded_window() {
+        let cursor = encode_cursor("数据结构", SearchScope::Thread, 12);
+        let params = SearchQuery {
+            q: "数据结构".into(),
+            query_type: Some("thread".into()),
+            limit: 12,
+            cursor: Some(cursor.clone()),
+        };
+        let search = validate_query(&params).expect("matching cursor");
+        assert_eq!(search.offset, 12);
+        assert_eq!(search.fetch_limit(), 25);
+
+        for invalid in [
+            SearchQuery {
+                q: "另一查询".into(),
+                query_type: Some("thread".into()),
+                limit: 12,
+                cursor: Some(cursor.clone()),
+            },
+            SearchQuery {
+                q: "数据结构".into(),
+                query_type: Some("review".into()),
+                limit: 12,
+                cursor: Some(cursor.clone()),
+            },
+            SearchQuery {
+                q: "数据结构".into(),
+                query_type: Some("all".into()),
+                limit: 12,
+                cursor: Some(cursor.clone()),
+            },
+        ] {
+            assert!(validate_query(&invalid).is_err());
+        }
+    }
+
+    #[test]
+    fn result_pages_use_lookahead_without_exceeding_the_search_window() {
+        let params = SearchQuery {
+            q: "数据结构".into(),
+            query_type: Some("thread".into()),
+            limit: 3,
+            cursor: Some(encode_cursor("数据结构", SearchScope::Thread, 2)),
+        };
+        let search = validate_query(&params).expect("valid page");
+        let page = page_results(vec![0, 1, 2, 3, 4, 5], &search);
+        assert_eq!(page.items, vec![2, 3, 4]);
+        assert!(page.has_more);
     }
 
     #[test]

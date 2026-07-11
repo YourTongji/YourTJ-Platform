@@ -1,7 +1,8 @@
 //! Meilisearch integration for courses search, index setup, and document sync.
 //!
-//! All functions gracefully degrade when Meilisearch is unreachable:
-//! they log a warning and return empty results or skip the operation.
+//! Background synchronization degrades safely when Meilisearch is unreachable.
+//! Federated candidate reads return an error so callers can distinguish an
+//! unavailable section from a genuine empty result.
 
 use std::collections::HashSet;
 use std::time::Duration;
@@ -249,21 +250,16 @@ pub async fn search_document_ids(
     q: &str,
     kind: SearchDocumentKind,
     limit: usize,
-) -> Vec<i64> {
+) -> AppResult<Vec<i64>> {
     if limit == 0 {
-        return Vec::new();
+        return Ok(Vec::new());
     }
-    let client = match Client::new(url, meili_api_key(api_key)) {
-        Ok(client) => client,
-        Err(error) => {
-            tracing::warn!(%error, "catalogue search client creation failed");
-            return Vec::new();
-        }
-    };
+    let client = Client::new(url, meili_api_key(api_key))
+        .map_err(|error| meili_app_failure("search client creation", error))?;
 
     let filter = format!("kind = {}", kind.value());
     let candidate_limit = limit.saturating_mul(4).min(1_000);
-    match client
+    let results = client
         .index("courses")
         .search()
         .with_query(q)
@@ -271,13 +267,8 @@ pub async fn search_document_ids(
         .with_limit(candidate_limit)
         .execute::<SearchCandidate>()
         .await
-    {
-        Ok(results) => ranked_candidate_ids(results.hits.into_iter().map(|hit| hit.result), kind),
-        Err(error) => {
-            tracing::warn!(%error, document_kind = kind.value(), "catalogue search failed");
-            Vec::new()
-        }
-    }
+        .map_err(|error| meili_app_failure("candidate search", error))?;
+    Ok(ranked_candidate_ids(results.hits.into_iter().map(|hit| hit.result), kind))
 }
 
 // ---------------------------------------------------------------------------

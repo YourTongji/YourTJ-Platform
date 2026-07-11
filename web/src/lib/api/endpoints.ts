@@ -420,9 +420,10 @@ export const api = {
     q: string,
     type: "course" | "teacher" | "review" | "thread" | "user" | "board" | "tag" | "all" = "all",
     limit = 12,
+    cursor?: string | null,
   ) {
     return apiRequest<SearchResult>("/search", {
-      query: { q, type, limit },
+      query: { q, type, limit, cursor },
       auth: "optional",
     });
   },

@@ -533,9 +533,12 @@ components:
         name: { type: string }
         description: { type: string, nullable: true }
         threadCount: { type: integer, minimum: 0 }
+    SearchResultScope:
+      type: string
+      enum: [course, review, thread, user, board, tag]
     SearchResult:
       type: object
-      required: [courses, reviews, threads, users, boards, tags]
+      required: [courses, reviews, threads, users, boards, tags, nextCursor, hasMore, hasMoreScopes, failedScopes]
       properties:
         courses: { type: array, items: { $ref: "#/components/schemas/CourseSearchHit" } }
         reviews: { type: array, items: { $ref: "#/components/schemas/ReviewSearchHit" } }
@@ -543,6 +546,19 @@ components:
         users: { type: array, items: { $ref: "#/components/schemas/UserSearchHit" } }
         boards: { type: array, items: { $ref: "#/components/schemas/BoardSearchHit" } }
         tags: { type: array, items: { $ref: "#/components/schemas/TagSearchHit" } }
+        nextCursor:
+          type: string
+          nullable: true
+          description: Opaque continuation for a specific non-all type, bound to the normalized query and type.
+        hasMore: { type: boolean }
+        hasMoreScopes:
+          type: array
+          items: { $ref: "#/components/schemas/SearchResultScope" }
+          description: Sections with more privacy-revalidated results; all-scope clients use this for "see more" links.
+        failedScopes:
+          type: array
+          items: { $ref: "#/components/schemas/SearchResultScope" }
+          description: Included sections that failed while other sections remained usable. Never contains internal errors.
 
     # ---- selection (选课/PK) ----
     Calendar: { type: object, properties: { id: { type: string }, name: { type: string }, isCurrent: { type: boolean } } }
@@ -2398,6 +2414,10 @@ paths:
         - { name: q, in: query, required: true, schema: { type: string, minLength: 2, maxLength: 100 } }
         - { name: type, in: query, schema: { type: string, enum: [course, teacher, review, thread, user, board, tag, all], default: all } }
         - { name: limit, in: query, schema: { type: integer, default: 10, minimum: 1, maximum: 30 } }
+        - name: cursor
+          in: query
+          schema: { type: string }
+          description: Opaque cursor returned for the same q and a specific non-all type; all-scope pagination uses hasMoreScopes then switches type.
       responses:
         "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/SearchResult" } } } }
         "400": { $ref: "#/components/responses/BadRequest" }

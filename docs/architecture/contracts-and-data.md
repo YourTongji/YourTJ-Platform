@@ -74,6 +74,9 @@ Fresh database 必须只通过 sqlx migration ledger 建立。普通启动、CI 
 - `/api/v2/search` 的 `type` 在后端决定实际查询域；course/review/thread/user/board/tag 每类独立
   有界，ID 必须可直接用于 canonical route，不带内部 index prefix。可选 bearer 用于应用校园资料与
   viewer relationship policy；匿名响应始终使用更窄的 public 可见范围。
+- Search cursor 只用于非 `all` scope，绑定规范化 query/type 和可见结果 offset，最大窗口 240；服务端
+  从 ranked candidates 起点重新回表后切片，因此隐藏/stale candidate 不会造成客户端越权或跳过可见
+  结果。`all` 通过 `hasMoreScopes` 切到单类续页；`failedScopes` 仅表达局部失败，不携带内部错误。
 - Meilisearch document primary key 只能使用其允许的字母数字、`-`、`_` 字符；当前内部前缀为
   `course-<id>` / `review-<id>` / `board-<id>` / `tag-<id>`；用户索引使用公开 account id。HTTP DTO
   始终去掉内部前缀。改变前缀必须配套 full reindex。

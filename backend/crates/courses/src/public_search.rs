@@ -85,6 +85,6 @@ pub async fn search_courses(
 ) -> AppResult<Vec<CourseSearchHit>> {
     let candidate_ids =
         meili::search_document_ids(meili_url, meili_key, query, SearchDocumentKind::Course, limit)
-            .await;
+            .await?;
     load_course_hits(pool, &candidate_ids, limit).await
 }

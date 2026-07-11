@@ -114,27 +114,15 @@ pub async fn search_user_ids(
     if limit == 0 {
         return Ok(Vec::new());
     }
-    let client = match client(meili_url, api_key) {
-        Ok(client) => client,
-        Err(error) => {
-            tracing::warn!(%error, "identity search client unavailable");
-            return Ok(Vec::new());
-        }
-    };
-    let results = match client
+    let client = client(meili_url, api_key)?;
+    let results = client
         .index(IDENTITY_USERS_INDEX)
         .search()
         .with_query(query)
         .with_limit(limit.saturating_mul(4).min(1_000))
         .execute::<Value>()
         .await
-    {
-        Ok(results) => results,
-        Err(error) => {
-            tracing::warn!(%error, "identity user search failed");
-            return Ok(Vec::new());
-        }
-    };
+        .map_err(|error| meili_failure("candidate search", error))?;
     let mut seen = HashSet::new();
     Ok(results
         .hits

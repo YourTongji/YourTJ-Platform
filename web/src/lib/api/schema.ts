@@ -2130,6 +2130,8 @@ export interface paths {
                     q: string;
                     type?: "course" | "teacher" | "review" | "thread" | "user" | "board" | "tag" | "all";
                     limit?: number;
+                    /** @description Opaque cursor returned for the same q and a specific non-all type; all-scope pagination uses hasMoreScopes then switches type. */
+                    cursor?: string;
                 };
                 header?: never;
                 path?: never;
@@ -8914,6 +8916,8 @@ export interface components {
             description: string | null;
             threadCount: number;
         };
+        /** @enum {string} */
+        SearchResultScope: "course" | "review" | "thread" | "user" | "board" | "tag";
         SearchResult: {
             courses: components["schemas"]["CourseSearchHit"][];
             reviews: components["schemas"]["ReviewSearchHit"][];
@@ -8921,6 +8925,13 @@ export interface components {
             users: components["schemas"]["UserSearchHit"][];
             boards: components["schemas"]["BoardSearchHit"][];
             tags: components["schemas"]["TagSearchHit"][];
+            /** @description Opaque continuation for a specific non-all type, bound to the normalized query and type. */
+            nextCursor: string | null;
+            hasMore: boolean;
+            /** @description Sections with more privacy-revalidated results; all-scope clients use this for "see more" links. */
+            hasMoreScopes: components["schemas"]["SearchResultScope"][];
+            /** @description Included sections that failed while other sections remained usable. Never contains internal errors. */
+            failedScopes: components["schemas"]["SearchResultScope"][];
         };
         Calendar: {
             id?: string;
