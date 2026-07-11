@@ -103,6 +103,7 @@ jobs:
   deploy:
     if: always() && github.event.action != 'closed'
     needs: [changes, backend, frontend]
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/download-artifact@v4
@@ -127,8 +128,8 @@ jobs:
             Port ${{ secrets.PREVIEW_PORT }}
             User ${{ secrets.PREVIEW_USER }}
             IdentityFile ~/.ssh/preview_key
-            StrictHostKeyChecking no
-            UserKnownHostsFile /dev/null
+            StrictHostKeyChecking accept-new
+            UserKnownHostsFile ~/.ssh/preview_known_hosts
           EOF
 
       - name: transfer backend image
@@ -192,8 +193,8 @@ jobs:
             Port ${{ secrets.PREVIEW_PORT }}
             User ${{ secrets.PREVIEW_USER }}
             IdentityFile ~/.ssh/preview_key
-            StrictHostKeyChecking no
-            UserKnownHostsFile /dev/null
+            StrictHostKeyChecking accept-new
+            UserKnownHostsFile ~/.ssh/preview_known_hosts
           EOF
 
       - name: cleanup
