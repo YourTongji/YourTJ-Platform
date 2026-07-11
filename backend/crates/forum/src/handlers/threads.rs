@@ -24,7 +24,7 @@ pub(crate) async fn hydrate_thread_summaries(
     let viewer_id = actor.map(|account| account.id);
     let thread_ids =
         threads.iter().filter_map(|thread| thread.id.parse::<i64>().ok()).collect::<Vec<_>>();
-    let (mut tags, mut excerpts, mut viewer_states) = tokio::try_join!(
+    let (mut tags, mut excerpts, mut viewer_states, mut image_references, mut attachments) = tokio::try_join!(
         repo::get_thread_tag_slugs_batch(pool, &thread_ids),
         repo::get_thread_body_excerpts(pool, &thread_ids),
         async {
@@ -35,6 +35,12 @@ pub(crate) async fn hydrate_thread_summaries(
                 None => Ok(std::collections::HashMap::new()),
             }
         },
+        repo::get_thread_image_references_batch(pool, &thread_ids),
+        media::attachments::resolve_forum_attachments_batch(
+            pool,
+            media::attachments::ForumTargetType::Thread,
+            &thread_ids,
+        ),
     )?;
     for thread in threads.iter_mut() {
         if let Ok(thread_id) = thread.id.parse::<i64>() {
@@ -42,6 +48,13 @@ pub(crate) async fn hydrate_thread_summaries(
             thread.body_excerpt = excerpts
                 .remove(&thread_id)
                 .and_then(|excerpt| (!excerpt.is_empty()).then_some(excerpt));
+            let references = image_references.remove(&thread_id).unwrap_or_default();
+            let projected = attachments.remove(&thread_id).unwrap_or_default();
+            if crate::content_policy::attachment_projection_matches(&references, &projected) {
+                thread.attachments = projected.into_iter().take(1).collect();
+            } else {
+                tracing::warn!(thread_id, "thread attachment projection mismatch");
+            }
             if let Some(state) = viewer_states.remove(&thread_id) {
                 thread.viewer_vote = state.vote;
                 thread.is_bookmarked = state.is_bookmarked;
@@ -99,6 +112,28 @@ pub(crate) async fn hydrate_thread_detail(
     dto: &mut ThreadDetailDto,
 ) -> AppResult<()> {
     dto.tags = repo::get_thread_tag_slugs(pool, thread_id).await?;
+    let projected = media::attachments::resolve_forum_attachments_batch(
+        pool,
+        media::attachments::ForumTargetType::Thread,
+        &[thread_id],
+    )
+    .await?
+    .remove(&thread_id)
+    .unwrap_or_default();
+    let references = crate::content_policy::image_references_for_stored_content(
+        dto.body.as_deref(),
+        dto.content_format,
+        media::attachments::ForumTargetType::Thread,
+    )
+    .unwrap_or_else(|error| {
+        tracing::warn!(%error, thread_id, "stored thread image references are invalid");
+        Vec::new()
+    });
+    if crate::content_policy::attachment_projection_matches(&references, &projected) {
+        dto.attachments = projected;
+    } else {
+        tracing::warn!(thread_id, "thread attachment projection mismatch");
+    }
     attach_poll_to_detail(pool, thread_id, actor.map(|account| account.id), dto).await?;
     if let Some(account_id) = actor.map(|account| account.id) {
         let mut states =
@@ -558,8 +593,16 @@ pub async fn create_thread(
         .await?;
     }
 
-    let row =
-        repo::create_thread(&state.db, board_id, auth.id, &body, is_queued, posting_actor).await?;
+    let row = repo::create_thread(
+        &state.db,
+        board_id,
+        auth.id,
+        &body,
+        is_queued,
+        posting_actor,
+        &prepared.image_references,
+    )
+    .await?;
 
     if !is_queued {
         let pool = state.db.clone();
@@ -669,7 +712,15 @@ pub async fn update_thread(
 
     let id: i64 = id_str.parse().map_err(|_| AppError::NotFound)?;
 
-    let row = repo::update_thread(&state.db, id, auth.id, &body, prepared.is_queued).await?;
+    let row = repo::update_thread(
+        &state.db,
+        id,
+        auth.id,
+        &body,
+        prepared.is_queued,
+        &prepared.image_references,
+    )
+    .await?;
 
     // Re-read canonical visibility and content inside the background index sync.
     let pool = state.db.clone();
@@ -737,6 +788,12 @@ pub async fn delete_thread(
     .await?;
     crate::repo::deactivate_target_vote_contributions(&mut tx, "thread", id, chrono::Utc::now())
         .await?;
+    media::attachments::detach_forum_asset_bindings(
+        &mut tx,
+        media::attachments::ForumTargetType::Thread,
+        id,
+    )
+    .await?;
     crate::repo::boards::refresh_board_thread_counts(&mut tx, &affected_board_ids).await?;
     tx.commit().await?;
 
@@ -780,18 +837,43 @@ pub async fn list_thread_revisions(
     }
 
     let revs = repo::list_revisions(&state.db, "thread", id).await?;
-    let dtos: Vec<RevisionDto> = revs
-        .into_iter()
-        .map(|r| RevisionDto {
-            id: r.id.to_string(),
-            seq: r.seq,
-            editor_id: r.editor_id.to_string(),
-            old_title: r.old_title,
-            old_body: r.old_body,
-            old_content_format: crate::dto::ContentFormat::from_db(&r.old_content_format),
-            created_at: r.created_at.timestamp(),
-        })
-        .collect();
+    let mut dtos = Vec::with_capacity(revs.len());
+    for revision in revs {
+        let projected = media::attachments::resolve_forum_attachments_at_version(
+            &state.db,
+            media::attachments::ForumTargetType::Thread,
+            id,
+            revision.old_content_version,
+        )
+        .await?;
+        let references = crate::content_policy::image_references_for_stored_content(
+            Some(&revision.old_body),
+            crate::dto::ContentFormat::from_db(&revision.old_content_format),
+            media::attachments::ForumTargetType::Thread,
+        )?;
+        let attachments =
+            if crate::content_policy::attachment_projection_matches(&references, &projected) {
+                projected
+            } else {
+                tracing::warn!(
+                    thread_id = id,
+                    revision_id = revision.id,
+                    "thread revision attachment projection mismatch"
+                );
+                Vec::new()
+            };
+        dtos.push(RevisionDto {
+            id: revision.id.to_string(),
+            seq: revision.seq,
+            editor_id: revision.editor_id.to_string(),
+            old_title: revision.old_title,
+            old_body: revision.old_body,
+            old_content_format: crate::dto::ContentFormat::from_db(&revision.old_content_format),
+            old_content_version: revision.old_content_version,
+            attachments,
+            created_at: revision.created_at.timestamp(),
+        });
+    }
 
     Ok(Json(dtos))
 }

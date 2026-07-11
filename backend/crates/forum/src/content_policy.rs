@@ -16,6 +16,7 @@ static MENTION_PATTERN: Lazy<Regex> =
 pub(crate) struct PreparedContent<T> {
     pub input: T,
     pub is_queued: bool,
+    pub image_references: Vec<media::attachments::ForumAssetReference>,
 }
 
 fn validate_title(title: &str) -> AppResult<()> {
@@ -26,23 +27,28 @@ fn validate_title(title: &str) -> AppResult<()> {
     Ok(())
 }
 
-fn validate_thread_body(body: Option<&str>, format: ContentFormat) -> AppResult<()> {
+fn validate_thread_body(
+    body: Option<&str>,
+    format: ContentFormat,
+) -> AppResult<Vec<media::attachments::ForumAssetReference>> {
     if body.is_some_and(|body| body.chars().count() > 50_000) {
         return Err(AppError::BadRequest("body must not exceed 50000 characters".into()));
     }
     if let Some(body) = body {
-        validate_format_profile(body, format, 4_000, 20)?;
+        return validate_format_profile(body, format, 4_000, 20, 8);
     }
-    Ok(())
+    Ok(Vec::new())
 }
 
-fn validate_comment_body(body: &str, format: ContentFormat) -> AppResult<()> {
+fn validate_comment_body(
+    body: &str,
+    format: ContentFormat,
+) -> AppResult<Vec<media::attachments::ForumAssetReference>> {
     let body_length = body.chars().count();
     if body.trim().is_empty() || body_length > 16_000 {
         return Err(AppError::BadRequest("body must be 1–16000 characters".into()));
     }
-    validate_format_profile(body, format, 1_600, 8)?;
-    Ok(())
+    validate_format_profile(body, format, 1_600, 8, 4)
 }
 
 fn markdown_options() -> Options {
@@ -54,14 +60,18 @@ fn validate_format_profile(
     format: ContentFormat,
     max_events: usize,
     max_links: usize,
-) -> AppResult<()> {
+    max_images: usize,
+) -> AppResult<Vec<media::attachments::ForumAssetReference>> {
     if format == ContentFormat::PlainV1 {
-        return Ok(());
+        return Ok(Vec::new());
     }
 
     let mut event_count = 0usize;
     let mut depth = 0usize;
     let mut link_count = 0usize;
+    let mut image_references = Vec::new();
+    let mut image_asset_ids = HashSet::new();
+    let mut image_alt: Option<(i64, String)> = None;
     for event in Parser::new_ext(body, markdown_options()) {
         event_count += 1;
         if event_count > max_events {
@@ -83,22 +93,132 @@ fn validate_format_profile(
                         }
                         validate_link_destination(&dest_url)?;
                     }
-                    Tag::Image { .. } => {
-                        return Err(AppError::BadRequest(
-                            "Markdown images require a bound platform asset".into(),
-                        ));
+                    Tag::Image { dest_url, .. } => {
+                        if image_alt.is_some() || image_references.len() >= max_images {
+                            return Err(AppError::BadRequest(
+                                "Markdown contains too many or nested images".into(),
+                            ));
+                        }
+                        let asset_id = parse_asset_destination(&dest_url)?;
+                        image_alt = Some((asset_id, String::new()));
                     }
                     _ => {}
                 }
+            }
+            Event::End(TagEnd::Image) => {
+                depth = depth.saturating_sub(1);
+                let (asset_id, alt_source) = image_alt.take().ok_or_else(|| {
+                    AppError::BadRequest("invalid Markdown image structure".into())
+                })?;
+                let alt_text = alt_source.split_whitespace().collect::<Vec<_>>().join(" ");
+                if !(1..=300).contains(&alt_text.chars().count()) {
+                    return Err(AppError::BadRequest(
+                        "Markdown image alt text must be 1–300 characters".into(),
+                    ));
+                }
+                if !image_asset_ids.insert(asset_id) {
+                    return Err(AppError::BadRequest(
+                        "the same asset cannot be referenced more than once".into(),
+                    ));
+                }
+                image_references.push(media::attachments::ForumAssetReference {
+                    asset_id,
+                    position: image_references.len() as i16,
+                    alt_text,
+                });
             }
             Event::End(_) => depth = depth.saturating_sub(1),
             Event::Html(_) | Event::InlineHtml(_) => {
                 return Err(AppError::BadRequest("raw HTML is not allowed in Markdown".into()));
             }
+            Event::Text(text) | Event::Code(text) if image_alt.is_some() => {
+                if let Some((_, alt_text)) = image_alt.as_mut() {
+                    alt_text.push_str(&text);
+                }
+            }
+            Event::SoftBreak | Event::HardBreak if image_alt.is_some() => {
+                if let Some((_, alt_text)) = image_alt.as_mut() {
+                    alt_text.push(' ');
+                }
+            }
             _ => {}
         }
     }
+    if image_alt.is_some() {
+        return Err(AppError::BadRequest("invalid Markdown image structure".into()));
+    }
+    Ok(image_references)
+}
+
+fn parse_asset_destination(destination: &str) -> AppResult<i64> {
+    let numeric_id = destination
+        .strip_prefix("yourtj-asset:")
+        .filter(|value| !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit()))
+        .ok_or_else(|| {
+            AppError::BadRequest(
+                "Markdown images must use a yourtj-asset reference; remote and data URLs are not allowed"
+                    .into(),
+            )
+        })?;
+    let asset_id = numeric_id
+        .parse::<i64>()
+        .ok()
+        .filter(|asset_id| *asset_id > 0 && asset_id.to_string() == numeric_id)
+        .ok_or_else(|| AppError::BadRequest("invalid canonical yourtj-asset reference".into()))?;
+    Ok(asset_id)
+}
+
+fn validate_attachment_asset_ids(
+    provided: &[String],
+    references: &[media::attachments::ForumAssetReference],
+) -> AppResult<()> {
+    let parsed = provided
+        .iter()
+        .map(|asset_id| {
+            asset_id
+                .parse::<i64>()
+                .ok()
+                .filter(|value| *value > 0)
+                .ok_or_else(|| AppError::BadRequest("invalid attachmentAssetIds".into()))
+        })
+        .collect::<AppResult<Vec<_>>>()?;
+    let referenced = references.iter().map(|reference| reference.asset_id).collect::<Vec<_>>();
+    if parsed != referenced {
+        return Err(AppError::BadRequest(
+            "attachmentAssetIds must exactly match Markdown image references in order".into(),
+        ));
+    }
     Ok(())
+}
+
+/// Re-parse canonical stored source for restoration. This never trusts a detached binding row to
+/// authorize public disclosure; Media must validate the current owner and clean status again.
+pub(crate) fn image_references_for_stored_content(
+    body: Option<&str>,
+    format: ContentFormat,
+    target_type: media::attachments::ForumTargetType,
+) -> AppResult<Vec<media::attachments::ForumAssetReference>> {
+    match target_type {
+        media::attachments::ForumTargetType::Thread => validate_thread_body(body, format),
+        media::attachments::ForumTargetType::Comment => {
+            validate_comment_body(body.unwrap_or_default(), format)
+        }
+    }
+}
+
+/// Ensure a Media projection is exactly the ordered binding set represented by canonical source.
+/// A mismatch fails closed at the Forum boundary so an orphan or corrupt usage cannot disclose a URL.
+pub(crate) fn attachment_projection_matches(
+    references: &[media::attachments::ForumAssetReference],
+    attachments: &[media::attachments::ForumAttachment],
+) -> bool {
+    references.len() == attachments.len()
+        && references.iter().zip(attachments).all(|(reference, attachment)| {
+            attachment.asset_id.parse::<i64>().ok() == Some(reference.asset_id)
+                && attachment.reference == reference.canonical_reference()
+                && attachment.position == reference.position
+                && attachment.alt == reference.alt_text
+        })
 }
 
 fn validate_link_destination(destination: &str) -> AppResult<()> {
@@ -214,7 +334,8 @@ pub(crate) fn prepare_thread_create(
 ) -> AppResult<PreparedContent<ThreadInput>> {
     input.title = input.title.trim().to_owned();
     validate_title(&input.title)?;
-    validate_thread_body(input.body.as_deref(), input.content_format)?;
+    let mut image_references = validate_thread_body(input.body.as_deref(), input.content_format)?;
+    validate_attachment_asset_ids(&input.attachment_asset_ids, &image_references)?;
     normalize_and_validate_tags(&mut input.tags)?;
 
     if let Some(poll) = input.poll.as_mut() {
@@ -264,7 +385,10 @@ pub(crate) fn prepare_thread_create(
         }
     }
 
-    Ok(PreparedContent { input, is_queued })
+    image_references = validate_thread_body(input.body.as_deref(), input.content_format)?;
+    validate_attachment_asset_ids(&input.attachment_asset_ids, &image_references)?;
+
+    Ok(PreparedContent { input, is_queued, image_references })
 }
 
 /// Validate and canonicalize the fields supplied by a thread edit.
@@ -288,36 +412,57 @@ pub(crate) fn prepare_thread_update(
     if input.body.is_some() && input.content_format.is_none() {
         input.content_format = Some(ContentFormat::PlainV1);
     }
-    validate_thread_body(
+    let mut image_references = validate_thread_body(
         input.body.as_deref(),
         input.content_format.unwrap_or(ContentFormat::PlainV1),
     )?;
+    if input.body.is_none() && !input.attachment_asset_ids.is_empty() {
+        return Err(AppError::BadRequest(
+            "attachmentAssetIds can only change together with body".into(),
+        ));
+    }
+    if input.body.is_some() {
+        validate_attachment_asset_ids(&input.attachment_asset_ids, &image_references)?;
+    }
     normalize_and_validate_tags(&mut input.tags)?;
 
     let mut is_queued = false;
     moderate_optional_field(&mut input.title, &mut is_queued)?;
     moderate_optional_field(&mut input.body, &mut is_queued)?;
-    Ok(PreparedContent { input, is_queued })
+    image_references = validate_thread_body(
+        input.body.as_deref(),
+        input.content_format.unwrap_or(ContentFormat::PlainV1),
+    )?;
+    if input.body.is_some() {
+        validate_attachment_asset_ids(&input.attachment_asset_ids, &image_references)?;
+    }
+    Ok(PreparedContent { input, is_queued, image_references })
 }
 
 /// Validate and canonicalize a new comment before any database write.
 pub(crate) fn prepare_comment_create(
     mut input: CommentInput,
 ) -> AppResult<PreparedContent<CommentInput>> {
-    validate_comment_body(&input.body, input.content_format)?;
+    let mut image_references = validate_comment_body(&input.body, input.content_format)?;
+    validate_attachment_asset_ids(&input.attachment_asset_ids, &image_references)?;
     let mut is_queued = false;
     moderate_field(&mut input.body, &mut is_queued)?;
-    Ok(PreparedContent { input, is_queued })
+    image_references = validate_comment_body(&input.body, input.content_format)?;
+    validate_attachment_asset_ids(&input.attachment_asset_ids, &image_references)?;
+    Ok(PreparedContent { input, is_queued, image_references })
 }
 
 /// Validate and canonicalize a comment edit using the same rules as creation.
 pub(crate) fn prepare_comment_update(
     mut input: CommentUpdateInput,
 ) -> AppResult<PreparedContent<CommentUpdateInput>> {
-    validate_comment_body(&input.body, input.content_format)?;
+    let mut image_references = validate_comment_body(&input.body, input.content_format)?;
+    validate_attachment_asset_ids(&input.attachment_asset_ids, &image_references)?;
     let mut is_queued = false;
     moderate_field(&mut input.body, &mut is_queued)?;
-    Ok(PreparedContent { input, is_queued })
+    image_references = validate_comment_body(&input.body, input.content_format)?;
+    validate_attachment_asset_ids(&input.attachment_asset_ids, &image_references)?;
+    Ok(PreparedContent { input, is_queued, image_references })
 }
 
 #[cfg(test)]
@@ -331,30 +476,75 @@ mod tests {
             "<script>alert(1)</script>",
             ContentFormat::MarkdownV1,
             50,
-            5
+            5,
+            4,
         )
         .is_err());
         assert!(validate_format_profile(
             "![alt](https://example.com/a.png)",
             ContentFormat::MarkdownV1,
             50,
-            5
+            5,
+            4,
         )
         .is_err());
         assert!(validate_format_profile(
             "[bad](javascript:alert(1))",
             ContentFormat::MarkdownV1,
             50,
-            5
+            5,
+            4,
         )
         .is_err());
         assert!(validate_format_profile(
             "[safe](/forum/threads/1)",
             ContentFormat::MarkdownV1,
             50,
-            5
+            5,
+            4,
         )
         .is_ok());
+    }
+
+    #[test]
+    fn markdown_profile_accepts_only_ordered_unique_platform_images_with_alt_text() {
+        let references = validate_format_profile(
+            "![校园风景](yourtj-asset:42)",
+            ContentFormat::MarkdownV1,
+            50,
+            5,
+            4,
+        )
+        .expect("platform image is valid");
+        assert_eq!(references.len(), 1);
+        assert_eq!(references[0].asset_id, 42);
+        assert_eq!(references[0].position, 0);
+        assert_eq!(references[0].alt_text, "校园风景");
+
+        assert!(validate_format_profile(
+            "![](yourtj-asset:42)",
+            ContentFormat::MarkdownV1,
+            50,
+            5,
+            4,
+        )
+        .is_err());
+        assert!(validate_format_profile(
+            "![x](data:image/png;base64,AAAA)",
+            ContentFormat::MarkdownV1,
+            50,
+            5,
+            4,
+        )
+        .is_err());
+        assert!(validate_format_profile(
+            "![x](yourtj-asset:042)",
+            ContentFormat::MarkdownV1,
+            50,
+            5,
+            4,
+        )
+        .is_err());
     }
 
     #[test]

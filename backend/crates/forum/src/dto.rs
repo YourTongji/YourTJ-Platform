@@ -64,6 +64,7 @@ pub struct ThreadDto {
     pub hot_score: Option<f64>,
     pub status: String,
     pub tags: Vec<String>,
+    pub attachments: Vec<media::attachments::ForumAttachment>,
     pub created_at: i64,
     pub last_activity_at: i64,
     pub viewer_vote: Option<String>,
@@ -95,6 +96,7 @@ pub struct ThreadDetailDto {
     pub vote_count: i32,
     pub hot_score: Option<f64>,
     pub tags: Vec<String>,
+    pub attachments: Vec<media::attachments::ForumAttachment>,
     pub status: String,
     pub pinned_at: Option<i64>,
     pub pinned_globally: bool,
@@ -132,6 +134,8 @@ pub struct ThreadInput {
     #[serde(default)]
     pub tags: Option<Vec<String>>,
     #[serde(default)]
+    pub attachment_asset_ids: Vec<String>,
+    #[serde(default)]
     pub poll: Option<PollInput>,
 }
 
@@ -148,6 +152,7 @@ pub struct CommentDto {
     pub body: String,
     pub content_format: ContentFormat,
     pub content_version: i64,
+    pub attachments: Vec<media::attachments::ForumAttachment>,
     pub vote_count: i32,
     pub viewer_vote: Option<String>,
     pub is_bookmarked: bool,
@@ -170,6 +175,8 @@ pub struct CommentInput {
     pub body: String,
     #[serde(default)]
     pub content_format: ContentFormat,
+    #[serde(default)]
+    pub attachment_asset_ids: Vec<String>,
     pub quoted_comment_id: Option<String>,
 }
 
@@ -358,6 +365,8 @@ pub enum DraftPayload {
         poll_question: String,
         #[serde(default)]
         poll_options: Vec<String>,
+        #[serde(default)]
+        attachment_asset_ids: Vec<String>,
     },
     /// An unpublished reply to one thread.
     Comment {
@@ -366,6 +375,8 @@ pub enum DraftPayload {
         #[serde(default)]
         content_format: ContentFormat,
         parent_id: Option<String>,
+        #[serde(default)]
+        attachment_asset_ids: Vec<String>,
     },
 }
 
@@ -388,6 +399,8 @@ pub struct ThreadUpdateInput {
     pub title: Option<String>,
     pub body: Option<String>,
     pub content_format: Option<ContentFormat>,
+    #[serde(default)]
+    pub attachment_asset_ids: Vec<String>,
     #[allow(dead_code)]
     pub tags: Option<Vec<String>>,
 }
@@ -401,6 +414,8 @@ pub struct CommentUpdateInput {
     pub body: String,
     #[serde(default)]
     pub content_format: ContentFormat,
+    #[serde(default)]
+    pub attachment_asset_ids: Vec<String>,
 }
 
 const fn legacy_content_version() -> i64 {
@@ -417,6 +432,8 @@ pub struct RevisionDto {
     pub old_title: Option<String>,
     pub old_body: String,
     pub old_content_format: ContentFormat,
+    pub old_content_version: i64,
+    pub attachments: Vec<media::attachments::ForumAttachment>,
     pub created_at: i64,
 }
 

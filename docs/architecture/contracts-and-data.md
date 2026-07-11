@@ -124,15 +124,40 @@ Fresh database 必须只通过 sqlx migration ledger 建立。普通启动、CI 
   canonical 状态、作者关系和 Identity 的 role-only batch projection 计算；Web 只能用它改善可用性，
   mutation handler 仍独立执行 owner/capability/role hierarchy 授权。
 - 服务端通过 pulldown-cmark event stream 验证 canonical source，限制结构/链接，拒绝 raw HTML、
-  非安全 URL 和未绑定图片；mention/search/notification projection 从解析事件生成。客户端 preview
+  非安全 URL 和非平台图片；mention/search/notification projection 从解析事件生成。客户端 preview
   不构成安全边界。
+- Forum 图片只用标准 Markdown image node + `yourtj-asset:<正整数>` vendor destination。Thread 最多 8 张、
+  comment 最多 4 张，alt 必填且同一 asset 不得重复。HTTP 的 ordered `attachmentAssetIds` 与 AST 引用
+  必须完全相等；`plain_v1` 不解析该语法。vendor destination 永远不直接成为浏览器请求 URL。
 - Media credential 只允许 account-bound exact object key；callback 原子消费 intent。
 - Web 只把服务端返回的短期 STS 凭证交给官方 OSS Browser SDK，不自行扩展 prefix/object key；客户端
   SHA-256 作为 callback custom value，业务后续只保存 signed callback 返回的 upload id。
-- 业务保存 asset/reference，不保存任意 URL；访问 URL 是带权限和到期的派生值。
+- 业务保存 asset/reference，不保存任意 URL；访问 URL 必须是授权派生值。当前 clean/owner URL 仍为不
+  到期的 direct OSS URL，是 production 上线前必须由 private bucket/CDN signing 关闭的已知缺口；staff
+  pending preview 已使用不暴露 vendor URL 的一次性同源代理。
 - asset status、binding、owner、target、alt、variants 与 retention 由 media/domain API 协作维护。
+- Media owner API 接受 Forum 已锁定的 transaction，按固定顺序锁 upload/active usage，重验 owner、kind、
+  intended usage 和 clean，再以新 `contentVersion` 原子切换 binding。Forum 不读写 media 私有 SQL；
+  stale content CAS 会整体回滚 canonical row、revision 和 usage。
+- `media.asset_usages` 保留 `boundContentVersion` 和 content-edit detach version，使 revision 只取得当时
+  生效且当前仍 clean 的最小投影。target soft delete 使用独立 `target_deleted` detach，30 天 grace 后
+  才可成为 GC candidate；restore 重新解析 canonical source 并重验 clean，不复用旧授权。
+- 公开 Forum DTO 仅由 Media owner 返回 asset id/reference、position、alt、可选尺寸和派生 URL。Forum
+  再与 canonical AST 做 exact match；corrupt/extra projection fail closed，不向客户端泄漏 URL。
 - Profile upload 的 intended usage 是 media-owned 恢复提示，不是授权事实；owner status DTO 使用最小字段，
   业务绑定仍在同一事务重新验证 owner、kind 与 clean 状态，避免 pending-to-public race。
+- Admin pending evidence 不进入 queue DTO。Media owner 以 database-backed one-time grant 绑定 upload、
+  moderator、reason 和 60 秒期限；GET 在同一事务消费 token hash 并写治理 audit，随后由 provider abstraction
+  以 callback MIME/bytes、20 MiB、20,000 px 单边和 40 MP hard limit 代理同源 stream；图片 header 在首个
+  response byte 前解析，可信 dimensions 回写 Media。Web 只创建短期 browser object URL，不获得 vendor
+  URL/key/hash。
+- Forum draft 可保存本人 `pending/clean/blocked` upload id 以跨设备恢复状态，但 draft usage 也必须匹配
+  target；只有发布 mutation 的 clean revalidation 才建立公开授权。
+- Forum attachment migration 是 additive rollout：先扩展 upload usage、增加 nullable image dimensions、
+  空 `asset_usages`、短期 moderation preview grant 和 revision source version，再部署读写代码。历史
+  Markdown 原本拒绝所有图片，因此不
+  猜测/backfill 旧 source；旧 `plain_v1` 不变。回退应用时停止新图片写入并保留 usage/history 供恢复，
+  不通过 drop 表或改写 source 伪造回滚。
 - Profile text/reference 由 Identity 持有；Media 在事务内验证本人 clean image，再调用 Identity 受限
   binding API。Forum 取得已授权 profile projection 后才批量解析 clean image URL，不跨域直查 upload 表。
 

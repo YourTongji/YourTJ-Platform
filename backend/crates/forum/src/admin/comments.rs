@@ -29,6 +29,9 @@ struct AdminCommentRow {
     created_at: chrono::DateTime<chrono::Utc>,
     deleted_at: Option<chrono::DateTime<chrono::Utc>>,
     hidden_at: Option<chrono::DateTime<chrono::Utc>>,
+    body: String,
+    content_format: String,
+    content_version: i64,
 }
 
 /// GET /api/v2/admin/forum/comments/{id} — staff recovery detail.
@@ -60,6 +63,7 @@ pub async fn get_comment_for_moderation(
     let parent_allows_edit =
         crate::repo::thread_allows_comment_edits(&state.db, comment.thread_id).await?;
     let mut dto = crate::handlers::comment_to_dto(&comment, solved_comment_id);
+    crate::handlers::hydrate_comment_attachments(&state.db, std::slice::from_mut(&mut dto)).await?;
     crate::content_permissions::hydrate_comments(
         &state.db,
         Some(&auth),
@@ -97,16 +101,26 @@ pub async fn admin_comment_action(
         return Err(AppError::BadRequest("reason must be 3–500 characters".into()));
     }
     let mut tx = state.db.begin().await?;
+    let thread_id: i64 = sqlx::query_scalar("SELECT thread_id FROM forum.comments WHERE id = $1")
+        .bind(id)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    sqlx::query("SELECT id FROM forum.threads WHERE id = $1 FOR UPDATE")
+        .bind(thread_id)
+        .execute(&mut *tx)
+        .await?;
     let comment = sqlx::query_as::<_, AdminCommentRow>(
         "SELECT c.author_id, c.thread_id, t.board_id, t.status AS thread_status, \
                 t.deleted_at AS thread_deleted_at, t.hidden_at AS thread_hidden_at, \
                 t.archived_at AS thread_archived_at, c.created_at, \
-                c.deleted_at, c.hidden_at \
+                c.deleted_at, c.hidden_at, c.body, c.content_format, c.content_version \
          FROM forum.comments c \
          JOIN forum.threads t ON t.id = c.thread_id \
-         WHERE c.id = $1 FOR UPDATE OF c",
+         WHERE c.id = $1 AND c.thread_id = $2 FOR UPDATE OF c",
     )
     .bind(id)
+    .bind(thread_id)
     .fetch_optional(&mut *tx)
     .await?
     .ok_or(AppError::NotFound)?;
@@ -139,8 +153,17 @@ pub async fn admin_comment_action(
                 .execute(&mut *tx)
                 .await?;
             }
+            media::attachments::detach_forum_asset_bindings(
+                &mut tx,
+                media::attachments::ForumTargetType::Comment,
+                id,
+            )
+            .await?;
         }
         "restore" => {
+            if comment.deleted_at.is_none() {
+                return Err(AppError::Conflict("comment is not deleted".into()));
+            }
             sqlx::query(
                 "UPDATE forum.comments SET deleted_at = NULL, deleted_by = NULL WHERE id = $1",
             )
@@ -152,6 +175,27 @@ pub async fn admin_comment_action(
                     .bind(comment.thread_id)
                     .execute(&mut *tx)
                     .await?;
+            }
+            let image_references = crate::content_policy::image_references_for_stored_content(
+                Some(&comment.body),
+                crate::dto::ContentFormat::from_db(&comment.content_format),
+                media::attachments::ForumTargetType::Comment,
+            )?;
+            if !image_references.is_empty() {
+                let author_id = comment.author_id.ok_or_else(|| {
+                    AppError::Conflict(
+                        "comment without an author cannot restore attachments".into(),
+                    )
+                })?;
+                media::attachments::sync_forum_asset_bindings(
+                    &mut tx,
+                    author_id,
+                    media::attachments::ForumTargetType::Comment,
+                    id,
+                    comment.content_version,
+                    &image_references,
+                )
+                .await?;
             }
         }
         "hide" => {

@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use axum::body::{to_bytes, Body};
 use axum::http::{header, Method, Request, StatusCode};
-use media::{routes_with_object_store, UploadObjectStore};
+use media::{routes_with_object_store, UploadObjectPreview, UploadObjectStore};
 use shared::{AppResult, AppState};
 use sqlx::PgPool;
 use tower::ServiceExt;
@@ -17,6 +17,25 @@ struct FailingObjectStore;
 impl UploadObjectStore for FailingObjectStore {
     async fn delete_object(&self, _oss_key: &str) -> AppResult<()> {
         Err(shared::AppError::BadRequest("simulated OSS failure".into()))
+    }
+
+    async fn read_image_for_moderation(
+        &self,
+        _oss_key: &str,
+        expected_content_type: &str,
+        expected_bytes: u64,
+        max_bytes: u64,
+    ) -> AppResult<UploadObjectPreview> {
+        assert_eq!(expected_content_type, "image/png");
+        assert_eq!(expected_bytes, 10);
+        assert!(max_bytes >= expected_bytes);
+        Ok(UploadObjectPreview {
+            content_type: expected_content_type.into(),
+            content_length: expected_bytes,
+            image_width: 2,
+            image_height: 3,
+            body: Body::from(vec![0x89; expected_bytes as usize]),
+        })
     }
 }
 
@@ -110,9 +129,147 @@ async fn failed_object_quarantine_leaves_upload_pending() {
             .expect("media moderator token");
     let owner_token = identity::auth::create_access_token(owner_id, &state.jwt_secret, 3600)
         .expect("media owner token");
+    let upload_id_string = upload_id.to_string();
     let block_uri = format!("/api/v2/admin/media/uploads/{upload_id}/block");
 
     let failing_app = routes_with_object_store(state.clone(), Arc::new(FailingObjectStore));
+    let queue_response = failing_app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            "/api/v2/admin/media/uploads".into(),
+            &moderator_token,
+            Body::empty(),
+        ))
+        .await
+        .expect("moderation queue response");
+    assert_eq!(queue_response.status(), StatusCode::OK);
+    let queue_body = response_json(queue_response).await;
+    let listed_upload = queue_body["items"]
+        .as_array()
+        .expect("moderation queue items")
+        .iter()
+        .find(|upload| upload["id"].as_str() == Some(&upload_id_string))
+        .expect("seed upload in moderation queue");
+    assert!(listed_upload.get("ossKey").is_none());
+    assert!(listed_upload.get("url").is_none());
+    assert!(listed_upload.get("sha256").is_none());
+
+    let own_grant_response = failing_app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            format!("/api/v2/admin/media/uploads/{upload_id}/preview-grants"),
+            &owner_token,
+            Body::from(r#"{"reason":"review own upload"}"#),
+        ))
+        .await
+        .expect("owner preview grant response");
+    assert_eq!(own_grant_response.status(), StatusCode::FORBIDDEN);
+    sqlx::query("UPDATE identity.accounts SET role = 'mod' WHERE id = $1")
+        .bind(owner_id)
+        .execute(&pool)
+        .await
+        .expect("promote upload owner for independent-review check");
+    let self_review_response = failing_app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            format!("/api/v2/admin/media/uploads/{upload_id}/preview-grants"),
+            &owner_token,
+            Body::from(r#"{"reason":"independent reviewer required"}"#),
+        ))
+        .await
+        .expect("self-review grant response");
+    assert_eq!(self_review_response.status(), StatusCode::FORBIDDEN);
+
+    let grant_response = failing_app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            format!("/api/v2/admin/media/uploads/{upload_id}/preview-grants"),
+            &moderator_token,
+            Body::from(r#"{"reason":"inspect image evidence"}"#),
+        ))
+        .await
+        .expect("preview grant response");
+    assert_eq!(grant_response.status(), StatusCode::OK);
+    assert_eq!(grant_response.headers()[header::CACHE_CONTROL], "private, no-store");
+    let grant_body = response_json(grant_response).await;
+    let preview_token = grant_body["token"].as_str().expect("one-time preview token");
+    assert_eq!(preview_token.len(), 43);
+    assert!(grant_body.get("ossKey").is_none());
+    assert!(grant_body.get("url").is_none());
+    assert!(grant_body.get("sha256").is_none());
+    let wrong_moderator_response = failing_app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!("/api/v2/admin/media/uploads/{upload_id}/preview"))
+                .header(header::AUTHORIZATION, format!("Bearer {owner_token}"))
+                .header("x-media-preview-token", preview_token)
+                .body(Body::empty())
+                .expect("wrong-moderator preview request"),
+        )
+        .await
+        .expect("wrong-moderator preview response");
+    assert_eq!(wrong_moderator_response.status(), StatusCode::NOT_FOUND);
+    let preview_request = Request::builder()
+        .method(Method::GET)
+        .uri(format!("/api/v2/admin/media/uploads/{upload_id}/preview"))
+        .header(header::AUTHORIZATION, format!("Bearer {moderator_token}"))
+        .header("x-media-preview-token", preview_token)
+        .body(Body::empty())
+        .expect("preview request");
+    let preview_response =
+        failing_app.clone().oneshot(preview_request).await.expect("preview response");
+    assert_eq!(preview_response.status(), StatusCode::OK);
+    assert_eq!(preview_response.headers()[header::CONTENT_TYPE], "image/png");
+    assert_eq!(preview_response.headers()[header::CACHE_CONTROL], "private, no-store, max-age=0");
+    assert_eq!(preview_response.headers()["x-content-type-options"], "nosniff");
+    assert_eq!(
+        to_bytes(preview_response.into_body(), usize::MAX).await.expect("preview bytes").len(),
+        10
+    );
+    let replay_response = failing_app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!("/api/v2/admin/media/uploads/{upload_id}/preview"))
+                .header(header::AUTHORIZATION, format!("Bearer {moderator_token}"))
+                .header("x-media-preview-token", preview_token)
+                .body(Body::empty())
+                .expect("replay preview request"),
+        )
+        .await
+        .expect("replay preview response");
+    assert_eq!(replay_response.status(), StatusCode::NOT_FOUND);
+    let (preview_reason, preview_metadata): (String, serde_json::Value) = sqlx::query_as(
+        "SELECT reason, metadata FROM governance.audit_events \
+         WHERE actor_account_id = $1 AND action = 'media.upload.previewed' \
+           AND target_type = 'upload' AND target_id = $2",
+    )
+    .bind(moderator_id)
+    .bind(&upload_id_string)
+    .fetch_one(&pool)
+    .await
+    .expect("preview audit event");
+    assert_eq!(preview_reason, "inspect image evidence");
+    assert_eq!(preview_metadata["purpose"], "moderation_review");
+    assert_eq!(preview_metadata["imageWidth"], 2);
+    assert_eq!(preview_metadata["imageHeight"], 3);
+    assert!(preview_metadata.get("ossKey").is_none());
+    assert!(preview_metadata.get("url").is_none());
+    let stored_dimensions: (i32, i32) =
+        sqlx::query_as("SELECT image_width, image_height FROM media.uploads WHERE id = $1")
+            .bind(upload_id)
+            .fetch_one(&pool)
+            .await
+            .expect("trusted preview dimensions");
+    assert_eq!(stored_dimensions, (2, 3));
+
     let failed_response = failing_app
         .clone()
         .oneshot(request(

@@ -74,6 +74,7 @@ function CommentCard({ comment, threadId }: { comment: Comment; threadId: string
         <MarkdownContent
           content={comment.body}
           format={comment.contentFormat}
+          attachments={comment.attachments}
           className="mt-3 text-sm"
         />
         <div className="mt-3 flex gap-2">
@@ -176,29 +177,36 @@ function CommentForm({ threadId }: { threadId: string }) {
   const { isAuthenticated } = useAuth();
   const queryClient = useQueryClient();
   const [body, setBody] = React.useState("");
+  const [attachmentAssetIds, setAttachmentAssetIds] = React.useState<string[]>([]);
+  const [attachmentsReady, setAttachmentsReady] = React.useState(true);
   const payload = React.useMemo<Extract<DraftPayload, { kind: "comment" }>>(() => ({
     kind: "comment",
     threadId,
     body,
     contentFormat: "markdown_v1",
     parentId: null,
-  }), [body, threadId]);
+    attachmentAssetIds,
+  }), [attachmentAssetIds, body, threadId]);
   const restoreDraft = React.useCallback((draftPayload: Extract<DraftPayload, { kind: "comment" }>) => {
-    if (draftPayload.threadId === threadId) setBody(draftPayload.body);
+    if (draftPayload.threadId === threadId) {
+      setBody(draftPayload.body);
+      setAttachmentAssetIds(draftPayload.attachmentAssetIds);
+    }
   }, [threadId]);
   const draft = useForumDraft({
     draftKey: `comment:${threadId}`,
     enabled: isAuthenticated && Boolean(threadId),
-    isEmpty: !body,
+    isEmpty: !body && attachmentAssetIds.length === 0,
     payload,
     onRestore: restoreDraft,
   });
   const mutation = useMutation({
-    mutationFn: () => api.addComment(threadId, body),
+    mutationFn: () => api.addComment(threadId, body, "markdown_v1", undefined, attachmentAssetIds),
     onSuccess: async () => {
       toast.success("回复已发布");
       await draft.clearDraft().catch(() => toast.warning("回复已发布，但云端草稿清理失败"));
       setBody("");
+      setAttachmentAssetIds([]);
       await queryClient.invalidateQueries({ queryKey: ["thread-comments", threadId] });
       await queryClient.invalidateQueries({ queryKey: ["thread", threadId] });
     },
@@ -229,8 +237,13 @@ function CommentForm({ threadId }: { threadId: string }) {
           maxLength={16_000}
           minHeight={140}
           placeholder="写下你的回复"
+          attachmentUsage="forum_comment"
+          attachmentAssetIds={attachmentAssetIds}
+          onAttachmentAssetIdsChange={setAttachmentAssetIds}
+          maxImages={4}
+          onAttachmentsReadyChange={setAttachmentsReady}
         />
-        <Button onClick={() => mutation.mutate()} disabled={!body.trim() || mutation.isPending}>
+        <Button onClick={() => mutation.mutate()} disabled={!body.trim() || !attachmentsReady || mutation.isPending}>
           <Send className="h-4 w-4" />
           发布回复
         </Button>
@@ -368,7 +381,12 @@ export function ThreadDetailPage() {
             {(item.tags ?? []).map((tag) => <Badge key={tag} variant="outline">#{tag}</Badge>)}
           </div>
           {item.body ? (
-            <MarkdownContent content={item.body} format={item.contentFormat} className="text-sm" />
+            <MarkdownContent
+              content={item.body}
+              format={item.contentFormat}
+              attachments={item.attachments}
+              className="text-sm"
+            />
           ) : (
             <p className="text-sm text-muted-foreground">这条帖子没有正文。</p>
           )}

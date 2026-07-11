@@ -32,6 +32,38 @@ pub async fn get_thread_body_excerpts(
         .collect())
 }
 
+/// Parse the exact ordered image references from canonical thread sources for disclosure checks.
+pub async fn get_thread_image_references_batch(
+    pool: &PgPool,
+    thread_ids: &[i64],
+) -> AppResult<std::collections::HashMap<i64, Vec<media::attachments::ForumAssetReference>>> {
+    if thread_ids.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+    let rows: Vec<(i64, Option<String>, String)> =
+        sqlx::query_as("SELECT id, body, content_format FROM forum.threads WHERE id = ANY($1)")
+            .bind(thread_ids)
+            .fetch_all(pool)
+            .await?;
+    let mut references = std::collections::HashMap::with_capacity(rows.len());
+    for (thread_id, body, format) in rows {
+        match crate::content_policy::image_references_for_stored_content(
+            body.as_deref(),
+            ContentFormat::from_db(&format),
+            media::attachments::ForumTargetType::Thread,
+        ) {
+            Ok(items) => {
+                references.insert(thread_id, items);
+            }
+            Err(error) => {
+                tracing::warn!(%error, thread_id, "stored thread image references are invalid");
+                references.insert(thread_id, Vec::new());
+            }
+        }
+    }
+    Ok(references)
+}
+
 /// List threads for a board with cursor pagination.
 ///
 /// `sort` is "hot" (hot_score desc, last_activity_at desc) or "new" (created_at desc).
@@ -850,6 +882,7 @@ pub async fn create_thread(
     input: &crate::dto::ThreadInput,
     is_hidden: bool,
     posting_actor: super::boards::BoardPostingActor,
+    image_references: &[media::attachments::ForumAssetReference],
 ) -> AppResult<ThreadRowJoinedFull> {
     let mut tx = pool.begin().await?;
     let board_ids = super::boards::lock_board_for_posting(&mut tx, board_id, posting_actor).await?;
@@ -882,6 +915,16 @@ pub async fn create_thread(
     .bind(input.content_format.as_str())
     .bind(is_hidden)
     .fetch_one(&mut *tx)
+    .await?;
+
+    media::attachments::sync_forum_asset_bindings(
+        &mut tx,
+        author_id,
+        media::attachments::ForumTargetType::Thread,
+        row.id,
+        row.content_version,
+        image_references,
+    )
     .await?;
 
     if input.tags.is_some() {
@@ -942,6 +985,7 @@ pub async fn update_thread(
     author_id: i64,
     input: &crate::dto::ThreadUpdateInput,
     is_queued: bool,
+    image_references: &[media::attachments::ForumAssetReference],
 ) -> AppResult<ThreadRowJoinedFull> {
     let mut tx = pool.begin().await?;
     let existing = sqlx::query_as::<_, ThreadRowJoinedFull>(
@@ -989,9 +1033,12 @@ pub async fn update_thread(
             "thread",
             id,
             author_id,
-            Some(&existing.title),
-            existing.body.as_deref().unwrap_or(""),
-            &existing.content_format,
+            super::revisions::RevisionSource {
+                old_title: Some(&existing.title),
+                old_body: existing.body.as_deref().unwrap_or(""),
+                old_content_format: &existing.content_format,
+                old_content_version: existing.content_version,
+            },
         )
         .await?;
     }
@@ -1042,6 +1089,18 @@ pub async fn update_thread(
                 .fetch_all(&mut *tx)
                 .await?;
         super::tags::set_thread_tags_tx(&mut tx, id, &existing_tag_ids).await?;
+    }
+
+    if input.body.is_some() {
+        media::attachments::sync_forum_asset_bindings(
+            &mut tx,
+            author_id,
+            media::attachments::ForumTargetType::Thread,
+            id,
+            row.content_version,
+            image_references,
+        )
+        .await?;
     }
 
     if is_queued {

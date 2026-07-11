@@ -4,11 +4,14 @@ import rehypeSanitize from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
 
 import { cn } from "@/lib/utils";
+import type { ForumAttachment } from "@/lib/api/types";
 
 export type ContentFormat = "plain_v1" | "markdown_v1";
 
 function safeMarkdownUrl(url: string, key: string) {
-  if (key === "src") return "";
+  if (key === "src") {
+    return /^\/__yourtj_asset__\/[1-9][0-9]*$/.test(url) ? url : "";
+  }
   if (url.startsWith("/") && !url.startsWith("//")) return url;
   if (url.startsWith("#")) return url;
   try {
@@ -19,7 +22,26 @@ function safeMarkdownUrl(url: string, key: string) {
   }
 }
 
-const components: Components = {
+interface MarkdownNode {
+  type?: string;
+  url?: string;
+  children?: MarkdownNode[];
+}
+
+function remarkPlatformImageReferences() {
+  return (tree: MarkdownNode) => {
+    const visit = (node: MarkdownNode) => {
+      if (node.type === "image" && node.url) {
+        const match = /^yourtj-asset:([1-9][0-9]*)$/.exec(node.url);
+        node.url = match ? `/__yourtj_asset__/${match[1]}` : node.url;
+      }
+      node.children?.forEach(visit);
+    };
+    visit(tree);
+  };
+}
+
+const baseComponents: Components = {
   a({ href, children, title }) {
     const isExternal = href?.startsWith("http://") || href?.startsWith("https://");
     return (
@@ -58,21 +80,52 @@ const components: Components = {
   ),
   th: ({ children }) => <th className="border bg-muted px-3 py-2 text-left font-semibold">{children}</th>,
   td: ({ children }) => <td className="border px-3 py-2 align-top">{children}</td>,
-  img: ({ alt }) => (
-    <span className="inline-flex rounded border border-dashed px-2 py-1 text-sm text-muted-foreground">
-      图片尚未通过平台资产校验{alt ? `：${alt}` : ""}
-    </span>
-  ),
 };
+
+function markdownComponents(attachments: ForumAttachment[]): Components {
+  const byReference = new Map(attachments.map((attachment) => [attachment.reference, attachment]));
+  return {
+    ...baseComponents,
+    img({ alt, src }) {
+      const match = /^\/__yourtj_asset__\/([1-9][0-9]*)$/.exec(src ?? "");
+      const attachment = match ? byReference.get(`yourtj-asset:${match[1]}`) : undefined;
+      if (!attachment) {
+        return (
+          <span
+            role="img"
+            aria-label={alt ? `图片不可用：${alt}` : "图片不可用"}
+            className="inline-flex rounded border border-dashed px-2 py-1 text-sm text-muted-foreground"
+          >
+            图片当前不可用{alt ? `：${alt}` : ""}
+          </span>
+        );
+      }
+      return (
+        <img
+          src={attachment.url}
+          alt={attachment.alt}
+          width={attachment.width ?? undefined}
+          height={attachment.height ?? undefined}
+          loading="lazy"
+          decoding="async"
+          referrerPolicy="no-referrer"
+          className="my-4 max-h-[36rem] max-w-full rounded-xl border object-contain"
+        />
+      );
+    },
+  };
+}
 
 export function MarkdownContent({
   content,
   format,
   className,
+  attachments = [],
 }: {
   content?: string | null;
   format: ContentFormat;
   className?: string;
+  attachments?: ForumAttachment[];
 }) {
   if (!content) return null;
   if (format === "plain_v1") {
@@ -81,11 +134,11 @@ export function MarkdownContent({
   return (
     <div className={cn("min-w-0 break-words", className)}>
       <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
+        remarkPlugins={[remarkGfm, remarkPlatformImageReferences]}
         rehypePlugins={[rehypeSanitize]}
         skipHtml
         urlTransform={safeMarkdownUrl}
-        components={components}
+        components={markdownComponents(attachments)}
       >
         {content}
       </ReactMarkdown>

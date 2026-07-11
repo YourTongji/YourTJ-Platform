@@ -11,6 +11,8 @@ use serde::{Deserialize, Serialize};
 pub enum MediaUsage {
     ProfileAvatar,
     ProfileBanner,
+    ForumThread,
+    ForumComment,
 }
 
 impl MediaUsage {
@@ -18,6 +20,8 @@ impl MediaUsage {
         match self {
             Self::ProfileAvatar => "profile_avatar",
             Self::ProfileBanner => "profile_banner",
+            Self::ForumThread => "forum_thread",
+            Self::ForumComment => "forum_comment",
         }
     }
 }
@@ -67,13 +71,12 @@ pub struct UploadDto {
     pub id: String,
     pub account_id: String,
     pub kind: String,
-    pub oss_key: String,
-    pub url: String,
     pub bytes: i64,
     pub mime: String,
-    pub sha256: String,
     pub status: String,
     pub usage: Option<String>,
+    pub image_width: Option<i32>,
+    pub image_height: Option<i32>,
     pub created_at: i64,
 }
 
@@ -87,6 +90,8 @@ pub struct MyUploadDto {
     pub bytes: i64,
     pub mime: String,
     pub status: String,
+    pub image_width: Option<i32>,
+    pub image_height: Option<i32>,
     pub created_at: i64,
 }
 
@@ -95,6 +100,14 @@ pub struct MyUploadDto {
 #[serde(rename_all = "camelCase")]
 pub struct UploadUrlDto {
     pub url: String,
+}
+
+/// Short-lived one-time credential for a same-origin moderation preview stream.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModerationPreviewGrantDto {
+    pub token: String,
+    pub expires_at: i64,
 }
 
 /// Owned clean image to bind to one controlled profile slot.

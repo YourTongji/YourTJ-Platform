@@ -105,6 +105,11 @@ contrast 或真实 layout 验收。视觉或交互变更至少人工验证 deskt
 Markdown/sanitizer、auth storage 或其他安全关键 browser logic 不能只靠人工 QA；相关 PR 必须先建立
 可重复的最小自动化 test harness，并覆盖 XSS/unsafe URL/resource-limit corpus。
 
+Forum 图片变更还必须运行 `cargo test -p forum --test forum_media_attachment_tests --
+--test-threads=1`，覆盖 `yourtj-asset` AST/ordered set、owner/usage/clean、stale CAS、revision、
+delete/restore/GC grace；Web 运行 Markdown renderer/editor 与 Forum attachment component tests。测试
+只向数据库写合成 metadata，不调用真实 OSS、CDN 或生产 credential。
+
 截图/录屏放 PR，不提交临时 `/tmp` 路径报告。补完整前端单元覆盖和浏览器旅程测试仍是产品 P1
 质量工作。
 

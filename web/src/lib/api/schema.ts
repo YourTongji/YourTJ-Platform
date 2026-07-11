@@ -4961,7 +4961,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Get CDN/object URL for an uploaded object */
+        /**
+         * Get CDN/object URL for an uploaded object
+         * @description Pending objects are owner-only; staff review must use the audited same-origin preview grant flow. Blocked objects are never returned.
+         */
         get: {
             parameters: {
                 query?: never;
@@ -7633,6 +7636,105 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/media/uploads/{id}/preview-grants": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Issue a one-time same-origin media preview grant
+         * @description Requires moderation.content. The moderator must be independent from the uploader and provide an evidence-read reason. No provider identifier or URL is returned.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["AdminReasonInput"];
+                };
+            };
+            responses: {
+                /** @description one-time grant */
+                200: {
+                    headers: {
+                        "Cache-Control"?: string;
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ModerationPreviewGrant"];
+                    };
+                };
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+                409: components["responses"]["Conflict"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/media/uploads/{id}/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Consume a one-time grant and proxy bounded image evidence
+         * @description Requires moderation.content and the same moderator who created the unexpired grant. The response is same-origin, no-store, MIME checked, bounded to 20 MiB / 20,000 px per side / 40 MP before the first byte, and audited without persisting a URL or key.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header: {
+                    "X-Media-Preview-Token": string;
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description bounded image stream */
+                200: {
+                    headers: {
+                        "Cache-Control"?: string;
+                        "X-Content-Type-Options"?: string;
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "image/jpeg": string;
+                        "image/png": string;
+                        "image/gif": string;
+                        "image/webp": string;
+                    };
+                };
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/media/uploads/{id}/approve": {
         parameters: {
             query?: never;
@@ -9845,6 +9947,20 @@ export interface components {
          * @enum {string}
          */
         ContentFormat: "plain_v1" | "markdown_v1";
+        /** @description Minimal clean Media projection for one server-validated yourtj-asset Markdown reference. The canonical destination is never a fetch URL. */
+        ForumAttachment: {
+            assetId: string;
+            reference: string;
+            position: number;
+            alt: string;
+            /**
+             * Format: uri
+             * @description Authorization-derived clean image URL; never persisted in Forum content.
+             */
+            url: string;
+            width: number | null;
+            height: number | null;
+        };
         Thread: {
             id: string;
             boardId: string;
@@ -9861,6 +9977,8 @@ export interface components {
             createdAt: number;
             lastActivityAt: number;
             tags: string[];
+            /** @description At most the first clean image for a bounded feed card. */
+            attachments: components["schemas"]["ForumAttachment"][];
             /** @enum {string|null} */
             viewerVote: "up" | "down" | null;
             isBookmarked: boolean;
@@ -9888,6 +10006,7 @@ export interface components {
             voteCount: number;
             hotScore: number | null;
             tags: string[];
+            attachments: components["schemas"]["ForumAttachment"][];
             status: string;
             pinnedAt: number | null;
             pinnedGlobally: boolean;
@@ -9920,6 +10039,8 @@ export interface components {
             body?: string | null;
             contentFormat?: components["schemas"]["ContentFormat"];
             tags?: string[];
+            /** @description Ordered asset ids that must exactly equal the markdown_v1 yourtj-asset image destinations. Must be empty for plain_v1. */
+            attachmentAssetIds?: string[];
             poll?: components["schemas"]["PollInput"];
         };
         ThreadUpdateInput: {
@@ -9934,6 +10055,8 @@ export interface components {
             /** @description Required whenever body is supplied; legacy omission is treated as plain_v1. */
             contentFormat?: components["schemas"]["ContentFormat"];
             tags?: string[];
+            /** @description When body is supplied, ordered ids must exactly match every yourtj-asset image reference; otherwise omit or send an empty array. */
+            attachmentAssetIds?: string[];
         };
         ThreadPinInput: {
             globally?: boolean;
@@ -9956,6 +10079,9 @@ export interface components {
             oldTitle: string | null;
             oldBody: string;
             oldContentFormat: components["schemas"]["ContentFormat"];
+            /** Format: int64 */
+            oldContentVersion: number;
+            attachments: components["schemas"]["ForumAttachment"][];
             createdAt: number;
         };
         Comment: {
@@ -9969,6 +10095,7 @@ export interface components {
             contentFormat: components["schemas"]["ContentFormat"];
             /** Format: int64 */
             contentVersion: number;
+            attachments: components["schemas"]["ForumAttachment"][];
             voteCount: number;
             /** @enum {string|null} */
             viewerVote: "up" | "down" | null;
@@ -9990,6 +10117,8 @@ export interface components {
             parentId?: string;
             body: string;
             contentFormat?: components["schemas"]["ContentFormat"];
+            /** @description Ordered asset ids that must exactly match markdown_v1 yourtj-asset image destinations. */
+            attachmentAssetIds?: string[];
             quotedCommentId?: string;
         };
         CommentUpdateInput: {
@@ -10001,6 +10130,8 @@ export interface components {
             expectedVersion: number;
             body: string;
             contentFormat?: components["schemas"]["ContentFormat"];
+            /** @description Ordered asset ids that must exactly match markdown_v1 yourtj-asset image destinations. */
+            attachmentAssetIds?: string[];
         };
         VoteInput: {
             /** @enum {string} */
@@ -10553,6 +10684,8 @@ export interface components {
             tags: string[];
             pollQuestion: string;
             pollOptions: string[];
+            /** @description Owner-only upload ids retained across devices. Pending/blocked state is not public binding authorization. */
+            attachmentAssetIds: string[];
         };
         CommentDraftPayload: {
             /**
@@ -10564,6 +10697,8 @@ export interface components {
             body: string;
             contentFormat: components["schemas"]["ContentFormat"];
             parentId: string | null;
+            /** @description Owner-only upload ids retained across devices. Pending/blocked state is not public binding authorization. */
+            attachmentAssetIds: string[];
         };
         ForumDraftPayload: components["schemas"]["ThreadDraftPayload"] | components["schemas"]["CommentDraftPayload"];
         DraftOutput: {
@@ -10724,15 +10859,15 @@ export interface components {
             siteName?: string | null;
         };
         /**
-         * @description Optional intended profile slot persisted across moderation and page reloads.
+         * @description Optional intended image surface persisted across moderation and page reloads; it is not a business binding.
          * @enum {string}
          */
-        MediaUsage: "profile_avatar" | "profile_banner";
+        MediaUsage: "profile_avatar" | "profile_banner" | "forum_thread" | "forum_comment";
         UploadIntentInput: {
             /** @enum {string} */
             kind: "image" | "file";
             contentType: string;
-            /** @description Profile usages require kind=image. Omit for unbound generic uploads. */
+            /** @description Controlled usages require kind=image. Omit for unbound generic uploads. */
             usage?: components["schemas"]["MediaUsage"];
         };
         UploadCredentials: {
@@ -10751,20 +10886,20 @@ export interface components {
             /** @description Unix seconds */
             expiration: number;
         };
+        /** @description Moderation-safe metadata. Storage key, object URL, and content hash are deliberately omitted. */
         Upload: {
-            id?: string;
-            accountId?: string;
+            id: string;
+            accountId: string;
             /** @enum {string} */
-            kind?: "image" | "file";
-            ossKey?: string;
-            url?: string;
-            bytes?: number;
-            mime?: string;
-            sha256?: string;
+            kind: "image" | "file";
+            bytes: number;
+            mime: string;
             /** @enum {string} */
-            status?: "pending" | "clean" | "blocked";
-            usage?: components["schemas"]["MediaUsage"] | null;
-            createdAt?: number;
+            status: "pending" | "clean" | "blocked";
+            usage: components["schemas"]["MediaUsage"] | null;
+            imageWidth: number | null;
+            imageHeight: number | null;
+            createdAt: number;
         };
         /** @description Owner-safe upload status; storage keys, hashes, and object URLs are intentionally omitted. */
         MyUpload: {
@@ -10776,7 +10911,15 @@ export interface components {
             mime: string;
             /** @enum {string} */
             status: "pending" | "clean" | "blocked";
+            imageWidth: number | null;
+            imageHeight: number | null;
             createdAt: number;
+        };
+        /** @description One-time short-lived credential for a same-origin, audited media preview. Contains no provider URL, key, or content hash. */
+        ModerationPreviewGrant: {
+            token: string;
+            /** @description Unix seconds; grants expire after 60 seconds and are consumed once. */
+            expiresAt: number;
         };
         UploadUrl: {
             url: string;

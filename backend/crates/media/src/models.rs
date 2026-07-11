@@ -10,11 +10,11 @@ pub struct UploadRow {
     pub account_id: i64,
     pub kind: String,
     pub oss_key: String,
-    pub url: String,
     pub bytes: i64,
     pub mime: String,
-    pub sha256: String,
     pub status: String,
     pub usage: Option<String>,
+    pub image_width: Option<i32>,
+    pub image_height: Option<i32>,
     pub created_at: DateTime<Utc>,
 }

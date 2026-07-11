@@ -52,6 +52,18 @@ function ThreadCard({ thread, boards }: { thread: ThreadFeed; boards: Board[] })
                   {thread.bodyExcerpt}
                 </p>
               ) : null}
+              {thread.attachments?.[0] ? (
+                <img
+                  src={thread.attachments[0].url}
+                  alt={thread.attachments[0].alt}
+                  width={thread.attachments[0].width ?? undefined}
+                  height={thread.attachments[0].height ?? undefined}
+                  loading="lazy"
+                  decoding="async"
+                  referrerPolicy="no-referrer"
+                  className="mt-3 max-h-72 w-full rounded-xl border object-cover"
+                />
+              ) : null}
               <div className="mt-3 flex flex-wrap gap-1.5">
                 {(thread.tags ?? []).map((tag) => (
                   <Badge key={tag} variant="secondary">#{tag}</Badge>
@@ -85,6 +97,8 @@ function CreateThreadDialog({ boards }: { boards: Board[] }) {
   const [tags, setTags] = React.useState("");
   const [pollQuestion, setPollQuestion] = React.useState("");
   const [pollOptions, setPollOptions] = React.useState("");
+  const [attachmentAssetIds, setAttachmentAssetIds] = React.useState<string[]>([]);
+  const [attachmentsReady, setAttachmentsReady] = React.useState(true);
   const selectedBoard = boards.find((board) => board.id === boardId);
   const draftPayload = React.useMemo<Extract<DraftPayload, { kind: "thread" }>>(() => ({
     kind: "thread",
@@ -99,7 +113,8 @@ function CreateThreadDialog({ boards }: { boards: Board[] }) {
       .slice(0, 3),
     pollQuestion,
     pollOptions: pollOptions.split(/\n+/).map((option) => option.trim()).filter(Boolean).slice(0, 20),
-  }), [boardId, body, pollOptions, pollQuestion, tags, title]);
+    attachmentAssetIds,
+  }), [attachmentAssetIds, boardId, body, pollOptions, pollQuestion, tags, title]);
   const restoreDraft = React.useCallback((payload: Extract<DraftPayload, { kind: "thread" }>) => {
     setBoardId(payload.boardId ?? "");
     setTitle(payload.title);
@@ -107,11 +122,12 @@ function CreateThreadDialog({ boards }: { boards: Board[] }) {
     setTags(payload.tags.join(" "));
     setPollQuestion(payload.pollQuestion);
     setPollOptions(payload.pollOptions.join("\n"));
+    setAttachmentAssetIds(payload.attachmentAssetIds);
   }, []);
   const draft = useForumDraft({
     draftKey: "thread:new",
     enabled: isAuthenticated && open,
-    isEmpty: !boardId && !title && !body && !tags && !pollQuestion && !pollOptions,
+    isEmpty: !boardId && !title && !body && !tags && !pollQuestion && !pollOptions && attachmentAssetIds.length === 0,
     payload: draftPayload,
     onRestore: restoreDraft,
   });
@@ -122,6 +138,7 @@ function CreateThreadDialog({ boards }: { boards: Board[] }) {
         title,
         body: body || undefined,
         contentFormat: "markdown_v1",
+        attachmentAssetIds,
         tags: tags
           .split(/[,\s，、]+/)
           .map((tag) => tag.trim())
@@ -149,6 +166,7 @@ function CreateThreadDialog({ boards }: { boards: Board[] }) {
       setTags("");
       setPollQuestion("");
       setPollOptions("");
+      setAttachmentAssetIds([]);
       await queryClient.invalidateQueries({ queryKey: ["forum", "threads"] });
       if (thread.id) {
         window.location.href = `/forum/threads/${thread.id}`;
@@ -223,6 +241,11 @@ function CreateThreadDialog({ boards }: { boards: Board[] }) {
                   label="帖子正文"
                   maxLength={50_000}
                   minHeight={240}
+                  attachmentUsage="forum_thread"
+                  attachmentAssetIds={attachmentAssetIds}
+                  onAttachmentAssetIdsChange={setAttachmentAssetIds}
+                  maxImages={8}
+                  onAttachmentsReadyChange={setAttachmentsReady}
                 />
               </React.Suspense>
             </div>
@@ -247,7 +270,7 @@ function CreateThreadDialog({ boards }: { boards: Board[] }) {
         <DialogFooter>
           <Button
             onClick={() => mutation.mutate()}
-            disabled={!boardId || !title.trim() || !selectedBoard?.canPost || mutation.isPending}
+            disabled={!boardId || !title.trim() || !selectedBoard?.canPost || !attachmentsReady || mutation.isPending}
           >
             <Send className="h-4 w-4" />
             发布

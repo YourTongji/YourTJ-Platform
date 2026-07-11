@@ -7,6 +7,7 @@ export interface CompletedMediaUpload {
   uploadId: string;
   ossKey: string;
   status: "pending";
+  originalName: string;
 }
 
 const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
@@ -88,5 +89,6 @@ export async function uploadMedia(
     uploadId: parseUploadCallbackData(result.data),
     ossKey: credentials.ossKey,
     status: "pending",
+    originalName: file.name,
   };
 }

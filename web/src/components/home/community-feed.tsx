@@ -85,6 +85,18 @@ function PostCard({ thread }: { thread: ThreadFeed }) {
               {thread.bodyExcerpt}
             </p>
           ) : null}
+          {thread.attachments?.[0] ? (
+            <img
+              src={thread.attachments[0].url}
+              alt={thread.attachments[0].alt}
+              width={thread.attachments[0].width ?? undefined}
+              height={thread.attachments[0].height ?? undefined}
+              loading="lazy"
+              decoding="async"
+              referrerPolicy="no-referrer"
+              className="mt-3 max-h-80 w-full rounded-xl border object-cover"
+            />
+          ) : null}
         </Link>
 
         <div className="mt-3 flex items-center gap-5 border-t border-border/70 pt-3 text-xs text-muted-foreground">

@@ -7,7 +7,8 @@
 use std::sync::Arc;
 
 use axum::extract::{OriginalUri, Path, Query, State};
-use axum::http::{HeaderMap, StatusCode, Uri};
+use axum::http::{header, HeaderMap, StatusCode, Uri};
+use axum::response::{IntoResponse, Response};
 use axum::{Extension, Json};
 use serde::Deserialize;
 use shared::pagination::Page;
@@ -18,6 +19,7 @@ use crate::dto::{
     UploadUrlDto,
 };
 use crate::oss::{self, AliyunStsProvider, OssConfig};
+use crate::preview::{consume_preview_grant, create_preview_grant, PREVIEW_TOKEN_HEADER};
 use crate::quarantine::{quarantine_upload, require_independent_moderator, UploadObjectStore};
 use crate::repo;
 use crate::{error::MediaError, models::UploadRow};
@@ -68,13 +70,12 @@ fn upload_to_dto(row: &UploadRow) -> UploadDto {
         id: row.id.to_string(),
         account_id: row.account_id.to_string(),
         kind: row.kind.clone(),
-        oss_key: row.oss_key.clone(),
-        url: row.url.clone(),
         bytes: row.bytes,
         mime: row.mime.clone(),
-        sha256: row.sha256.clone(),
         status: row.status.clone(),
         usage: row.usage.clone(),
+        image_width: row.image_width,
+        image_height: row.image_height,
         created_at: row.created_at.timestamp(),
     }
 }
@@ -87,6 +88,8 @@ fn upload_to_owner_dto(row: &UploadRow) -> MyUploadDto {
         bytes: row.bytes,
         mime: row.mime.clone(),
         status: row.status.clone(),
+        image_width: row.image_width,
+        image_height: row.image_height,
         created_at: row.created_at.timestamp(),
     }
 }
@@ -107,7 +110,7 @@ fn validate_upload_kind(kind: &str) -> AppResult<()> {
 fn validate_upload_usage(kind: &str, usage: Option<MediaUsage>) -> AppResult<Option<&'static str>> {
     match usage {
         Some(_) if kind != "image" => {
-            Err(MediaError::BadRequest("profile media usage requires an image".into()).into())
+            Err(MediaError::BadRequest("image media usage requires an image".into()).into())
         }
         Some(usage) => Ok(Some(usage.as_str())),
         None => Ok(None),
@@ -171,10 +174,7 @@ async fn moderate_upload(
 fn can_read_upload_url(auth: &shared::AuthAccount, upload: &UploadRow) -> bool {
     match upload.status.as_str() {
         "clean" => true,
-        "pending" => {
-            upload.account_id == auth.id
-                || auth.has_capability(shared::auth::Capability::ModerateContent)
-        }
+        "pending" => upload.account_id == auth.id,
         "blocked" => false,
         _ => false,
     }
@@ -508,6 +508,77 @@ pub async fn list_uploads(
     Ok(Json(Page::new(items, next_cursor)))
 }
 
+/// POST /api/v2/admin/media/uploads/{id}/preview-grants — issue one short-lived read grant.
+pub async fn create_upload_preview_grant(
+    State(state): State<AppState>,
+    Path(id_str): Path<String>,
+    headers: HeaderMap,
+    Json(body): Json<ModerateUploadInput>,
+) -> AppResult<Response> {
+    let auth = identity::auth_middleware::authenticate(
+        &headers,
+        &state.db,
+        &state.jwt_secret,
+        state.redis.as_ref(),
+    )
+    .await
+    .map_err(|_response| AppError::Unauthorized)?;
+    auth.require_capability(shared::auth::Capability::ModerateContent)
+        .map_err(|_| AppError::Forbidden)?;
+
+    let upload_id: i64 = id_str.parse().map_err(|_| AppError::NotFound)?;
+    let reason = validate_moderation_reason(&body.reason)?;
+    let grant = create_preview_grant(&state, &auth, upload_id, reason).await?;
+    let mut response = Json(grant).into_response();
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, header::HeaderValue::from_static("private, no-store"));
+    response.headers_mut().insert(header::PRAGMA, header::HeaderValue::from_static("no-cache"));
+    Ok(response)
+}
+
+/// GET /api/v2/admin/media/uploads/{id}/preview — consume a grant and proxy image bytes.
+pub async fn preview_upload(
+    State(state): State<AppState>,
+    Extension(object_store): Extension<Arc<dyn UploadObjectStore>>,
+    Path(id_str): Path<String>,
+    headers: HeaderMap,
+) -> AppResult<Response> {
+    let auth = identity::auth_middleware::authenticate(
+        &headers,
+        &state.db,
+        &state.jwt_secret,
+        state.redis.as_ref(),
+    )
+    .await
+    .map_err(|_response| AppError::Unauthorized)?;
+    auth.require_capability(shared::auth::Capability::ModerateContent)
+        .map_err(|_| AppError::Forbidden)?;
+
+    let upload_id: i64 = id_str.parse().map_err(|_| AppError::NotFound)?;
+    let token = headers
+        .get(PREVIEW_TOKEN_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .ok_or(AppError::NotFound)?;
+    let preview =
+        consume_preview_grant(&state, &auth, upload_id, token, object_store.as_ref()).await?;
+    tracing::info!(upload_id, moderator_id = auth.id, "media preview authorized");
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, preview.content_type)
+        .header(header::CONTENT_LENGTH, preview.content_length)
+        .header(header::CACHE_CONTROL, "private, no-store, max-age=0")
+        .header(header::PRAGMA, "no-cache")
+        .header(header::EXPIRES, "0")
+        .header(header::CONTENT_DISPOSITION, "inline")
+        .header("x-content-type-options", "nosniff")
+        .header("cross-origin-resource-policy", "same-origin")
+        .header("content-security-policy", "default-src 'none'; sandbox")
+        .body(preview.body)
+        .map_err(|error| AppError::Internal(anyhow::Error::new(error)))
+}
+
 /// POST /api/v2/admin/media/uploads/{id}/approve — approve a pending upload
 pub async fn approve_upload(
     State(state): State<AppState>,
@@ -579,22 +650,22 @@ mod tests {
             account_id,
             kind: "image".into(),
             oss_key: "uploads/1/image/file.png".into(),
-            url: "https://example.invalid/file.png".into(),
             bytes: 10,
             mime: "image/png".into(),
-            sha256: "a".repeat(64),
             status: status.into(),
             usage: None,
+            image_width: None,
+            image_height: None,
             created_at: Utc::now(),
         }
     }
 
     #[test]
-    fn pending_url_is_limited_to_owner_or_staff() {
+    fn pending_url_is_limited_to_owner_and_staff_must_use_audited_preview() {
         let pending = upload(10, "pending");
         assert!(can_read_upload_url(&account(10, "user"), &pending));
         assert!(!can_read_upload_url(&account(11, "user"), &pending));
-        assert!(can_read_upload_url(&account(11, "mod"), &pending));
+        assert!(!can_read_upload_url(&account(11, "mod"), &pending));
     }
 
     #[test]
@@ -614,6 +685,8 @@ mod tests {
     fn profile_usage_is_restricted_to_images() {
         assert!(validate_upload_usage("image", Some(MediaUsage::ProfileAvatar)).is_ok());
         assert!(validate_upload_usage("file", Some(MediaUsage::ProfileBanner)).is_err());
+        assert!(validate_upload_usage("image", Some(MediaUsage::ForumThread)).is_ok());
+        assert!(validate_upload_usage("file", Some(MediaUsage::ForumComment)).is_err());
     }
 
     #[test]

@@ -23,6 +23,7 @@ const thread = {
   tags: ["campus"],
   viewerVote: "up" as const,
   isBookmarked: true,
+  attachments: [],
   canEdit: false,
   canDelete: false,
   canModerate: false,

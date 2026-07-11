@@ -24,6 +24,7 @@ interface VersionedSource {
   body: string;
   contentFormat: ContentFormat;
   contentVersion: number;
+  attachmentAssetIds: string[];
 }
 
 interface ThreadSource extends VersionedSource {
@@ -105,6 +106,7 @@ function threadSource(thread: ThreadDetailWithPoll): ThreadSource {
     body: thread.body ?? "",
     contentFormat: thread.contentFormat ?? "plain_v1",
     contentVersion: thread.contentVersion ?? 1,
+    attachmentAssetIds: (thread.attachments ?? []).map((attachment) => attachment.assetId),
   };
 }
 
@@ -113,6 +115,7 @@ function commentSource(comment: Comment): VersionedSource {
     body: comment.body ?? "",
     contentFormat: comment.contentFormat ?? "plain_v1",
     contentVersion: comment.contentVersion ?? 1,
+    attachmentAssetIds: (comment.attachments ?? []).map((attachment) => attachment.assetId),
   };
 }
 
@@ -124,6 +127,7 @@ export function ThreadAuthorActions({ thread }: { thread: ThreadDetailWithPoll }
   const [isDeleting, setIsDeleting] = React.useState(false);
   const [draft, setDraft] = React.useState<ThreadSource>(() => threadSource(thread));
   const [conflict, setConflict] = React.useState<ThreadSource | null>(null);
+  const [attachmentsReady, setAttachmentsReady] = React.useState(true);
 
   const invalidate = React.useCallback(async () => {
     await Promise.all([
@@ -140,6 +144,7 @@ export function ThreadAuthorActions({ thread }: { thread: ThreadDetailWithPoll }
       title: source.title,
       body: source.body,
       contentFormat: "markdown_v1",
+      attachmentAssetIds: source.attachmentAssetIds,
     }),
     onSuccess: async () => {
       setConflict(null);
@@ -226,6 +231,13 @@ export function ThreadAuthorActions({ thread }: { thread: ThreadDetailWithPoll }
               label="帖子正文"
               maxLength={50_000}
               minHeight={260}
+              attachmentUsage="forum_thread"
+              attachmentAssetIds={draft.attachmentAssetIds}
+              onAttachmentAssetIdsChange={(attachmentAssetIds) =>
+                setDraft((current) => ({ ...current, attachmentAssetIds }))
+              }
+              maxImages={8}
+              onAttachmentsReadyChange={setAttachmentsReady}
             />
           </div>
           <DialogFooter>
@@ -235,7 +247,7 @@ export function ThreadAuthorActions({ thread }: { thread: ThreadDetailWithPoll }
             <Button
               type="button"
               onClick={() => update.mutate(draft)}
-              disabled={!draft.title.trim() || update.isPending || Boolean(conflict)}
+              disabled={!draft.title.trim() || !attachmentsReady || update.isPending || Boolean(conflict)}
             >
               {update.isPending ? <Loader2 className="size-4 motion-safe:animate-spin" aria-hidden="true" /> : null}
               保存修改
@@ -262,6 +274,7 @@ export function CommentAuthorActions({ comment, threadId }: { comment: Comment; 
   const [isDeleting, setIsDeleting] = React.useState(false);
   const [draft, setDraft] = React.useState<VersionedSource>(() => commentSource(comment));
   const [conflict, setConflict] = React.useState<VersionedSource | null>(null);
+  const [attachmentsReady, setAttachmentsReady] = React.useState(true);
 
   const invalidate = React.useCallback(async () => {
     await Promise.all([
@@ -278,6 +291,7 @@ export function CommentAuthorActions({ comment, threadId }: { comment: Comment; 
       expectedVersion: source.contentVersion,
       body: source.body,
       contentFormat: "markdown_v1",
+      attachmentAssetIds: source.attachmentAssetIds,
     }),
     onSuccess: async () => {
       setConflict(null);
@@ -356,6 +370,13 @@ export function CommentAuthorActions({ comment, threadId }: { comment: Comment; 
               label="回复正文"
               maxLength={16_000}
               minHeight={200}
+              attachmentUsage="forum_comment"
+              attachmentAssetIds={draft.attachmentAssetIds}
+              onAttachmentAssetIdsChange={(attachmentAssetIds) =>
+                setDraft((current) => ({ ...current, attachmentAssetIds }))
+              }
+              maxImages={4}
+              onAttachmentsReadyChange={setAttachmentsReady}
             />
           </div>
           <DialogFooter>
@@ -365,7 +386,7 @@ export function CommentAuthorActions({ comment, threadId }: { comment: Comment; 
             <Button
               type="button"
               onClick={() => update.mutate(draft)}
-              disabled={!draft.body.trim() || update.isPending || Boolean(conflict)}
+              disabled={!draft.body.trim() || !attachmentsReady || update.isPending || Boolean(conflict)}
             >
               {update.isPending ? <Loader2 className="size-4 motion-safe:animate-spin" aria-hidden="true" /> : null}
               保存修改

@@ -22,6 +22,7 @@ const emptyDraft: CommentDraft = {
   body: "",
   contentFormat: "markdown_v1",
   parentId: null,
+  attachmentAssetIds: [],
 };
 
 describe("useForumDraft", () => {

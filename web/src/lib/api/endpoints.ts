@@ -1,4 +1,4 @@
-import { apiRequest } from "./client";
+import { apiBlobRequest, apiRequest } from "./client";
 import type {
   Account,
   Achievement,
@@ -62,6 +62,7 @@ import type {
   LedgerVerify,
   Major,
   MediaUsage,
+  ModerationPreviewGrant,
   Notification,
   NotificationPreferences,
   Page,
@@ -569,6 +570,7 @@ export const api = {
     body?: string;
     contentFormat?: ContentFormat;
     tags?: string[];
+    attachmentAssetIds?: string[];
     poll?: { question: string; multiSelect?: boolean; options: string[] };
   }) {
     return apiRequest<ThreadDetailWithPoll>("/forum/threads", { method: "POST", body });
@@ -584,6 +586,7 @@ export const api = {
     body?: string;
     contentFormat?: ContentFormat;
     tags?: string[];
+    attachmentAssetIds?: string[];
   }) {
     return apiRequest<ThreadDetailWithPoll>(`/forum/threads/${encodeURIComponent(id)}`, {
       method: "PATCH",
@@ -608,10 +611,11 @@ export const api = {
     body: string,
     contentFormat: ContentFormat = "markdown_v1",
     parentId?: string,
+    attachmentAssetIds: string[] = [],
   ) {
     return apiRequest<Comment>(`/forum/threads/${encodeURIComponent(threadId)}/comments`, {
       method: "POST",
-      body: { body, contentFormat, parentId },
+      body: { body, contentFormat, parentId, attachmentAssetIds },
     });
   },
 
@@ -619,6 +623,7 @@ export const api = {
     expectedVersion: number;
     body: string;
     contentFormat: ContentFormat;
+    attachmentAssetIds?: string[];
   }) {
     return apiRequest<Comment>(`/forum/comments/${encodeURIComponent(id)}`, {
       method: "PATCH",
@@ -1437,6 +1442,19 @@ export const api = {
 
   adminMediaUploads(cursor?: string | null) {
     return apiRequest<Page<Upload>>("/admin/media/uploads", { query: { cursor, limit: 30 } });
+  },
+
+  createAdminMediaPreviewGrant(id: string, reason: string) {
+    return apiRequest<ModerationPreviewGrant>(
+      `/admin/media/uploads/${encodeURIComponent(id)}/preview-grants`,
+      { method: "POST", body: { reason } },
+    );
+  },
+
+  adminMediaPreview(id: string, token: string) {
+    return apiBlobRequest(`/admin/media/uploads/${encodeURIComponent(id)}/preview`, {
+      "X-Media-Preview-Token": token,
+    });
   },
 
   moderateAdminMediaUpload(id: string, action: "approve" | "block", reason: string) {

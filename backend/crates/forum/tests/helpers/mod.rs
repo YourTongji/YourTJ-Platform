@@ -272,6 +272,18 @@ async fn run_migrations(pool: &PgPool) {
             .expect("migration 0044 failed");
     }
 
+    let has_forum_media_bindings: bool =
+        sqlx::query_scalar("SELECT to_regclass('media.asset_usages') IS NOT NULL")
+            .fetch_one(pool)
+            .await
+            .unwrap_or(false);
+    if !has_forum_media_bindings {
+        sqlx::raw_sql(include_str!("../../../../migrations/0046_forum_media_attachments.sql"))
+            .execute(pool)
+            .await
+            .expect("migration 0046 failed");
+    }
+
     let has_governance_schema: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM information_schema.schemata WHERE schema_name = 'governance')",
     )

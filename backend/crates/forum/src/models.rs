@@ -225,6 +225,7 @@ pub struct PostRevisionRow {
     pub old_title: Option<String>,
     pub old_body: String,
     pub old_content_format: String,
+    pub old_content_version: i64,
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 

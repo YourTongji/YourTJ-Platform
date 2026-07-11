@@ -11,17 +11,21 @@ use std::sync::Arc;
 mod dto;
 mod error;
 mod handlers;
+mod image_header;
 mod models;
 mod oss;
+mod preview;
 mod quarantine;
 mod repo;
+
+pub mod attachments;
 
 use axum::routing::{get, post, put};
 use axum::{Extension, Router};
 use shared::{AppResult, AppState};
 use sqlx::PgPool;
 
-pub use quarantine::UploadObjectStore;
+pub use quarantine::{UploadObjectPreview, UploadObjectStore};
 
 /// Return whether an upload is a clean image owned by the specified account.
 ///
@@ -69,6 +73,11 @@ pub fn routes_with_object_store(
         )
         // Admin moderation endpoints
         .route("/api/v2/admin/media/uploads", get(handlers::list_uploads))
+        .route(
+            "/api/v2/admin/media/uploads/{id}/preview-grants",
+            post(handlers::create_upload_preview_grant),
+        )
+        .route("/api/v2/admin/media/uploads/{id}/preview", get(handlers::preview_upload))
         .route("/api/v2/admin/media/uploads/{id}/approve", post(handlers::approve_upload))
         .route("/api/v2/admin/media/uploads/{id}/block", post(handlers::block_upload))
         .layer(Extension(object_store))

@@ -29,6 +29,16 @@ class ResizeObserverStub implements ResizeObserver {
 
 globalThis.ResizeObserver = ResizeObserverStub;
 
+Object.defineProperty(Range.prototype, "getClientRects", {
+  configurable: true,
+  value: vi.fn(() => []),
+});
+
+Object.defineProperty(Range.prototype, "getBoundingClientRect", {
+  configurable: true,
+  value: vi.fn(() => new DOMRect()),
+});
+
 Object.defineProperty(HTMLCanvasElement.prototype, "getContext", {
   configurable: true,
   value: vi.fn(() => null),

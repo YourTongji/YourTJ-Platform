@@ -90,7 +90,8 @@ pub async fn insert_upload_in_tx(
     let row = sqlx::query_as::<_, UploadRow>(
         "INSERT INTO media.uploads (account_id, kind, oss_key, url, bytes, mime, sha256, usage) \
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
-         RETURNING id, account_id, kind, oss_key, url, bytes, mime, sha256, status, usage, created_at",
+         RETURNING id, account_id, kind, oss_key, bytes, mime, status, usage, \
+                   image_width, image_height, created_at",
     )
     .bind(account_id)
     .bind(kind)
@@ -130,7 +131,8 @@ pub async fn consume_upload_intent(
 /// Find an upload by its primary key.
 pub async fn find_upload(pool: &PgPool, id: i64) -> AppResult<Option<UploadRow>> {
     let row = sqlx::query_as::<_, UploadRow>(
-        "SELECT id, account_id, kind, oss_key, url, bytes, mime, sha256, status, usage, created_at \
+        "SELECT id, account_id, kind, oss_key, bytes, mime, status, usage, \
+                image_width, image_height, created_at \
          FROM media.uploads WHERE id = $1",
     )
     .bind(id)
@@ -205,7 +207,8 @@ pub async fn list_pending(
     };
 
     let rows = sqlx::query_as::<_, UploadRow>(
-        "SELECT id, account_id, kind, oss_key, url, bytes, mime, sha256, status, usage, created_at \
+        "SELECT id, account_id, kind, oss_key, bytes, mime, status, usage, \
+                image_width, image_height, created_at \
          FROM media.uploads \
          WHERE status = 'pending' \
            AND ($1::timestamptz IS NULL OR created_at < $1::timestamptz \
@@ -247,7 +250,8 @@ pub async fn list_owned(
         (None, None)
     };
     let rows = sqlx::query_as::<_, UploadRow>(
-        "SELECT id, account_id, kind, oss_key, url, bytes, mime, sha256, status, usage, created_at \
+        "SELECT id, account_id, kind, oss_key, bytes, mime, status, usage, \
+                image_width, image_height, created_at \
          FROM media.uploads \
          WHERE account_id = $1 \
            AND ($2::text IS NULL OR usage = $2) \
@@ -282,7 +286,8 @@ pub async fn find_owned_upload(
     upload_id: i64,
 ) -> AppResult<Option<UploadRow>> {
     let row = sqlx::query_as::<_, UploadRow>(
-        "SELECT id, account_id, kind, oss_key, url, bytes, mime, sha256, status, usage, created_at \
+        "SELECT id, account_id, kind, oss_key, bytes, mime, status, usage, \
+                image_width, image_height, created_at \
          FROM media.uploads WHERE id = $1 AND account_id = $2",
     )
     .bind(upload_id)

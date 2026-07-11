@@ -64,6 +64,7 @@ describe("media upload boundary", () => {
       uploadId: "42",
       ossKey: "uploads/1/image/intent.png",
       status: "pending",
+      originalName: "photo.png",
     });
     expect(apiMocks.mediaUploadCredentials).toHaveBeenCalledWith(
       "image",

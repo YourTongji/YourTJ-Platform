@@ -8,6 +8,8 @@ import * as React from "react";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { MarkdownContent } from "@/components/content/markdown-content";
+import { ForumImageAttachments } from "@/components/content/forum-image-attachments";
+import type { MediaUsage } from "@/lib/api/types";
 
 interface MarkdownAction {
   label: string;
@@ -38,6 +40,11 @@ const inlineActions: MarkdownAction[] = [
   },
 ];
 
+function referencedAssetIds(source: string) {
+  const matches = source.matchAll(/!\[[^\]\n]*\]\(yourtj-asset:([1-9][0-9]*)\)/g);
+  return Array.from(new Set(Array.from(matches, (match) => match[1])));
+}
+
 export function MarkdownEditor({
   value,
   onChange,
@@ -45,6 +52,11 @@ export function MarkdownEditor({
   maxLength,
   minHeight = 220,
   placeholder = "使用 Markdown 编写内容",
+  attachmentUsage,
+  attachmentAssetIds = [],
+  onAttachmentAssetIdsChange,
+  maxImages,
+  onAttachmentsReadyChange,
 }: {
   value: string;
   onChange: (value: string) => void;
@@ -52,6 +64,11 @@ export function MarkdownEditor({
   maxLength: number;
   minHeight?: number;
   placeholder?: string;
+  attachmentUsage?: Extract<MediaUsage, "forum_thread" | "forum_comment">;
+  attachmentAssetIds?: string[];
+  onAttachmentAssetIdsChange?: (assetIds: string[]) => void;
+  maxImages?: number;
+  onAttachmentsReadyChange?: (isReady: boolean) => void;
 }) {
   const editorRef = React.useRef<ReactCodeMirrorRef>(null);
   const [mode, setMode] = React.useState<"edit" | "preview">("edit");
@@ -59,6 +76,7 @@ export function MarkdownEditor({
     markdown(),
     EditorView.lineWrapping,
     EditorState.changeFilter.of((transaction) => transaction.newDoc.length <= maxLength),
+    EditorView.contentAttributes.of({ "aria-label": label }),
     EditorView.theme({
       "&": { backgroundColor: "transparent", color: "inherit", fontSize: "0.875rem" },
       ".cm-content": { minHeight: `${minHeight}px`, padding: "0.75rem", fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" },
@@ -68,7 +86,7 @@ export function MarkdownEditor({
       ".cm-placeholder": { color: "hsl(var(--muted-foreground))" },
       ".cm-selectionBackground, &.cm-focused .cm-selectionBackground": { backgroundColor: "hsl(var(--primary) / 0.18)" },
     }),
-  ], [maxLength, minHeight]);
+  ], [label, maxLength, minHeight]);
 
   function replaceSelection(action: MarkdownAction) {
     const view = editorRef.current?.view;
@@ -96,6 +114,50 @@ export function MarkdownEditor({
     const replacement = selected.split("\n").map((line) => `${prefix}${line}`).join("\n");
     view.dispatch({ changes: { from, to, insert: replacement }, scrollIntoView: true });
     view.focus();
+  }
+
+  function insertImage(assetId: string, alt: string) {
+    if (attachmentAssetIds.includes(assetId)) return;
+    const view = editorRef.current?.view;
+    const safeAlt = alt
+      .replaceAll("[", "")
+      .replaceAll("]", "")
+      .replaceAll("\\", "")
+      .split(/\s+/)
+      .filter(Boolean)
+      .join(" ")
+      .slice(0, 300) || "论坛图片";
+    const reference = `![${safeAlt}](yourtj-asset:${assetId})`;
+    if (view) {
+      const { from, to } = view.state.selection.main;
+      const before = from > 0 && !view.state.sliceDoc(from - 1, from).includes("\n") ? "\n\n" : "";
+      const after = to < view.state.doc.length ? "\n\n" : "\n";
+      view.dispatch({
+        changes: { from, to, insert: `${before}${reference}${after}` },
+        selection: { anchor: from + before.length + reference.length + after.length },
+        scrollIntoView: true,
+      });
+      view.focus();
+    } else {
+      onChange(`${value}${value.endsWith("\n") || !value ? "" : "\n\n"}${reference}\n`);
+    }
+    onAttachmentAssetIdsChange?.([...attachmentAssetIds, assetId]);
+  }
+
+  function removeImage(assetId: string) {
+    const escapedId = assetId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const pattern = new RegExp(
+      `!?\\[[^\\]\\n]*\\]\\(yourtj-asset:${escapedId}\\)[\\t ]*\\n?`,
+      "g",
+    );
+    const nextValue = value.replace(pattern, "").replace(/\n{3,}/g, "\n\n");
+    const view = editorRef.current?.view;
+    if (view) {
+      view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: nextValue } });
+    } else {
+      onChange(nextValue);
+    }
+    onAttachmentAssetIdsChange?.(attachmentAssetIds.filter((currentId) => currentId !== assetId));
   }
 
   return (
@@ -136,10 +198,12 @@ export function MarkdownEditor({
           <CodeMirror
             ref={editorRef}
             value={value}
-            onChange={onChange}
+            onChange={(nextValue) => {
+              onChange(nextValue);
+              onAttachmentAssetIdsChange?.(referencedAssetIds(nextValue));
+            }}
             extensions={extensions}
             placeholder={placeholder}
-            aria-label={label}
             basicSetup={{
               lineNumbers: false,
               foldGutter: false,
@@ -163,6 +227,19 @@ export function MarkdownEditor({
         <span>支持 CommonMark 与 GFM；不解析 HTML 或远程图片</span>
         <span className="shrink-0 tabular-nums">{value.length}/{maxLength}</span>
       </div>
+      {attachmentUsage && onAttachmentAssetIdsChange && maxImages ? (
+        <div className="border-t p-3">
+          <ForumImageAttachments
+            usage={attachmentUsage}
+            assetIds={attachmentAssetIds}
+            maxImages={maxImages}
+            disabled={mode !== "edit"}
+            onUpload={insertImage}
+            onRemove={removeImage}
+            onReadyChange={onAttachmentsReadyChange}
+          />
+        </div>
+      ) : null}
     </div>
   );
 }

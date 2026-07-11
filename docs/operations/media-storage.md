@@ -18,8 +18,9 @@
 - 当前允许 JPEG、PNG、GIF、WebP 和 PDF；SVG、视频和其他文件拒绝。
 - OSS callback public-key URL 只允许官方 host、禁 redirect、有 5 秒 timeout 和 16 KiB key document limit。
 - Callback 锁定 intent，核对 key/MIME/bytes/SHA-256 shape，原子创建 `pending` upload 并消费 intent。
-- Authenticated URL endpoint 对 clean asset 允许任意登录用户，pending 只允许 owner/staff，blocked
-  不返回；当前生成的是 direct OSS URL，不是 private signed/CDN URL。
+- Authenticated URL endpoint 对 clean asset 允许任意登录用户，pending 只允许 owner，blocked 不返回；staff
+  pending evidence 必须走下述一次性 audit proxy，不能回退到该 direct URL。当前 owner/clean URL 仍是
+  direct OSS URL，不是 private signed/CDN URL。
 - Staff approve 将 `pending -> clean`。Block 会先永久删除 OSS object，删除成功后才事务提交
   `pending -> blocked` 与 governance audit；删除失败时 row 保持 pending。
 - Platform promotion 保存可空 `asset_id`，创建或替换时只接受当前管理员拥有的 clean image；公开卡片
@@ -31,6 +32,22 @@
   轮询，只有 clean 项出现绑定操作，blocked 项提示重新上传。
 - Profile disclosure 每次只为仍为 clean 的 asset 派生 URL；后续被 block 的 object 即使旧 reference
   尚未清理，也不会继续出现在 profile DTO。
+- Forum thread/comment upload intent 使用独立 `forum_thread/forum_comment` usage；Web 持久恢复审核状态并
+  插入 `yourtj-asset:<id>`，但 pending/blocked 只能留在 owner draft，不能建立公开 binding。
+- Media-owned `asset_usages` 在 Forum create/edit 事务中重验 owner、image、usage、clean 和正文有序集合；
+  soft delete 只 detach usage 并设置 30 天 GC grace，restore 重新解析正文并 rebind。公开投影只返回派生
+  URL、alt、position 和可信时的尺寸，不返回 object key、hash 或 owner metadata。
+- Admin pending queue 同样不返回 object key、hash 或持久 URL。持有 `moderation.content` 的独立审核员
+  必须填写读取原因，先取得 60 秒、仅当前账号可用、一次性 token，再以 header 交给同源 preview
+  endpoint；服务端重验 pending/image/MIME/声明字节数，在流出首个 byte 前解析 JPEG/PNG/GIF/WebP
+  header（header scan 最多 1 MiB），限制单边 20,000 px、总像素 40 MP，并以 20 MiB hard limit 继续
+  流式代理；可信 dimensions 回写 upload metadata。响应返回 `no-store`、`nosniff`、same-origin/CSP
+  headers。token 只存 SHA-256，消费与
+  `media.upload.previewed` audit 原子提交，audit 只记 upload id、固定 purpose、reason、MIME/声明字节数，
+  不记 token、provider URL 或 key。Block 仍由 Media 内部使用 object key 先删除 provider object，再提交
+  blocked 状态和 audit；管理 UI 明确该动作不可撤销。
+- 当前同源 evidence proxy 只开放 allowlisted raster image；PDF/file 不回退到 vendor URL，管理 UI 明确
+  显示“文件预览未开放”。PDF 要等独立的 scanner/sandbox renderer 后再开放人工内容预览。
 
 管理 UI 必须如实说明 block 会永久删除 object，不能继续显示“不会自动删除”。
 
@@ -68,19 +85,20 @@ Private/public、CDN signing 和原图保留仍为 `Decision needed`；在决定
 
 1. Client 请求 intent，声明 kind/content type；服务端授权 exact key。
 2. Client 直传 OSS，展示进度和可重试失败，不自行认为业务发布成功。
-3. OSS callback 创建 pending upload；profile client 按持久化 usage 恢复列表并轮询 owner-only status，
-   因刷新或换设备不会把 pending 当失败，也不会自行绑定。
+3. OSS callback 创建 pending upload；profile/Forum client 按持久化 usage 恢复列表并轮询 owner-only
+   status，因刷新或换设备不会把 pending 当失败，也不会自行获得公开绑定授权。
 4. Scanner 验证 magic bytes、MIME、尺寸/像素、病毒/恶意 PDF，图片移除 EXIF/GPS 并生成 variants。
-5. Clean 后业务 mutation 用 `assetId` 绑定 avatar/thread/comment/review/DM；avatar/banner Web 已执行
-   owner+image+clean 绑定与解除，其余业务类型仍待实现。
-6. 替换/删除解除 binding；无引用 asset 进入 grace period，GC worker 最终删除 object 和派生 variants。
+5. Clean 后业务 mutation 用 `assetId` 绑定 avatar/thread/comment/review/DM；avatar/banner 和
+   thread/comment Web/API 已执行 owner+image+usage+clean 约束，review/DM 仍待实现。
+6. Forum 编辑替换会把旧 usage 标为 `content_edit` 并保留版本区间；软删除标为 `target_deleted`，30 天后
+   才是 GC candidate。恢复只在资产仍 clean 时重新绑定。当前没有执行 object purge 的 GC worker。
 
-第 4–6 步当前未完整实现，状态为 `Partial/P1`。Profile reference 是第一条受控 binding，但现有 callback
-的 MIME/SHA 仍只是 metadata 形状检查，不是可信内容扫描；不得在没有 magic-byte/decoder/scanner 的
-情况下自动 clean。
+第 4 步和第 6 步 GC worker 当前未完整实现，状态为 `Partial/P1`。现有 callback 的 MIME/SHA 仍只是
+metadata 形状检查，不是可信内容扫描；不得在没有 magic-byte/decoder/scanner 的情况下自动 clean。
 
-Binding 使用显式 `asset_usages(asset_id, target_type, target_id, slot/position)` 事实表；同一 clean asset
-可以有多个经过 owner/visibility policy 允许的 usage，refcount 只是可重建 cache。Private DM asset
+Forum binding 使用显式、version-aware 的 `asset_usages(asset_id, target_type, target_id, position)` 事实表；
+当前同一目标内禁止重复 asset，position 与 Markdown AST 顺序一致。跨目标复用仍要逐次经过 owner/usage/
+visibility policy，refcount 只是可重建 cache。Private DM asset
 不能被公共内容复用。GC 只处理没有 active usage、超过 grace period 且不受 legal hold 的 asset，
 不能依靠单个业务 row 的 nullable URL 猜引用。
 
@@ -90,8 +108,15 @@ Binding 使用显式 `asset_usages(asset_id, target_type, target_id, slot/positi
 - Protocol tests 使用 fake STS/OSS HTTP 或 alternate object-store boundary，覆盖 policy、callback canonical
   signature、redirect rejection、intent replay、key/MIME/size mismatch 和 delete-before-block ordering。
 - Handler→DB test 覆盖 profile image 对 pending、他人 clean、本人 clean asset 的拒绝/接受与解绑。
+- Forum handler→DB test 覆盖 exact ordered set、duplicate/missing/extra id、无 alt、远程/data URL、
+  cross-account、pending/blocked、stale edit、revision、delete/restore 与并发 restore；不调用真实 OSS。
+- Admin preview integration test 使用 fake object store，覆盖 capability/independent reviewer、一次性 token、
+  MIME/byte/dimension-bound same-origin response、replay rejection、`no-store`/`nosniff`、dimension persistence
+  和不含 key/URL 的 audit；协议 unit test 覆盖四种允许图片 header 与 pixel limit；Web test 覆盖 reason、
+  one-time proxy 调用、browser blob 展示和 DOM 不出现 provider metadata。
 - Owner status test 覆盖 usage filter、pending/clean 恢复、他人 asset 不可枚举和响应不泄露 OSS metadata；
-  Web component/axe test 覆盖 pending/blocked 不可绑定、clean 可绑定与当前图片可移除。
+  Web component/axe test 覆盖 Forum pending/blocked 不可发布、clean 可发布、引用插入/移除和 object key
+  不进入 DOM。
 - End-to-end test bucket 若存在，使用独立 account/prefix、最短 lifecycle 和合成无 PII asset。
 - Test 完成自动清理；cleanup failure 进入告警，不靠人工记住 object key。
 

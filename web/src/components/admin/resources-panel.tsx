@@ -3,6 +3,7 @@ import {
   AlertTriangle,
   BookOpen,
   Check,
+  Eye,
   FileWarning,
   Pencil,
   Plus,
@@ -48,6 +49,8 @@ function MediaQueue() {
   const queryClient = useQueryClient();
   const [cursorStack, setCursorStack] = React.useState<Array<string | null>>([null]);
   const [decision, setDecision] = React.useState<{ upload: Upload; action: "approve" | "block" } | null>(null);
+  const [previewDecision, setPreviewDecision] = React.useState<Upload | null>(null);
+  const [previewObject, setPreviewObject] = React.useState<{ uploadId: string; url: string } | null>(null);
   const cursor = cursorStack.at(-1);
   const uploads = useQuery({
     queryKey: ["admin", "media", "pending", cursor],
@@ -59,11 +62,29 @@ function MediaQueue() {
     onSuccess: async () => {
       toast.success("媒体审核状态已更新");
       setDecision(null);
+      setPreviewObject(null);
       await queryClient.invalidateQueries({ queryKey: ["admin", "media"] });
       await queryClient.invalidateQueries({ queryKey: ["admin", "overview"] });
     },
     onError: (error) => toast.error(error instanceof Error ? error.message : "媒体审核失败"),
   });
+  const preview = useMutation({
+    mutationFn: async ({ uploadId, reason }: { uploadId: string; reason: string }) => {
+      const grant = await api.createAdminMediaPreviewGrant(uploadId, reason);
+      return { uploadId, blob: await api.adminMediaPreview(uploadId, grant.token) };
+    },
+    onSuccess: async ({ uploadId, blob }) => {
+      setPreviewObject({ uploadId, url: URL.createObjectURL(blob) });
+      setPreviewDecision(null);
+      await queryClient.invalidateQueries({ queryKey: ["admin", "media"] });
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : "媒体预览失败"),
+  });
+
+  React.useEffect(() => {
+    if (!previewObject) return;
+    return () => URL.revokeObjectURL(previewObject.url);
+  }, [previewObject]);
 
   if (uploads.isLoading) return <LoadingState label="加载待审媒体" />;
   if (uploads.isError) return <ErrorState error={uploads.error} onRetry={() => void uploads.refetch()} />;
@@ -73,7 +94,7 @@ function MediaQueue() {
     <div className="space-y-3">
       <Card className="border-primary/30 bg-primary/5">
         <CardContent className="p-4 text-xs leading-5 text-muted-foreground">
-          批准与阻止都必须填写原因，并与状态变更原子写入治理审计。阻止操作当前不会自动删除 OSS 中的对象。
+          预览使用 60 秒、一次性的同源代理授权并记录证据读取原因；批准与阻止也必须填写原因。界面不会暴露 object key、hash 或持久 URL。
         </CardContent>
       </Card>
       {uploads.data?.items?.map((upload) => (
@@ -87,10 +108,32 @@ function MediaQueue() {
                 <span className="text-xs text-muted-foreground">{upload.mime} · {formatNumber(upload.bytes)} B</span>
               </div>
               <p className="mt-2 truncate text-sm">上传 #{upload.id} · 账号 {upload.accountId}</p>
-              <p className="mt-1 text-xs text-muted-foreground">{formatUnixTime(upload.createdAt)} · SHA-256 {upload.sha256?.slice(0, 12) ?? "未知"}…</p>
-              {upload.url ? <a className="mt-2 inline-block text-xs text-primary hover:underline" href={upload.url} target="_blank" rel="noreferrer">在新窗口查看对象</a> : null}
+              <p className="mt-1 text-xs text-muted-foreground">
+                {formatUnixTime(upload.createdAt)}
+                {upload.usage ? ` · 用途 ${upload.usage}` : ""}
+                {upload.imageWidth && upload.imageHeight ? ` · ${upload.imageWidth}×${upload.imageHeight}` : ""}
+              </p>
+              {previewObject?.uploadId === upload.id ? (
+                <div className="mt-3 rounded-lg border bg-muted/30 p-2">
+                  <img
+                    src={previewObject.url}
+                    alt={`待审上传 ${upload.id} 的一次性预览`}
+                    className="max-h-80 max-w-full rounded object-contain"
+                  />
+                  <Button type="button" size="sm" variant="ghost" className="mt-2" onClick={() => setPreviewObject(null)}>
+                    <X className="size-4" />关闭预览
+                  </Button>
+                </div>
+              ) : null}
             </div>
             <div className="flex flex-wrap gap-2">
+              {upload.kind === "image" ? (
+                <Button type="button" size="sm" variant="outline" onClick={() => setPreviewDecision(upload)}>
+                  <Eye className="size-4" />安全预览
+                </Button>
+              ) : (
+                <span className="self-center text-xs text-muted-foreground">文件预览未开放</span>
+              )}
               <Button type="button" size="sm" onClick={() => setDecision({ upload, action: "approve" })}><Check className="size-4" />批准</Button>
               <Button type="button" variant="destructive" size="sm" onClick={() => setDecision({ upload, action: "block" })}><X className="size-4" />阻止</Button>
             </div>
@@ -104,12 +147,21 @@ function MediaQueue() {
         onNext={() => uploads.data?.nextCursor && setCursorStack((items) => [...items, uploads.data?.nextCursor ?? null])}
       />
       <ReasonDialog
+        open={Boolean(previewDecision)}
+        onOpenChange={(open) => !open && setPreviewDecision(null)}
+        title="读取待审媒体证据"
+        description="系统会签发仅供当前管理员使用的 60 秒一次性授权，通过同源代理读取一张受 MIME 与字节上限保护的图片；读取原因会进入审计。"
+        confirmLabel="生成并读取预览"
+        isPending={preview.isPending}
+        onConfirm={(reason) => previewDecision?.id && preview.mutate({ uploadId: previewDecision.id, reason })}
+      />
+      <ReasonDialog
         open={Boolean(decision)}
         onOpenChange={(open) => !open && setDecision(null)}
         title={decision?.action === "approve" ? "批准媒体对象" : "阻止媒体对象"}
         description={decision?.action === "approve"
           ? "批准后对象可进入正常使用流程，决定和原因会进入治理审计。"
-          : "阻止后对象不可公开使用；当前实现尚未自动删除 OSS 对象。"}
+          : "阻止会永久删除 OSS 对象，再提交 blocked 状态与治理审计；该操作无法撤销。"}
         confirmLabel={decision?.action === "approve" ? "确认批准" : "确认阻止"}
         destructive={decision?.action === "block"}
         isPending={moderate.isPending}

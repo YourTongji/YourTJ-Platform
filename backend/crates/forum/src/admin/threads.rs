@@ -19,6 +19,9 @@ struct AdminThreadRow {
     deleted_at: Option<chrono::DateTime<chrono::Utc>>,
     hidden_at: Option<chrono::DateTime<chrono::Utc>>,
     archived_at: Option<chrono::DateTime<chrono::Utc>>,
+    body: Option<String>,
+    content_format: String,
+    content_version: i64,
 }
 
 /// GET /api/v2/admin/forum/threads/{id} — staff recovery detail.
@@ -79,7 +82,8 @@ pub async fn admin_thread_action(
         .ok_or_else(|| AppError::BadRequest("reason must be 3–500 characters".into()))?;
     let mut tx = state.db.begin().await?;
     let thread = sqlx::query_as::<_, AdminThreadRow>(
-        "SELECT author_id, board_id, status, created_at, deleted_at, hidden_at, archived_at \
+        "SELECT author_id, board_id, status, created_at, deleted_at, hidden_at, archived_at, \
+                body, content_format, content_version \
          FROM forum.threads WHERE id = $1 FOR UPDATE",
     )
     .bind(id)
@@ -133,6 +137,12 @@ pub async fn admin_thread_action(
                 )
                 .await?;
             }
+            media::attachments::detach_forum_asset_bindings(
+                &mut tx,
+                media::attachments::ForumTargetType::Thread,
+                id,
+            )
+            .await?;
         }
         "unarchive" => {
             if thread.archived_at.is_none() {
@@ -177,6 +187,25 @@ pub async fn admin_thread_action(
                 return Err(AppError::Conflict("thread is not deleted".into()));
             }
             crate::repo::restore_thread(&mut *tx, id).await?;
+            let image_references = crate::content_policy::image_references_for_stored_content(
+                thread.body.as_deref(),
+                crate::dto::ContentFormat::from_db(&thread.content_format),
+                media::attachments::ForumTargetType::Thread,
+            )?;
+            if !image_references.is_empty() {
+                let author_id = thread.author_id.ok_or_else(|| {
+                    AppError::Conflict("thread without an author cannot restore attachments".into())
+                })?;
+                media::attachments::sync_forum_asset_bindings(
+                    &mut tx,
+                    author_id,
+                    media::attachments::ForumTargetType::Thread,
+                    id,
+                    thread.content_version,
+                    &image_references,
+                )
+                .await?;
+            }
             if let (true, true, Some(author_id)) =
                 (thread.hidden_at.is_none(), thread.archived_at.is_none(), thread.author_id)
             {

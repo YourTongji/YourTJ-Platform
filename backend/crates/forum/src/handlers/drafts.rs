@@ -29,7 +29,14 @@ fn validate_draft(draft_key: &str, payload: &DraftPayload) -> AppResult<()> {
 
     match payload {
         DraftPayload::Thread {
-            board_id, title, body, tags, poll_question, poll_options, ..
+            board_id,
+            title,
+            body,
+            tags,
+            poll_question,
+            poll_options,
+            attachment_asset_ids,
+            ..
         } => {
             let target = draft_key.strip_prefix("thread:").ok_or_else(|| {
                 AppError::BadRequest("thread draftKey must start with thread:".into())
@@ -53,11 +60,12 @@ fn validate_draft(draft_key: &str, payload: &DraftPayload) -> AppResult<()> {
                 || poll_question.chars().count() > 300
                 || poll_options.len() > 20
                 || poll_options.iter().any(|option| option.chars().count() > 200)
+                || attachment_asset_ids.len() > 8
             {
                 return Err(AppError::BadRequest("thread draft metadata exceeds limits".into()));
             }
         }
-        DraftPayload::Comment { thread_id, body, parent_id, .. } => {
+        DraftPayload::Comment { thread_id, body, parent_id, attachment_asset_ids, .. } => {
             let target = draft_key.strip_prefix("comment:").ok_or_else(|| {
                 AppError::BadRequest("comment draftKey must start with comment:".into())
             })?;
@@ -67,12 +75,36 @@ fn validate_draft(draft_key: &str, payload: &DraftPayload) -> AppResult<()> {
             if parent_id.as_deref().is_some_and(|id| !positive_id(id)) {
                 return Err(AppError::BadRequest("invalid draft parentId".into()));
             }
-            if body.chars().count() > MAX_COMMENT_BODY_CHARS {
+            if body.chars().count() > MAX_COMMENT_BODY_CHARS || attachment_asset_ids.len() > 4 {
                 return Err(AppError::BadRequest("comment draft exceeds content limits".into()));
             }
         }
     }
     Ok(())
+}
+
+fn draft_asset_ids(
+    payload: &DraftPayload,
+) -> AppResult<(media::attachments::ForumTargetType, Vec<i64>)> {
+    let (target_type, values) = match payload {
+        DraftPayload::Thread { attachment_asset_ids, .. } => {
+            (media::attachments::ForumTargetType::Thread, attachment_asset_ids)
+        }
+        DraftPayload::Comment { attachment_asset_ids, .. } => {
+            (media::attachments::ForumTargetType::Comment, attachment_asset_ids)
+        }
+    };
+    let asset_ids = values
+        .iter()
+        .map(|value| {
+            value
+                .parse::<i64>()
+                .ok()
+                .filter(|asset_id| *asset_id > 0)
+                .ok_or_else(|| AppError::BadRequest("invalid draft attachmentAssetIds".into()))
+        })
+        .collect::<AppResult<Vec<_>>>()?;
+    Ok((target_type, asset_ids))
 }
 
 fn draft_dto(row: DraftRow) -> DraftDto {
@@ -106,6 +138,14 @@ pub async fn save_draft_handler(
 
     let mut transaction = state.db.begin().await?;
     crate::repo::lock_draft_owner(&mut transaction, auth.id).await?;
+    let (target_type, asset_ids) = draft_asset_ids(&body.payload)?;
+    media::attachments::validate_owned_forum_draft_assets(
+        &mut transaction,
+        auth.id,
+        target_type,
+        &asset_ids,
+    )
+    .await?;
     if body.expected_version == 0 {
         if crate::repo::draft_exists(&mut transaction, auth.id, &body.draft_key).await? {
             return Err(AppError::Conflict("draft already exists".into()));

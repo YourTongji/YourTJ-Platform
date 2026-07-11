@@ -145,3 +145,33 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}) 
     throw error;
   }
 }
+
+async function fetchBlobOnce(path: string, headersInput?: HeadersInit) {
+  const headers = new Headers(headersInput);
+  const token = readAccessToken();
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+  const response = await fetch(buildUrl(path), { headers });
+  if (!response.ok) throw await parseError(response);
+  const contentType = response.headers.get("content-type")?.split(";", 1)[0] ?? "";
+  if (!["image/jpeg", "image/png", "image/gif", "image/webp"].includes(contentType)) {
+    throw new ApiError(response.status, "媒体预览类型无效");
+  }
+  const blob = await response.blob();
+  if (blob.size > 20 * 1024 * 1024) {
+    throw new ApiError(response.status, "媒体预览超过大小限制");
+  }
+  return blob;
+}
+
+/** Fetch one same-origin binary response while preserving the normal access-token refresh path. */
+export async function apiBlobRequest(path: string, headers?: HeadersInit) {
+  try {
+    return await fetchBlobOnce(path, headers);
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 401) {
+      const refreshed = await refreshTokens();
+      if (refreshed) return fetchBlobOnce(path, headers);
+    }
+    throw error;
+  }
+}

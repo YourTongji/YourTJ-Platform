@@ -789,9 +789,21 @@ components:
       type: string
       enum: [plain_v1, markdown_v1]
       default: plain_v1
+    ForumAttachment:
+      type: object
+      description: Minimal clean Media projection for one server-validated yourtj-asset Markdown reference. The canonical destination is never a fetch URL.
+      required: [assetId, reference, position, alt, url, width, height]
+      properties:
+        assetId: { type: string }
+        reference: { type: string, pattern: '^yourtj-asset:[1-9][0-9]*$' }
+        position: { type: integer, minimum: 0, maximum: 7 }
+        alt: { type: string, minLength: 1, maxLength: 300 }
+        url: { type: string, format: uri, description: Authorization-derived clean image URL; never persisted in Forum content. }
+        width: { type: integer, minimum: 1, maximum: 20000, nullable: true }
+        height: { type: integer, minimum: 1, maximum: 20000, nullable: true }
     Thread:
       type: object
-      required: [id, boardId, authorHandle, title, bodyExcerpt, contentVersion, replyCount, voteCount, hotScore, status, createdAt, lastActivityAt, tags, viewerVote, isBookmarked, canEdit, canDelete, canModerate]
+      required: [id, boardId, authorHandle, title, bodyExcerpt, contentVersion, replyCount, voteCount, hotScore, status, createdAt, lastActivityAt, tags, attachments, viewerVote, isBookmarked, canEdit, canDelete, canModerate]
       properties:
         id: { type: string }
         boardId: { type: string }
@@ -806,6 +818,7 @@ components:
         createdAt: { type: integer }
         lastActivityAt: { type: integer }
         tags: { type: array, items: { type: string } }
+        attachments: { type: array, maxItems: 1, description: At most the first clean image for a bounded feed card., items: { $ref: "#/components/schemas/ForumAttachment" } }
         viewerVote: { type: string, enum: [up, down], nullable: true }
         isBookmarked: { type: boolean }
         canEdit: { type: boolean, description: Server-authoritative author edit permission for this viewer. }
@@ -815,7 +828,7 @@ components:
       allOf: [{ $ref: "#/components/schemas/Thread" }, { type: object, properties: { unreadCount: { type: integer, nullable: true } } }]
     ThreadDetail:
       type: object
-      required: [id, boardId, authorHandle, authorId, title, body, contentFormat, contentVersion, replyCount, voteCount, hotScore, tags, status, pinnedAt, pinnedGlobally, featuredAt, closedAt, archivedAt, deletedAt, editedAt, hiddenAt, createdAt, lastActivityAt, solvedAnswerId, viewerVote, isBookmarked, myLastReadCommentId, mySubscriptionLevel, poll, canEdit, canDelete, canModerate]
+      required: [id, boardId, authorHandle, authorId, title, body, contentFormat, contentVersion, replyCount, voteCount, hotScore, tags, attachments, status, pinnedAt, pinnedGlobally, featuredAt, closedAt, archivedAt, deletedAt, editedAt, hiddenAt, createdAt, lastActivityAt, solvedAnswerId, viewerVote, isBookmarked, myLastReadCommentId, mySubscriptionLevel, poll, canEdit, canDelete, canModerate]
       properties:
         id: { type: string }
         boardId: { type: string }
@@ -829,6 +842,7 @@ components:
         voteCount: { type: integer }
         hotScore: { type: number, nullable: true }
         tags: { type: array, items: { type: string } }
+        attachments: { type: array, maxItems: 8, items: { $ref: "#/components/schemas/ForumAttachment" } }
         status: { type: string }
         pinnedAt: { type: integer, nullable: true }
         pinnedGlobally: { type: boolean }
@@ -860,6 +874,12 @@ components:
         body: { type: string, nullable: true, maxLength: 50000 }
         contentFormat: { $ref: "#/components/schemas/ContentFormat" }
         tags: { type: array, items: { type: string, minLength: 1, maxLength: 64 }, maxItems: 3, uniqueItems: true }
+        attachmentAssetIds:
+          type: array
+          maxItems: 8
+          uniqueItems: true
+          description: Ordered asset ids that must exactly equal the markdown_v1 yourtj-asset image destinations. Must be empty for plain_v1.
+          items: { type: string, pattern: '^[1-9][0-9]*$' }
         poll: { $ref: "#/components/schemas/PollInput" }
     ThreadUpdateInput:
       type: object
@@ -876,6 +896,12 @@ components:
           allOf: [{ $ref: "#/components/schemas/ContentFormat" }]
           description: Required whenever body is supplied; legacy omission is treated as plain_v1.
         tags: { type: array, items: { type: string, minLength: 1, maxLength: 64 }, maxItems: 3, uniqueItems: true }
+        attachmentAssetIds:
+          type: array
+          maxItems: 8
+          uniqueItems: true
+          description: When body is supplied, ordered ids must exactly match every yourtj-asset image reference; otherwise omit or send an empty array.
+          items: { type: string, pattern: '^[1-9][0-9]*$' }
     ThreadPinInput: { type: object, properties: { globally: { type: boolean } } }
     ThreadMoveInput: { type: object, required: [boardId], properties: { boardId: { type: string } } }
     AdminThreadActionInput:
@@ -892,7 +918,7 @@ components:
         reason: { type: string, minLength: 3, maxLength: 500 }
     PostRevision:
       type: object
-      required: [id, seq, editorId, oldTitle, oldBody, oldContentFormat, createdAt]
+      required: [id, seq, editorId, oldTitle, oldBody, oldContentFormat, oldContentVersion, attachments, createdAt]
       properties:
         id: { type: string }
         seq: { type: integer }
@@ -900,10 +926,12 @@ components:
         oldTitle: { type: string, nullable: true }
         oldBody: { type: string }
         oldContentFormat: { $ref: "#/components/schemas/ContentFormat" }
+        oldContentVersion: { type: integer, format: int64, minimum: 1 }
+        attachments: { type: array, maxItems: 8, items: { $ref: "#/components/schemas/ForumAttachment" } }
         createdAt: { type: integer }
     Comment:
       type: object
-      required: [id, threadId, parentId, path, authorHandle, authorId, body, contentFormat, contentVersion, voteCount, viewerVote, isBookmarked, isDeleted, isHidden, editedAt, createdAt, quotedCommentId, isSolved, canEdit, canDelete, canModerate]
+      required: [id, threadId, parentId, path, authorHandle, authorId, body, contentFormat, contentVersion, attachments, voteCount, viewerVote, isBookmarked, isDeleted, isHidden, editedAt, createdAt, quotedCommentId, isSolved, canEdit, canDelete, canModerate]
       properties:
         id: { type: string }
         threadId: { type: string }
@@ -914,6 +942,7 @@ components:
         body: { type: string }
         contentFormat: { $ref: "#/components/schemas/ContentFormat" }
         contentVersion: { type: integer, format: int64, minimum: 1 }
+        attachments: { type: array, maxItems: 4, items: { $ref: "#/components/schemas/ForumAttachment" } }
         voteCount: { type: integer }
         viewerVote: { type: string, enum: [up, down], nullable: true }
         isBookmarked: { type: boolean }
@@ -933,6 +962,12 @@ components:
         parentId: { type: string }
         body: { type: string, minLength: 1, maxLength: 16000 }
         contentFormat: { $ref: "#/components/schemas/ContentFormat" }
+        attachmentAssetIds:
+          type: array
+          maxItems: 4
+          uniqueItems: true
+          description: Ordered asset ids that must exactly match markdown_v1 yourtj-asset image destinations.
+          items: { type: string, pattern: '^[1-9][0-9]*$' }
         quotedCommentId: { type: string }
     CommentUpdateInput:
       type: object
@@ -946,6 +981,12 @@ components:
           description: Compare-and-swap version. Legacy omission is treated as version 1 and conflicts once content has changed.
         body: { type: string, minLength: 1, maxLength: 16000 }
         contentFormat: { $ref: "#/components/schemas/ContentFormat" }
+        attachmentAssetIds:
+          type: array
+          maxItems: 4
+          uniqueItems: true
+          description: Ordered asset ids that must exactly match markdown_v1 yourtj-asset image destinations.
+          items: { type: string, pattern: '^[1-9][0-9]*$' }
     VoteInput:
       type: object
       required: [value, postType]
@@ -1552,7 +1593,7 @@ components:
     ThreadDraftPayload:
       type: object
       additionalProperties: false
-      required: [kind, boardId, title, body, contentFormat, tags, pollQuestion, pollOptions]
+      required: [kind, boardId, title, body, contentFormat, tags, pollQuestion, pollOptions, attachmentAssetIds]
       properties:
         kind: { type: string, enum: [thread] }
         boardId: { type: string, nullable: true }
@@ -1568,16 +1609,28 @@ components:
           type: array
           maxItems: 20
           items: { type: string, maxLength: 200 }
+        attachmentAssetIds:
+          type: array
+          maxItems: 8
+          uniqueItems: true
+          description: Owner-only upload ids retained across devices. Pending/blocked state is not public binding authorization.
+          items: { type: string, pattern: '^[1-9][0-9]*$' }
     CommentDraftPayload:
       type: object
       additionalProperties: false
-      required: [kind, threadId, body, contentFormat, parentId]
+      required: [kind, threadId, body, contentFormat, parentId, attachmentAssetIds]
       properties:
         kind: { type: string, enum: [comment] }
         threadId: { type: string }
         body: { type: string, maxLength: 16000 }
         contentFormat: { $ref: "#/components/schemas/ContentFormat" }
         parentId: { type: string, nullable: true }
+        attachmentAssetIds:
+          type: array
+          maxItems: 4
+          uniqueItems: true
+          description: Owner-only upload ids retained across devices. Pending/blocked state is not public binding authorization.
+          items: { type: string, pattern: '^[1-9][0-9]*$' }
     ForumDraftPayload:
       oneOf:
         - { $ref: "#/components/schemas/ThreadDraftPayload" }
@@ -1779,8 +1832,8 @@ components:
     # ---- media ----
     MediaUsage:
       type: string
-      description: Optional intended profile slot persisted across moderation and page reloads.
-      enum: [profile_avatar, profile_banner]
+      description: Optional intended image surface persisted across moderation and page reloads; it is not a business binding.
+      enum: [profile_avatar, profile_banner, forum_thread, forum_comment]
     UploadIntentInput:
       type: object
       required: [kind, contentType]
@@ -1789,7 +1842,7 @@ components:
         contentType: { type: string }
         usage:
           allOf: [{ $ref: "#/components/schemas/MediaUsage" }]
-          description: Profile usages require kind=image. Omit for unbound generic uploads.
+          description: Controlled usages require kind=image. Omit for unbound generic uploads.
     UploadCredentials:
       type: object
       required: [uploadIntentId, accessKeyId, accessKeySecret, securityToken, region, bucket, prefix, ossKey, callbackUrl, callbackBody, expiration]
@@ -1807,23 +1860,24 @@ components:
         expiration: { type: integer, description: Unix seconds }
     Upload:
       type: object
+      required: [id, accountId, kind, bytes, mime, status, usage, imageWidth, imageHeight, createdAt]
+      description: Moderation-safe metadata. Storage key, object URL, and content hash are deliberately omitted.
       properties:
         id: { type: string }
         accountId: { type: string }
         kind: { type: string, enum: [image, file] }
-        ossKey: { type: string }
-        url: { type: string }
         bytes: { type: integer }
         mime: { type: string }
-        sha256: { type: string }
         status: { type: string, enum: [pending, clean, blocked] }
         usage:
           allOf: [{ $ref: "#/components/schemas/MediaUsage" }]
           nullable: true
+        imageWidth: { type: integer, minimum: 1, maximum: 20000, nullable: true }
+        imageHeight: { type: integer, minimum: 1, maximum: 20000, nullable: true }
         createdAt: { type: integer }
     MyUpload:
       type: object
-      required: [id, kind, usage, bytes, mime, status, createdAt]
+      required: [id, kind, usage, bytes, mime, status, imageWidth, imageHeight, createdAt]
       description: Owner-safe upload status; storage keys, hashes, and object URLs are intentionally omitted.
       properties:
         id: { type: string }
@@ -1834,7 +1888,16 @@ components:
         bytes: { type: integer, minimum: 1 }
         mime: { type: string }
         status: { type: string, enum: [pending, clean, blocked] }
+        imageWidth: { type: integer, minimum: 1, maximum: 20000, nullable: true }
+        imageHeight: { type: integer, minimum: 1, maximum: 20000, nullable: true }
         createdAt: { type: integer }
+    ModerationPreviewGrant:
+      type: object
+      description: One-time short-lived credential for a same-origin, audited media preview. Contains no provider URL, key, or content hash.
+      required: [token, expiresAt]
+      properties:
+        token: { type: string, minLength: 43, maxLength: 43 }
+        expiresAt: { type: integer, description: Unix seconds; grants expire after 60 seconds and are consumed once. }
     UploadUrl:
       type: object
       required: [url]
@@ -3123,6 +3186,7 @@ paths:
     get:
       tags: [media]
       summary: Get CDN/object URL for an uploaded object
+      description: Pending objects are owner-only; staff review must use the audited same-origin preview grant flow. Blocked objects are never returned.
       parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
       responses:
         "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/UploadUrl" } } } }
@@ -3683,6 +3747,30 @@ paths:
       summary: Pending media moderation queue
       parameters: [{ $ref: "#/components/parameters/Cursor" }, { $ref: "#/components/parameters/Limit" }]
       responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/UploadPage" } } } }, "403": { $ref: "#/components/responses/Forbidden" } }
+  /admin/media/uploads/{id}/preview-grants:
+    post:
+      tags: [admin, media]
+      summary: Issue a one-time same-origin media preview grant
+      description: Requires moderation.content. The moderator must be independent from the uploader and provide an evidence-read reason. No provider identifier or URL is returned.
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/AdminReasonInput" } } } }
+      responses:
+        "200": { description: one-time grant, headers: { Cache-Control: { schema: { type: string } } }, content: { application/json: { schema: { $ref: "#/components/schemas/ModerationPreviewGrant" } } } }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /admin/media/uploads/{id}/preview:
+    get:
+      tags: [admin, media]
+      summary: Consume a one-time grant and proxy bounded image evidence
+      description: Requires moderation.content and the same moderator who created the unexpired grant. The response is same-origin, no-store, MIME checked, bounded to 20 MiB / 20,000 px per side / 40 MP before the first byte, and audited without persisting a URL or key.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: X-Media-Preview-Token, in: header, required: true, schema: { type: string, minLength: 43, maxLength: 43 } }
+      responses:
+        "200": { description: bounded image stream, headers: { Cache-Control: { schema: { type: string } }, X-Content-Type-Options: { schema: { type: string } } }, content: { image/jpeg: { schema: { type: string, format: binary } }, image/png: { schema: { type: string, format: binary } }, image/gif: { schema: { type: string, format: binary } }, image/webp: { schema: { type: string, format: binary } } } }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /admin/media/uploads/{id}/approve:
     post:
       tags: [admin, media]

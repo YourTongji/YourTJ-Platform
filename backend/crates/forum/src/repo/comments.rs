@@ -25,6 +25,16 @@ pub struct CommentCreateOutcome {
 pub struct CommentSource<'a> {
     pub body: &'a str,
     pub content_format: &'a str,
+    pub image_references: &'a [media::attachments::ForumAssetReference],
+}
+
+/// Canonical source and compare-and-swap facts for one comment edit.
+pub struct CommentUpdateSource<'a> {
+    pub body: &'a str,
+    pub content_format: &'a str,
+    pub expected_version: i64,
+    pub is_queued: bool,
+    pub image_references: &'a [media::attachments::ForumAssetReference],
 }
 
 /// Return whether the parent thread currently permits author comment edits.
@@ -286,6 +296,15 @@ pub async fn create_comment(
         )
         .await?
     };
+    media::attachments::sync_forum_asset_bindings(
+        &mut tx,
+        author_id,
+        media::attachments::ForumTargetType::Comment,
+        row.id,
+        row.content_version,
+        source.image_references,
+    )
+    .await?;
     tx.commit().await?;
     Ok(CommentCreateOutcome { row, thread_author_id: thread_state.author_id, quoted_author_id })
 }
@@ -417,10 +436,7 @@ pub async fn update_comment(
     pool: &PgPool,
     id: i64,
     author_id: i64,
-    body: &str,
-    content_format: &str,
-    expected_version: i64,
-    is_queued: bool,
+    source: CommentUpdateSource<'_>,
 ) -> AppResult<CommentRowJoined> {
     let mut tx = pool.begin().await?;
     let thread_id: i64 = sqlx::query_scalar("SELECT thread_id FROM forum.comments WHERE id = $1")
@@ -462,13 +478,14 @@ pub async fn update_comment(
     if existing.deleted_at.is_some() || existing.hidden_at.is_some() {
         return Err(shared::AppError::NotFound);
     }
-    if expected_version != existing.content_version {
+    if source.expected_version != existing.content_version {
         return Err(shared::AppError::OptimisticLockConflict {
             current_version: existing.content_version,
         });
     }
 
-    let body_changed = existing.body != body || existing.content_format != content_format;
+    let body_changed =
+        existing.body != source.body || existing.content_format != source.content_format;
     let within_grace = existing.created_at > chrono::Utc::now() - chrono::Duration::minutes(5);
     if body_changed && !within_grace {
         super::revisions::create_revision_tx(
@@ -476,9 +493,12 @@ pub async fn update_comment(
             "comment",
             id,
             author_id,
-            None,
-            &existing.body,
-            &existing.content_format,
+            super::revisions::RevisionSource {
+                old_title: None,
+                old_body: &existing.body,
+                old_content_format: &existing.content_format,
+                old_content_version: existing.content_version,
+            },
         )
         .await?;
     }
@@ -502,19 +522,29 @@ pub async fn update_comment(
          FROM updated u \
          JOIN identity.accounts a ON a.id = u.author_id",
     )
-    .bind(body)
-    .bind(content_format)
+    .bind(source.body)
+    .bind(source.content_format)
     .bind(body_changed)
-    .bind(is_queued)
+    .bind(source.is_queued)
     .bind(id)
-    .bind(expected_version)
+    .bind(source.expected_version)
     .fetch_optional(&mut *tx)
     .await?
     .ok_or(shared::AppError::OptimisticLockConflict {
         current_version: existing.content_version,
     })?;
 
-    if is_queued {
+    media::attachments::sync_forum_asset_bindings(
+        &mut tx,
+        author_id,
+        media::attachments::ForumTargetType::Comment,
+        id,
+        row.content_version,
+        source.image_references,
+    )
+    .await?;
+
+    if source.is_queued {
         sqlx::query(
             "UPDATE forum.threads SET reply_count = GREATEST(reply_count - 1, 0) WHERE id = $1",
         )

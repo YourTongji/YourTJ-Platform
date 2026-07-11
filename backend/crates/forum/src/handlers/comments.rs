@@ -31,6 +31,40 @@ async fn hydrate_comment_viewer_states(
     Ok(())
 }
 
+pub(crate) async fn hydrate_comment_attachments(
+    pool: &sqlx::PgPool,
+    comments: &mut [CommentDto],
+) -> AppResult<()> {
+    let comment_ids =
+        comments.iter().filter_map(|comment| comment.id.parse::<i64>().ok()).collect::<Vec<_>>();
+    let mut attachments = media::attachments::resolve_forum_attachments_batch(
+        pool,
+        media::attachments::ForumTargetType::Comment,
+        &comment_ids,
+    )
+    .await?;
+    for comment in comments {
+        if let Ok(comment_id) = comment.id.parse::<i64>() {
+            let projected = attachments.remove(&comment_id).unwrap_or_default();
+            let references = crate::content_policy::image_references_for_stored_content(
+                Some(&comment.body),
+                comment.content_format,
+                media::attachments::ForumTargetType::Comment,
+            )
+            .unwrap_or_else(|error| {
+                tracing::warn!(%error, comment_id, "stored comment image references are invalid");
+                Vec::new()
+            });
+            if crate::content_policy::attachment_projection_matches(&references, &projected) {
+                comment.attachments = projected;
+            } else {
+                tracing::warn!(comment_id, "comment attachment projection mismatch");
+            }
+        }
+    }
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // query params
 // ---------------------------------------------------------------------------
@@ -89,6 +123,7 @@ pub async fn list_comments(
 
     let mut items: Vec<CommentDto> =
         rows.iter().map(|r| comment_to_dto(r, solved_comment_id)).collect();
+    hydrate_comment_attachments(&state.db, &mut items).await?;
     if let Some(account_id) = current_user_id {
         hydrate_comment_viewer_states(&state.db, account_id, &mut items).await?;
     }
@@ -169,6 +204,7 @@ pub async fn create_comment(
         repo::comments::CommentSource {
             body: &body.body,
             content_format: body.content_format.as_str(),
+            image_references: &prepared.image_references,
         },
         parent_id,
         quoted_comment_id,
@@ -350,6 +386,7 @@ pub async fn create_comment(
     crate::cache::invalidate_thread_by_id(state.redis.as_ref(), &state.db, thread_id).await;
 
     let mut dto = comment_to_dto(&row, None);
+    hydrate_comment_attachments(&state.db, std::slice::from_mut(&mut dto)).await?;
     crate::content_permissions::hydrate_comments(
         &state.db,
         Some(&auth),
@@ -388,10 +425,13 @@ pub async fn update_comment(
         &state.db,
         id,
         auth.id,
-        &prepared.input.body,
-        prepared.input.content_format.as_str(),
-        prepared.input.expected_version,
-        prepared.is_queued,
+        repo::comments::CommentUpdateSource {
+            body: &prepared.input.body,
+            content_format: prepared.input.content_format.as_str(),
+            expected_version: prepared.input.expected_version,
+            is_queued: prepared.is_queued,
+            image_references: &prepared.image_references,
+        },
     )
     .await?;
 
@@ -407,6 +447,7 @@ pub async fn update_comment(
     crate::cache::invalidate_thread_by_id(state.redis.as_ref(), &state.db, row.thread_id).await;
 
     let mut dto = comment_to_dto(&row, solved_comment_id);
+    hydrate_comment_attachments(&state.db, std::slice::from_mut(&mut dto)).await?;
     hydrate_comment_viewer_states(&state.db, auth.id, std::slice::from_mut(&mut dto)).await?;
     crate::content_permissions::hydrate_comments(
         &state.db,
@@ -435,27 +476,40 @@ pub async fn delete_comment(
     .map_err(|_r| AppError::Unauthorized)?;
 
     let id: i64 = id_str.parse().map_err(|_| AppError::NotFound)?;
-    let comment = repo::find_comment(&state.db, id).await?.ok_or(AppError::NotFound)?;
-
-    if comment.author_id != auth.id {
+    let mut tx = state.db.begin().await?;
+    let thread_id: i64 = sqlx::query_scalar("SELECT thread_id FROM forum.comments WHERE id = $1")
+        .bind(id)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    sqlx::query("SELECT id FROM forum.threads WHERE id = $1 FOR UPDATE")
+        .bind(thread_id)
+        .execute(&mut *tx)
+        .await?;
+    let (author_id, deleted_at): (i64, Option<chrono::DateTime<chrono::Utc>>) = sqlx::query_as(
+        "SELECT author_id, deleted_at FROM forum.comments \
+         WHERE id = $1 AND thread_id = $2 FOR UPDATE",
+    )
+    .bind(id)
+    .bind(thread_id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or(AppError::NotFound)?;
+    if author_id != auth.id {
         return Err(AppError::Forbidden);
     }
-
-    let mut tx = state.db.begin().await?;
-    let deleted_thread_id: Option<i64> = sqlx::query_scalar(
-        "UPDATE forum.comments SET deleted_at = now(), deleted_by = $1 \
-         WHERE id = $2 AND author_id = $1 AND deleted_at IS NULL RETURNING thread_id",
-    )
-    .bind(auth.id)
-    .bind(id)
-    .fetch_optional(&mut *tx)
-    .await?;
-    let deleted_thread_id =
-        deleted_thread_id.ok_or_else(|| AppError::Conflict("comment is already deleted".into()))?;
+    if deleted_at.is_some() {
+        return Err(AppError::Conflict("comment is already deleted".into()));
+    }
+    sqlx::query("UPDATE forum.comments SET deleted_at = now(), deleted_by = $1 WHERE id = $2")
+        .bind(auth.id)
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
     sqlx::query(
         "UPDATE forum.threads SET reply_count = GREATEST(reply_count - 1, 0) WHERE id = $1",
     )
-    .bind(deleted_thread_id)
+    .bind(thread_id)
     .execute(&mut *tx)
     .await?;
     activity::contributions::deactivate_contribution(
@@ -466,9 +520,15 @@ pub async fn delete_comment(
     .await?;
     crate::repo::deactivate_target_vote_contributions(&mut tx, "comment", id, chrono::Utc::now())
         .await?;
+    media::attachments::detach_forum_asset_bindings(
+        &mut tx,
+        media::attachments::ForumTargetType::Comment,
+        id,
+    )
+    .await?;
     tx.commit().await?;
 
-    crate::cache::invalidate_thread_by_id(state.redis.as_ref(), &state.db, comment.thread_id).await;
+    crate::cache::invalidate_thread_by_id(state.redis.as_ref(), &state.db, thread_id).await;
 
     Ok(Json(json!({"ok": true})))
 }
@@ -496,18 +556,43 @@ pub async fn list_comment_revisions(
     }
 
     let revs = repo::list_revisions(&state.db, "comment", id).await?;
-    let dtos: Vec<RevisionDto> = revs
-        .into_iter()
-        .map(|r| RevisionDto {
-            id: r.id.to_string(),
-            seq: r.seq,
-            editor_id: r.editor_id.to_string(),
-            old_title: r.old_title,
-            old_body: r.old_body,
-            old_content_format: crate::dto::ContentFormat::from_db(&r.old_content_format),
-            created_at: r.created_at.timestamp(),
-        })
-        .collect();
+    let mut dtos = Vec::with_capacity(revs.len());
+    for revision in revs {
+        let projected = media::attachments::resolve_forum_attachments_at_version(
+            &state.db,
+            media::attachments::ForumTargetType::Comment,
+            id,
+            revision.old_content_version,
+        )
+        .await?;
+        let references = crate::content_policy::image_references_for_stored_content(
+            Some(&revision.old_body),
+            crate::dto::ContentFormat::from_db(&revision.old_content_format),
+            media::attachments::ForumTargetType::Comment,
+        )?;
+        let attachments =
+            if crate::content_policy::attachment_projection_matches(&references, &projected) {
+                projected
+            } else {
+                tracing::warn!(
+                    comment_id = id,
+                    revision_id = revision.id,
+                    "comment revision attachment projection mismatch"
+                );
+                Vec::new()
+            };
+        dtos.push(RevisionDto {
+            id: revision.id.to_string(),
+            seq: revision.seq,
+            editor_id: revision.editor_id.to_string(),
+            old_title: revision.old_title,
+            old_body: revision.old_body,
+            old_content_format: crate::dto::ContentFormat::from_db(&revision.old_content_format),
+            old_content_version: revision.old_content_version,
+            attachments,
+            created_at: revision.created_at.timestamp(),
+        });
+    }
 
     Ok(Json(dtos))
 }

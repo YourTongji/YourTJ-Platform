@@ -47,6 +47,9 @@
 - Mention policy 默认 `everyone`；`following` 表示接收方关注作者。Identity 的 batch projection 只
   返回 active、未 suspended 账号的 id/handle/policy，Forum 再应用 follow/block/mute 和通知偏好。
   不满足策略、未知或生命周期关闭的 handle 仍保留为公开普通文字，不产生通知或存在性信号。
+- Forum 主题/评论图片只接受本人 clean platform asset。公开内容 DTO 返回正文精确引用所需的 asset id、
+  alt、position、可选尺寸和状态校验后的派生 URL；不返回 object key、hash、上传 owner 或原始回调信息。
+  pending/blocked upload id 仅可留在 owner draft/status surface，不构成公开授权。
 
 ### Partial
 
@@ -114,6 +117,13 @@
   scanner、orphan GC 和 legal hold 仍按 OSS runbook 的后续阶段执行。
 - Profile upload usage 只表达 owner 选择的头像/封面槽位，用于刷新后恢复审核状态；owner status API 不
   返回 object key、hash、account id 或持久 URL，账号 purge 时与 upload/intent 一起进入 media 清理编排。
+- Forum upload usage 只表达 thread/comment intended surface；draft export 应包含本人 source 与 upload id，
+  公共 export 只包含 canonical `yourtj-asset` reference 和允许公开的派生 attachment metadata。软删除将
+  active usage detach 并设置 30 天 GC grace，保留 revision/恢复所需事实；restore 重新验证 clean。实际
+  object purge 仍须无 active usage、无 legal hold、过 grace 且由可审计 GC worker 执行。
+- Moderation preview grant 只保存 token SHA-256、upload/moderator、reason、60 秒 expiry 与消费时间；签发时
+  清理过期超过 1 天的 grant row。长期治理证据保留独立 audit（不含 token、URL/key），不把短期 grant
+  当作永久访问日志。
 
 Profile 字段与社交关系不进入普通请求日志、metrics label 或 governance audit body。未来推荐/广告若要
 使用关系数据，必须另行说明目的、opt-out、保留和公平性，不能因字段已存在而默认获权。
@@ -165,6 +175,10 @@ Legal hold 有合法目的、授权者、范围、到期和审计，不得成为
 - 任意第三方头像/Markdown 图片会泄露访问者 IP，因此持久媒体只允许平台 asset。
 - Onebox 只服务 allowlisted 公共 HTTPS 页面；fragment 被移除，含 query 的 URL 不进入持久 cache，
   metadata 有界且不返回远程图片。Migration 清除历史 query URL/remote-image cache；访问日志不记录 URL。
+- Web renderer 只把 `yourtj-asset` 映射到同一响应中匹配的服务端派生 URL；remote/data destination 与
+  DTO 中多余/损坏 binding 都 fail closed。管理审核 DTO 同样不披露 object key、hash 或持久 URL；待审
+  证据只通过 capability-gated、独立审核员、60 秒一次性 token 的同源 bounded proxy 读取，读取 purpose/
+  reason 以 upload id 审计，token 仅存 hash 且不进入 URL、日志或 audit。
 - 推广保存平台 clean asset id 和站内目标路径，不保存远程图片 URL。曝光/点击只使用两小时有效的
   随机签名展示票据去重，票据不含账号、IP、设备或 audience 身份；原始 receipt 48 小时后由 worker
   删除，长期只保留 promotion × UTC day 的曝光/点击总数。该数据不能用于个人级 attribution、跨域
