@@ -45,6 +45,12 @@ pub struct SessionRow {
     pub refresh_hash: String,
     pub expires_at: DateTime<Utc>,
     pub revoked_at: Option<DateTime<Utc>>,
+    pub family_id: Option<uuid::Uuid>,
+    pub replaced_by_session_id: Option<i64>,
+    pub device_name: Option<String>,
+    pub user_agent: Option<String>,
+    pub last_used_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
 }
 
 /// A row from `identity.account_keys`.

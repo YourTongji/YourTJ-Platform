@@ -204,7 +204,7 @@ pub async fn verify_email(
     let refresh_expires = Utc::now() + chrono::Duration::seconds(state.refresh_ttl as i64);
 
     let session_id =
-        repo::insert_session(&state.db, account.id, &refresh_hash, refresh_expires).await?;
+        repo::insert_session(&state.db, account.id, &refresh_hash, refresh_expires, None).await?;
 
     // Embed session_id so the refresh handler can look it up efficiently.
     let combined_refresh = format!("{session_id:x}:{refresh_plain}");
@@ -277,7 +277,7 @@ pub async fn register(
     let refresh_expires = Utc::now() + chrono::Duration::seconds(state.refresh_ttl as i64);
 
     let session_id =
-        repo::insert_session(&state.db, account.id, &refresh_hash, refresh_expires).await?;
+        repo::insert_session(&state.db, account.id, &refresh_hash, refresh_expires, None).await?;
 
     let combined_refresh = format!("{session_id:x}:{refresh_plain}");
 
@@ -291,7 +291,9 @@ pub async fn register(
 /// POST /auth/refresh
 ///
 /// Accepts a refresh token, validates it, revokes the old session, and
-/// returns a new token pair.
+/// returns a new token pair. Detects refresh token reuse by checking if
+/// the old session was already revoked with a replacement — if so, the
+/// entire family is revoked.
 pub async fn refresh(
     State(state): State<AppState>,
     Json(body): Json<RefreshInput>,
@@ -310,8 +312,13 @@ pub async fn refresh(
         .await?
         .ok_or(shared::AppError::Unauthorized)?;
 
-    // Revoke the old session.
-    repo::revoke_session(&state.db, session.id).await?;
+    // Reuse detection: session already revoked with a replacement.
+    if session.replaced_by_session_id.is_some() {
+        if let Some(family_id) = session.family_id {
+            repo::revoke_session_family(&state.db, &family_id).await?;
+        }
+        return Err(shared::AppError::Unauthorized);
+    }
 
     // Get the account.
     let account =
@@ -320,14 +327,19 @@ pub async fn refresh(
             .ok_or(shared::AppError::Unauthorized)?;
     ensure_login_allowed(&state, &account).await?;
 
-    // Create new token pair.
+    // Create new token pair and session (same family).
     let access_token = create_access_token(account.id, &state.jwt_secret, state.jwt_ttl)
         .map_err(|e| shared::AppError::Internal(anyhow::anyhow!(e)))?;
     let (new_refresh_plain, new_refresh_hash) = generate_refresh_token();
     let refresh_expires = Utc::now() + chrono::Duration::seconds(state.refresh_ttl as i64);
 
+    let family_id = session.family_id.or_else(|| Some(uuid::Uuid::new_v4()));
     let new_sid =
-        repo::insert_session(&state.db, account.id, &new_refresh_hash, refresh_expires).await?;
+        repo::insert_session(&state.db, account.id, &new_refresh_hash, refresh_expires, family_id)
+            .await?;
+
+    // Revoke old session with replacement link.
+    repo::revoke_session(&state.db, session.id, Some(new_sid)).await?;
 
     let combined_refresh = format!("{new_sid:x}:{new_refresh_plain}");
 
@@ -727,7 +739,7 @@ pub async fn password_login(
     let refresh_expires = Utc::now() + chrono::Duration::seconds(state.refresh_ttl as i64);
 
     let session_id =
-        repo::insert_session(&state.db, account.id, &refresh_hash, refresh_expires).await?;
+        repo::insert_session(&state.db, account.id, &refresh_hash, refresh_expires, None).await?;
 
     let combined_refresh = format!("{session_id:x}:{refresh_plain}");
 

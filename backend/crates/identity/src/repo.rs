@@ -423,20 +423,24 @@ pub async fn update_account(
 // sessions
 // ---------------------------------------------------------------------------
 
-/// Create a new session row. Returns the auto-generated session id.
+/// Create a new session row. If `family_id` is provided the session belongs
+/// to an existing refresh family. Returns the auto-generated session id.
 pub async fn insert_session(
     pool: &PgPool,
     account_id: i64,
     refresh_hash: &str,
     expires_at: DateTime<Utc>,
+    family_id: Option<uuid::Uuid>,
 ) -> AppResult<i64> {
     let row: (i64,) = sqlx::query_as(
-        "INSERT INTO identity.sessions (account_id, refresh_hash, expires_at) \
-         VALUES ($1, $2, $3) RETURNING id",
+        "INSERT INTO identity.sessions \
+         (account_id, refresh_hash, expires_at, family_id) \
+         VALUES ($1, $2, $3, $4) RETURNING id",
     )
     .bind(account_id)
     .bind(refresh_hash)
     .bind(expires_at)
+    .bind(family_id)
     .fetch_one(pool)
     .await?;
     Ok(row.0)
@@ -449,7 +453,7 @@ pub async fn find_session(
     refresh_hash: &str,
 ) -> AppResult<Option<SessionRow>> {
     let row = sqlx::query_as::<_, SessionRow>(
-        "SELECT id, account_id, refresh_hash, expires_at, revoked_at \
+        "SELECT id, account_id, refresh_hash, expires_at, revoked_at, family_id, replaced_by_session_id, device_name, user_agent, last_used_at, created_at \
          FROM identity.sessions \
          WHERE id = $1 AND refresh_hash = $2 \
            AND expires_at > now() AND revoked_at IS NULL",
@@ -461,12 +465,28 @@ pub async fn find_session(
     Ok(row)
 }
 
-/// Soft-revoke a single session.
-pub async fn revoke_session(pool: &PgPool, session_id: i64) -> AppResult<()> {
-    sqlx::query("UPDATE identity.sessions SET revoked_at = now() WHERE id = $1")
+/// Soft-revoke a single session and record what replaced it.
+pub async fn revoke_session(
+    pool: &PgPool,
+    session_id: i64,
+    replaced_by: Option<i64>,
+) -> AppResult<()> {
+    if let Some(replacement) = replaced_by {
+        sqlx::query(
+            "UPDATE identity.sessions \
+             SET revoked_at = now(), replaced_by_session_id = $1 \
+             WHERE id = $2",
+        )
+        .bind(replacement)
         .bind(session_id)
         .execute(pool)
         .await?;
+    } else {
+        sqlx::query("UPDATE identity.sessions SET revoked_at = now() WHERE id = $1")
+            .bind(session_id)
+            .execute(pool)
+            .await?;
+    }
     Ok(())
 }
 
@@ -477,6 +497,35 @@ pub async fn revoke_all_sessions(pool: &PgPool, account_id: i64) -> AppResult<()
         .execute(pool)
         .await?;
     Ok(())
+}
+
+/// Revoke every session in the same family (for reuse detection).
+pub async fn revoke_session_family(pool: &PgPool, family_id: &uuid::Uuid) -> AppResult<()> {
+    sqlx::query(
+        "UPDATE identity.sessions SET revoked_at = now() \
+         WHERE family_id = $1 AND revoked_at IS NULL",
+    )
+    .bind(family_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// List non-revoked sessions for an account (for session management UI).
+#[allow(dead_code)]
+pub async fn list_account_sessions(pool: &PgPool, account_id: i64) -> AppResult<Vec<SessionRow>> {
+    let rows = sqlx::query_as::<_, SessionRow>(
+        "SELECT id, account_id, refresh_hash, expires_at, revoked_at, family_id, replaced_by_session_id, device_name, user_agent, last_used_at, created_at, \
+                family_id, replaced_by_session_id, device_name, user_agent, \
+                last_used_at, created_at \
+         FROM identity.sessions \
+         WHERE account_id = $1 AND revoked_at IS NULL \
+         ORDER BY created_at DESC",
+    )
+    .bind(account_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
 }
 
 // ---------------------------------------------------------------------------
