@@ -119,7 +119,7 @@ async fn request_code_returns_unavailable_and_invalidates_code_when_delivery_fai
 /// ── verify-email ───────────────────────────────────────────────────────
 
 #[tokio::test]
-async fn test_verify_correct_code_creates_account() {
+async fn test_register_creates_account() {
     let (pool, app) = create_test_app().await;
     let email = format!("charlie-{}@tongji.edu.cn", uuid::Uuid::new_v4());
     let captcha_token = format!("request-{}", uuid::Uuid::new_v4());
@@ -132,7 +132,7 @@ async fn test_verify_correct_code_creates_account() {
                 .header(header::CONTENT_TYPE, "application/json")
                 .header("x-forwarded-for", &captcha_token)
                 .body(Body::from(
-                    json!({ "email": email, "purpose": "login", "captchaToken": captcha_token })
+                    json!({ "email": email, "purpose": "registration", "captchaToken": captcha_token })
                         .to_string(),
                 ))
                 .unwrap(),
@@ -157,7 +157,7 @@ async fn test_verify_correct_code_creates_account() {
         .oneshot(
             Request::builder()
                 .method(Method::POST)
-                .uri("/api/v2/auth/email/verify")
+                .uri("/api/v2/auth/register")
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(Body::from(
                     json!({ "email": email, "code": correct_code, "handle": "charlie" })
@@ -191,6 +191,7 @@ async fn test_email_flow_stores_only_encrypted_account_email() {
     let app =
         create_test_app_with_pool_and_encryption(pool.clone(), Some(encryption.clone())).await;
     let email = format!("encrypted-{}@tongji.edu.cn", uuid::Uuid::new_v4());
+    let handle = format!("user-{}", uuid::Uuid::new_v4());
     let captcha_token = format!("request-{}", uuid::Uuid::new_v4());
 
     let response = app
@@ -202,7 +203,7 @@ async fn test_email_flow_stores_only_encrypted_account_email() {
                 .header(header::CONTENT_TYPE, "application/json")
                 .header("x-forwarded-for", &captcha_token)
                 .body(Body::from(
-                    json!({ "email": email, "purpose": "login", "captchaToken": captcha_token })
+                    json!({ "email": email, "purpose": "registration", "captchaToken": captcha_token })
                         .to_string(),
                 ))
                 .unwrap(),
@@ -230,12 +231,15 @@ async fn test_email_flow_stores_only_encrypted_account_email() {
 
     let code = helpers::brute_force_code(&code_hash);
     let response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .method(Method::POST)
-                .uri("/api/v2/auth/email/verify")
+                .uri("/api/v2/auth/register")
                 .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(json!({ "email": email, "code": code }).to_string()))
+                .body(Body::from(
+                    json!({ "email": email, "code": code, "handle": handle }).to_string(),
+                ))
                 .unwrap(),
         )
         .await
@@ -696,18 +700,20 @@ async fn test_new_account_has_user_role() {
 }
 
 #[tokio::test]
-async fn test_handle_auto_generated_on_first_login() {
+async fn test_register_requires_handle() {
     let (pool, _) = create_test_app().await;
 
     helpers::insert_valid_code(&pool, "nancy@tongji.edu.cn", "444444").await;
 
-    let app = create_test_app_with_pool(pool).await;
+    let app = create_test_app_with_pool(pool.clone()).await;
 
+    // Registration without handle should fail.
     let resp = app
+        .clone()
         .oneshot(
             Request::builder()
                 .method(Method::POST)
-                .uri("/api/v2/auth/email/verify")
+                .uri("/api/v2/auth/register")
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(Body::from(
                     json!({ "email": "nancy@tongji.edu.cn", "code": "444444" }).to_string(),
@@ -716,7 +722,50 @@ async fn test_handle_auto_generated_on_first_login() {
         )
         .await
         .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
 
+    // Registration with handle should succeed.
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/v2/auth/email/request-code")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({ "email": "nancy@tongji.edu.cn", "purpose": "registration", "captchaToken": "req-nancy" })
+                        .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+    let code_hash: String = sqlx::query_scalar(
+        "SELECT code_hash FROM identity.email_codes \
+         WHERE email = 'nancy@tongji.edu.cn' AND expires_at > now() AND attempts < 5 \
+         ORDER BY created_at DESC LIMIT 1",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let correct_code = helpers::brute_force_code(&code_hash);
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/v2/auth/register")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({ "email": "nancy@tongji.edu.cn", "code": correct_code, "handle": "nancy" })
+                        .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     let body: Value = helpers::read_json(resp).await;
     assert_eq!(body["account"]["handle"], "nancy");
