@@ -44,6 +44,8 @@ pub async fn setup_course_index(url: &str, api_key: &str) -> Result<(), String> 
             "aliases",
             "teacherName",
             "department",
+            "courseName",
+            "comment",
         ])
         .await
         .map_err(|e| format!("Meili searchable attrs: {e}"))?;
@@ -334,7 +336,18 @@ pub async fn sync_review_to_meili(url: &str, api_key: &str, review_id: i64, pool
     let record = match build_review_document(review_id, pool).await {
         Ok(Some(r)) => r,
         Ok(None) => {
-            tracing::warn!(review_id, "review not found for Meili sync");
+            match Client::new(url, Some(api_key)) {
+                Ok(client) => {
+                    if let Err(error) =
+                        client.index("courses").delete_document(format!("review:{review_id}")).await
+                    {
+                        tracing::warn!(error = %error, review_id, "Meili review delete failed");
+                    }
+                }
+                Err(error) => {
+                    tracing::warn!(error = %error, review_id, "Meili client creation failed during review delete");
+                }
+            }
             return;
         }
         Err(e) => {
@@ -373,7 +386,7 @@ async fn build_review_document(
         "SELECT r.id, r.comment, c.name AS course_name, c.code AS course_code \
          FROM reviews.reviews r \
          JOIN courses.courses c ON c.id = r.course_id \
-         WHERE r.id = $1",
+         WHERE r.id = $1 AND r.status = 'visible'",
     )
     .bind(review_id)
     .fetch_optional(pool)
@@ -385,6 +398,7 @@ async fn build_review_document(
             "name": format!("Review: {}", r.course_name),
             "code": r.course_code,
             "courseName": r.course_name,
+            "comment": r.comment,
             "kind": "review",
         }))),
         None => Ok(None),

@@ -78,15 +78,14 @@ pub async fn create_review(
     let cid = course_id.to_string();
     shared::cache::bump_version_opt(state.redis.as_ref(), "course", &cid).await.ok();
     shared::cache::bump_version_opt(state.redis.as_ref(), "reviews", &cid).await.ok();
-    // Fire-and-forget Meilisearch sync for the new review.
-    {
-        let meili_url = state.meili_url.clone();
-        let meili_key = state.meili_master_key.clone();
-        let review_id = dto.id.parse::<i64>().unwrap_or(0);
-        let pool = state.db.clone();
-        tokio::spawn(async move {
-            courses::meili::sync_review_to_meili(&meili_url, &meili_key, review_id, &pool).await;
-        });
+    if let Ok(review_id) = dto.id.parse::<i64>() {
+        courses::meili::sync_review_to_meili(
+            &state.meili_url,
+            &state.meili_master_key,
+            review_id,
+            &state.db,
+        )
+        .await;
     }
 
     Ok((StatusCode::CREATED, Json(dto)))
@@ -123,15 +122,13 @@ pub async fn edit_review(
     let cid = dto.course_id.clone();
     shared::cache::bump_version_opt(state.redis.as_ref(), "course", &cid).await.ok();
 
-    // Fire-and-forget Meilisearch sync for the updated review.
-    {
-        let meili_url = state.meili_url.clone();
-        let meili_key = state.meili_master_key.clone();
-        let pool = state.db.clone();
-        tokio::spawn(async move {
-            courses::meili::sync_review_to_meili(&meili_url, &meili_key, review_id, &pool).await;
-        });
-    }
+    courses::meili::sync_review_to_meili(
+        &state.meili_url,
+        &state.meili_master_key,
+        review_id,
+        &state.db,
+    )
+    .await;
 
     Ok(Json(dto))
 }

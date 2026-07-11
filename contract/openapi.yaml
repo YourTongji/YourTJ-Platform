@@ -809,7 +809,7 @@ paths:
       parameters: [{ $ref: "#/components/parameters/WalletIntent" }, { $ref: "#/components/parameters/WalletSig" }, { $ref: "#/components/parameters/WalletIdempotencyKey" }]
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/TipInput" } } } }
       responses:
-        "200": { description: ok }
+        "204": { description: tipped }
         "402": { description: insufficient balance, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
   # NOTE: /credit/bounty and /credit/bounty/{id}/confirm are aliases for
   # /credit/tasks POST and /credit/tasks/{id}/action confirm; backend only
@@ -897,14 +897,14 @@ paths:
       tags: [credit]
       summary: Accept a task
       parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
-      responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Task" } } } } }
+      responses: { "204": { description: accepted } }
   /credit/tasks/{id}/action:
     post:
       tags: [credit]
       summary: Two-phase confirm — submit / confirm(release) / cancel / reject / delete
       parameters: [{ name: id, in: path, required: true, schema: { type: string } }, { $ref: "#/components/parameters/WalletIntent" }, { $ref: "#/components/parameters/WalletSig" }, { $ref: "#/components/parameters/WalletIdempotencyKey" }]
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/TaskAction" } } } }
-      responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Task" } } } } }
+      responses: { "204": { description: updated } }
 
   # ---- escrow market: products / purchases ----
   /credit/products:
@@ -938,7 +938,7 @@ paths:
       summary: Escrow steps — accept / deliver / confirm(release)
       parameters: [{ name: id, in: path, required: true, schema: { type: string } }, { $ref: "#/components/parameters/WalletIntent" }, { $ref: "#/components/parameters/WalletSig" }, { $ref: "#/components/parameters/WalletIdempotencyKey" }]
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/PurchaseAction" } } } }
-      responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Purchase" } } } } }
+      responses: { "204": { description: updated } }
 
   # ============ search ============
   /search:
@@ -1305,7 +1305,7 @@ paths:
       tags: [admin]
       summary: Toggle visibility (hide/unhide)
       parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
-      responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Review" } } } } }
+      responses: { "200": { description: ok, content: { application/json: { schema: { type: object, required: [ok], properties: { ok: { type: boolean } } } } } } }
   /admin/courses:
     get:
       tags: [admin]

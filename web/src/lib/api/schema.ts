@@ -875,8 +875,8 @@ export interface paths {
                 };
             };
             responses: {
-                /** @description ok */
-                200: {
+                /** @description tipped */
+                204: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -1177,14 +1177,12 @@ export interface paths {
             };
             requestBody?: never;
             responses: {
-                /** @description ok */
-                200: {
+                /** @description accepted */
+                204: {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content: {
-                        "application/json": components["schemas"]["Task"];
-                    };
+                    content?: never;
                 };
             };
         };
@@ -1225,14 +1223,12 @@ export interface paths {
                 };
             };
             responses: {
-                /** @description ok */
-                200: {
+                /** @description updated */
+                204: {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content: {
-                        "application/json": components["schemas"]["Task"];
-                    };
+                    content?: never;
                 };
             };
         };
@@ -1430,14 +1426,12 @@ export interface paths {
                 };
             };
             responses: {
-                /** @description ok */
-                200: {
+                /** @description updated */
+                204: {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content: {
-                        "application/json": components["schemas"]["Purchase"];
-                    };
+                    content?: never;
                 };
             };
         };
@@ -4041,7 +4035,9 @@ export interface paths {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": components["schemas"]["Review"];
+                        "application/json": {
+                            ok: boolean;
+                        };
                     };
                 };
             };

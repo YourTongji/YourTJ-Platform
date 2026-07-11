@@ -68,7 +68,7 @@ async fn task_create_and_list() {
     .await;
     let resp = app.clone().oneshot(request).await.unwrap();
 
-    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(resp.status(), StatusCode::CREATED);
     let json = read_json(resp).await;
     assert_eq!(json["title"], "My Bounty");
     assert_eq!(json["rewardAmount"].as_i64().unwrap(), 100);
@@ -131,7 +131,7 @@ async fn task_accept_and_submit_flow() {
     .await;
     let resp = app.clone().oneshot(request).await.unwrap();
 
-    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(resp.status(), StatusCode::CREATED);
     let task = read_json(resp).await;
     let task_id = task["id"].as_str().unwrap();
 
@@ -235,7 +235,7 @@ async fn product_create_and_list() {
         .await
         .unwrap();
 
-    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(resp.status(), StatusCode::CREATED);
     let product = read_json(resp).await;
     assert_eq!(product["title"], "Test Product");
     assert_eq!(product["price"].as_i64().unwrap(), 50);
@@ -287,7 +287,7 @@ async fn purchase_flow_releases_escrow() {
         .await
         .unwrap();
 
-    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(resp.status(), StatusCode::CREATED);
     let product = read_json(resp).await;
     let product_id = product["id"].as_str().unwrap();
 
@@ -306,7 +306,7 @@ async fn purchase_flow_releases_escrow() {
     .await;
     let resp = app.clone().oneshot(request).await.unwrap();
 
-    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(resp.status(), StatusCode::CREATED);
     let purchase = read_json(resp).await;
     let purchase_id = purchase["id"].as_str().unwrap();
     assert_eq!(purchase["status"], "pending");
@@ -397,7 +397,7 @@ async fn task_delete_open_refunds_escrow_and_removes_row() {
     )
     .await;
     let resp = app.clone().oneshot(request).await.unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(resp.status(), StatusCode::CREATED);
     let task = read_json(resp).await;
     let task_id = task["id"].as_str().unwrap().to_string();
 

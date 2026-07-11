@@ -250,7 +250,7 @@ pub async fn create_task(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(body): Json<TaskInput>,
-) -> AppResult<Json<TaskDto>> {
+) -> AppResult<(StatusCode, Json<TaskDto>)> {
     let auth = crate::auth::authenticate(&headers, &state.db, &state.jwt_secret)
         .await
         .map_err(map_auth_err)?;
@@ -300,17 +300,20 @@ pub async fn create_task(
 
     tx.commit().await?;
 
-    Ok(Json(TaskDto {
-        id: task.id.to_string(),
-        creator_id: task.creator_id.to_string(),
-        acceptor_id: task.acceptor_id.map(|v| v.to_string()),
-        title: task.title,
-        description: task.description,
-        reward_amount: task.reward_amount,
-        contact_info: task.contact_info,
-        status: task.status,
-        created_at: task.created_at.timestamp(),
-    }))
+    Ok((
+        StatusCode::CREATED,
+        Json(TaskDto {
+            id: task.id.to_string(),
+            creator_id: task.creator_id.to_string(),
+            acceptor_id: task.acceptor_id.map(|v| v.to_string()),
+            title: task.title,
+            description: task.description,
+            reward_amount: task.reward_amount,
+            contact_info: task.contact_info,
+            status: task.status,
+            created_at: task.created_at.timestamp(),
+        }),
+    ))
 }
 
 /// POST /api/v2/credit/tasks/{id}/accept — acceptor claims a task.
@@ -615,7 +618,7 @@ pub async fn create_product(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(body): Json<ProductInput>,
-) -> AppResult<Json<ProductDto>> {
+) -> AppResult<(StatusCode, Json<ProductDto>)> {
     let auth = crate::auth::authenticate(&headers, &state.db, &state.jwt_secret)
         .await
         .map_err(map_auth_err)?;
@@ -643,17 +646,20 @@ pub async fn create_product(
     )
     .await?;
 
-    Ok(Json(ProductDto {
-        id: product.id.to_string(),
-        seller_id: product.seller_id.to_string(),
-        title: product.title,
-        description: product.description,
-        price: product.price,
-        stock: product.stock,
-        delivery_info: product.delivery_info,
-        status: product.status,
-        created_at: product.created_at.timestamp(),
-    }))
+    Ok((
+        StatusCode::CREATED,
+        Json(ProductDto {
+            id: product.id.to_string(),
+            seller_id: product.seller_id.to_string(),
+            title: product.title,
+            description: product.description,
+            price: product.price,
+            stock: product.stock,
+            delivery_info: product.delivery_info,
+            status: product.status,
+            created_at: product.created_at.timestamp(),
+        }),
+    ))
 }
 
 /// POST /api/v2/credit/products/{id}/purchase
@@ -665,7 +671,7 @@ pub async fn purchase_product(
     State(state): State<AppState>,
     Path(id): Path<i64>,
     headers: HeaderMap,
-) -> AppResult<Json<PurchaseDto>> {
+) -> AppResult<(StatusCode, Json<PurchaseDto>)> {
     let auth = crate::auth::authenticate(&headers, &state.db, &state.jwt_secret)
         .await
         .map_err(map_auth_err)?;
@@ -728,14 +734,17 @@ pub async fn purchase_product(
     .await?;
     tx.commit().await?;
 
-    Ok(Json(PurchaseDto {
-        id: purchase.id.to_string(),
-        product_id: purchase.product_id.to_string(),
-        buyer_id: purchase.buyer_id.to_string(),
-        seller_id: purchase.seller_id.to_string(),
-        amount: purchase.amount,
-        status: purchase.status,
-    }))
+    Ok((
+        StatusCode::CREATED,
+        Json(PurchaseDto {
+            id: purchase.id.to_string(),
+            product_id: purchase.product_id.to_string(),
+            buyer_id: purchase.buyer_id.to_string(),
+            seller_id: purchase.seller_id.to_string(),
+            amount: purchase.amount,
+            status: purchase.status,
+        }),
+    ))
 }
 
 /// Query for GET /api/v2/credit/purchases.
