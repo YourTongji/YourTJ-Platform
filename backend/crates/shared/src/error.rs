@@ -30,6 +30,9 @@ pub enum AppError {
     #[error("rate limited")]
     RateLimited,
 
+    #[error("service unavailable")]
+    ServiceUnavailable,
+
     /// Anything unexpected. The inner error is logged, never serialized.
     #[error(transparent)]
     Internal(#[from] anyhow::Error),
@@ -45,6 +48,9 @@ impl AppError {
             AppError::BadRequest(_) => (StatusCode::BAD_REQUEST, "BAD_REQUEST"),
             AppError::Conflict(_) => (StatusCode::CONFLICT, "CONFLICT"),
             AppError::RateLimited => (StatusCode::TOO_MANY_REQUESTS, "RATE_LIMITED"),
+            AppError::ServiceUnavailable => {
+                (StatusCode::SERVICE_UNAVAILABLE, "SERVICE_UNAVAILABLE")
+            }
             AppError::Internal(_) => (StatusCode::INTERNAL_SERVER_ERROR, "INTERNAL"),
         }
     }

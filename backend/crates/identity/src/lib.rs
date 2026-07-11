@@ -10,6 +10,7 @@ use shared::AppState;
 pub mod auth;
 pub mod auth_middleware;
 mod email_code;
+mod email_templates;
 mod handlers;
 mod ledger;
 mod password;

@@ -50,6 +50,8 @@ for delivered behavior.
   cross-domain audit requirements.
 - [Admin console](operations/admin-console.md) — information architecture, workflows, safety rules, and
   delivery criteria.
+- [Email delivery](operations/email-delivery.md) — provider configuration, failure semantics, secret
+  isolation, deployment, and incident response.
 
 ## Migrations delivered in this PR
 

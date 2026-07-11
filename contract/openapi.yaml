@@ -68,6 +68,7 @@ components:
     NotFound:     { description: Not found, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
     Conflict:     { description: Conflict, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
     RateLimited:  { description: Too many requests, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+    ServiceUnavailable: { description: Upstream service unavailable, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
 
   schemas:
     Error:
@@ -1064,6 +1065,7 @@ paths:
       responses:
         "204": { description: sent }
         "429": { $ref: "#/components/responses/RateLimited" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
   /auth/email/verify:
     post:
       tags: [auth]
@@ -1260,6 +1262,7 @@ paths:
       responses:
         "204": { description: sent }
         "429": { $ref: "#/components/responses/RateLimited" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
   /auth/password/reset:
     post:
       tags: [auth]

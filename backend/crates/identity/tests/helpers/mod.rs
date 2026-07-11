@@ -13,6 +13,11 @@ use sqlx::PgPool;
 /// Reads `DATABASE_URL` from the environment; falls back to a local
 /// default if not set.
 pub async fn create_test_app() -> (PgPool, axum::Router) {
+    let test_config = shared::Config::from_env().expect("test Config::from_env");
+    create_test_app_with_config(test_config).await
+}
+
+pub async fn create_test_app_with_config(test_config: shared::Config) -> (PgPool, axum::Router) {
     let url = std::env::var("DATABASE_URL")
         .unwrap_or_else(|_| "postgres://postgres:postgres@localhost:5432/yourtj_test".to_string());
 
@@ -20,7 +25,6 @@ pub async fn create_test_app() -> (PgPool, axum::Router) {
 
     run_migrations(&pool).await;
 
-    let test_config = shared::Config::from_env().expect("test Config::from_env");
     let redis = test_redis_pool();
 
     let state = AppState {
