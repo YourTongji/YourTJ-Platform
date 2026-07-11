@@ -140,6 +140,23 @@ async fn run_migrations(pool: &PgPool) {
             .expect("migration 0021 failed");
     }
 
+    let has_dm_participant_lifecycle: bool = sqlx::query_scalar(
+        "SELECT EXISTS( \
+           SELECT 1 FROM information_schema.columns \
+           WHERE table_schema = 'forum' AND table_name = 'dm_participants' \
+             AND column_name = 'muted_at' \
+         )",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or(false);
+    if !has_dm_participant_lifecycle {
+        sqlx::raw_sql(include_str!("../../../../migrations/0036_dm_participant_lifecycle.sql"))
+            .execute(pool)
+            .await
+            .expect("migration 0036 failed");
+    }
+
     let has_governance_schema: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM information_schema.schemata WHERE schema_name = 'governance')",
     )

@@ -84,6 +84,9 @@ async fn dm_lifecycle_is_canonical_private_readable_and_moderated() {
     assert_eq!(conversation["participantHandle"], "dm-bob");
     assert_eq!(conversation["participantAvatarUrl"], "https://example.test/bob.png");
     assert_eq!(conversation["unreadCount"], 0);
+    assert_eq!(conversation["isArchived"], false);
+    assert_eq!(conversation["isMuted"], false);
+    assert_eq!(conversation["isDeleted"], false);
 
     let send_response = request(
         &app,
@@ -208,6 +211,122 @@ async fn dm_lifecycle_is_canonical_private_readable_and_moderated() {
     .unwrap();
     assert_eq!(governance_action.0, "confirmed abuse");
     assert_eq!(governance_action.1, json!({ "decision": "uphold" }));
+
+    let mute_response = request(
+        &app,
+        Method::PUT,
+        &format!("/api/v2/forum/dm/conversations/{conversation_id}/mute"),
+        &bob_token,
+        None,
+    )
+    .await;
+    assert_eq!(mute_response.status(), StatusCode::NO_CONTENT);
+
+    let archive_response = request(
+        &app,
+        Method::PUT,
+        &format!("/api/v2/forum/dm/conversations/{conversation_id}/archive"),
+        &bob_token,
+        None,
+    )
+    .await;
+    assert_eq!(archive_response.status(), StatusCode::NO_CONTENT);
+    let archived_inbox = request(
+        &app,
+        Method::GET,
+        "/api/v2/forum/dm/conversations?view=archived&limit=20",
+        &bob_token,
+        None,
+    )
+    .await;
+    let archived_inbox = read_json(archived_inbox).await;
+    assert_eq!(archived_inbox["items"].as_array().unwrap().len(), 1);
+    assert_eq!(archived_inbox["items"][0]["isArchived"], true);
+    assert_eq!(archived_inbox["items"][0]["isMuted"], true);
+
+    let wake_response = request(
+        &app,
+        Method::POST,
+        &format!("/api/v2/forum/dm/conversations/{conversation_id}/messages"),
+        &alice_token,
+        Some(json!({ "body": "wake archived conversation" })),
+    )
+    .await;
+    assert_eq!(wake_response.status(), StatusCode::CREATED);
+    let wake_message = read_json(wake_response).await;
+    let wake_message_id = wake_message["id"].as_str().unwrap();
+
+    let search_inbox = request(
+        &app,
+        Method::GET,
+        "/api/v2/forum/dm/conversations?q=wake&limit=20",
+        &bob_token,
+        None,
+    )
+    .await;
+    let search_inbox = read_json(search_inbox).await;
+    assert_eq!(search_inbox["items"].as_array().unwrap().len(), 1);
+    assert_eq!(search_inbox["items"][0]["isArchived"], false);
+    assert_eq!(search_inbox["items"][0]["isMuted"], true);
+
+    let unread_response =
+        request(&app, Method::GET, "/api/v2/forum/dm/unread-count", &bob_token, None).await;
+    assert_eq!(unread_response.status(), StatusCode::OK);
+    assert_eq!(read_json(unread_response).await["count"], 1);
+
+    let delete_response = request(
+        &app,
+        Method::DELETE,
+        &format!("/api/v2/forum/dm/conversations/{conversation_id}"),
+        &bob_token,
+        None,
+    )
+    .await;
+    assert_eq!(delete_response.status(), StatusCode::NO_CONTENT);
+    let deleted_inbox = request(
+        &app,
+        Method::GET,
+        "/api/v2/forum/dm/conversations?view=deleted&limit=20",
+        &bob_token,
+        None,
+    )
+    .await;
+    let deleted_inbox = read_json(deleted_inbox).await;
+    assert_eq!(deleted_inbox["items"].as_array().unwrap().len(), 1);
+    assert_eq!(deleted_inbox["items"][0]["isDeleted"], true);
+    let hidden_messages = request(
+        &app,
+        Method::GET,
+        &format!("/api/v2/forum/dm/conversations/{conversation_id}/messages"),
+        &bob_token,
+        None,
+    )
+    .await;
+    assert_eq!(hidden_messages.status(), StatusCode::FORBIDDEN);
+
+    let recover_response = request(
+        &app,
+        Method::POST,
+        &format!("/api/v2/forum/dm/conversations/{conversation_id}/recover"),
+        &bob_token,
+        None,
+    )
+    .await;
+    assert_eq!(recover_response.status(), StatusCode::NO_CONTENT);
+    let read_wake_response = request(
+        &app,
+        Method::POST,
+        &format!("/api/v2/forum/dm/conversations/{conversation_id}/read"),
+        &bob_token,
+        Some(json!({ "lastReadMessageId": wake_message_id })),
+    )
+    .await;
+    assert_eq!(read_wake_response.status(), StatusCode::NO_CONTENT);
+
+    let invalid_view =
+        request(&app, Method::GET, "/api/v2/forum/dm/conversations?view=unknown", &bob_token, None)
+            .await;
+    assert_eq!(invalid_view.status(), StatusCode::BAD_REQUEST);
 
     sqlx::query("INSERT INTO forum.user_ignores (account_id, ignored_account_id) VALUES ($1, $2)")
         .bind(bob_id)

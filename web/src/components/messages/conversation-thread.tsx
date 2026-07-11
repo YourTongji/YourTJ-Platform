@@ -1,4 +1,17 @@
-import { ArrowLeft, Ban, Flag, Loader2, Send, UserRoundCheck } from "lucide-react";
+import {
+  Archive,
+  ArchiveRestore,
+  ArrowLeft,
+  Ban,
+  Bell,
+  BellOff,
+  Flag,
+  Loader2,
+  MoreHorizontal,
+  Send,
+  Trash2,
+  UserRoundCheck,
+} from "lucide-react";
 import * as React from "react";
 import { Link } from "react-router";
 
@@ -14,6 +27,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Textarea } from "@/components/ui/textarea";
 import type { DmConversation, DmMessage } from "@/lib/api/types";
 import { formatUnixTime } from "@/lib/format";
@@ -26,6 +46,7 @@ export function ConversationThread({
   body,
   isIgnored,
   relationshipPending,
+  lifecyclePending,
   isLoading,
   error,
   sendError,
@@ -39,6 +60,9 @@ export function ConversationThread({
   onSend,
   onReport,
   onToggleIgnore,
+  onToggleArchive,
+  onToggleMute,
+  onDelete,
 }: {
   conversation?: DmConversation;
   messages: DmMessage[];
@@ -46,6 +70,7 @@ export function ConversationThread({
   body: string;
   isIgnored: boolean;
   relationshipPending: boolean;
+  lifecyclePending: boolean;
   isLoading: boolean;
   error?: unknown;
   sendError?: unknown;
@@ -59,8 +84,12 @@ export function ConversationThread({
   onSend: () => void;
   onReport: (message: DmMessage) => void;
   onToggleIgnore: () => void;
+  onToggleArchive: () => void;
+  onToggleMute: () => void;
+  onDelete: () => void;
 }) {
   const [confirmBlockOpen, setConfirmBlockOpen] = React.useState(false);
+  const [confirmDeleteOpen, setConfirmDeleteOpen] = React.useState(false);
   const viewportRef = React.useRef<HTMLDivElement>(null);
   const newestMessageId = messages.at(-1)?.id;
 
@@ -106,17 +135,40 @@ export function ConversationThread({
               <p className="text-xs text-muted-foreground">一对一私信</p>
             </div>
           </div>
-          <Button
-            type="button"
-            size="sm"
-            variant={isIgnored ? "outline" : "ghost"}
-            onClick={() => isIgnored ? onToggleIgnore() : setConfirmBlockOpen(true)}
-            disabled={relationshipPending}
-            aria-label={isIgnored ? `解除对 ${conversation.participantHandle} 的屏蔽` : `屏蔽 ${conversation.participantHandle}`}
-          >
-            {isIgnored ? <UserRoundCheck className="size-4" /> : <Ban className="size-4" />}
-            <span className="hidden sm:inline">{isIgnored ? "解除屏蔽" : "屏蔽"}</span>
-          </Button>
+          <div className="flex items-center gap-1">
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button type="button" variant="ghost" size="icon" disabled={lifecyclePending} aria-label="会话设置">
+                  <MoreHorizontal className="size-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onSelect={onToggleMute}>
+                  {conversation.isMuted ? <Bell className="size-4" /> : <BellOff className="size-4" />}
+                  {conversation.isMuted ? "恢复通知" : "静音通知"}
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={onToggleArchive}>
+                  {conversation.isArchived ? <ArchiveRestore className="size-4" /> : <Archive className="size-4" />}
+                  {conversation.isArchived ? "移回收件箱" : "归档会话"}
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem variant="destructive" onSelect={() => setConfirmDeleteOpen(true)}>
+                  <Trash2 className="size-4" />删除会话
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+            <Button
+              type="button"
+              size="sm"
+              variant={isIgnored ? "outline" : "ghost"}
+              onClick={() => isIgnored ? onToggleIgnore() : setConfirmBlockOpen(true)}
+              disabled={relationshipPending}
+              aria-label={isIgnored ? `解除对 ${conversation.participantHandle} 的屏蔽` : `屏蔽 ${conversation.participantHandle}`}
+            >
+              {isIgnored ? <UserRoundCheck className="size-4" /> : <Ban className="size-4" />}
+              <span className="hidden sm:inline">{isIgnored ? "解除屏蔽" : "屏蔽"}</span>
+            </Button>
+          </div>
         </CardHeader>
 
         <CardContent ref={viewportRef} className="min-h-0 flex-1 overflow-y-auto bg-muted/15 p-3 sm:p-5">
@@ -251,6 +303,31 @@ export function ConversationThread({
               disabled={relationshipPending}
             >
               <Ban className="size-4" />确认屏蔽
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={confirmDeleteOpen} onOpenChange={setConfirmDeleteOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>删除这段会话？</DialogTitle>
+            <DialogDescription>
+              会话只会从你的收件箱隐藏，对方副本不会被删除。你可以在“最近删除”中恢复；对方发送新消息时会话也会重新出现。
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setConfirmDeleteOpen(false)}>取消</Button>
+            <Button
+              type="button"
+              variant="destructive"
+              onClick={() => {
+                onDelete();
+                setConfirmDeleteOpen(false);
+              }}
+              disabled={lifecyclePending}
+            >
+              <Trash2 className="size-4" />删除我的副本
             </Button>
           </DialogFooter>
         </DialogContent>

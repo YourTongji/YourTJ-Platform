@@ -265,6 +265,9 @@ pub struct DmConversationListRow {
     pub last_message_excerpt: Option<String>,
     pub last_message_at: chrono::DateTime<chrono::Utc>,
     pub unread_count: i64,
+    pub is_archived: bool,
+    pub is_muted: bool,
+    pub is_deleted: bool,
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 

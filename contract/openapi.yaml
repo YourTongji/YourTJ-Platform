@@ -768,7 +768,7 @@ components:
     # ---- forum: DM ----
     DmConversation:
       type: object
-      required: [id, participantId, participantHandle, unreadCount, createdAt]
+      required: [id, participantId, participantHandle, unreadCount, isArchived, isMuted, isDeleted, createdAt]
       properties:
         id: { type: string }
         participantId: { type: string }
@@ -777,6 +777,9 @@ components:
         lastMessageExcerpt: { type: string, nullable: true }
         lastMessageAt: { type: integer, nullable: true }
         unreadCount: { type: integer, minimum: 0 }
+        isArchived: { type: boolean }
+        isMuted: { type: boolean }
+        isDeleted: { type: boolean }
         createdAt: { type: integer }
     DmConversationInput:
       type: object
@@ -1784,13 +1787,64 @@ paths:
     get:
       tags: [forum]
       summary: List DM conversations
-      parameters: [{ $ref: "#/components/parameters/Cursor" }, { $ref: "#/components/parameters/Limit" }]
+      parameters:
+        - { name: view, in: query, schema: { type: string, enum: [inbox, archived, deleted], default: inbox } }
+        - { name: q, in: query, schema: { type: string, minLength: 2, maxLength: 100 } }
+        - { $ref: "#/components/parameters/Cursor" }
+        - { $ref: "#/components/parameters/Limit" }
       responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/DmConversationPage" } } } } }
     post:
       tags: [forum]
       summary: Create or get DM conversation
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/DmConversationInput" } } } }
       responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/DmConversation" } } } } }
+  /forum/dm/unread-count:
+    get:
+      tags: [forum]
+      summary: Count unread private messages across active conversations
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [count]
+                properties: { count: { type: integer, minimum: 0 } }
+  /forum/dm/conversations/{id}:
+    delete:
+      tags: [forum]
+      summary: Hide a conversation for the current participant
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses: { "204": { description: hidden for this participant }, "404": { $ref: "#/components/responses/NotFound" } }
+  /forum/dm/conversations/{id}/recover:
+    post:
+      tags: [forum]
+      summary: Recover a participant-hidden conversation
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses: { "204": { description: recovered }, "404": { $ref: "#/components/responses/NotFound" } }
+  /forum/dm/conversations/{id}/archive:
+    put:
+      tags: [forum]
+      summary: Archive a conversation for the current participant
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses: { "204": { description: archived }, "404": { $ref: "#/components/responses/NotFound" } }
+    delete:
+      tags: [forum]
+      summary: Return an archived conversation to the inbox
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses: { "204": { description: unarchived }, "404": { $ref: "#/components/responses/NotFound" } }
+  /forum/dm/conversations/{id}/mute:
+    put:
+      tags: [forum]
+      summary: Mute notifications for a conversation
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses: { "204": { description: muted }, "404": { $ref: "#/components/responses/NotFound" } }
+    delete:
+      tags: [forum]
+      summary: Restore notifications for a conversation
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses: { "204": { description: unmuted }, "404": { $ref: "#/components/responses/NotFound" } }
   /forum/dm/conversations/{id}/messages:
     get:
       tags: [forum]

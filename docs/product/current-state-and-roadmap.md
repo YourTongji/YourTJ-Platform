@@ -44,7 +44,7 @@
 | 聚合搜索 | `Partial` | courses/reviews/threads 已由独立 search domain 返回 typed、可跳转且回表重验的结果，type/limit 和 Web 综合结果页生效；仍缺每类 cursor、users/boards/tags、highlight/纠错和可靠 outbox 更新 |
 | 通知 | `Partial` | bounded cursor/unread/逐条与全部已读、安全站内 target、Web 全局角标和筛选已接通；偏好 key 与事件类型仍不一致，部分旧事件无 target，也没有 Web SSE/multi-instance delivery |
 | 公告 | `Partial` | 只有 CRUD 和首页标题；无状态、排期、受众、revision、seen/ack receipt 和未读全局弹窗 |
-| 私信 | `Partial` | 核心 1:1 可用；缺 DM policy、消息请求、archive/delete/recover、附件、搜索、会话 mute、实时与全局角标 |
+| 私信 | `Partial` | canonical 1:1、举报证据、archive/delete/recover、搜索、会话 mute 和全局角标已接通；仍缺 DM policy、消息请求、附件、实时及 retention/legal-hold worker |
 | 推广位 | `Planned` | 左侧推广卡硬编码；无后台模型、排期、素材、受众、审计和聚合效果指标 |
 | 徽章与认证 | `Partial` | 成就徽章后端存在，缺授予/撤销 UI；身份认证、特殊认证和角色标识尚未拆分 |
 | 治理 | `Partial` | 审核和制裁基础较强；缺当事人通知、申诉、冲突回避、账号生命周期、保留 worker 和高风险 recent-auth |

@@ -5,7 +5,7 @@ import { toast } from "sonner";
 
 import { PageHeader } from "@/components/common/page-header";
 import { EmptyState, LoadingState } from "@/components/common/states";
-import { ConversationList } from "@/components/messages/conversation-list";
+import { ConversationList, type ConversationView } from "@/components/messages/conversation-list";
 import { ConversationThread } from "@/components/messages/conversation-thread";
 import { NewConversationDialog } from "@/components/messages/new-conversation-dialog";
 import { ReportMessageDialog } from "@/components/messages/report-message-dialog";
@@ -20,13 +20,21 @@ export function MessagesPage() {
   const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
   const selectedId = searchParams.get("conversation") ?? "";
+  const rawView = searchParams.get("view");
+  const view: ConversationView = rawView === "archived" || rawView === "deleted" ? rawView : "inbox";
   const [body, setBody] = React.useState("");
+  const [conversationSearch, setConversationSearch] = React.useState("");
+  const deferredConversationSearch = React.useDeferredValue(conversationSearch.trim());
   const [reportingMessage, setReportingMessage] = React.useState<DmMessage | null>(null);
   const lastMarkedRead = React.useRef("");
 
   const conversations = useInfiniteQuery({
-    queryKey: ["dm", "conversations"],
-    queryFn: ({ pageParam }) => api.dmConversations(pageParam),
+    queryKey: ["dm", "conversations", view, deferredConversationSearch],
+    queryFn: ({ pageParam }) => api.dmConversations({
+      cursor: pageParam,
+      view,
+      q: deferredConversationSearch.length >= 2 ? deferredConversationSearch : undefined,
+    }),
     initialPageParam: null as string | null,
     getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
     enabled: isAuthenticated,
@@ -86,7 +94,7 @@ export function MessagesPage() {
     mutationFn: (handle: string) => api.createDmConversation(handle),
     onSuccess: async (conversation) => {
       toast.success(`已打开与 ${conversation.participantHandle} 的对话`);
-      selectConversation(conversation);
+      selectConversation(conversation, "inbox");
       await queryClient.invalidateQueries({ queryKey: ["dm", "conversations"] });
     },
   });
@@ -97,6 +105,7 @@ export function MessagesPage() {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["dm", "messages", selectedId] }),
         queryClient.invalidateQueries({ queryKey: ["dm", "conversations"] }),
+        queryClient.invalidateQueries({ queryKey: ["dm-unread-count"] }),
       ]);
     },
   });
@@ -126,6 +135,42 @@ export function MessagesPage() {
     },
     onError: (error) => toast.error(error instanceof Error ? error.message : "关系设置失败"),
   });
+  const lifecycle = useMutation({
+    mutationFn: async ({
+      action,
+      conversation,
+    }: {
+      action: "archive" | "mute" | "delete" | "recover";
+      conversation: DmConversation;
+    }) => {
+      if (action === "archive") {
+        await api.setDmConversationArchived(conversation.id, !conversation.isArchived);
+      } else if (action === "mute") {
+        await api.setDmConversationMuted(conversation.id, !conversation.isMuted);
+      } else if (action === "delete") {
+        await api.deleteDmConversation(conversation.id);
+      } else {
+        await api.recoverDmConversation(conversation.id);
+      }
+      return { action, conversation };
+    },
+    onSuccess: async ({ action, conversation }) => {
+      const messages: Record<typeof action, string> = {
+        archive: conversation.isArchived ? "会话已移回收件箱" : "会话已归档",
+        mute: conversation.isMuted ? "已恢复会话通知" : "已静音会话通知",
+        delete: "会话已移到最近删除",
+        recover: "会话已恢复",
+      };
+      toast.success(messages[action]);
+      if (action === "delete" || action === "archive") clearSelection();
+      if (action === "recover") selectConversation(conversation, "inbox");
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["dm", "conversations"] }),
+        queryClient.invalidateQueries({ queryKey: ["dm-unread-count"] }),
+      ]);
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : "会话操作失败"),
+  });
 
   const newestMessage = messages.data?.pages[0]?.items?.[0];
   React.useEffect(() => {
@@ -141,16 +186,28 @@ export function MessagesPage() {
       });
   }, [newestMessage?.id, queryClient, selectedId]);
 
-  function selectConversation(conversation: DmConversation) {
+  function selectConversation(conversation: DmConversation, nextView: ConversationView = view) {
     setBody("");
     sendMessage.reset();
-    setSearchParams({ conversation: conversation.id }, { replace: true });
+    const next = new URLSearchParams({ conversation: conversation.id });
+    if (nextView !== "inbox") next.set("view", nextView);
+    setSearchParams(next, { replace: true });
   }
 
   function clearSelection() {
     setBody("");
     sendMessage.reset();
-    setSearchParams({}, { replace: true });
+    const next = new URLSearchParams();
+    if (view !== "inbox") next.set("view", view);
+    setSearchParams(next, { replace: true });
+  }
+
+  function changeView(nextView: ConversationView) {
+    setBody("");
+    setConversationSearch("");
+    const next = new URLSearchParams();
+    if (nextView !== "inbox") next.set("view", nextView);
+    setSearchParams(next, { replace: true });
   }
 
   if (authLoading) {
@@ -178,22 +235,30 @@ export function MessagesPage() {
           <ConversationList
             conversations={conversationItems}
             selectedId={selectedId}
+            view={view}
+            searchQuery={conversationSearch}
             headerAction={(
-              <NewConversationDialog
-                canCreate={(account?.trustLevel ?? 0) >= 1}
-                isPending={createConversation.isPending}
-                error={createConversation.error}
-                onReset={createConversation.reset}
-                onCreate={(handle) => createConversation.mutateAsync(handle)}
-              />
+              view === "inbox" ? (
+                <NewConversationDialog
+                  canCreate={(account?.trustLevel ?? 0) >= 1}
+                  isPending={createConversation.isPending}
+                  error={createConversation.error}
+                  onReset={createConversation.reset}
+                  onCreate={(handle) => createConversation.mutateAsync(handle)}
+                />
+              ) : null
             )}
             isLoading={conversations.isLoading}
             error={conversations.error}
             hasMore={Boolean(conversations.hasNextPage)}
             isLoadingMore={conversations.isFetchingNextPage}
+            isRecovering={lifecycle.isPending}
             onRetry={() => void conversations.refetch()}
             onLoadMore={() => void conversations.fetchNextPage()}
             onSelect={selectConversation}
+            onViewChange={changeView}
+            onSearchChange={setConversationSearch}
+            onRecover={(conversation) => lifecycle.mutate({ action: "recover", conversation })}
           />
         </aside>
 
@@ -205,6 +270,7 @@ export function MessagesPage() {
             body={body}
             isIgnored={selectedIsIgnored}
             relationshipPending={relationship.isPending || ignoredUsers.isLoading || ignoredUsers.isFetchingNextPage}
+            lifecyclePending={lifecycle.isPending}
             isLoading={messages.isLoading}
             error={messages.error}
             sendError={sendMessage.error}
@@ -221,6 +287,15 @@ export function MessagesPage() {
               setReportingMessage(message);
             }}
             onToggleIgnore={() => relationship.mutate()}
+            onToggleArchive={() => {
+              if (selectedConversation) lifecycle.mutate({ action: "archive", conversation: selectedConversation });
+            }}
+            onToggleMute={() => {
+              if (selectedConversation) lifecycle.mutate({ action: "mute", conversation: selectedConversation });
+            }}
+            onDelete={() => {
+              if (selectedConversation) lifecycle.mutate({ action: "delete", conversation: selectedConversation });
+            }}
           />
         </section>
       </div>

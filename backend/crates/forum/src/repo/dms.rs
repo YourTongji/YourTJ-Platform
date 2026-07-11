@@ -2,7 +2,7 @@
 
 use chrono::{DateTime, Utc};
 use shared::{AppError, AppResult};
-use sqlx::{FromRow, PgPool};
+use sqlx::{FromRow, PgPool, Postgres, QueryBuilder};
 
 use crate::models::{DmConversationListRow, DmMessageReportRow, DmMessageRow};
 
@@ -95,6 +95,16 @@ pub async fn find_or_create_conversation(
     .execute(&mut *tx)
     .await?;
 
+    sqlx::query(
+        "UPDATE forum.dm_participants \
+         SET deleted_at = NULL, archived_at = NULL \
+         WHERE conversation_id = $1 AND account_id = $2",
+    )
+    .bind(conversation_id)
+    .bind(account_id_a)
+    .execute(&mut *tx)
+    .await?;
+
     tx.commit().await?;
     Ok(conversation_id)
 }
@@ -117,6 +127,9 @@ pub async fn get_conversation(
                    AND unread.sender_id <> $2 \
                    AND (participant.last_read_message_id IS NULL \
                         OR unread.id > participant.last_read_message_id)) AS unread_count, \
+                participant.archived_at IS NOT NULL AS is_archived, \
+                participant.muted_at IS NOT NULL AS is_muted, \
+                participant.deleted_at IS NOT NULL AS is_deleted, \
                 conversation.created_at \
          FROM forum.dm_conversations AS conversation \
          JOIN forum.dm_participants AS participant \
@@ -165,99 +178,88 @@ pub fn decode_conversation_cursor(cursor: &str) -> AppResult<(DateTime<Utc>, i64
     Ok((last_message_at, conversation_id))
 }
 
-/// List a participant's non-deleted conversations by latest activity.
+/// List a participant's conversations by participant-local lifecycle and latest activity.
 pub async fn list_conversations(
     pool: &PgPool,
     account_id: i64,
+    view: &str,
+    search_query: Option<&str>,
     cursor: Option<(DateTime<Utc>, i64)>,
     limit: i64,
 ) -> AppResult<(Vec<DmConversationListRow>, Option<String>)> {
     let bounded_limit = limit.clamp(1, 100);
-    let rows = if let Some((cursor_time, cursor_id)) = cursor {
-        sqlx::query_as::<_, DmConversationListRow>(
-            "SELECT conversation.id, \
-                    other_account.id AS other_account_id, \
-                    other_account.handle::text AS other_handle, \
-                    other_account.avatar_url AS other_avatar_url, \
-                    LEFT(last_message.body, 160) AS last_message_excerpt, \
-                    COALESCE(last_message.created_at, conversation.created_at) AS last_message_at, \
-                    (SELECT COUNT(*) FROM forum.dm_messages AS unread \
-                     WHERE unread.conversation_id = conversation.id \
-                       AND unread.sender_id <> $1 \
-                       AND (participant.last_read_message_id IS NULL \
-                            OR unread.id > participant.last_read_message_id)) AS unread_count, \
-                    conversation.created_at \
-             FROM forum.dm_conversations AS conversation \
-             JOIN forum.dm_participants AS participant \
-               ON participant.conversation_id = conversation.id \
-              AND participant.account_id = $1 \
-              AND participant.deleted_at IS NULL \
-             JOIN forum.dm_participants AS other_participant \
-               ON other_participant.conversation_id = conversation.id \
-              AND other_participant.account_id <> $1 \
-             JOIN identity.accounts AS other_account \
-               ON other_account.id = other_participant.account_id \
-             LEFT JOIN LATERAL ( \
-               SELECT message.body, message.created_at \
-               FROM forum.dm_messages AS message \
-               WHERE message.conversation_id = conversation.id \
-               ORDER BY message.id DESC \
-               LIMIT 1 \
-             ) AS last_message ON true \
-             WHERE COALESCE(last_message.created_at, conversation.created_at) < $2 \
-                OR (COALESCE(last_message.created_at, conversation.created_at) = $2 \
-                    AND conversation.id < $3) \
-             ORDER BY last_message_at DESC, conversation.id DESC \
-             LIMIT $4",
-        )
-        .bind(account_id)
-        .bind(cursor_time)
-        .bind(cursor_id)
-        .bind(bounded_limit + 1)
-        .fetch_all(pool)
-        .await?
-    } else {
-        sqlx::query_as::<_, DmConversationListRow>(
-            "SELECT conversation.id, \
-                    other_account.id AS other_account_id, \
-                    other_account.handle::text AS other_handle, \
-                    other_account.avatar_url AS other_avatar_url, \
-                    LEFT(last_message.body, 160) AS last_message_excerpt, \
-                    COALESCE(last_message.created_at, conversation.created_at) AS last_message_at, \
-                    (SELECT COUNT(*) FROM forum.dm_messages AS unread \
-                     WHERE unread.conversation_id = conversation.id \
-                       AND unread.sender_id <> $1 \
-                       AND (participant.last_read_message_id IS NULL \
-                            OR unread.id > participant.last_read_message_id)) AS unread_count, \
-                    conversation.created_at \
-             FROM forum.dm_conversations AS conversation \
-             JOIN forum.dm_participants AS participant \
-               ON participant.conversation_id = conversation.id \
-              AND participant.account_id = $1 \
-              AND participant.deleted_at IS NULL \
-             JOIN forum.dm_participants AS other_participant \
-               ON other_participant.conversation_id = conversation.id \
-              AND other_participant.account_id <> $1 \
-             JOIN identity.accounts AS other_account \
-               ON other_account.id = other_participant.account_id \
-             LEFT JOIN LATERAL ( \
-               SELECT message.body, message.created_at \
-               FROM forum.dm_messages AS message \
-               WHERE message.conversation_id = conversation.id \
-               ORDER BY message.id DESC \
-               LIMIT 1 \
-             ) AS last_message ON true \
-             ORDER BY last_message_at DESC, conversation.id DESC \
-             LIMIT $2",
-        )
-        .bind(account_id)
-        .bind(bounded_limit + 1)
-        .fetch_all(pool)
-        .await?
+    let mut builder = QueryBuilder::<Postgres>::new(
+        "SELECT conversation.id, \
+                other_account.id AS other_account_id, \
+                other_account.handle::text AS other_handle, \
+                other_account.avatar_url AS other_avatar_url, \
+                LEFT(last_message.body, 160) AS last_message_excerpt, \
+                COALESCE(last_message.created_at, conversation.created_at) AS last_message_at, \
+                (SELECT COUNT(*) FROM forum.dm_messages AS unread \
+                 WHERE unread.conversation_id = conversation.id \
+                   AND unread.sender_id <> ",
+    );
+    builder.push_bind(account_id).push(
+        " AND (participant.last_read_message_id IS NULL \
+                OR unread.id > participant.last_read_message_id)) AS unread_count, \
+         participant.archived_at IS NOT NULL AS is_archived, \
+         participant.muted_at IS NOT NULL AS is_muted, \
+         participant.deleted_at IS NOT NULL AS is_deleted, \
+         conversation.created_at \
+         FROM forum.dm_conversations AS conversation \
+         JOIN forum.dm_participants AS participant \
+           ON participant.conversation_id = conversation.id \
+          AND participant.account_id = ",
+    );
+    builder.push_bind(account_id).push(
+        " JOIN forum.dm_participants AS other_participant \
+           ON other_participant.conversation_id = conversation.id \
+          AND other_participant.account_id <> ",
+    );
+    builder.push_bind(account_id).push(
+        " JOIN identity.accounts AS other_account \
+           ON other_account.id = other_participant.account_id \
+         LEFT JOIN LATERAL ( \
+           SELECT message.body, message.created_at \
+           FROM forum.dm_messages AS message \
+           WHERE message.conversation_id = conversation.id \
+           ORDER BY message.id DESC \
+           LIMIT 1 \
+         ) AS last_message ON true \
+         WHERE ",
+    );
+    match view {
+        "archived" => {
+            builder.push("participant.deleted_at IS NULL AND participant.archived_at IS NOT NULL")
+        }
+        "deleted" => builder.push("participant.deleted_at IS NOT NULL"),
+        _ => builder.push("participant.deleted_at IS NULL AND participant.archived_at IS NULL"),
     };
+    if let Some(query) = search_query {
+        let pattern = format!("%{query}%");
+        builder.push(" AND (other_account.handle::text ILIKE ");
+        builder.push_bind(pattern.clone());
+        builder.push(" OR COALESCE(last_message.body, '') ILIKE ");
+        builder.push_bind(pattern);
+        builder.push(")");
+    }
+    if let Some((cursor_time, cursor_id)) = cursor {
+        builder.push(" AND (COALESCE(last_message.created_at, conversation.created_at) < ");
+        builder.push_bind(cursor_time);
+        builder.push(" OR (COALESCE(last_message.created_at, conversation.created_at) = ");
+        builder.push_bind(cursor_time);
+        builder.push(" AND conversation.id < ");
+        builder.push_bind(cursor_id);
+        builder.push("))");
+    }
+    builder.push(" ORDER BY last_message_at DESC, conversation.id DESC LIMIT ");
+    builder.push_bind(bounded_limit + 1);
 
-    let has_more = rows.len() > bounded_limit as usize;
-    let items = if has_more { rows[..bounded_limit as usize].to_vec() } else { rows };
+    let mut items = builder.build_query_as::<DmConversationListRow>().fetch_all(pool).await?;
+    let has_more = items.len() > bounded_limit as usize;
+    if has_more {
+        items.truncate(bounded_limit as usize);
+    }
     let next_cursor = if has_more {
         items.last().map(|row| encode_conversation_cursor(row.last_message_at, row.id))
     } else {
@@ -265,6 +267,120 @@ pub async fn list_conversations(
     };
 
     Ok((items, next_cursor))
+}
+
+/// Count unread messages across the participant's active inbox.
+pub async fn unread_count(pool: &PgPool, account_id: i64) -> AppResult<i64> {
+    let count = sqlx::query_scalar(
+        "SELECT COUNT(*) \
+         FROM forum.dm_messages AS message \
+         JOIN forum.dm_participants AS participant \
+           ON participant.conversation_id = message.conversation_id \
+          AND participant.account_id = $1 \
+          AND participant.deleted_at IS NULL \
+         WHERE message.sender_id <> $1 \
+           AND (participant.last_read_message_id IS NULL \
+                OR message.id > participant.last_read_message_id)",
+    )
+    .bind(account_id)
+    .fetch_one(pool)
+    .await?;
+    Ok(count)
+}
+
+/// Return whether the participant muted notifications for one conversation.
+pub async fn participant_is_muted(
+    pool: &PgPool,
+    conversation_id: i64,
+    account_id: i64,
+) -> AppResult<bool> {
+    let is_muted = sqlx::query_scalar(
+        "SELECT COALESCE(( \
+           SELECT muted_at IS NOT NULL FROM forum.dm_participants \
+           WHERE conversation_id = $1 AND account_id = $2 \
+         ), false)",
+    )
+    .bind(conversation_id)
+    .bind(account_id)
+    .fetch_one(pool)
+    .await?;
+    Ok(is_muted)
+}
+
+/// Set or clear participant-local archive state for an active conversation.
+pub async fn set_archived(
+    pool: &PgPool,
+    conversation_id: i64,
+    account_id: i64,
+    is_archived: bool,
+) -> AppResult<bool> {
+    let result = sqlx::query(
+        "UPDATE forum.dm_participants \
+         SET archived_at = CASE WHEN $3 THEN COALESCE(archived_at, now()) ELSE NULL END \
+         WHERE conversation_id = $1 AND account_id = $2 AND deleted_at IS NULL",
+    )
+    .bind(conversation_id)
+    .bind(account_id)
+    .bind(is_archived)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected() == 1)
+}
+
+/// Set or clear participant-local notification mute state.
+pub async fn set_muted(
+    pool: &PgPool,
+    conversation_id: i64,
+    account_id: i64,
+    is_muted: bool,
+) -> AppResult<bool> {
+    let result = sqlx::query(
+        "UPDATE forum.dm_participants \
+         SET muted_at = CASE WHEN $3 THEN COALESCE(muted_at, now()) ELSE NULL END \
+         WHERE conversation_id = $1 AND account_id = $2 AND deleted_at IS NULL",
+    )
+    .bind(conversation_id)
+    .bind(account_id)
+    .bind(is_muted)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected() == 1)
+}
+
+/// Hide a conversation only from one participant's inbox.
+pub async fn delete_for_participant(
+    pool: &PgPool,
+    conversation_id: i64,
+    account_id: i64,
+) -> AppResult<bool> {
+    let result = sqlx::query(
+        "UPDATE forum.dm_participants \
+         SET deleted_at = now(), archived_at = NULL \
+         WHERE conversation_id = $1 AND account_id = $2 AND deleted_at IS NULL",
+    )
+    .bind(conversation_id)
+    .bind(account_id)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected() == 1)
+}
+
+/// Recover a participant-hidden conversation without changing the other participant's state.
+pub async fn recover_for_participant(
+    pool: &PgPool,
+    conversation_id: i64,
+    account_id: i64,
+) -> AppResult<bool> {
+    let result = sqlx::query(
+        "UPDATE forum.dm_participants \
+         SET deleted_at = NULL, archived_at = NULL \
+         WHERE conversation_id = $1 AND account_id = $2 AND deleted_at IS NOT NULL",
+    )
+    .bind(conversation_id)
+    .bind(account_id)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected() == 1)
 }
 
 /// Return the other active participant for a sender in a conversation.
@@ -308,6 +424,7 @@ pub async fn send_message(
     sender_id: i64,
     body: &str,
 ) -> AppResult<(i64, DateTime<Utc>)> {
+    let mut transaction = pool.begin().await?;
     let row: InsertedMessage = sqlx::query_as(
         "INSERT INTO forum.dm_messages (conversation_id, sender_id, body) \
          SELECT $1, $2, $3 \
@@ -320,9 +437,20 @@ pub async fn send_message(
     .bind(conversation_id)
     .bind(sender_id)
     .bind(body)
-    .fetch_optional(pool)
+    .fetch_optional(&mut *transaction)
     .await?
     .ok_or(AppError::Forbidden)?;
+
+    sqlx::query(
+        "UPDATE forum.dm_participants \
+         SET deleted_at = NULL, archived_at = NULL \
+         WHERE conversation_id = $1",
+    )
+    .bind(conversation_id)
+    .execute(&mut *transaction)
+    .await?;
+
+    transaction.commit().await?;
 
     Ok((row.id, row.created_at))
 }

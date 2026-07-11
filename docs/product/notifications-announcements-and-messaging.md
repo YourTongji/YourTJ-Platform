@@ -23,6 +23,8 @@
 - 公告有管理员 CRUD、理由和审计，首页显示最近标题。
 - 私信有 canonical 1:1 conversation、分页 inbox/messages、单调 read pointer、准确未读、
   block/sanction/trust 检查、单条举报和受限 staff evidence。
+- 私信支持 participant-local archive/unarchive、可恢复删除、会话搜索和 mute；新消息会让双方的归档/
+  隐藏会话重新进入收件箱，mute 只抑制通知而不篡改未读事实。Web 已接通三类收件箱和全局私信角标。
 
 ### Partial
 
@@ -31,7 +33,7 @@
 - SSE 只适合单实例，没有 Redis bridge 或 durable event delivery。
 - Digest 缺稳定 event×channel preference、delivery status/retry 与运营验证，Web 也没有对应设置。
 - 公告缺 publish 状态、排期、严重度、展示方式、受众、revision 和用户 receipt。
-- 私信缺 DM policy、消息请求、archive/delete/recover、附件、搜索、mute、实时和全局角标。
+- 私信仍缺 DM policy、消息请求、附件、实时、retention/legal-hold worker 和多实例广播。
 
 ## 通知模型
 

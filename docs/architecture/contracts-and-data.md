@@ -99,6 +99,8 @@ Fresh database 必须只通过 sqlx migration ledger 建立。普通启动、CI 
 - Staff write 记录 actor kind/id/role、action、target、reason、result 和 correlation；metadata 最小化。
 - Secrets、code、token、signature-as-credential、raw email、完整请求 body 和任意 DM 不进入日志/审计。
 - Evidence read 本身是敏感动作，需要 capability、purpose 和 audit。
+- DM archive、mute 和 delete 是 `dm_participants` 上的 participant-local 状态；不能改写另一参与者的
+  副本。新消息可恢复双方 inbox 可见性，但 mute 保持独立，并且只影响通知投影，不影响未读计数。
 
 ## 积分不变量
 

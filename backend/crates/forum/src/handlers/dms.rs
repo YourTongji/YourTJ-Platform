@@ -20,6 +20,8 @@ use super::default_limit;
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DmConversationListQuery {
+    pub view: Option<String>,
+    pub q: Option<String>,
     pub cursor: Option<String>,
     #[serde(default = "default_limit")]
     pub limit: i64,
@@ -58,6 +60,9 @@ fn conversation_to_dto(row: DmConversationListRow) -> DmConversationDto {
         last_message_excerpt: row.last_message_excerpt,
         last_message_at: row.last_message_at.timestamp(),
         unread_count: row.unread_count,
+        is_archived: row.is_archived,
+        is_muted: row.is_muted,
+        is_deleted: row.is_deleted,
         created_at: row.created_at.timestamp(),
     }
 }
@@ -147,11 +152,123 @@ pub async fn list_conversations_handler(
     .map_err(|_| AppError::Unauthorized)?;
 
     let limit = validate_limit(query.limit)?;
+    let view = query.view.as_deref().unwrap_or("inbox");
+    if !matches!(view, "inbox" | "archived" | "deleted") {
+        return Err(AppError::BadRequest("view must be inbox, archived, or deleted".into()));
+    }
+    let search_query = query.q.as_deref().map(str::trim).filter(|value| !value.is_empty());
+    if search_query.is_some_and(|value| !(2..=100).contains(&value.chars().count())) {
+        return Err(AppError::BadRequest("q must contain 2 to 100 characters".into()));
+    }
     let cursor = query.cursor.as_deref().map(repo::dms::decode_conversation_cursor).transpose()?;
     let (rows, next_cursor) =
-        repo::dms::list_conversations(&state.db, auth.id, cursor, limit).await?;
+        repo::dms::list_conversations(&state.db, auth.id, view, search_query, cursor, limit)
+            .await?;
     let items = rows.into_iter().map(conversation_to_dto).collect();
     Ok(Json(Page::new(items, next_cursor)))
+}
+
+/// Return an account-scoped unread DM count for the global navigation badge.
+pub async fn unread_dm_count_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> AppResult<Json<serde_json::Value>> {
+    let auth = identity::auth_middleware::authenticate(
+        &headers,
+        &state.db,
+        &state.jwt_secret,
+        state.redis.as_ref(),
+    )
+    .await
+    .map_err(|_| AppError::Unauthorized)?;
+    let count = repo::dms::unread_count(&state.db, auth.id).await?;
+    Ok(Json(serde_json::json!({ "count": count })))
+}
+
+async fn participant_action(
+    state: &AppState,
+    headers: &HeaderMap,
+    id_str: &str,
+    action: &str,
+) -> AppResult<StatusCode> {
+    let auth = identity::auth_middleware::authenticate(
+        headers,
+        &state.db,
+        &state.jwt_secret,
+        state.redis.as_ref(),
+    )
+    .await
+    .map_err(|_| AppError::Unauthorized)?;
+    let conversation_id: i64 = id_str.parse().map_err(|_| AppError::NotFound)?;
+    let changed = match action {
+        "archive" => repo::dms::set_archived(&state.db, conversation_id, auth.id, true).await?,
+        "unarchive" => repo::dms::set_archived(&state.db, conversation_id, auth.id, false).await?,
+        "mute" => repo::dms::set_muted(&state.db, conversation_id, auth.id, true).await?,
+        "unmute" => repo::dms::set_muted(&state.db, conversation_id, auth.id, false).await?,
+        "delete" => repo::dms::delete_for_participant(&state.db, conversation_id, auth.id).await?,
+        "recover" => {
+            repo::dms::recover_for_participant(&state.db, conversation_id, auth.id).await?
+        }
+        _ => false,
+    };
+    if !changed {
+        return Err(AppError::NotFound);
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Archive a conversation only for the current participant.
+pub async fn archive_conversation_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> AppResult<StatusCode> {
+    participant_action(&state, &headers, &id, "archive").await
+}
+
+/// Return a participant's archived conversation to the inbox.
+pub async fn unarchive_conversation_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> AppResult<StatusCode> {
+    participant_action(&state, &headers, &id, "unarchive").await
+}
+
+/// Mute notifications without changing unread message facts.
+pub async fn mute_conversation_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> AppResult<StatusCode> {
+    participant_action(&state, &headers, &id, "mute").await
+}
+
+/// Restore notifications for a conversation.
+pub async fn unmute_conversation_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> AppResult<StatusCode> {
+    participant_action(&state, &headers, &id, "unmute").await
+}
+
+/// Hide a conversation only for the current participant.
+pub async fn delete_conversation_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> AppResult<StatusCode> {
+    participant_action(&state, &headers, &id, "delete").await
+}
+
+/// Recover a participant-hidden conversation.
+pub async fn recover_conversation_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> AppResult<StatusCode> {
+    participant_action(&state, &headers, &id, "recover").await
 }
 
 /// Send a message after rechecking sanctions, lifecycle, membership, and blocks.
@@ -186,6 +303,8 @@ pub async fn send_message_handler(
     if repo::dms::pair_is_blocked(&state.db, auth.id, recipient_id).await? {
         return Err(AppError::Forbidden);
     }
+    let recipient_is_muted =
+        repo::dms::participant_is_muted(&state.db, conversation_id, recipient_id).await?;
 
     shared::ratelimit::check_token_bucket(
         state.redis.as_ref(),
@@ -204,26 +323,28 @@ pub async fn send_message_handler(
             .fetch_one(&state.db)
             .await?;
 
-    let pool = state.db.clone();
-    let conversation_id_string = conversation_id.to_string();
-    let body_excerpt = body.body.chars().take(100).collect::<String>();
-    let sender_id = auth.id;
-    let notification_sender_handle = sender_handle.clone();
-    tokio::spawn(async move {
-        crate::notification_hooks::create_notification(
-            &pool,
-            recipient_id,
-            "dm",
-            serde_json::json!({
-                "conversationId": conversation_id_string,
-                "senderHandle": notification_sender_handle,
-                "bodyExcerpt": body_excerpt,
-            }),
-            Some(&conversation_id.to_string()),
-            Some(sender_id),
-        )
-        .await;
-    });
+    if !recipient_is_muted {
+        let pool = state.db.clone();
+        let conversation_id_string = conversation_id.to_string();
+        let body_excerpt = body.body.chars().take(100).collect::<String>();
+        let sender_id = auth.id;
+        let notification_sender_handle = sender_handle.clone();
+        tokio::spawn(async move {
+            crate::notification_hooks::create_notification(
+                &pool,
+                recipient_id,
+                "dm",
+                serde_json::json!({
+                    "conversationId": conversation_id_string,
+                    "senderHandle": notification_sender_handle,
+                    "bodyExcerpt": body_excerpt,
+                }),
+                Some(&conversation_id.to_string()),
+                Some(sender_id),
+            )
+            .await;
+        });
+    }
 
     Ok((
         StatusCode::CREATED,

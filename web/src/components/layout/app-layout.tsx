@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { Bell, LogOut, Menu, Moon, Plus, Search, Settings, Sun, User } from "lucide-react";
+import { Bell, LogOut, Menu, MessageCircle, Moon, Plus, Search, Settings, Sun, User } from "lucide-react";
 import * as React from "react";
 import { Link, Outlet, useLocation, useNavigate } from "react-router";
 
@@ -62,6 +62,14 @@ export function AppLayout() {
     refetchInterval: 60_000,
   });
   const unreadCount = notificationCount.data?.count ?? 0;
+  const dmCount = useQuery({
+    queryKey: ["dm-unread-count"],
+    queryFn: api.dmUnreadCount,
+    enabled: isAuthenticated,
+    staleTime: 30_000,
+    refetchInterval: 60_000,
+  });
+  const unreadDmCount = dmCount.data?.count ?? 0;
 
   return (
     <TooltipProvider>
@@ -131,6 +139,22 @@ export function AppLayout() {
                   ) : null}
                 </Link>
               </Button>
+              {isAuthenticated ? (
+                <Button asChild variant="ghost" size="icon" className="size-9 rounded-full text-[#6b7280]">
+                  <Link
+                    to="/messages"
+                    className="relative"
+                    aria-label={unreadDmCount > 0 ? `私信，${unreadDmCount} 条未读` : "私信"}
+                  >
+                    <MessageCircle className="size-[18px]" />
+                    {unreadDmCount > 0 ? (
+                      <span className="absolute -right-1 -top-1 min-w-4 rounded-full bg-primary px-1 text-center text-[10px] font-semibold leading-4 text-primary-foreground">
+                        {unreadDmCount > 99 ? "99+" : unreadDmCount}
+                      </span>
+                    ) : null}
+                  </Link>
+                </Button>
+              ) : null}
               <ThemeToggle />
               {isAuthenticated ? (
                 <DropdownMenu>

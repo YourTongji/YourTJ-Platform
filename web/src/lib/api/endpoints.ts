@@ -466,10 +466,18 @@ export const api = {
     });
   },
 
-  dmConversations(cursor?: string | null) {
+  dmConversations(query: {
+    cursor?: string | null;
+    view?: "inbox" | "archived" | "deleted";
+    q?: string;
+  } = {}) {
     return apiRequest<Page<DmConversation>>("/forum/dm/conversations", {
-      query: { cursor, limit: 30 },
+      query: { ...query, limit: 30 },
     });
+  },
+
+  dmUnreadCount() {
+    return apiRequest<{ count: number }>("/forum/dm/unread-count");
   },
 
   createDmConversation(recipientHandle: string) {
@@ -496,6 +504,30 @@ export const api = {
     return apiRequest<void>(`/forum/dm/conversations/${encodeURIComponent(id)}/read`, {
       method: "POST",
       body: { lastReadMessageId },
+    });
+  },
+
+  setDmConversationArchived(id: string, isArchived: boolean) {
+    return apiRequest<void>(`/forum/dm/conversations/${encodeURIComponent(id)}/archive`, {
+      method: isArchived ? "PUT" : "DELETE",
+    });
+  },
+
+  setDmConversationMuted(id: string, isMuted: boolean) {
+    return apiRequest<void>(`/forum/dm/conversations/${encodeURIComponent(id)}/mute`, {
+      method: isMuted ? "PUT" : "DELETE",
+    });
+  },
+
+  deleteDmConversation(id: string) {
+    return apiRequest<void>(`/forum/dm/conversations/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    });
+  },
+
+  recoverDmConversation(id: string) {
+    return apiRequest<void>(`/forum/dm/conversations/${encodeURIComponent(id)}/recover`, {
+      method: "POST",
     });
   },
 
