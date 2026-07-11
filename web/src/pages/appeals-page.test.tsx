@@ -17,7 +17,10 @@ const apiMocks = vi.hoisted(() => ({
   appealPasswordLogin: vi.fn(),
 }));
 
-const authState = vi.hoisted(() => ({ isAuthenticated: true }));
+const authState = vi.hoisted(() => ({
+  isAuthenticated: true,
+  account: { id: "1" } as { id: string } | null,
+}));
 
 vi.mock("@/context/auth-provider", () => ({
   useAuth: () => authState,
@@ -82,6 +85,7 @@ describe("AppealsPage", () => {
   beforeEach(() => {
     sessionStorage.clear();
     authState.isAuthenticated = true;
+    authState.account = { id: "1" };
     apiMocks.list.mockReset().mockResolvedValue({
       items: [submittedAppeal],
       hasMore: false,
@@ -152,6 +156,7 @@ describe("AppealsPage", () => {
 
   it("lets a suspended user use a purpose-bound credential to load notices and appeals", async () => {
     authState.isAuthenticated = false;
+    authState.account = null;
     const user = userEvent.setup();
     renderPage();
 
@@ -174,5 +179,49 @@ describe("AppealsPage", () => {
       "restricted-appeal-token",
     ));
     expect(await screen.findByText("处置与申诉通知")).toBeVisible();
+  });
+
+  it("never reuses one restricted account cache after switching credentials", async () => {
+    authState.isAuthenticated = false;
+    authState.account = null;
+    apiMocks.appealPasswordLogin
+      .mockReset()
+      .mockResolvedValueOnce({
+        accessToken: "restricted-account-a",
+        expiresAt: Math.floor(Date.now() / 1_000) + 3_600,
+      })
+      .mockResolvedValueOnce({
+        accessToken: "restricted-account-b",
+        expiresAt: Math.floor(Date.now() / 1_000) + 3_600,
+      });
+    apiMocks.list.mockImplementation((_cursor, token) => Promise.resolve({
+      items: [{
+        ...submittedAppeal,
+        id: token === "restricted-account-a" ? "account-a-appeal" : "account-b-appeal",
+        originalReason: token === "restricted-account-a"
+          ? "账号 A 私密处置"
+          : "账号 B 私密处置",
+      }],
+      hasMore: false,
+      nextCursor: null,
+    }));
+    apiMocks.notices.mockResolvedValue({ items: [], hasMore: false, nextCursor: null });
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.type(screen.getByLabelText("同济邮箱"), "account-a@tongji.edu.cn");
+    await user.type(screen.getByLabelText("密码"), "correct horse battery staple");
+    await user.click(screen.getByRole("button", { name: "验证并进入" }));
+    expect(await screen.findByText("账号 A 私密处置")).toBeVisible();
+
+    await user.click(screen.getByRole("button", { name: "退出申诉访问" }));
+    await waitFor(() => expect(screen.queryByText("账号 A 私密处置")).not.toBeInTheDocument());
+    await user.type(screen.getByLabelText("同济邮箱"), "account-b@tongji.edu.cn");
+    await user.type(screen.getByLabelText("密码"), "correct horse battery staple");
+    await user.click(screen.getByRole("button", { name: "验证并进入" }));
+
+    expect(await screen.findByText("账号 B 私密处置")).toBeVisible();
+    expect(screen.queryByText("账号 A 私密处置")).not.toBeInTheDocument();
+    expect(apiMocks.list).toHaveBeenCalledWith(null, "restricted-account-b");
   });
 });

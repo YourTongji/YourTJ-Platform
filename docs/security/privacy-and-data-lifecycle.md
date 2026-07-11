@@ -40,7 +40,9 @@
   不复制举报人、staff identity、evidence 或完整内容。申诉记录保存原事件引用、本人理由、公开决定理由
   和 append-only transition history，内部 reviewer id 只在 capability-gated admin DTO 出现。
 - Appeal access JWT 只有一小时有效期、无 refresh/session 持久化，浏览器仅放 sessionStorage；普通 API
-  拒绝该 scope，减少受限账号为申诉而重新开放其他个人数据的风险。
+  拒绝该 scope，减少受限账号为申诉而重新开放其他个人数据的风险。每次 restricted credential 另生成
+  不含 token/账号信息的随机 cache partition，退出时同步清除该 partition 的申诉与治理通知缓存，避免
+  同一浏览器切换受限账号时短暂展示前一账号数据。
 - Activity visibility 默认 `only_me`，本人始终可读，`public` 允许匿名、`campus` 只允许已登录校园
   账号；它在 profile visibility 和双向 block 之后控制逐条主题/回复列表及未来 likes/media/activity
   tabs。Profile 可见时，主题/回复/获赞 aggregate 仍是公共内容贡献计数，不因列表私密而置零。

@@ -16,7 +16,12 @@ import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { useAuth } from "@/context/auth-provider";
-import { clearAppealAccess, readAppealAccessToken, writeAppealAccess } from "@/lib/appeal-access";
+import {
+  clearAppealAccess,
+  readAppealAccess,
+  writeAppealAccess,
+  type AppealAccessSession,
+} from "@/lib/appeal-access";
 import { api } from "@/lib/api/endpoints";
 import type { Appeal, AppealStatus } from "@/lib/api/types";
 import { formatUnixTime, idempotencyKey } from "@/lib/format";
@@ -47,7 +52,7 @@ function eventIdFromTargetUrl(targetUrl: string) {
   return eventId && /^\d+$/.test(eventId) ? eventId : null;
 }
 
-function AppealAccessCard({ onAuthenticated }: { onAuthenticated: (token: string) => void }) {
+function AppealAccessCard({ onAuthenticated }: { onAuthenticated: (access: AppealAccessSession) => void }) {
   const [mode, setMode] = React.useState<"password" | "code">("password");
   const [email, setEmail] = React.useState("");
   const [password, setPassword] = React.useState("");
@@ -56,8 +61,7 @@ function AppealAccessCard({ onAuthenticated }: { onAuthenticated: (token: string
   const passwordLogin = useMutation({
     mutationFn: () => api.appealPasswordLogin({ email: campusEmail(email), password }),
     onSuccess: (result) => {
-      writeAppealAccess(result);
-      onAuthenticated(result.accessToken);
+      onAuthenticated(writeAppealAccess(result));
       toast.success("已进入申诉中心");
     },
     onError: (error) => toast.error(error instanceof Error ? error.message : "验证失败"),
@@ -71,8 +75,7 @@ function AppealAccessCard({ onAuthenticated }: { onAuthenticated: (token: string
   const verifyCode = useMutation({
     mutationFn: () => api.appealEmailVerify({ email: campusEmail(email), code: code.trim() }),
     onSuccess: (result) => {
-      writeAppealAccess(result);
-      onAuthenticated(result.accessToken);
+      onAuthenticated(writeAppealAccess(result));
       toast.success("已进入申诉中心");
     },
     onError: (error) => toast.error(error instanceof Error ? error.message : "验证失败"),
@@ -212,24 +215,27 @@ function AppealCard({ appeal, onWithdraw }: { appeal: Appeal; onWithdraw: (appea
 }
 
 export function AppealsPage() {
-  const { isAuthenticated } = useAuth();
+  const { account, isAuthenticated } = useAuth();
   const queryClient = useQueryClient();
   const [searchParams] = useSearchParams();
-  const [appealToken, setAppealToken] = React.useState(() => readAppealAccessToken());
+  const [appealAccess, setAppealAccess] = React.useState(() => readAppealAccess());
   const [eventId, setEventId] = React.useState(searchParams.get("event") ?? "");
   const [reason, setReason] = React.useState("");
   const [withdrawTarget, setWithdrawTarget] = React.useState<Appeal | null>(null);
-  const canAccess = isAuthenticated || Boolean(appealToken);
-  const customToken = isAuthenticated ? undefined : appealToken ?? undefined;
+  const canAccess = isAuthenticated || Boolean(appealAccess);
+  const customToken = isAuthenticated ? undefined : appealAccess?.accessToken;
+  const cachePartition = isAuthenticated
+    ? `account:${account?.id ?? "unknown"}`
+    : `restricted:${appealAccess?.cachePartition ?? "none"}`;
   const appeals = useInfiniteQuery({
-    queryKey: ["appeals", customToken ? "restricted" : "session"],
+    queryKey: ["appeals", cachePartition],
     queryFn: ({ pageParam }) => api.myAppeals(pageParam, customToken),
     initialPageParam: null as string | null,
     getNextPageParam: (page) => page.hasMore ? page.nextCursor ?? undefined : undefined,
     enabled: canAccess,
   });
   const governanceNotices = useInfiniteQuery({
-    queryKey: ["governance-notices", { surface: "appeals", access: customToken ? "restricted" : "session" }],
+    queryKey: ["governance-notices", { surface: "appeals", cachePartition }],
     queryFn: ({ pageParam }) => api.governanceNotices(undefined, pageParam, customToken),
     initialPageParam: null as string | null,
     getNextPageParam: (page) => page.hasMore ? page.nextCursor ?? undefined : undefined,
@@ -282,7 +288,11 @@ export function AppealsPage() {
             variant="outline"
             onClick={() => {
               clearAppealAccess();
-              setAppealToken(null);
+              queryClient.removeQueries({ queryKey: ["appeals", cachePartition] });
+              queryClient.removeQueries({
+                queryKey: ["governance-notices", { surface: "appeals", cachePartition }],
+              });
+              setAppealAccess(null);
             }}
           >
             退出申诉访问
@@ -291,7 +301,7 @@ export function AppealsPage() {
       />
 
       {!canAccess ? (
-        <AppealAccessCard onAuthenticated={setAppealToken} />
+        <AppealAccessCard onAuthenticated={setAppealAccess} />
       ) : (
         <div className="space-y-5">
           <Card>
