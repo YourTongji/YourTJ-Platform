@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Archive, Image, Pencil, Plus, RectangleHorizontal } from "lucide-react";
+import { Archive, ChartNoAxesColumn, Image, Pencil, Plus, RectangleHorizontal } from "lucide-react";
 import * as React from "react";
 import { toast } from "sonner";
 
@@ -36,6 +36,82 @@ function unixDateTime(value: string) {
   if (!value) return null;
   const timestamp = new Date(value).getTime();
   return Number.isFinite(timestamp) ? Math.floor(timestamp / 1000) : null;
+}
+
+function clickThroughRate(impressions: number, clicks: number) {
+  if (impressions === 0) return "0.0%";
+  return `${((clicks / impressions) * 100).toFixed(1)}%`;
+}
+
+function PromotionMetricsDialog({ item, onOpenChange }: {
+  item: Promotion | null;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const metrics = useQuery({
+    queryKey: ["admin", "promotions", item?.id, "metrics"],
+    queryFn: () => api.adminPromotionMetrics(item?.id ?? ""),
+    enabled: Boolean(item),
+  });
+  const summary = metrics.data?.summary ?? item?.metrics;
+  return (
+    <Dialog open={Boolean(item)} onOpenChange={onOpenChange}>
+      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>{item?.title ?? "推广"} · 投放趋势</DialogTitle>
+          <DialogDescription>
+            仅聚合短期匿名展示票据，不保存账号、IP 或设备标识。点击缺少先行曝光时会自动补记一次曝光。
+          </DialogDescription>
+        </DialogHeader>
+        {summary ? (
+          <dl className="grid grid-cols-3 gap-3" aria-label="推广投放汇总">
+            <div className="rounded-lg border p-3">
+              <dt className="text-xs text-muted-foreground">曝光</dt>
+              <dd className="mt-1 text-xl font-semibold tabular-nums">{summary.impressions}</dd>
+            </div>
+            <div className="rounded-lg border p-3">
+              <dt className="text-xs text-muted-foreground">点击</dt>
+              <dd className="mt-1 text-xl font-semibold tabular-nums">{summary.clicks}</dd>
+            </div>
+            <div className="rounded-lg border p-3">
+              <dt className="text-xs text-muted-foreground">点击率</dt>
+              <dd className="mt-1 text-xl font-semibold tabular-nums">
+                {clickThroughRate(summary.impressions, summary.clicks)}
+              </dd>
+            </div>
+          </dl>
+        ) : null}
+        {metrics.isLoading ? <LoadingState label="加载推广趋势" /> : metrics.isError ? (
+          <ErrorState title="趋势加载失败" error={metrics.error} onRetry={() => void metrics.refetch()} />
+        ) : (
+          <div className="overflow-x-auto rounded-lg border">
+            <table className="w-full text-left text-sm">
+              <caption className="sr-only">按 UTC 日期统计的推广曝光、点击与点击率</caption>
+              <thead className="bg-muted/60 text-xs text-muted-foreground">
+                <tr>
+                  <th scope="col" className="px-3 py-2 font-medium">日期（UTC）</th>
+                  <th scope="col" className="px-3 py-2 text-right font-medium">曝光</th>
+                  <th scope="col" className="px-3 py-2 text-right font-medium">点击</th>
+                  <th scope="col" className="px-3 py-2 text-right font-medium">点击率</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y">
+                {metrics.data?.days.map((day) => (
+                  <tr key={day.metricDate}>
+                    <th scope="row" className="px-3 py-2 font-normal">{day.metricDate}</th>
+                    <td className="px-3 py-2 text-right tabular-nums">{day.impressions}</td>
+                    <td className="px-3 py-2 text-right tabular-nums">{day.clicks}</td>
+                    <td className="px-3 py-2 text-right tabular-nums">
+                      {clickThroughRate(day.impressions, day.clicks)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
 }
 
 function PromotionEditor({ open, item, onOpenChange }: {
@@ -197,6 +273,7 @@ export function PromotionsPanel() {
   const [editorOpen, setEditorOpen] = React.useState(false);
   const [editing, setEditing] = React.useState<Promotion | null>(null);
   const [archiving, setArchiving] = React.useState<Promotion | null>(null);
+  const [metricsTarget, setMetricsTarget] = React.useState<Promotion | null>(null);
   const cursor = cursorStack.at(-1);
   const promotions = useQuery({
     queryKey: ["admin", "promotions", cursor],
@@ -222,7 +299,7 @@ export function PromotionsPanel() {
     <div className="space-y-5">
       <AdminSectionHeader
         title="首页推广"
-        description="维护自营推荐的站内目标、clean asset、位置、受众、排期和稳定排序；不接受外链图片。"
+        description="维护自营推广的站内目标、clean asset、位置、受众、排期和稳定排序，并查看隐私最小化的投放数据；不接受外链图片。"
         actions={<Button type="button" size="sm" onClick={() => { setEditing(null); setEditorOpen(true); }}><Plus className="size-4" />创建推广</Button>}
       />
       {promotions.isLoading ? <LoadingState label="加载推广" /> : promotions.isError ? (
@@ -245,8 +322,16 @@ export function PromotionsPanel() {
                   {item.body ? <p className="mt-2 text-sm text-muted-foreground">{item.body}</p> : null}
                   <p className="mt-2 text-xs text-muted-foreground">目标 {item.targetUrl} · 受众 {item.audience} · v{item.version} · {formatUnixTime(item.updatedAt)}</p>
                   {item.assetId ? <p className="mt-1 flex items-center gap-1 text-xs text-muted-foreground"><Image className="size-3" />clean asset #{item.assetId}</p> : null}
+                  {item.metrics ? (
+                    <p className="mt-2 text-xs text-muted-foreground">
+                      {item.metrics.from} 至 {item.metrics.to}：{item.metrics.impressions} 次曝光 · {item.metrics.clicks} 次点击 · 点击率 {clickThroughRate(item.metrics.impressions, item.metrics.clicks)}
+                    </p>
+                  ) : null}
                 </div>
-                <div className="flex shrink-0 gap-2">
+                <div className="flex shrink-0 flex-wrap gap-2">
+                  <Button type="button" variant="outline" size="sm" onClick={() => setMetricsTarget(item)}>
+                    <ChartNoAxesColumn className="size-4" />日趋势
+                  </Button>
                   {item.status !== "archived" ? (
                     <>
                       <Button type="button" variant="outline" size="sm" onClick={() => { setEditing(item); setEditorOpen(true); }}><Pencil className="size-4" />编辑</Button>
@@ -266,6 +351,7 @@ export function PromotionsPanel() {
         </div>
       )}
       <PromotionEditor open={editorOpen} item={editing} onOpenChange={setEditorOpen} />
+      <PromotionMetricsDialog item={metricsTarget} onOpenChange={(open) => !open && setMetricsTarget(null)} />
       <ReasonDialog
         open={Boolean(archiving)}
         onOpenChange={(open) => !open && setArchiving(null)}

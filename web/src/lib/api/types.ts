@@ -90,6 +90,7 @@ export type NotificationPreferences = Schema["NotificationPreferences"];
 export type Product = Schema["Product"];
 export type Promotion = Schema["Promotion"];
 export type PromotionCreateInput = Schema["PromotionCreateInput"];
+export type PromotionMetrics = Schema["PromotionMetrics"];
 export type PromotionUpdateInput = Schema["PromotionUpdateInput"];
 export type Purchase = Schema["Purchase"];
 export type Review = Schema["Review"];

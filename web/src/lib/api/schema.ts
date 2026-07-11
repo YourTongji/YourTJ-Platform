@@ -5515,6 +5515,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/promotions/{id}/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Record one deduplicated anonymous promotion impression or click
+         * @description A click implicitly records the matching impression when it was not delivered first. The signed presentation token contains no account, IP, or device identifier.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["PromotionEventInput"];
+                };
+            };
+            responses: {
+                /** @description recorded or already recorded */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                400: components["responses"]["BadRequest"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/settings": {
         parameters: {
             query?: never;
@@ -7006,6 +7050,52 @@ export interface paths {
                 409: components["responses"]["Conflict"];
             };
         };
+        trace?: never;
+    };
+    "/admin/promotions/{id}/metrics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read privacy-minimal daily promotion delivery metrics */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description Inclusive UTC date; defaults to 29 days before today. */
+                    from?: string;
+                    /** @description Inclusive UTC date; defaults to today and cannot be in the future. */
+                    to?: string;
+                };
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["PromotionMetrics"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/admin/media/uploads": {
@@ -9628,6 +9718,33 @@ export interface components {
             archivedAt?: number | null;
             createdAt: number;
             updatedAt: number;
+            /** @description Short-lived anonymous presentation token returned only by the active public list. */
+            trackingToken: string | null;
+            /** @description Rolling 30-day aggregate returned only by the administration list. */
+            metrics: components["schemas"]["PromotionMetricSummary"] | null;
+        };
+        PromotionMetricSummary: {
+            /** Format: date */
+            from: string;
+            /** Format: date */
+            to: string;
+            impressions: number;
+            clicks: number;
+        };
+        PromotionMetricDay: {
+            /** Format: date */
+            metricDate: string;
+            impressions: number;
+            clicks: number;
+        };
+        PromotionMetrics: {
+            summary: components["schemas"]["PromotionMetricSummary"];
+            days: components["schemas"]["PromotionMetricDay"][];
+        };
+        PromotionEventInput: {
+            /** @enum {string} */
+            eventType: "impression" | "click";
+            trackingToken: string;
         };
         PromotionCreateInput: {
             /** @enum {string} */

@@ -1094,7 +1094,7 @@ components:
         createdAt: { type: integer }
     Promotion:
       type: object
-      required: [id, placement, title, targetUrl, status, effectiveState, priority, audience, version, createdAt, updatedAt]
+      required: [id, placement, title, targetUrl, status, effectiveState, priority, audience, version, createdAt, updatedAt, trackingToken, metrics]
       properties:
         id: { type: string }
         placement: { type: string, enum: [home-left-primary, home-left-secondary] }
@@ -1113,6 +1113,47 @@ components:
         archivedAt: { type: integer, nullable: true }
         createdAt: { type: integer }
         updatedAt: { type: integer }
+        trackingToken:
+          type: string
+          nullable: true
+          description: Short-lived anonymous presentation token returned only by the active public list.
+        metrics:
+          allOf: [{ $ref: "#/components/schemas/PromotionMetricSummary" }]
+          nullable: true
+          description: Rolling 30-day aggregate returned only by the administration list.
+    PromotionMetricSummary:
+      type: object
+      additionalProperties: false
+      required: [from, to, impressions, clicks]
+      properties:
+        from: { type: string, format: date }
+        to: { type: string, format: date }
+        impressions: { type: integer, minimum: 0 }
+        clicks: { type: integer, minimum: 0 }
+    PromotionMetricDay:
+      type: object
+      additionalProperties: false
+      required: [metricDate, impressions, clicks]
+      properties:
+        metricDate: { type: string, format: date }
+        impressions: { type: integer, minimum: 0 }
+        clicks: { type: integer, minimum: 0 }
+    PromotionMetrics:
+      type: object
+      additionalProperties: false
+      required: [summary, days]
+      properties:
+        summary: { $ref: "#/components/schemas/PromotionMetricSummary" }
+        days:
+          type: array
+          items: { $ref: "#/components/schemas/PromotionMetricDay" }
+    PromotionEventInput:
+      type: object
+      additionalProperties: false
+      required: [eventType, trackingToken]
+      properties:
+        eventType: { type: string, enum: [impression, click] }
+        trackingToken: { type: string, minLength: 1, maxLength: 2048 }
     PromotionCreateInput:
       type: object
       required: [placement, title, targetUrl, status, priority, audience, reason]
@@ -3044,6 +3085,17 @@ paths:
               schema:
                 type: array
                 items: { $ref: "#/components/schemas/Promotion" }
+  /promotions/{id}/events:
+    post:
+      tags: [platform]
+      security: []
+      summary: Record one deduplicated anonymous promotion impression or click
+      description: A click implicitly records the matching impression when it was not delivered first. The signed presentation token contains no account, IP, or device identifier.
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/PromotionEventInput" } } } }
+      responses:
+        "204": { description: recorded or already recorded }
+        "400": { $ref: "#/components/responses/BadRequest" }
   /settings:
     get: { tags: [platform], security: [], summary: Public runtime settings, responses: { "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Setting" } } } } } } }
   /onebox:
@@ -3317,6 +3369,19 @@ paths:
       parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/AdminVersionedArchiveInput" } } } }
       responses: { "204": { description: archived }, "403": { $ref: "#/components/responses/Forbidden" }, "404": { $ref: "#/components/responses/NotFound" }, "409": { $ref: "#/components/responses/Conflict" } }
+  /admin/promotions/{id}/metrics:
+    get:
+      tags: [admin]
+      summary: Read privacy-minimal daily promotion delivery metrics
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: from, in: query, schema: { type: string, format: date }, description: Inclusive UTC date; defaults to 29 days before today. }
+        - { name: to, in: query, schema: { type: string, format: date }, description: Inclusive UTC date; defaults to today and cannot be in the future. }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/PromotionMetrics" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /admin/media/uploads:
     get:
       tags: [admin, media]

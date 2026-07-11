@@ -6,7 +6,7 @@
 >
 > 负责人：Privacy owner、Security owner、Domain maintainers
 >
-> 最近核验：2026-07-12，migrations `0034`、`0037`、`0038`、`0040`、`0044`、`0048`、`0049`
+> 最近核验：2026-07-12，migrations `0034`、`0037`、`0038`、`0040`、`0044`、`0048`、`0049`、`0051`
 
 本规范将数据最小化、可见性、导出、删除和保留作为产品前置条件。它不是法律意见；涉及 PIPL、
 未成年人、广告或跨境处理的最终政策需要合格法律与隐私负责人确认。
@@ -145,8 +145,10 @@ Legal hold 有合法目的、授权者、范围、到期和审计，不得成为
 - 任意第三方头像/Markdown 图片会泄露访问者 IP，因此持久媒体只允许平台 asset。
 - Onebox 只服务 allowlisted 公共 HTTPS 页面；fragment 被移除，含 query 的 URL 不进入持久 cache，
   metadata 有界且不返回远程图片。Migration 清除历史 query URL/remote-image cache；访问日志不记录 URL。
-- 推广保存平台 clean asset id 和站内目标路径，不保存远程图片 URL；当前没有个人级 impression/click
-  tracking，未来效果指标只允许必要的按日聚合。
+- 推广保存平台 clean asset id 和站内目标路径，不保存远程图片 URL。曝光/点击只使用两小时有效的
+  随机签名展示票据去重，票据不含账号、IP、设备或 audience 身份；原始 receipt 48 小时后由 worker
+  删除，长期只保留 promotion × UTC day 的曝光/点击总数。该数据不能用于个人级 attribution、跨域
+  画像或重建访问者身份。
 - Captcha 只收到完成验证必要的信息，不发送邮箱、正文或私信；其 metadata 保留需进入隐私说明。
 - PR preview 不注入生产邮件/OSS/PII 凭据，不使用生产数据快照。
 

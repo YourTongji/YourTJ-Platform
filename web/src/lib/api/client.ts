@@ -30,6 +30,7 @@ interface RequestOptions {
   headers?: HeadersInit;
   auth?: boolean | "optional";
   signal?: AbortSignal;
+  keepalive?: boolean;
 }
 
 let refreshPromise: Promise<boolean> | null = null;
@@ -106,6 +107,7 @@ async function fetchOnce<T>(path: string, options: RequestOptions) {
     headers,
     body: options.body === undefined ? undefined : JSON.stringify(options.body),
     signal: options.signal,
+    keepalive: options.keepalive,
   });
 
   if (response.status === 204 || response.status === 202) {

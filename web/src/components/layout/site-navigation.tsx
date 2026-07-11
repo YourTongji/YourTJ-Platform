@@ -13,6 +13,7 @@ import {
   WalletCards,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
+import * as React from "react";
 import { Link, NavLink } from "react-router";
 
 import { capabilitiesForAccount } from "@/components/admin/capabilities";
@@ -120,16 +121,61 @@ function PromotionAsset({ promotion }: { promotion: Promotion }) {
 }
 
 function PromotionSlot({ promotion, onNavigate }: { promotion: Promotion; onNavigate?: () => void }) {
+  const linkRef = React.useRef<HTMLAnchorElement>(null);
+  const reportedToken = React.useRef<string | null>(null);
+
+  React.useEffect(() => {
+    const token = promotion.trackingToken;
+    const node = linkRef.current;
+    if (!token || !node || reportedToken.current === token) return;
+    const record = () => {
+      if (reportedToken.current === token) return;
+      reportedToken.current = token;
+      void api.recordPromotionEvent(promotion.id, "impression", token).catch(() => undefined);
+    };
+    if (!("IntersectionObserver" in window)) return;
+    let visibilityTimer: number | undefined;
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (reportedToken.current === token) return;
+        if (entry?.isIntersecting && entry.intersectionRatio >= 0.5) {
+          if (visibilityTimer === undefined) {
+            visibilityTimer = window.setTimeout(record, 500);
+          }
+        } else if (visibilityTimer !== undefined) {
+          window.clearTimeout(visibilityTimer);
+          visibilityTimer = undefined;
+        }
+      },
+      { threshold: 0.5 },
+    );
+    observer.observe(node);
+    return () => {
+      observer.disconnect();
+      if (visibilityTimer !== undefined) window.clearTimeout(visibilityTimer);
+    };
+  }, [promotion.id, promotion.trackingToken]);
+
   return (
     <Link
+      ref={linkRef}
       to={promotion.targetUrl}
-      onClick={onNavigate}
+      onClick={() => {
+        if (promotion.trackingToken) {
+          void api.recordPromotionEvent(
+            promotion.id,
+            "click",
+            promotion.trackingToken,
+          ).catch(() => undefined);
+        }
+        onNavigate?.();
+      }}
       className="motion-interactive block rounded-lg border border-primary/25 bg-primary/10 p-3 text-left outline-none hover:border-primary/45 hover:bg-primary/15 focus-visible:ring-[3px] focus-visible:ring-ring/50"
     >
       <PromotionAsset promotion={promotion} />
       <p className="flex items-center gap-1 text-[10px] font-medium tracking-[0.08em] text-primary">
         <Sparkles className="size-3" aria-hidden="true" />
-        社区推荐
+        社区推广
       </p>
       <p className="mt-1 text-sm font-semibold text-foreground">{promotion.title}</p>
       {promotion.body ? (

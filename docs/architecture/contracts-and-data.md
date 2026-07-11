@@ -90,6 +90,11 @@ Fresh database 必须只通过 sqlx migration ledger 建立。普通启动、CI 
 - 用户搜索索引由 Identity 维护，只存 id/handle/display name；Forum 通过 Identity public account API、
   自己的 relationship/count projection 和 Media public API 组装最终 hit。聚合 `search` crate 不跨域 SQL。
 - Redis cache key 版本化或短 TTL，mutation 精确 bump 相关 version；缓存故障不改变业务写入事实。
+- Platform 为每个实际返回的 promotion 签发 purpose/audience/issuer 绑定、两小时有效且含随机 UUID 的
+  HS256 presentation token；签名使用与 access JWT 分域的 key material，claims 不含 viewer 标识。
+  `promotion_event_receipts(token_id,event_type)` 只负责一次性幂等，点击事务先补齐同票据曝光再累计点击，
+  保证日表 `clicks <= impressions`。Receipt 48 小时后删除，`promotion_daily_metrics` 保留无身份日聚合；
+  管理查询最多生成 93 天零填充序列，列表只批量读取 30 天汇总，不做 N+1。
 - Onebox cache key 使用规范化 query-free URL 与 policy version；ready row 最长 7 天，failure row 仅
   2 分钟。含 query 的外部 URL 不持久化，旧 query/remote-image cache 由 additive migration 清除；
   过期 cache 不是外部内容事实源。

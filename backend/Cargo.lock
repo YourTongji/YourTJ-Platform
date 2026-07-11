@@ -2061,6 +2061,7 @@ dependencies = [
  "chrono",
  "governance",
  "identity",
+ "jsonwebtoken",
  "media",
  "serde",
  "serde_json",

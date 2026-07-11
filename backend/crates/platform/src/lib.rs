@@ -12,6 +12,8 @@ mod settings;
 mod validation;
 pub mod verifications;
 
+pub use promotions::purge_expired_promotion_event_receipts;
+
 use axum::Router;
 use shared::AppState;
 

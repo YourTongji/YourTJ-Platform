@@ -64,6 +64,7 @@ import type {
   Product,
   Promotion,
   PromotionCreateInput,
+  PromotionMetrics,
   PromotionUpdateInput,
   Purchase,
   Review,
@@ -332,6 +333,15 @@ export const api = {
 
   promotions(placement?: Promotion["placement"]) {
     return apiRequest<Promotion[]>("/promotions", { query: { placement } });
+  },
+
+  recordPromotionEvent(id: string, eventType: "impression" | "click", trackingToken: string) {
+    return apiRequest<void>(`/promotions/${encodeURIComponent(id)}/events`, {
+      method: "POST",
+      auth: false,
+      keepalive: true,
+      body: { eventType, trackingToken },
+    });
   },
 
   settings() {
@@ -1297,6 +1307,12 @@ export const api = {
     return apiRequest<void>(`/admin/promotions/${encodeURIComponent(id)}`, {
       method: "DELETE",
       body,
+    });
+  },
+
+  adminPromotionMetrics(id: string, from?: string, to?: string) {
+    return apiRequest<PromotionMetrics>(`/admin/promotions/${encodeURIComponent(id)}/metrics`, {
+      query: { from, to },
     });
   },
 

@@ -1,16 +1,27 @@
+use std::collections::HashMap;
+
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
-use axum::routing::{get, patch};
+use axum::routing::{get, patch, post};
 use axum::{Json, Router};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, NaiveDate, Utc};
 use governance::AccountActor;
+use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
 use shared::auth::Capability;
 use shared::{AppError, AppResult, AppState, Page};
-use sqlx::{FromRow, Postgres, Transaction};
+use sqlx::{FromRow, PgPool, Postgres, Transaction};
+use uuid::Uuid;
 
 use crate::auth::{is_staff, optional_account, staff_account};
 use crate::validation::{optional_text, parse_id, reason, required_text, schedule, timestamp};
+
+const TRACKING_AUDIENCE: &str = "promotion-events";
+const TRACKING_ISSUER: &str = "yourtj";
+const TRACKING_PURPOSE: &str = "promotion-event-v1";
+const TRACKING_TOKEN_TTL_SECONDS: i64 = 2 * 60 * 60;
+const METRIC_SUMMARY_DAYS: i64 = 30;
+const MAX_METRIC_RANGE_DAYS: i64 = 93;
 
 #[derive(Debug, Clone, FromRow)]
 struct PromotionRecord {
@@ -52,6 +63,32 @@ struct PromotionDto {
     archived_at: Option<i64>,
     created_at: i64,
     updated_at: i64,
+    tracking_token: Option<String>,
+    metrics: Option<PromotionMetricSummaryDto>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PromotionMetricSummaryDto {
+    from: String,
+    to: String,
+    impressions: i64,
+    clicks: i64,
+}
+
+#[derive(Debug, FromRow, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PromotionMetricDayDto {
+    metric_date: NaiveDate,
+    impressions: i64,
+    clicks: i64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PromotionMetricsDto {
+    summary: PromotionMetricSummaryDto,
+    days: Vec<PromotionMetricDayDto>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -107,6 +144,39 @@ struct PublicQuery {
 struct AdminListQuery {
     cursor: Option<String>,
     limit: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PromotionEventInput {
+    event_type: String,
+    tracking_token: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AdminMetricQuery {
+    from: Option<NaiveDate>,
+    to: Option<NaiveDate>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct PromotionTrackingClaims {
+    aud: String,
+    iss: String,
+    purpose: String,
+    promotion_id: i64,
+    version: i64,
+    token_id: String,
+    iat: i64,
+    exp: i64,
+}
+
+#[derive(Debug, FromRow)]
+struct PromotionMetricAggregate {
+    promotion_id: i64,
+    impressions: i64,
+    clicks: i64,
 }
 
 struct ValidatedPromotion {
@@ -198,7 +268,65 @@ fn effective_state(record: &PromotionRecord, now: DateTime<Utc>) -> String {
     "active".into()
 }
 
-fn dto(record: PromotionRecord) -> PromotionDto {
+fn tracking_key_material(secret: &str) -> String {
+    format!("yourtj:{TRACKING_PURPOSE}:{secret}")
+}
+
+fn issue_tracking_token(record: &PromotionRecord, secret: &str) -> AppResult<String> {
+    let now = Utc::now().timestamp();
+    let claims = PromotionTrackingClaims {
+        aud: TRACKING_AUDIENCE.into(),
+        iss: TRACKING_ISSUER.into(),
+        purpose: TRACKING_PURPOSE.into(),
+        promotion_id: record.id,
+        version: record.version,
+        token_id: Uuid::new_v4().to_string(),
+        iat: now,
+        exp: now + TRACKING_TOKEN_TTL_SECONDS,
+    };
+    let key_material = tracking_key_material(secret);
+    encode(
+        &Header::new(Algorithm::HS256),
+        &claims,
+        &EncodingKey::from_secret(key_material.as_bytes()),
+    )
+    .map_err(|_| {
+        AppError::Internal(std::io::Error::other("promotion tracking token encoding failed").into())
+    })
+}
+
+fn decode_tracking_token(token: &str, secret: &str) -> AppResult<PromotionTrackingClaims> {
+    if token.is_empty() || token.chars().count() > 2048 {
+        return Err(AppError::BadRequest("invalid promotion tracking token".into()));
+    }
+    let mut validation = Validation::new(Algorithm::HS256);
+    validation.set_audience(&[TRACKING_AUDIENCE]);
+    validation.set_issuer(&[TRACKING_ISSUER]);
+    validation.set_required_spec_claims(&["aud", "exp", "iss"]);
+    validation.leeway = 10;
+    let key_material = tracking_key_material(secret);
+    let claims = decode::<PromotionTrackingClaims>(
+        token,
+        &DecodingKey::from_secret(key_material.as_bytes()),
+        &validation,
+    )
+    .map_err(|_| AppError::BadRequest("invalid promotion tracking token".into()))?
+    .claims;
+    if claims.purpose != TRACKING_PURPOSE || claims.version < 1 {
+        return Err(AppError::BadRequest("invalid promotion tracking token".into()));
+    }
+    Ok(claims)
+}
+
+fn summary_window(today: NaiveDate) -> (NaiveDate, NaiveDate) {
+    (today - Duration::days(METRIC_SUMMARY_DAYS - 1), today)
+}
+
+fn dto(
+    record: PromotionRecord,
+    tracking_token: Option<String>,
+    metrics: Option<PromotionMetricSummaryDto>,
+) -> PromotionDto {
     PromotionDto {
         id: record.id.to_string(),
         effective_state: effective_state(&record, Utc::now()),
@@ -217,7 +345,55 @@ fn dto(record: PromotionRecord) -> PromotionDto {
         archived_at: record.archived_at.map(|value| value.timestamp()),
         created_at: record.created_at.timestamp(),
         updated_at: record.updated_at.timestamp(),
+        tracking_token,
+        metrics,
     }
+}
+
+async fn metric_summaries(
+    pool: &PgPool,
+    promotion_ids: &[i64],
+) -> AppResult<HashMap<i64, PromotionMetricSummaryDto>> {
+    if promotion_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let today = Utc::now().date_naive();
+    let (from, to) = summary_window(today);
+    let rows = sqlx::query_as::<_, PromotionMetricAggregate>(
+        "SELECT promotion_id, COALESCE(SUM(impressions), 0)::bigint AS impressions, \
+                COALESCE(SUM(clicks), 0)::bigint AS clicks \
+         FROM platform.promotion_daily_metrics \
+         WHERE promotion_id = ANY($1) AND metric_date BETWEEN $2 AND $3 \
+         GROUP BY promotion_id",
+    )
+    .bind(promotion_ids)
+    .bind(from)
+    .bind(to)
+    .fetch_all(pool)
+    .await?;
+    let mut summaries = rows
+        .into_iter()
+        .map(|row| {
+            (
+                row.promotion_id,
+                PromotionMetricSummaryDto {
+                    from: from.to_string(),
+                    to: to.to_string(),
+                    impressions: row.impressions,
+                    clicks: row.clicks,
+                },
+            )
+        })
+        .collect::<HashMap<_, _>>();
+    for promotion_id in promotion_ids {
+        summaries.entry(*promotion_id).or_insert_with(|| PromotionMetricSummaryDto {
+            from: from.to_string(),
+            to: to.to_string(),
+            impressions: 0,
+            clicks: 0,
+        });
+    }
+    Ok(summaries)
 }
 
 fn transition_allowed(current: &str, next: &str) -> bool {
@@ -295,7 +471,14 @@ async fn list_active(
     .bind(staff)
     .fetch_all(&state.db)
     .await?;
-    Ok(Json(rows.into_iter().map(dto).collect()))
+    let items = rows
+        .into_iter()
+        .map(|record| {
+            let tracking_token = issue_tracking_token(&record, &state.jwt_secret)?;
+            Ok(dto(record, Some(tracking_token), None))
+        })
+        .collect::<AppResult<Vec<_>>>()?;
+    Ok(Json(items))
 }
 
 async fn admin_list(
@@ -319,7 +502,16 @@ async fn admin_list(
     let has_more = rows.len() > limit as usize;
     let visible = rows.into_iter().take(limit as usize).collect::<Vec<_>>();
     let next_cursor = has_more.then(|| visible.last().map(|row| row.id.to_string())).flatten();
-    Ok(Json(Page::new(visible.into_iter().map(dto).collect(), next_cursor)))
+    let promotion_ids = visible.iter().map(|record| record.id).collect::<Vec<_>>();
+    let mut summaries = metric_summaries(&state.db, &promotion_ids).await?;
+    let items = visible
+        .into_iter()
+        .map(|record| {
+            let metrics = summaries.remove(&record.id);
+            dto(record, None, metrics)
+        })
+        .collect();
+    Ok(Json(Page::new(items, next_cursor)))
 }
 
 async fn admin_create(
@@ -372,7 +564,7 @@ async fn admin_create(
     )
     .await?;
     tx.commit().await?;
-    Ok((StatusCode::CREATED, Json(dto(record))))
+    Ok((StatusCode::CREATED, Json(dto(record, None, None))))
 }
 
 async fn admin_update(
@@ -474,7 +666,7 @@ async fn admin_update(
     )
     .await?;
     tx.commit().await?;
-    Ok(Json(dto(record)))
+    Ok(Json(dto(record, None, None)))
 }
 
 async fn admin_archive(
@@ -523,11 +715,156 @@ async fn admin_archive(
     Ok(StatusCode::NO_CONTENT)
 }
 
+async fn record_metric_event(
+    tx: &mut Transaction<'_, Postgres>,
+    claims: &PromotionTrackingClaims,
+    token_id: Uuid,
+    event_type: &str,
+) -> AppResult<()> {
+    if event_type == "impression" {
+        sqlx::query(
+            "WITH accepted AS ( \
+               INSERT INTO platform.promotion_event_receipts \
+                 (token_id, promotion_id, issued_version, event_type) \
+               VALUES ($1, $2, $3, 'impression') \
+               ON CONFLICT (token_id, event_type) DO NOTHING \
+               RETURNING promotion_id \
+             ) \
+             INSERT INTO platform.promotion_daily_metrics \
+               (promotion_id, metric_date, impressions, clicks, updated_at) \
+             SELECT promotion_id, timezone('UTC', now())::date, 1, 0, now() FROM accepted \
+             ON CONFLICT (promotion_id, metric_date) DO UPDATE SET \
+               impressions = platform.promotion_daily_metrics.impressions + 1, \
+               updated_at = now()",
+        )
+        .bind(token_id)
+        .bind(claims.promotion_id)
+        .bind(claims.version)
+        .execute(&mut **tx)
+        .await?;
+    } else {
+        sqlx::query(
+            "WITH accepted AS ( \
+               INSERT INTO platform.promotion_event_receipts \
+                 (token_id, promotion_id, issued_version, event_type) \
+               VALUES ($1, $2, $3, 'click') \
+               ON CONFLICT (token_id, event_type) DO NOTHING \
+               RETURNING promotion_id \
+             ) \
+             UPDATE platform.promotion_daily_metrics metric SET \
+               clicks = metric.clicks + 1, updated_at = now() \
+             FROM accepted \
+             WHERE metric.promotion_id = accepted.promotion_id \
+               AND metric.metric_date = timezone('UTC', now())::date",
+        )
+        .bind(token_id)
+        .bind(claims.promotion_id)
+        .bind(claims.version)
+        .execute(&mut **tx)
+        .await?;
+    }
+    Ok(())
+}
+
+async fn record_public_event(
+    State(state): State<AppState>,
+    Path(promotion_id): Path<String>,
+    Json(input): Json<PromotionEventInput>,
+) -> AppResult<StatusCode> {
+    let promotion_id = parse_id(&promotion_id, "promotion id")?;
+    if !matches!(input.event_type.as_str(), "impression" | "click") {
+        return Err(AppError::BadRequest("eventType must be impression or click".into()));
+    }
+    let claims = decode_tracking_token(&input.tracking_token, &state.jwt_secret)?;
+    if claims.promotion_id != promotion_id {
+        return Err(AppError::BadRequest("invalid promotion tracking token".into()));
+    }
+    let token_id = Uuid::parse_str(&claims.token_id)
+        .map_err(|_| AppError::BadRequest("invalid promotion tracking token".into()))?;
+    let mut tx = state.db.begin().await?;
+    if input.event_type == "click" {
+        record_metric_event(&mut tx, &claims, token_id, "impression").await?;
+    }
+    record_metric_event(&mut tx, &claims, token_id, &input.event_type).await?;
+    tx.commit().await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+fn metric_range(query: AdminMetricQuery) -> AppResult<(NaiveDate, NaiveDate)> {
+    let today = Utc::now().date_naive();
+    let default_from = today - Duration::days(METRIC_SUMMARY_DAYS - 1);
+    let from = query.from.unwrap_or(default_from);
+    let to = query.to.unwrap_or(today);
+    let days = (to - from).num_days() + 1;
+    if from > to || to > today || !(1..=MAX_METRIC_RANGE_DAYS).contains(&days) {
+        return Err(AppError::BadRequest(
+            "metrics range must be ordered, end today or earlier, and contain at most 93 days"
+                .into(),
+        ));
+    }
+    Ok((from, to))
+}
+
+async fn admin_metrics(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(promotion_id): Path<String>,
+    Query(query): Query<AdminMetricQuery>,
+) -> AppResult<Json<PromotionMetricsDto>> {
+    staff_account(&headers, &state, Capability::ManagePromotions).await?;
+    let promotion_id = parse_id(&promotion_id, "promotion id")?;
+    let exists: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM platform.promotions WHERE id = $1)")
+            .bind(promotion_id)
+            .fetch_one(&state.db)
+            .await?;
+    if !exists {
+        return Err(AppError::NotFound);
+    }
+    let (from, to) = metric_range(query)?;
+    let days = sqlx::query_as::<_, PromotionMetricDayDto>(
+        "SELECT series.metric_date::date AS metric_date, \
+                COALESCE(metric.impressions, 0)::bigint AS impressions, \
+                COALESCE(metric.clicks, 0)::bigint AS clicks \
+         FROM generate_series($2::date, $3::date, interval '1 day') \
+              AS series(metric_date) \
+         LEFT JOIN platform.promotion_daily_metrics metric \
+           ON metric.promotion_id = $1 AND metric.metric_date = series.metric_date::date \
+         ORDER BY series.metric_date",
+    )
+    .bind(promotion_id)
+    .bind(from)
+    .bind(to)
+    .fetch_all(&state.db)
+    .await?;
+    let summary = PromotionMetricSummaryDto {
+        from: from.to_string(),
+        to: to.to_string(),
+        impressions: days.iter().map(|day| day.impressions).sum(),
+        clicks: days.iter().map(|day| day.clicks).sum(),
+    };
+    Ok(Json(PromotionMetricsDto { summary, days }))
+}
+
+/// Deletes expired anonymous promotion deduplication receipts while retaining daily aggregates.
+pub async fn purge_expired_promotion_event_receipts(pool: &PgPool) -> AppResult<u64> {
+    let affected = sqlx::query(
+        "DELETE FROM platform.promotion_event_receipts \
+         WHERE recorded_at < now() - interval '48 hours'",
+    )
+    .execute(pool)
+    .await?
+    .rows_affected();
+    Ok(affected)
+}
+
 pub(crate) fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/v2/promotions", get(list_active))
+        .route("/api/v2/promotions/{id}/events", post(record_public_event))
         .route("/api/v2/admin/promotions", get(admin_list).post(admin_create))
         .route("/api/v2/admin/promotions/{id}", patch(admin_update).delete(admin_archive))
+        .route("/api/v2/admin/promotions/{id}/metrics", get(admin_metrics))
 }
 
 #[cfg(test)]

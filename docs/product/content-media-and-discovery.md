@@ -63,7 +63,9 @@
   没有 durable progress/retry，因此可靠投影闭环仍为 `Partial`。
 - 首页左侧推广由 platform API 返回真实自营内容；支持两个 placement、状态/排期、受众、priority、
   optimistic version、独立 capability、reason/audit 和后台 UI。目标只接受安全站内相对路径，素材只
-  接受当前操作者拥有的 clean image asset id，不保存图片 URL。
+  接受当前操作者拥有的 clean image asset id，不保存图片 URL。公开列表为每次展示签发不含账号、IP
+  或设备标识的两小时票据；卡片持续达到 50% 可见 500ms 才记曝光，点击会补齐可能丢失的曝光。同一
+  票据的曝光/点击分别幂等，后台提供 30 天汇总和最多 93 天 UTC 日趋势。
 
 ### Partial
 
@@ -80,8 +82,8 @@
 - 聚合搜索已有六类 typed 结果、有效 type filter、独立 Web 综合结果页与全局搜索入口；仍缺每类
   highlight/纠错，以及 transactional outbox 驱动的索引可靠更新。单类 cursor、all 页“查看更多”
   和局部失败状态已完成。
-- 推广尚无通用 `asset_usages` binding/GC、匿名 clean 图片交付和按日聚合 impression/click；这些缺口
-  不影响无图片卡片和登录用户通过 media 授权 URL 显示 clean asset。
+- 推广尚无通用 `asset_usages` binding/GC 和匿名 clean 图片交付；这些缺口不影响无图片卡片和登录
+  用户通过 media 授权 URL 显示 clean asset。效果数据已按日聚合，但不等于商业广告归因或跨域画像。
 
 ## 内容类型与格式
 
