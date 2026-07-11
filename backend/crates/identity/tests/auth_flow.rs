@@ -46,23 +46,17 @@ async fn test_request_code_creates_record() {
     assert!(count.unwrap() > 0);
 }
 
-// Ignored: the test app runs without Redis (`redis: None`), and
-// `check_token_bucket` is a no-op without a Redis backend, so no 429 is ever
-// returned. The token-bucket logic itself is covered by `shared::ratelimit`
-// tests. Run this with a Redis-backed app to exercise the end-to-end limit.
 #[tokio::test]
-#[ignore = "requires Redis; test app runs without a Redis backend"]
 async fn test_request_code_rate_limited() {
     let (_, app) = create_test_app().await;
+    let email = format!("bob-{}@tongji.edu.cn", uuid::Uuid::new_v4());
 
     let make_req = |captcha_token: &str| {
         Request::builder()
             .method(Method::POST)
             .uri("/api/v2/auth/email/request-code")
             .header(header::CONTENT_TYPE, "application/json")
-            .body(Body::from(
-                json!({ "email": "bob@tongji.edu.cn", "captchaToken": captcha_token }).to_string(),
-            ))
+            .body(Body::from(json!({ "email": email, "captchaToken": captcha_token }).to_string()))
             .unwrap()
     };
 

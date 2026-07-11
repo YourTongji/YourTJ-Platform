@@ -140,7 +140,10 @@ async fn test_report_requires_auth() {
                 .method(Method::POST)
                 .uri(format!("/api/v2/reviews/{review_id}/report"))
                 .header("Content-Type", "application/json")
-                .body(axum::body::Body::from(json!({ "reason": "bad" }).to_string()))
+                .body(axum::body::Body::from(
+                    json!({ "reason": "bad", "captchaToken": "unauthenticated-report" })
+                        .to_string(),
+                ))
                 .unwrap(),
         )
         .await
