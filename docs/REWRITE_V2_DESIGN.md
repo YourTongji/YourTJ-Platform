@@ -571,7 +571,13 @@ Previously all system-originated ledger entries used literal `"system-signed"` a
 - Comment path generation uses `FOR UPDATE` row locks inside a transaction
 - Unique partial index on `(thread_id, path)` prevents concurrent path collisions
 
-### 8.6 Domain boundaries
+### 8.6 OSS upload trust boundary
+
+- `POST /api/v2/media/upload-credentials` creates a 15-minute account-bound upload intent and returns Alibaba STS credentials whose policy permits `oss:PutObject` only for that intent's exact object key.
+- OSS callbacks accept only HTTPS public-key URLs on `gosspublic.alicdn.com`, disable redirects, verify RSA PKCS#1 v1.5 with MD5 over the OSS canonical path/body, and atomically consume the upload intent with upload-row creation.
+- Missing OSS configuration fails media routes closed; long-lived access keys and role secrets are loaded only from environment variables.
+
+### 8.7 Domain boundaries
 
 | Crate | Owns |
 |---|---|
@@ -582,7 +588,7 @@ Previously all system-originated ledger entries used literal `"system-signed"` a
 | `shared` | Config, JWT primitives (no DB queries), AppState, error types, pagination, cache, rate limiting |
 | `api` | Router composition, startup wiring, platform routes, admin stubs (selection sync, review reindex) |
 
-### 8.7 Rate limits (Redis token bucket)
+### 8.8 Rate limits (Redis token bucket)
 
 | Operation | Rate |
 |---|---|

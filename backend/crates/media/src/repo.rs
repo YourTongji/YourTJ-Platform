@@ -1,15 +1,80 @@
 //! Database access layer for the media domain.
 
+use chrono::{DateTime, Utc};
 use shared::AppResult;
-use sqlx::PgPool;
+use sqlx::{PgPool, Postgres, Transaction};
+use uuid::Uuid;
 
 use crate::error::MediaError;
 use crate::models::UploadRow;
 
-/// Insert a new upload row with status `pending`.
-#[allow(clippy::too_many_arguments)] // reason: insert_upload mirrors the full upload column set; enforcing fields via individual params prevents accidental omission
-pub async fn insert_upload(
+/// Server-issued upload authorization row.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct UploadIntentRow {
+    pub id: Uuid,
+    pub account_id: i64,
+    pub kind: String,
+    pub oss_key: String,
+    pub content_type: String,
+    pub max_bytes: i64,
+    pub callback_token: String,
+    pub expires_at: DateTime<Utc>,
+    pub upload_id: Option<i64>,
+}
+
+/// Insert a new upload intent bound to one account-scoped object key.
+#[allow(clippy::too_many_arguments)] // reason: upload intent creation binds every persisted authorization field explicitly.
+pub async fn insert_upload_intent(
     pool: &PgPool,
+    intent_id: Uuid,
+    account_id: i64,
+    kind: &str,
+    oss_key: &str,
+    content_type: &str,
+    max_bytes: i64,
+    callback_token: &str,
+    expires_at: DateTime<Utc>,
+) -> AppResult<UploadIntentRow> {
+    let row = sqlx::query_as::<_, UploadIntentRow>(
+        "INSERT INTO media.upload_intents \
+         (id, account_id, kind, oss_key, content_type, max_bytes, callback_token, expires_at) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
+         RETURNING id, account_id, kind, oss_key, content_type, max_bytes, callback_token, \
+                   expires_at, upload_id",
+    )
+    .bind(intent_id)
+    .bind(account_id)
+    .bind(kind)
+    .bind(oss_key)
+    .bind(content_type)
+    .bind(max_bytes)
+    .bind(callback_token)
+    .bind(expires_at)
+    .fetch_one(pool)
+    .await?;
+    Ok(row)
+}
+
+/// Lock an upload intent for callback processing.
+pub async fn lock_upload_intent(
+    tx: &mut Transaction<'_, Postgres>,
+    intent_id: Uuid,
+) -> AppResult<Option<UploadIntentRow>> {
+    let row = sqlx::query_as::<_, UploadIntentRow>(
+        "SELECT id, account_id, kind, oss_key, content_type, max_bytes, callback_token, \
+                expires_at, upload_id \
+         FROM media.upload_intents WHERE id = $1 FOR UPDATE",
+    )
+    .bind(intent_id)
+    .fetch_optional(&mut **tx)
+    .await?;
+    Ok(row)
+}
+
+/// Insert an upload row inside the callback transaction.
+#[allow(clippy::too_many_arguments)] // reason: callback row creation mirrors the persisted upload columns.
+pub async fn insert_upload_in_tx(
+    tx: &mut Transaction<'_, Postgres>,
     account_id: i64,
     kind: &str,
     oss_key: &str,
@@ -30,9 +95,31 @@ pub async fn insert_upload(
     .bind(bytes)
     .bind(mime)
     .bind(sha256)
-    .fetch_one(pool)
+    .fetch_one(&mut **tx)
     .await?;
     Ok(row)
+}
+
+/// Mark an upload intent consumed by the created upload row.
+pub async fn consume_upload_intent(
+    tx: &mut Transaction<'_, Postgres>,
+    intent_id: Uuid,
+    upload_id: i64,
+) -> AppResult<()> {
+    let affected = sqlx::query(
+        "UPDATE media.upload_intents \
+         SET consumed_at = now(), upload_id = $2 \
+         WHERE id = $1 AND consumed_at IS NULL",
+    )
+    .bind(intent_id)
+    .bind(upload_id)
+    .execute(&mut **tx)
+    .await?
+    .rows_affected();
+    if affected != 1 {
+        return Err(MediaError::BadRequest("upload intent already consumed".into()).into());
+    }
+    Ok(())
 }
 
 /// Find an upload by its primary key.

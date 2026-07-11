@@ -16,6 +16,9 @@ pub enum MediaError {
     #[error("bad request: {0}")]
     BadRequest(String),
 
+    #[error("media upload service unavailable: {0}")]
+    Unavailable(String),
+
     #[error(transparent)]
     Internal(#[from] anyhow::Error),
 }
@@ -24,8 +27,9 @@ impl From<MediaError> for AppError {
     fn from(e: MediaError) -> Self {
         match e {
             MediaError::NotFound => AppError::NotFound,
-            MediaError::Forbidden(msg) => AppError::BadRequest(msg),
+            MediaError::Forbidden(_) => AppError::Forbidden,
             MediaError::BadRequest(msg) => AppError::BadRequest(msg),
+            MediaError::Unavailable(msg) => AppError::BadRequest(msg),
             MediaError::Internal(err) => AppError::Internal(err),
         }
     }

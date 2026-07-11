@@ -24,6 +24,7 @@ tags:
   - { name: forum }
   - { name: notifications }
   - { name: platform }
+  - { name: media }
   - { name: admin }
 
 security:
@@ -541,6 +542,51 @@ components:
         description: { type: string, nullable: true }
         image: { type: string, nullable: true }
         siteName: { type: string, nullable: true }
+    # ---- media ----
+    UploadIntentInput:
+      type: object
+      required: [kind, contentType]
+      properties:
+        kind: { type: string, enum: [image, file] }
+        contentType: { type: string }
+    UploadCredentials:
+      type: object
+      required: [uploadIntentId, accessKeyId, accessKeySecret, securityToken, region, bucket, prefix, ossKey, callbackUrl, callbackBody, expiration]
+      properties:
+        uploadIntentId: { type: string, format: uuid }
+        accessKeyId: { type: string }
+        accessKeySecret: { type: string }
+        securityToken: { type: string }
+        region: { type: string }
+        bucket: { type: string }
+        prefix: { type: string }
+        ossKey: { type: string }
+        callbackUrl: { type: string, format: uri }
+        callbackBody: { type: string }
+        expiration: { type: integer, description: Unix seconds }
+    Upload:
+      type: object
+      properties:
+        id: { type: string }
+        accountId: { type: string }
+        kind: { type: string, enum: [image, file] }
+        ossKey: { type: string }
+        url: { type: string }
+        bytes: { type: integer }
+        mime: { type: string }
+        sha256: { type: string }
+        status: { type: string, enum: [pending, clean, blocked] }
+        createdAt: { type: integer }
+    UploadUrl:
+      type: object
+      required: [url]
+      properties:
+        url: { type: string }
+    UploadPage:
+      allOf:
+        - $ref: "#/components/schemas/Page"
+        - { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/Upload" } } } }
+
     # ---- admin ----
     Badge:
       type: object
@@ -1104,6 +1150,35 @@ paths:
       summary: Get poll results
       parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
       responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/PollResult" } } } } }
+
+  # ============ media ==========
+  /media/upload-credentials:
+    post:
+      tags: [media]
+      summary: Issue an OSS upload intent and scoped STS credentials
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/UploadIntentInput" } } } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/UploadCredentials" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /media/callback:
+    post:
+      tags: [media]
+      security: []
+      summary: Alibaba OSS signed upload callback
+      requestBody: { required: true, content: { application/json: { schema: { type: object } } } }
+      responses:
+        "200": { description: ok }
+        "400": { $ref: "#/components/responses/BadRequest" }
+  /media/{id}/url:
+    get:
+      tags: [media]
+      summary: Get CDN/object URL for an uploaded object
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/UploadUrl" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
 
   # ============ notifications ============
   /notifications:

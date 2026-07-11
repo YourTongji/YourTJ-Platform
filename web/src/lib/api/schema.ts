@@ -815,8 +815,8 @@ export interface paths {
         post: {
             parameters: {
                 query?: never;
-                header?: {
-                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                header: {
+                    "Idempotency-Key": components["parameters"]["WalletIdempotencyKey"];
                 };
                 path?: never;
                 cookie?: never;
@@ -3336,6 +3336,127 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/media/upload-credentials": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Issue an OSS upload intent and scoped STS credentials */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["UploadIntentInput"];
+                };
+            };
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["UploadCredentials"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/media/callback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Alibaba OSS signed upload callback */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                400: components["responses"]["BadRequest"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/media/{id}/url": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get CDN/object URL for an uploaded object */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["UploadUrl"];
+                    };
+                };
+                401: components["responses"]["Unauthorized"];
+                404: components["responses"]["NotFound"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/notifications": {
         parameters: {
             query?: never;
@@ -5696,6 +5817,47 @@ export interface components {
             description?: string | null;
             image?: string | null;
             siteName?: string | null;
+        };
+        UploadIntentInput: {
+            /** @enum {string} */
+            kind: "image" | "file";
+            contentType: string;
+        };
+        UploadCredentials: {
+            /** Format: uuid */
+            uploadIntentId: string;
+            accessKeyId: string;
+            accessKeySecret: string;
+            securityToken: string;
+            region: string;
+            bucket: string;
+            prefix: string;
+            ossKey: string;
+            /** Format: uri */
+            callbackUrl: string;
+            callbackBody: string;
+            /** @description Unix seconds */
+            expiration: number;
+        };
+        Upload: {
+            id?: string;
+            accountId?: string;
+            /** @enum {string} */
+            kind?: "image" | "file";
+            ossKey?: string;
+            url?: string;
+            bytes?: number;
+            mime?: string;
+            sha256?: string;
+            /** @enum {string} */
+            status?: "pending" | "clean" | "blocked";
+            createdAt?: number;
+        };
+        UploadUrl: {
+            url: string;
+        };
+        UploadPage: components["schemas"]["Page"] & {
+            items?: components["schemas"]["Upload"][];
         };
         Badge: {
             id?: string;

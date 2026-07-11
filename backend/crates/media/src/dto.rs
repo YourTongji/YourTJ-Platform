@@ -5,25 +5,38 @@
 
 use serde::{Deserialize, Serialize};
 
-/// STS credentials returned to the client for direct OSS upload.
+/// Upload intent request for direct OSS upload.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UploadIntentInput {
+    pub kind: String,
+    pub content_type: String,
+}
+
+/// STS credentials and callback fields returned for direct OSS upload.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UploadCredentialsDto {
+    pub upload_intent_id: String,
     pub access_key_id: String,
     pub access_key_secret: String,
     pub security_token: String,
     pub region: String,
     pub bucket: String,
     pub prefix: String,
-    pub expiration: String,
+    pub oss_key: String,
+    pub callback_url: String,
+    pub callback_body: String,
+    pub expiration: i64,
 }
 
 /// Body received from the OSS callback after a successful upload.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UploadCallbackInput {
+    pub upload_intent_id: String,
+    pub callback_token: String,
     pub oss_key: String,
-    pub url: String,
     pub bytes: i64,
     pub mime: String,
     pub sha256: String,
