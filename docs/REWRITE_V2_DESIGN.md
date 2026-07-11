@@ -1,5 +1,18 @@
 # YourTJ v2 后端设计草案（A）
 
+> **Status:** Historical architecture baseline; non-authoritative for current API, schema, governance,
+> or implementation status.
+>
+> **Owner:** Platform maintainers
+>
+> **Last verified:** Partially reconciled through 2026-06 remediation notes; not a current inventory
+>
+> **Authoritative sources:** [`docs/README.md`](README.md), `contract/openapi.yaml`, numbered migrations,
+> and current normative product/security documents
+>
+> 本文保留早期架构决策和演进背景。完整 DDL、示例路径、阶段状态可能已经过期；当前社区治理、
+> 活跃度、资料/私信与权限规范请从 [`docs/README.md`](README.md) 进入。
+
 > 目标架构：阿里云华东 · SAE 无状态容器（serverless）· PolarDB（A 单实例 / B 主从读写分离）· Meilisearch 搜索 · Redis 缓存/计数/限流/热榜 · OSS+CDN 媒体。
 > 身份：校园邮箱验证码注册 + JWT/refresh；账号绑 Ed25519，仅资金操作签名。
 > 本文覆盖：①API 约定 ②v2 OpenAPI 草案 ③PolarDB DDL ④搜索索引设计 ⑤缓存与失效策略。
@@ -24,7 +37,7 @@
 
 ## 1. v2 OpenAPI 草案（约定 + 代表性示例）
 
-> **完整契约以 [`contract/openapi.yaml`](../contract/openapi.yaml) 为单一权威源**（65 路径 / 75 操作 / 52 schema，覆盖 auth·identity·wallet·credit(含 escrow 市场)·search·courses·selection(选课)·reviews·forum·notifications·platform·admin，并抽出可复用的 `Cursor/Limit/X-Wallet-Sig/Idempotency-Key` 参数与错误响应）。本节只保留约定与代表性示例，改接口请先改契约。
+> **完整契约以 [`contract/openapi.yaml`](../contract/openapi.yaml) 为单一权威源**。本节只保留历史约定与代表性示例；路径、操作和 schema 数量不在文档中手工维护，改接口请先改契约。
 
 ```yaml
 openapi: 3.1.0
@@ -565,7 +578,7 @@ Previously all system-originated ledger entries used literal `"system-signed"` a
 - `CREDIT_SYSTEM_PRIVATE_KEY` (hex-encoded 32-byte seed) loaded from the environment
 - `derive_system_key()` in `api/src/bootstrap.rs` derives the Ed25519 keypair at startup
 - System public key is stored in `AppState.system_public_key_b64`
-- All `mint`, `escrow_hold`, `escrow_release` entries are signed with real Ed25519 
+- All `mint`, `escrow_hold`, `escrow_release` entries are signed with real Ed25519
 - `verify_full_ledger` verifies both user and system signatures against stored public keys
 - Batch preload of `identity.account_keys` reduces N+1 queries during full verification
 

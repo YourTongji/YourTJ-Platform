@@ -1,5 +1,19 @@
 # YourTJ Web Frontend Architecture
 
+> **Status:** Current frontend inventory; partial/proposed areas are labelled below
+>
+> **Owner:** Web maintainers
+>
+> **Last verified:** 2026-07-11 against `origin/main@06a8898`
+>
+> **Authoritative sources:** `contract/openapi.yaml` for the intended HTTP contract and `web/src` for the current client implementation
+
+Product rules live in the [documentation index](../docs/README.md), especially
+[activity scoring](../docs/product/activity-scoring.md),
+[profiles and messaging](../docs/product/profile-and-messaging.md), and the
+[admin console](../docs/operations/admin-console.md). This file records frontend structure and must not
+promote a partial screen to a complete product capability.
+
 ## Stack
 
 - Vite + React + TypeScript
@@ -17,19 +31,19 @@ gateway.
 
 ## Feature Map
 
-| Area | Routes | Backend APIs |
-|---|---|---|
-| Home | `/` | announcements, hot forum feed, hot courses, wallet summary |
-| Auth | `/login` | `/auth/email/request-code`, `/auth/email/verify`, `/auth/refresh`, `/auth/logout`, `/me` |
-| Forum | `/forum`, `/forum/threads/:id`, `/bookmarks` | boards, tags, thread feed, create thread, comments, votes, flags, bookmarks, subscriptions, polls |
-| Messages | `/messages` | DM conversations and messages |
-| Courses | `/courses`, `/courses/:id` | departments, courses, search, details, AI summary, reviews, likes, reports |
-| Selection | `/schedule` | calendars, grades, majors, course natures, courses by major/nature/search, course timeslots, latest sync |
-| Wallet | `/wallet` | wallet, bind public key, legacy claim challenge/claim, ledger, ledger verify, tip, tasks, products, purchases |
-| Notifications | `/notifications` | notifications, unread count, mark read, notification prefs via settings |
-| Profile | `/profile/:handle` | public user profile, user threads, user comments |
-| Settings | `/settings` | `/me` profile update; local notification preference placeholder |
-| Admin | `/admin` | review queue, report queue, settings, selection sync, search reindex |
+| Area | Routes | State | Backend APIs |
+|---|---|---|---|
+| Home | `/` | **Partial:** feed works; right grid is still synthetic trust-level data until this PR's activity API lands | announcements, forum feed; proposed `/me/activity` |
+| Auth | `/login` | Current, subject to contract conformance tests | email/password auth, refresh, logout, `/me` |
+| Forum | `/forum`, `/forum/threads/:id`, `/bookmarks` | Current core, with moderation UI expansion proposed | boards, tags, threads, comments, votes, flags, bookmarks, subscriptions, polls |
+| Messages | `/messages` | **Partial:** basic 1:1 list/send only; no read state, report/archive flow, or handle-first composer | DM conversations and messages |
+| Courses | `/courses`, `/courses/:id` | Current core | departments, courses, search, details, AI summary, reviews, likes, reports |
+| Selection | `/schedule` | Current client uses implementation aliases; contract mismatch documented below | calendars, grades, majors, natures, course search/timeslots |
+| Wallet | `/wallet` | Current core; signing uses one-time intents | wallet, legacy claim, ledger verify, tip, tasks, products, purchases |
+| Notifications | `/notifications` | Current core | list, unread count, mark read, account notification prefs |
+| Profile | `/profile/:handle` | **Partial:** screen exists; list response contract currently drifts from Rust | public profile, user threads/comments |
+| Settings | `/settings` | Current profile and backend-persisted notification preferences | `/me`, `/me/notification-prefs` |
+| Admin | `/admin` | **Partial:** only reviews/reports/settings/job triggers are surfaced | expanded capability-driven console is proposed in this PR |
 
 ## Selection Adaptation
 
@@ -44,8 +58,9 @@ The current Rust router exposes:
 - `/selection/courses/{code}`
 - `/selection/courses/{code}/timeslots`
 
-The frontend uses the Rust router paths because they are authoritative for the
-current backend binary.
+The current frontend uses the Rust router aliases so it can operate against the current binary. This is
+an acknowledged contract defect, not a new source of truth: the implementation, OpenAPI, and generated
+client must converge before the mismatch can be marked resolved.
 
 ## Wallet Signing
 
@@ -55,16 +70,10 @@ The frontend implements a local Ed25519 wallet:
 - public key: sent to `/wallet/bind`
 - signing helper: `src/lib/wallet.ts`
 
-Current backend status:
-
-- Task/product escrow endpoints accept or ignore `X-Wallet-Sig` and are wired.
-- `/credit/tip` generates `tx_id`, `nonce`, and `timestamp` on the server before
-  signature verification. A browser cannot pre-sign the exact payload. The UI
-  therefore documents the backend protocol gap instead of pretending tips work.
-
-To make tipping fully usable, add a backend intent/challenge endpoint that returns
-the canonical payload to sign, or let the client provide the nonce/timestamp/tx id
-that the backend verifies.
+Current backend contract uses `POST /credit/signing-intents` to return exact `signingBytes`, followed by
+the write request carrying `X-Wallet-Intent`, `X-Wallet-Sig`, and the same `Idempotency-Key`. Any screen
+that has not completed this two-step flow must stay labelled unavailable rather than falling back to an
+unsigned request.
 
 ## Verification
 

@@ -1,5 +1,20 @@
 # 论坛体系对齐 Discourse — 完整设计（Forum Parity Plan）
 
+> **Status:** Historical parity plan; its gap matrix and phase labels are not a current implementation
+> inventory or current governance authority.
+>
+> **Owner:** Forum maintainers
+>
+> **Last verified:** Written before the current F1/F2/F3 implementation; retained for rationale
+>
+> **Authoritative sources:** [`docs/README.md`](README.md),
+> [`product/community-governance.md`](product/community-governance.md),
+> [`product/profile-and-messaging.md`](product/profile-and-messaging.md),
+> [`security/rbac-and-audit.md`](security/rbac-and-audit.md), OpenAPI, and numbered migrations
+>
+> 本文保留 Discourse 对齐时的产品思考，但其中 ✅/🟡/❌ 与 F0–F3 状态已过期。不要据此判断
+> 当前接口、数据库或已上线能力。
+
 > 目标：以 Discourse 的论坛功能体系为基准，逐项对照 YourTJ forum 域的现状，
 > 给出**内容功能完整、详尽、好用**的对齐方案。本文是 forum 域 Phase B → Phase C
 > 的权威设计，落地时按 §9 分期执行；改 HTTP 面先改 `contract/openapi.yaml`。
