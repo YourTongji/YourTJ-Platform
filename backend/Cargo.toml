@@ -36,6 +36,8 @@ deadpool-redis = "0.19"
 regex = "1"
 percent-encoding = "2"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+# 0.24 stays on edition 2021 for the workspace's Rust 1.80 compatibility floor.
+scraper = { version = "=0.24.0", default-features = false }
 ring = "0.17"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

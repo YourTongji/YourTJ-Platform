@@ -87,6 +87,9 @@ Fresh database 必须只通过 sqlx migration ledger 建立。普通启动、CI 
 - 用户搜索索引由 Identity 维护，只存 id/handle/display name；Forum 通过 Identity public account API、
   自己的 relationship/count projection 和 Media public API 组装最终 hit。聚合 `search` crate 不跨域 SQL。
 - Redis cache key 版本化或短 TTL，mutation 精确 bump 相关 version；缓存故障不改变业务写入事实。
+- Onebox cache key 使用规范化 query-free URL 与 policy version；ready row 最长 7 天，failure row 仅
+  2 分钟。含 query 的外部 URL 不持久化，旧 query/remote-image cache 由 additive migration 清除；
+  过期 cache 不是外部内容事实源。
 - 不使用 `LIKE %q%` 作为热点中文聚合搜索降级，除非产品/性能测试定义了严格有界范围。
 
 ## 内容与媒体契约

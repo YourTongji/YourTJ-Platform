@@ -8,8 +8,7 @@ use axum::extract::{Query, State};
 use axum::http::HeaderMap;
 use axum::routing::get;
 use axum::{Json, Router};
-use once_cell::sync::Lazy;
-use regex::Regex;
+use scraper::{Html, Selector};
 use serde::{Deserialize, Serialize};
 use sha2::Digest as _;
 use shared::{AppError, AppResult, AppState};
@@ -17,9 +16,11 @@ use sqlx::PgPool;
 
 const MAX_BODY_BYTES: usize = 512 * 1024;
 const MAX_REDIRECTS: usize = 5;
-const ONEBOX_POLICY_VERSION: &str = "v2";
+const ONEBOX_POLICY_VERSION: &str = "v3";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(3);
 const TOTAL_TIMEOUT: Duration = Duration::from_secs(6);
+const ERROR_CACHE_TTL_SECONDS: i64 = 120;
+const SUCCESS_CACHE_TTL_SECONDS: i64 = 604_800;
 
 // ---------------------------------------------------------------------------
 // DTOs
@@ -46,14 +47,18 @@ pub struct OneboxQuery {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, sqlx::FromRow)]
-#[allow(dead_code)]
 struct LinkPreviewRow {
-    url_hash: String,
     url: String,
     title: Option<String>,
     description: Option<String>,
-    image_url: Option<String>,
     site_name: Option<String>,
+    status: String,
+    expires_at: chrono::DateTime<chrono::Utc>,
+}
+
+enum CachedPreview {
+    Ready(OneboxResult),
+    Failed,
 }
 
 // ---------------------------------------------------------------------------
@@ -78,15 +83,16 @@ pub async fn get_onebox(
         .unwrap_or_else(|| "unknown".into());
     shared::ratelimit::check_token_bucket(state.redis.as_ref(), "onebox", &ip, 30, 60).await?;
 
-    let url = query.url.trim().to_string();
-    if url.is_empty() {
+    if query.url.trim().is_empty() {
         return Err(AppError::BadRequest("url is required".into()));
     }
 
-    let parsed = parse_target_url(&url)
+    let parsed = normalize_target_url(query.url.trim())
         .map_err(|_| AppError::BadRequest("URL must be a safe HTTPS URL".into()))?;
     let domain =
         parsed.host_str().ok_or_else(|| AppError::BadRequest("invalid URL".into()))?.to_string();
+    let is_cacheable = is_persistently_cacheable_url(&parsed);
+    let url = parsed.to_string();
 
     // Check domain whitelist from platform.settings.
     if !is_allowed_domain(&state.db, state.redis.as_ref(), &domain).await? {
@@ -102,9 +108,13 @@ pub async fn get_onebox(
 
     let url_hash = compute_url_hash(&url);
 
-    // Check cache (Redis fast path, then DB fallback).
     if let Some(cached) = cached_preview(state.redis.as_ref(), &state.db, &url_hash).await? {
-        return Ok(Json(cached));
+        return match cached {
+            CachedPreview::Ready(preview) => Ok(Json(preview)),
+            CachedPreview::Failed => {
+                Err(AppError::BadRequest("failed to fetch link preview".into()))
+            }
+        };
     }
 
     // Fetch OG tags from the remote URL.
@@ -117,13 +127,23 @@ pub async fn get_onebox(
                 error_category = error.category(),
                 "onebox fetch failed"
             );
+            save_failed_preview(
+                &state.db,
+                state.redis.as_ref(),
+                &url,
+                &url_hash,
+                error.category(),
+                is_cacheable,
+            )
+            .await;
             return Err(AppError::BadRequest("failed to fetch link preview".into()));
         }
     };
     result.url = url.clone();
 
-    // Best-effort cache write (failures are logged, not propagated).
-    save_preview(&state.db, state.redis.as_ref(), &result, &url_hash).await;
+    if is_cacheable {
+        save_preview(&state.db, state.redis.as_ref(), &result, &url_hash).await;
+    }
 
     Ok(Json(result))
 }
@@ -143,6 +163,16 @@ fn parse_target_url(url: &str) -> Result<reqwest::Url, OneboxFetchError> {
         return Err(OneboxFetchError::UnsafeTarget);
     }
     Ok(parsed)
+}
+
+fn normalize_target_url(url: &str) -> Result<reqwest::Url, OneboxFetchError> {
+    let mut parsed = parse_target_url(url)?;
+    parsed.set_fragment(None);
+    Ok(parsed)
+}
+
+fn is_persistently_cacheable_url(url: &reqwest::Url) -> bool {
+    url.query().is_none()
 }
 
 /// Compute the SHA-256 hexadecimal hash of a URL for use as a cache key.
@@ -224,17 +254,25 @@ async fn cached_preview(
     redis: Option<&deadpool_redis::Pool>,
     pool: &PgPool,
     url_hash: &str,
-) -> Result<Option<OneboxResult>, AppError> {
+) -> Result<Option<CachedPreview>, AppError> {
     // Redis fast path.
     if let Some(pool_r) = redis {
         if let Ok(mut conn) = pool_r.get().await {
+            if redis::cmd("EXISTS")
+                .arg(format!("onebox:error:{url_hash}"))
+                .query_async::<bool>(&mut conn)
+                .await
+                .unwrap_or(false)
+            {
+                return Ok(Some(CachedPreview::Failed));
+            }
             if let Ok(Some(raw)) = redis::cmd("GET")
-                .arg(format!("onebox:{}", url_hash))
+                .arg(format!("onebox:{url_hash}"))
                 .query_async::<Option<String>>(&mut conn)
                 .await
             {
                 if let Ok(val) = serde_json::from_str::<OneboxResult>(&raw) {
-                    return Ok(Some(val));
+                    return Ok(Some(CachedPreview::Ready(val)));
                 }
             }
         }
@@ -242,7 +280,7 @@ async fn cached_preview(
 
     // DB fallback.
     let row = sqlx::query_as::<_, LinkPreviewRow>(
-        "SELECT url_hash, url, title, description, image_url, site_name \
+        "SELECT url, title, description, site_name, status, expires_at \
          FROM platform.link_previews WHERE url_hash = $1",
     )
     .bind(url_hash)
@@ -250,12 +288,37 @@ async fn cached_preview(
     .await?;
 
     if let Some(r) = row {
+        if r.expires_at <= chrono::Utc::now() {
+            let _ = sqlx::query(
+                "DELETE FROM platform.link_previews WHERE url_hash = $1 AND expires_at <= now()",
+            )
+            .bind(url_hash)
+            .execute(pool)
+            .await;
+            return Ok(None);
+        }
+        let cache_seconds = (r.expires_at - chrono::Utc::now())
+            .num_seconds()
+            .clamp(1, SUCCESS_CACHE_TTL_SECONDS) as u64;
+        if r.status == "error" {
+            if let Some(pool_r) = redis {
+                if let Ok(mut conn) = pool_r.get().await {
+                    let _: Result<(), _> = redis::cmd("SETEX")
+                        .arg(format!("onebox:error:{url_hash}"))
+                        .arg(cache_seconds)
+                        .arg("1")
+                        .query_async(&mut conn)
+                        .await;
+                }
+            }
+            return Ok(Some(CachedPreview::Failed));
+        }
         let result = OneboxResult {
             r#type: "card".into(),
             url: r.url,
             title: r.title,
             description: r.description,
-            image_url: r.image_url,
+            image_url: None,
             site_name: r.site_name,
         };
 
@@ -264,8 +327,8 @@ async fn cached_preview(
             if let Ok(mut conn) = pool_r.get().await {
                 if let Ok(json) = serde_json::to_string(&result) {
                     let _: Result<(), _> = redis::cmd("SETEX")
-                        .arg(format!("onebox:{}", url_hash))
-                        .arg(604_800u64)
+                        .arg(format!("onebox:{url_hash}"))
+                        .arg(cache_seconds)
                         .arg(&json)
                         .query_async(&mut conn)
                         .await;
@@ -273,7 +336,7 @@ async fn cached_preview(
             }
         }
 
-        return Ok(Some(result));
+        return Ok(Some(CachedPreview::Ready(result)));
     }
 
     Ok(None)
@@ -290,37 +353,86 @@ async fn save_preview(
     // DB upsert.
     let result = sqlx::query(
         "INSERT INTO platform.link_previews \
-         (url_hash, url, title, description, image_url, site_name, fetched_at) \
-         VALUES ($1, $2, $3, $4, $5, $6, now()) \
+         (url_hash, url, title, description, site_name, fetched_at, \
+          status, error_category, expires_at) \
+         VALUES ($1, $2, $3, $4, $5, now(), 'ready', NULL, now() + interval '7 days') \
          ON CONFLICT (url_hash) \
          DO UPDATE SET \
-           title = $3, description = $4, image_url = $5, site_name = $6, \
-           fetched_at = now()",
+           title = $3, description = $4, image_url = NULL, site_name = $5, \
+           status = 'ready', error_category = NULL, fetched_at = now(), \
+           expires_at = now() + interval '7 days'",
     )
     .bind(url_hash)
     .bind(&preview.url)
     .bind(&preview.title)
     .bind(&preview.description)
-    .bind(&preview.image_url)
     .bind(&preview.site_name)
     .execute(pool)
     .await;
 
     if let Err(e) = result {
-        tracing::warn!(error = %e, "onebox failed to save DB cache");
+        tracing::warn!(error = %e, url_hash, "onebox failed to save DB cache");
     }
 
     // Redis write (7-day TTL).
     if let Some(pool_r) = redis {
         if let Ok(mut conn) = pool_r.get().await {
             if let Ok(json) = serde_json::to_string(preview) {
+                let _: Result<(), _> = redis::cmd("DEL")
+                    .arg(format!("onebox:error:{url_hash}"))
+                    .query_async(&mut conn)
+                    .await;
                 let _: Result<(), _> = redis::cmd("SETEX")
-                    .arg(format!("onebox:{}", url_hash))
-                    .arg(604_800u64)
+                    .arg(format!("onebox:{url_hash}"))
+                    .arg(SUCCESS_CACHE_TTL_SECONDS as u64)
                     .arg(&json)
                     .query_async(&mut conn)
                     .await;
             }
+        }
+    }
+}
+
+async fn save_failed_preview(
+    pool: &PgPool,
+    redis: Option<&deadpool_redis::Pool>,
+    url: &str,
+    url_hash: &str,
+    error_category: &str,
+    persist_url: bool,
+) {
+    if persist_url {
+        let result = sqlx::query(
+            "INSERT INTO platform.link_previews \
+             (url_hash, url, title, description, image_url, site_name, fetched_at, \
+              status, error_category, expires_at) \
+             VALUES ($1, $2, NULL, NULL, NULL, NULL, now(), 'error', $3, \
+                     now() + interval '120 seconds') \
+             ON CONFLICT (url_hash) DO UPDATE SET \
+               url = $2, title = NULL, description = NULL, image_url = NULL, site_name = NULL, \
+               status = 'error', error_category = $3, fetched_at = now(), \
+               expires_at = now() + interval '120 seconds'",
+        )
+        .bind(url_hash)
+        .bind(url)
+        .bind(error_category)
+        .execute(pool)
+        .await;
+        if let Err(error) = result {
+            tracing::warn!(%error, url_hash, "onebox failed to save negative cache");
+        }
+    }
+
+    if let Some(pool_r) = redis {
+        if let Ok(mut conn) = pool_r.get().await {
+            let _: Result<(), _> =
+                redis::cmd("DEL").arg(format!("onebox:{url_hash}")).query_async(&mut conn).await;
+            let _: Result<(), _> = redis::cmd("SETEX")
+                .arg(format!("onebox:error:{url_hash}"))
+                .arg(ERROR_CACHE_TTL_SECONDS as u64)
+                .arg("1")
+                .query_async(&mut conn)
+                .await;
         }
     }
 }
@@ -458,7 +570,7 @@ async fn fetch_bounded_html(
                 .get(reqwest::header::LOCATION)
                 .and_then(|value| value.to_str().ok())
                 .ok_or(OneboxFetchError::Redirect)?;
-            current_url = parse_target_url(
+            current_url = normalize_target_url(
                 current_url.join(location).map_err(|_| OneboxFetchError::Redirect)?.as_str(),
             )?;
             continue;
@@ -520,43 +632,50 @@ async fn fetch_og_tags(
 }
 
 fn parse_og_tags(body: &str, url: &str) -> OneboxResult {
-    static OG_META_RE: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(
-            r###"<meta\s+(?:[^>]*?\s)?(?:property="og:([^"]+)"\s+[^>]*?content="([^"]*)"|content="([^"]*)"\s+[^>]*?property="og:([^"]+)")\s*/?>"###,
-        )
-        .expect("invalid OG meta regex")
-    });
-
-    static TITLE_RE: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r###"<title[^>]*>([^<]*)</title>"###).expect("invalid title regex")
-    });
-
+    let document = Html::parse_document(body);
     let mut title = None;
     let mut description = None;
+    let mut fallback_description = None;
     let mut site_name = None;
 
-    for cap in OG_META_RE.captures_iter(body) {
-        let (prop, content) = if let (Some(p), Some(c)) = (cap.get(1), cap.get(2)) {
-            (p.as_str(), c.as_str())
-        } else if let (Some(c), Some(p)) = (cap.get(3), cap.get(4)) {
-            (p.as_str(), c.as_str())
-        } else {
-            continue;
-        };
-
-        let content = html_unescape(content).trim().to_string();
-        match prop {
-            "title" => title = bounded_text(&content, 300),
-            "description" => description = bounded_text(&content, 1_000),
-            "site_name" => site_name = bounded_text(&content, 100),
-            _ => {}
+    if let Ok(meta_selector) = Selector::parse("meta") {
+        for element in document.select(&meta_selector) {
+            let Some(content) = element.value().attr("content") else {
+                continue;
+            };
+            let property =
+                element.value().attr("property").map(str::trim).map(str::to_ascii_lowercase);
+            match property.as_deref() {
+                Some("og:title") if title.is_none() => title = bounded_text(content, 300),
+                Some("og:description") if description.is_none() => {
+                    description = bounded_text(content, 1_000)
+                }
+                Some("og:site_name") if site_name.is_none() => {
+                    site_name = bounded_text(content, 100)
+                }
+                _ => {}
+            }
+            if fallback_description.is_none()
+                && element
+                    .value()
+                    .attr("name")
+                    .is_some_and(|name| name.eq_ignore_ascii_case("description"))
+            {
+                fallback_description = bounded_text(content, 1_000);
+            }
         }
     }
 
-    // Fallback to the document <title> when no og:title is present.
+    if description.is_none() {
+        description = fallback_description;
+    }
+
     if title.is_none() {
-        if let Some(cap) = TITLE_RE.captures(body) {
-            title = cap.get(1).and_then(|value| bounded_text(&html_unescape(value.as_str()), 300));
+        if let Ok(title_selector) = Selector::parse("title") {
+            title = document.select(&title_selector).next().and_then(|element| {
+                let text = element.text().collect::<String>();
+                bounded_text(&text, 300)
+            });
         }
     }
 
@@ -572,24 +691,16 @@ fn parse_og_tags(body: &str, url: &str) -> OneboxResult {
 }
 
 fn bounded_text(value: &str, max_chars: usize) -> Option<String> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
+    let without_controls: String = value
+        .chars()
+        .map(|character| if character.is_control() { ' ' } else { character })
+        .collect();
+    let normalized = without_controls.split_whitespace().collect::<Vec<_>>().join(" ");
+    if normalized.is_empty() {
         None
     } else {
-        Some(trimmed.chars().take(max_chars).collect())
+        Some(normalized.chars().take(max_chars).collect())
     }
-}
-
-/// Decode the most common HTML entities in a string.
-fn html_unescape(s: &str) -> String {
-    s.replace("&amp;", "&")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", "\"")
-        .replace("&#39;", "'")
-        .replace("&#x27;", "'")
-        .replace("&#x2F;", "/")
-        .replace("&#x2f;", "/")
 }
 
 /// All onebox-owned routes.
@@ -602,8 +713,9 @@ mod tests {
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
     use super::{
-        append_bounded_chunk, compute_url_hash, decode_html_bytes, is_public_ip, matches_domain,
-        parse_og_tags, parse_target_url, MAX_BODY_BYTES,
+        append_bounded_chunk, compute_url_hash, decode_html_bytes, is_persistently_cacheable_url,
+        is_public_ip, matches_domain, normalize_target_url, parse_og_tags, parse_target_url,
+        MAX_BODY_BYTES,
     };
 
     #[test]
@@ -613,6 +725,21 @@ mod tests {
         assert!(parse_target_url("https://user:secret@example.com/path").is_err());
         assert!(parse_target_url("https://example.com:8443/path").is_err());
         assert!(parse_target_url("not a url").is_err());
+    }
+
+    #[test]
+    fn normalized_url_removes_fragments_and_canonicalizes_the_host() {
+        let normalized =
+            normalize_target_url("https://EXAMPLE.com:443/a%2Fb?q=1#section").expect("safe URL");
+        assert_eq!(normalized.as_str(), "https://example.com/a%2Fb?q=1");
+        assert_eq!(
+            compute_url_hash(normalized.as_str()),
+            compute_url_hash("https://example.com/a%2Fb?q=1")
+        );
+        assert!(!is_persistently_cacheable_url(&normalized));
+        assert!(is_persistently_cacheable_url(
+            &normalize_target_url("https://example.com/article#comments").expect("safe URL")
+        ));
     }
 
     #[test]
@@ -669,6 +796,33 @@ mod tests {
         assert_eq!(result.description.as_deref(), Some("A & B"));
         assert_eq!(result.site_name.as_deref(), Some("Campus"));
         assert!(result.image_url.is_none());
+    }
+
+    #[test]
+    fn html5_parser_handles_attribute_order_case_entities_and_malformed_markup() {
+        let body = r#"<HTML><head>
+            <meta CONTENT='A &amp; B' PROPERTY='OG:TITLE'>
+            <meta content='fallback should lose' name='description'>
+            <meta content='Canonical description' property='og:description'>
+            <meta property='og:site_name' content=' Campus&#10; News '>
+            <title>Ignored <b>fallback</b></title>
+            <meta property='og:image' content='https://tracker.example/pixel.png'>
+            <meta property='og:title' content='later title'>
+        </head><body><p>unclosed"#;
+        let result = parse_og_tags(body, "https://example.com/article");
+        assert_eq!(result.title.as_deref(), Some("A & B"));
+        assert_eq!(result.description.as_deref(), Some("Canonical description"));
+        assert_eq!(result.site_name.as_deref(), Some("Campus News"));
+        assert!(result.image_url.is_none());
+    }
+
+    #[test]
+    fn parser_uses_document_title_and_meta_description_fallbacks() {
+        let body = r#"<title>Campus &amp; update</title>
+                      <meta name="description" content="  Important   notice  ">"#;
+        let result = parse_og_tags(body, "https://example.com/article");
+        assert_eq!(result.title.as_deref(), Some("Campus & update"));
+        assert_eq!(result.description.as_deref(), Some("Important notice"));
     }
 
     #[test]

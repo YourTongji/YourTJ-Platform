@@ -122,14 +122,19 @@ plain-text projection 与恶意样例必须由共享 protocol profile 和 confor
 
 ## Link preview / Onebox
 
-当前 Onebox 已只接受标准端口 HTTPS，并在每次 redirect 前重新执行 domain allowlist、DNS 和
+当前 Onebox 只接受标准端口 HTTPS，并在每次 redirect 前重新执行 domain allowlist、DNS 和
 public-IP 检查；所有解析出的地址都必须为公网地址，请求固定到已验证地址，body 以 512 KiB
-流式上限读取并用容错 UTF-8 解码。远程 `og:image` 不返回给客户端，cache hash 包含 policy version，
-日志只记录 URL hash、允许域名和错误类别。
+流式上限读取并用容错 UTF-8 解码。HTML metadata 由 `html5ever` 上层的维护中 parser 解析，支持
+畸形 markup、属性乱序/大小写与 entity，字段在去控制字符、折叠空白后有界截断。
 
-该能力仍为 `Partial`：OG metadata 仍使用有界正则提取而不是维护中的 HTML parser；尚无安全
-media proxy、规范化 URL/短期错误缓存和完整的网络 fixture 测试。Markdown 自动 link preview
-必须等这些剩余边界完成后才可默认开启。
+输入 URL 通过标准 URL parser 规范化并移除 fragment，cache hash 包含 policy version。无 query 的
+规范化 URL 可持久化：成功 cache 最长 7 天，错误仅 2 分钟；带 query 的 URL 不进入 PostgreSQL 或
+成功 Redis cache，失败只保存不可逆 hash 的短期 Redis marker。Migration 会清除旧 query URL 和
+历史远程图片字段。远程 `og:image` 始终不返回给客户端，日志只记录 URL hash、允许域名和错误类别。
+
+该能力仍为 `Partial`：尚缺覆盖 TLS、redirect、DNS 变化、content type 和流式超限的受控 HTTPS
+网络 fixture。当前产品明确不展示远程预览图，因此 media proxy 不是上线前置；若未来要显示图片，
+必须先接平台 asset/proxy。Markdown 自动 link preview 要等网络 fixture 完成后才可默认开启。
 
 目标规则：
 

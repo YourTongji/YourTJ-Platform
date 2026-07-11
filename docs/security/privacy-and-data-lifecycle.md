@@ -6,7 +6,7 @@
 >
 > 负责人：Privacy owner、Security owner、Domain maintainers
 >
-> 最近核验：2026-07-12，migrations `0034`、`0037`、`0038`、`0040`、`0044`
+> 最近核验：2026-07-12，migrations `0034`、`0037`、`0038`、`0040`、`0044`、`0049`
 
 本规范将数据最小化、可见性、导出、删除和保留作为产品前置条件。它不是法律意见；涉及 PIPL、
 未成年人、广告或跨境处理的最终政策需要合格法律与隐私负责人确认。
@@ -57,6 +57,7 @@
 | 治理证据 | reports、sanctions、appeals、audit | capability + purpose | 防篡改、访问审计、期限/hold |
 | 认证凭证 | type/grant、签发/撤销原因、opaque evidence reference | `verifications.manage`；允许时为最小公开投影 | 默认私密、可到期/撤销、公开不含证据/操作者 |
 | 运营数据 | job log、metrics、aggregated promo events | operators | 聚合、去标识、有限保留 |
+| 外链预览缓存 | 无 query 的规范化 allowlisted HTTPS URL、公开 metadata、失败类别 | 服务端与页面请求者 | ready 最长 7 天、error 2 分钟；query URL/远程图片不持久化，日志只记 hash |
 | 公告 receipt | announcement/revision、seen/dismiss/ack time | 本人、汇总后的公告管理员 | 账号删除级联清除，不记录设备/IP；后台只返回聚合计数 |
 | 积分记录 | ledger、wallet projection | owner/verification policy | ledger 不改写，删除后 tombstone |
 | 积分完整性证据 | run reason、operator id、wallet account id、派生/缓存差额 | `credit.integrity` staff | 随 ledger/audit 完整性证据保留；不含邮箱、签名、key 或原始错误 |
@@ -140,6 +141,8 @@ Legal hold 有合法目的、授权者、范围、到期和审计，不得成为
 
 - Cloudflare Email、Alibaba OSS/CDN、captcha、Meilisearch/Redis 运维都需要数据流和 secret 边界。
 - 任意第三方头像/Markdown 图片会泄露访问者 IP，因此持久媒体只允许平台 asset。
+- Onebox 只服务 allowlisted 公共 HTTPS 页面；fragment 被移除，含 query 的 URL 不进入持久 cache，
+  metadata 有界且不返回远程图片。Migration 清除历史 query URL/remote-image cache；访问日志不记录 URL。
 - 推广保存平台 clean asset id 和站内目标路径，不保存远程图片 URL；当前没有个人级 impression/click
   tracking，未来效果指标只允许必要的按日聚合。
 - Captcha 只收到完成验证必要的信息，不发送邮箱、正文或私信；其 metadata 保留需进入隐私说明。
