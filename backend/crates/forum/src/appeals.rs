@@ -25,8 +25,6 @@ struct ForumContentState {
     author_id: Option<i64>,
     thread_id: i64,
     board_id: i64,
-    parent_visible: bool,
-    created_at: DateTime<Utc>,
     deleted_at: Option<DateTime<Utc>>,
     hidden_at: Option<DateTime<Utc>>,
     content_body: Option<String>,
@@ -85,16 +83,13 @@ async fn content_state(
     let query = match target_kind {
         "thread" => format!(
             "SELECT author_id, id AS thread_id, board_id, \
-                    status = 'visible' AND archived_at IS NULL AS parent_visible, \
-                    created_at, deleted_at, hidden_at, body AS content_body, content_format, \
+                    deleted_at, hidden_at, body AS content_body, content_format, \
                     content_version \
              FROM forum.threads WHERE id = $1{lock_clause}"
         ),
         "comment" => format!(
             "SELECT comment.author_id, comment.thread_id, thread.board_id, \
-                    thread.status = 'visible' AND thread.deleted_at IS NULL \
-                      AND thread.hidden_at IS NULL AND thread.archived_at IS NULL AS parent_visible, \
-                    comment.created_at, comment.deleted_at, comment.hidden_at, \
+                    comment.deleted_at, comment.hidden_at, \
                     comment.body AS content_body, comment.content_format, comment.content_version \
              FROM forum.comments comment \
              JOIN forum.threads thread ON thread.id = comment.thread_id \
@@ -124,9 +119,7 @@ async fn locked_comment_state(
         .await?;
     sqlx::query_as(
         "SELECT comment.author_id, comment.thread_id, thread.board_id, \
-                thread.status = 'visible' AND thread.deleted_at IS NULL \
-                  AND thread.hidden_at IS NULL AND thread.archived_at IS NULL AS parent_visible, \
-                comment.created_at, comment.deleted_at, comment.hidden_at, \
+                comment.deleted_at, comment.hidden_at, \
                 comment.body AS content_body, comment.content_format, comment.content_version \
          FROM forum.comments comment \
          JOIN forum.threads thread ON thread.id = comment.thread_id \
@@ -296,27 +289,24 @@ pub async fn overturn_content_for_appeal_tx(
     if disposition_kind == "delete" {
         rebind_restored_attachments(connection, &state, canonical_kind, target_id).await?;
     }
-    let is_visible_after_reversal = state.parent_visible
-        && match disposition_kind {
-            "hide" => state.deleted_at.is_none(),
-            "delete" => state.hidden_at.is_none(),
-            _ => false,
-        };
-    if is_visible_after_reversal {
-        activity::contributions::activate_contribution(
-            connection,
-            appellant_account_id,
-            if canonical_kind == "thread" {
-                activity::contributions::ActivityKind::Thread
-            } else {
-                activity::contributions::ActivityKind::Comment
-            },
-            &format!("forum_{canonical_kind}:{target_id}"),
-            state.created_at,
-        )
-        .await?;
-        crate::repo::reactivate_target_vote_contributions(connection, canonical_kind, target_id)
+    match canonical_kind {
+        "thread" => {
+            crate::repo::activity_projection::synchronize_thread_activity_subtree(
+                connection,
+                target_id,
+                Utc::now(),
+            )
             .await?;
+        }
+        "comment" => {
+            crate::repo::activity_projection::synchronize_comment_activity(
+                connection,
+                target_id,
+                Utc::now(),
+            )
+            .await?;
+        }
+        _ => return Err(AppError::NotFound),
     }
     if original_action == "forum.flag.uphold" {
         require_restriction_changed(original_metadata)?;

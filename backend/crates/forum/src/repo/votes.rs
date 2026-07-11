@@ -1,105 +1,58 @@
 use shared::AppResult;
-use sqlx::{FromRow, PgConnection, PgPool};
+use sqlx::{PgConnection, PgPool};
 
-#[derive(Debug, FromRow)]
-struct VoteContributionRow {
-    post_type: String,
+struct LockedVoteTarget {
+    post_author_id: Option<i64>,
+    thread_id: i64,
+    board_id: i64,
+}
+
+async fn lock_vote_target(
+    connection: &mut PgConnection,
+    post_type: &str,
     post_id: i64,
-    account_id: i64,
-    updated_at: chrono::DateTime<chrono::Utc>,
-}
-
-async fn positive_votes_for_target(
-    connection: &mut PgConnection,
-    target_type: &str,
-    target_id: i64,
-    require_visible: bool,
-) -> AppResult<Vec<VoteContributionRow>> {
-    let query = match target_type {
-        "thread" => {
-            "SELECT vote.post_type, vote.post_id, vote.account_id, vote.updated_at \
-             FROM forum.votes vote \
-             LEFT JOIN forum.comments comment \
-               ON vote.post_type = 'comment' AND comment.id = vote.post_id \
-             WHERE vote.value = 1 \
-               AND ((vote.post_type = 'thread' AND vote.post_id = $1) \
-                    OR (vote.post_type = 'comment' AND comment.thread_id = $1)) \
-               AND (NOT $2 OR ( \
-                 (vote.post_type = 'thread' AND EXISTS ( \
-                   SELECT 1 FROM forum.threads thread \
-                   WHERE thread.id = vote.post_id AND thread.status = 'visible' \
-                     AND thread.deleted_at IS NULL AND thread.hidden_at IS NULL \
-                     AND thread.archived_at IS NULL \
-                 )) OR \
-                 (vote.post_type = 'comment' AND EXISTS ( \
-                   SELECT 1 FROM forum.comments visible_comment \
-                   JOIN forum.threads thread ON thread.id = visible_comment.thread_id \
-                   WHERE visible_comment.id = vote.post_id \
-                     AND visible_comment.deleted_at IS NULL \
-                     AND visible_comment.hidden_at IS NULL \
-                     AND thread.status = 'visible' AND thread.deleted_at IS NULL \
-                     AND thread.hidden_at IS NULL AND thread.archived_at IS NULL \
-                 )) \
-               ))"
-        }
-        "comment" => {
-            "SELECT vote.post_type, vote.post_id, vote.account_id, vote.updated_at \
-             FROM forum.votes vote \
-             WHERE vote.value = 1 AND vote.post_type = 'comment' AND vote.post_id = $1 \
-               AND (NOT $2 OR EXISTS ( \
-                 SELECT 1 FROM forum.comments comment \
-                 JOIN forum.threads thread ON thread.id = comment.thread_id \
-                 WHERE comment.id = vote.post_id \
-                   AND comment.deleted_at IS NULL AND comment.hidden_at IS NULL \
-                   AND thread.status = 'visible' AND thread.deleted_at IS NULL \
-                   AND thread.hidden_at IS NULL AND thread.archived_at IS NULL \
-               ))"
-        }
-        _ => return Err(shared::AppError::BadRequest("target type must be thread/comment".into())),
-    };
-    sqlx::query_as(query)
-        .bind(target_id)
-        .bind(require_visible)
-        .fetch_all(connection)
-        .await
-        .map_err(Into::into)
-}
-
-/// Remove heatmap credit for positive votes whose target became unavailable.
-pub async fn deactivate_target_vote_contributions(
-    connection: &mut PgConnection,
-    target_type: &str,
-    target_id: i64,
-    occurred_at: chrono::DateTime<chrono::Utc>,
-) -> AppResult<()> {
-    for vote in positive_votes_for_target(connection, target_type, target_id, false).await? {
-        activity::contributions::deactivate_contribution(
-            connection,
-            &format!("forum_vote:{}:{}:{}", vote.post_type, vote.post_id, vote.account_id),
-            occurred_at,
+) -> AppResult<LockedVoteTarget> {
+    if post_type == "thread" {
+        let (post_author_id, thread_id, board_id) = sqlx::query_as(
+            "SELECT author_id, id, board_id FROM forum.threads \
+             WHERE id = $1 AND status = 'visible' \
+               AND deleted_at IS NULL AND hidden_at IS NULL AND archived_at IS NULL \
+             FOR UPDATE",
         )
-        .await?;
+        .bind(post_id)
+        .fetch_optional(connection)
+        .await?
+        .ok_or(shared::AppError::NotFound)?;
+        return Ok(LockedVoteTarget { post_author_id, thread_id, board_id });
     }
-    Ok(())
-}
 
-/// Restore heatmap credit for current positive votes once their target is visible again.
-pub async fn reactivate_target_vote_contributions(
-    connection: &mut PgConnection,
-    target_type: &str,
-    target_id: i64,
-) -> AppResult<()> {
-    for vote in positive_votes_for_target(connection, target_type, target_id, true).await? {
-        activity::contributions::activate_contribution(
-            connection,
-            vote.account_id,
-            activity::contributions::ActivityKind::Like,
-            &format!("forum_vote:{}:{}:{}", vote.post_type, vote.post_id, vote.account_id),
-            vote.updated_at,
-        )
-        .await?;
-    }
-    Ok(())
+    let thread_id: i64 = sqlx::query_scalar("SELECT thread_id FROM forum.comments WHERE id = $1")
+        .bind(post_id)
+        .fetch_optional(&mut *connection)
+        .await?
+        .ok_or(shared::AppError::NotFound)?;
+    let board_id: i64 = sqlx::query_scalar(
+        "SELECT board_id FROM forum.threads \
+         WHERE id = $1 AND status = 'visible' \
+           AND deleted_at IS NULL AND hidden_at IS NULL AND archived_at IS NULL \
+         FOR UPDATE",
+    )
+    .bind(thread_id)
+    .fetch_optional(&mut *connection)
+    .await?
+    .ok_or(shared::AppError::NotFound)?;
+    let post_author_id: Option<i64> = sqlx::query_scalar(
+        "SELECT author_id FROM forum.comments \
+         WHERE id = $1 AND thread_id = $2 \
+           AND deleted_at IS NULL AND hidden_at IS NULL \
+         FOR UPDATE",
+    )
+    .bind(post_id)
+    .bind(thread_id)
+    .fetch_optional(connection)
+    .await?
+    .ok_or(shared::AppError::NotFound)?;
+    Ok(LockedVoteTarget { post_author_id, thread_id, board_id })
 }
 
 /// Materialized vote result plus the transition needed for notifications.
@@ -136,32 +89,8 @@ pub async fn vote_post(
     }
 
     let mut tx = pool.begin().await?;
-    let (post_author_id, thread_id, board_id): (Option<i64>, i64, i64) = if post_type == "thread" {
-        sqlx::query_as(
-            "SELECT author_id, id, board_id FROM forum.threads \
-             WHERE id = $1 AND status = 'visible' \
-               AND deleted_at IS NULL AND hidden_at IS NULL AND archived_at IS NULL \
-             FOR UPDATE",
-        )
-        .bind(post_id)
-        .fetch_optional(&mut *tx)
-        .await?
-        .ok_or(shared::AppError::NotFound)?
-    } else {
-        sqlx::query_as(
-            "SELECT c.author_id, c.thread_id, t.board_id FROM forum.comments c \
-             JOIN forum.threads t ON t.id = c.thread_id \
-             WHERE c.id = $1 \
-               AND c.deleted_at IS NULL AND c.hidden_at IS NULL \
-               AND t.status = 'visible' AND t.deleted_at IS NULL \
-               AND t.hidden_at IS NULL AND t.archived_at IS NULL \
-             FOR UPDATE OF c, t",
-        )
-        .bind(post_id)
-        .fetch_optional(&mut *tx)
-        .await?
-        .ok_or(shared::AppError::NotFound)?
-    };
+    let target = lock_vote_target(&mut tx, post_type, post_id).await?;
+    let LockedVoteTarget { post_author_id, thread_id, board_id } = target;
     if post_author_id == Some(account_id) {
         return Err(shared::AppError::BadRequest("cannot vote on your own content".into()));
     }
@@ -288,33 +217,8 @@ pub async fn remove_vote(
     }
 
     let mut tx = pool.begin().await?;
-    let (post_author_id, thread_id, board_id): (Option<i64>, i64, i64) = if post_type == "thread" {
-        sqlx::query_as(
-            "SELECT author_id, id, board_id FROM forum.threads \
-                 WHERE id = $1 AND status = 'visible' \
-                   AND deleted_at IS NULL AND hidden_at IS NULL AND archived_at IS NULL \
-                 FOR UPDATE",
-        )
-        .bind(post_id)
-        .fetch_optional(&mut *tx)
-        .await?
-        .ok_or(shared::AppError::NotFound)?
-    } else {
-        sqlx::query_as(
-            "SELECT comment.author_id, comment.thread_id, thread.board_id \
-                 FROM forum.comments comment \
-                 JOIN forum.threads thread ON thread.id = comment.thread_id \
-                 WHERE comment.id = $1 \
-                   AND comment.deleted_at IS NULL AND comment.hidden_at IS NULL \
-                   AND thread.status = 'visible' AND thread.deleted_at IS NULL \
-                   AND thread.hidden_at IS NULL AND thread.archived_at IS NULL \
-                 FOR UPDATE OF comment, thread",
-        )
-        .bind(post_id)
-        .fetch_optional(&mut *tx)
-        .await?
-        .ok_or(shared::AppError::NotFound)?
-    };
+    let target = lock_vote_target(&mut tx, post_type, post_id).await?;
+    let LockedVoteTarget { post_author_id, thread_id, board_id } = target;
 
     let source_key = format!("forum_vote:{post_type}:{post_id}:{account_id}");
     activity::contributions::lock_contribution_source(&mut tx, &source_key).await?;

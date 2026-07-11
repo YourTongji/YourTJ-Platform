@@ -781,14 +781,12 @@ pub async fn delete_thread(
     .bind(id)
     .execute(&mut *tx)
     .await?;
-    activity::contributions::deactivate_contribution(
+    crate::repo::activity_projection::synchronize_thread_activity_subtree(
         &mut tx,
-        &format!("forum_thread:{id}"),
+        id,
         chrono::Utc::now(),
     )
     .await?;
-    crate::repo::deactivate_target_vote_contributions(&mut tx, "thread", id, chrono::Utc::now())
-        .await?;
     media::attachments::detach_forum_asset_bindings(
         &mut tx,
         media::attachments::ForumTargetType::Thread,

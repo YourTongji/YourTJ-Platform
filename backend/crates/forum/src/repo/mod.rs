@@ -51,6 +51,7 @@ pub mod threads;
 pub mod viewer_state;
 pub mod votes;
 
+pub(crate) mod activity_projection;
 pub mod bookmarks;
 pub mod dms;
 pub mod drafts;
@@ -113,7 +114,4 @@ pub use threads::{
     list_threads_feed, list_threads_feed_following, list_threads_feed_subscriptions, update_thread,
 };
 pub use viewer_state::{get_post_viewer_states, PostViewerState};
-pub use votes::{
-    deactivate_target_vote_contributions, reactivate_target_vote_contributions, remove_vote,
-    vote_post,
-};
+pub use votes::{remove_vote, vote_post};

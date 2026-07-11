@@ -22,11 +22,6 @@ struct AdminCommentRow {
     author_id: Option<i64>,
     thread_id: i64,
     board_id: i64,
-    thread_status: String,
-    thread_deleted_at: Option<chrono::DateTime<chrono::Utc>>,
-    thread_hidden_at: Option<chrono::DateTime<chrono::Utc>>,
-    thread_archived_at: Option<chrono::DateTime<chrono::Utc>>,
-    created_at: chrono::DateTime<chrono::Utc>,
     deleted_at: Option<chrono::DateTime<chrono::Utc>>,
     hidden_at: Option<chrono::DateTime<chrono::Utc>>,
     body: String,
@@ -111,9 +106,7 @@ pub async fn admin_comment_action(
         .execute(&mut *tx)
         .await?;
     let comment = sqlx::query_as::<_, AdminCommentRow>(
-        "SELECT c.author_id, c.thread_id, t.board_id, t.status AS thread_status, \
-                t.deleted_at AS thread_deleted_at, t.hidden_at AS thread_hidden_at, \
-                t.archived_at AS thread_archived_at, c.created_at, \
+        "SELECT c.author_id, c.thread_id, t.board_id, \
                 c.deleted_at, c.hidden_at, c.body, c.content_format, c.content_version \
          FROM forum.comments c \
          JOIN forum.threads t ON t.id = c.thread_id \
@@ -125,13 +118,6 @@ pub async fn admin_comment_action(
     .await?
     .ok_or(AppError::NotFound)?;
     super::require_lower_author_role(&mut tx, &auth, comment.author_id).await?;
-    let parent_is_visible = comment.thread_status == "visible"
-        && comment.thread_deleted_at.is_none()
-        && comment.thread_hidden_at.is_none()
-        && comment.thread_archived_at.is_none();
-    let was_visible =
-        parent_is_visible && comment.deleted_at.is_none() && comment.hidden_at.is_none();
-
     match action.as_str() {
         "delete" => {
             if comment.deleted_at.is_some() {
@@ -218,41 +204,8 @@ pub async fn admin_comment_action(
         _ => return Err(AppError::BadRequest(format!("unknown action: {action}"))),
     }
 
-    let is_visible = match action.as_str() {
-        "restore" => parent_is_visible && comment.hidden_at.is_none(),
-        "unhide" => parent_is_visible && comment.deleted_at.is_none(),
-        _ => false,
-    };
-    if was_visible && matches!(action.as_str(), "delete" | "hide") {
-        activity::contributions::deactivate_contribution(
-            &mut tx,
-            &format!("forum_comment:{id}"),
-            chrono::Utc::now(),
-        )
+    crate::repo::activity_projection::synchronize_comment_activity(&mut tx, id, chrono::Utc::now())
         .await?;
-    } else if is_visible {
-        if let Some(author_id) = comment.author_id {
-            activity::contributions::activate_contribution(
-                &mut tx,
-                author_id,
-                activity::contributions::ActivityKind::Comment,
-                &format!("forum_comment:{id}"),
-                comment.created_at,
-            )
-            .await?;
-        }
-    }
-    if matches!(action.as_str(), "delete" | "hide") {
-        crate::repo::deactivate_target_vote_contributions(
-            &mut tx,
-            "comment",
-            id,
-            chrono::Utc::now(),
-        )
-        .await?;
-    } else if matches!(action.as_str(), "restore" | "unhide") {
-        crate::repo::reactivate_target_vote_contributions(&mut tx, "comment", id).await?;
-    }
     crate::repo::insert_mod_action(&mut *tx, auth.id, &action, "comment", id, Some(reason), None)
         .await?;
     let governance_event_id = governance::record_account_event_with_id_tx(

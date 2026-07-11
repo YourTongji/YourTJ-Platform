@@ -551,19 +551,8 @@ pub async fn update_comment(
         .bind(thread_id)
         .execute(&mut *tx)
         .await?;
-        activity::contributions::deactivate_contribution(
-            &mut tx,
-            &format!("forum_comment:{id}"),
-            chrono::Utc::now(),
-        )
-        .await?;
-        super::votes::deactivate_target_vote_contributions(
-            &mut tx,
-            "comment",
-            id,
-            chrono::Utc::now(),
-        )
-        .await?;
+        super::activity_projection::synchronize_comment_activity(&mut tx, id, chrono::Utc::now())
+            .await?;
     }
 
     tx.commit().await?;

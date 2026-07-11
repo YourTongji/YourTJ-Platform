@@ -159,15 +159,8 @@ async fn auto_archive_stale_inner(pool: &PgPool) -> AppResult<i32> {
     .fetch_all(&mut *tx)
     .await?;
     for thread_id in &thread_ids {
-        activity::contributions::deactivate_contribution(
+        super::activity_projection::synchronize_thread_activity_subtree(
             &mut tx,
-            &format!("forum_thread:{thread_id}"),
-            chrono::Utc::now(),
-        )
-        .await?;
-        super::votes::deactivate_target_vote_contributions(
-            &mut tx,
-            "thread",
             *thread_id,
             chrono::Utc::now(),
         )

@@ -90,6 +90,10 @@ Fresh database 必须只通过 sqlx migration ledger 建立。普通启动、CI 
   始终去掉内部前缀。改变前缀必须配套 full reindex。
 - Full reindex 等待 clear task 成功后再 add，并观察 add 结果。
 - Hot/search counter 使用增量/投影，读路径避免全表聚合；定期 reconciliation 纠偏。
+- Forum activity projection 与 canonical thread/comment mutation 共用事务。父状态转换先锁 thread、
+  再按 id 锁 comments，随后按 thread source、comment id、vote target/account 的固定顺序取得 activity
+  source lock；整棵子树由 canonical 可见性重算激活状态，恢复沿用原 content/reaction timestamp，
+  不在读路径聚合修补。
 - `forum.user_follows` 是关系事实；`forum.user_social_stats` 是 trigger 同事务维护的可重建计数投影。
   Follow 与 block 对同一账号对使用相同 transaction advisory lock，防止 block 与并发 follow 双写穿透。
 - Following feed 不复用 board/thread subscription：Forum 先按 follow/content/block/mute 事实取得有界

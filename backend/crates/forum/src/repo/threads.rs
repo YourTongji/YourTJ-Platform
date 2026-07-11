@@ -1104,15 +1104,8 @@ pub async fn update_thread(
     }
 
     if is_queued {
-        activity::contributions::deactivate_contribution(
+        super::activity_projection::synchronize_thread_activity_subtree(
             &mut tx,
-            &format!("forum_thread:{id}"),
-            chrono::Utc::now(),
-        )
-        .await?;
-        super::votes::deactivate_target_vote_contributions(
-            &mut tx,
-            "thread",
             id,
             chrono::Utc::now(),
         )

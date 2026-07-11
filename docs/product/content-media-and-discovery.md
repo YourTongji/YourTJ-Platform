@@ -76,6 +76,8 @@
 - Comment 申诉恢复与所有 comment mutation 统一使用 thread→comment lock；parent visibility 只在 thread
   lock 后读取。并发 parent hide/delete 先完成时，恢复的 comment 继续保留 media binding，但不会错误
   恢复 activity/vote 投影或被旧 parent snapshot 当作公开内容。
+- Thread 隐藏、软删除、归档、举报处置、排队编辑和自动归档统一在 source mutation 事务内同步整棵
+  activity 子树：主题、全部评论及两类正向 vote 按稳定锁序停用；恢复只重启仍可公开的 canonical source。
 - Web CodeMirror 已接 direct-to-OSS 图片上传、持久状态恢复、pending/clean/quarantined/blocked 状态、引用插入和移除；
   pending 可保存在本人云端草稿，但发布按钮和服务端 binding 都要求 clean。
 - 课程/课评、论坛主题、用户与论坛 discovery object 各有最小化 Meilisearch 候选能力；独立
