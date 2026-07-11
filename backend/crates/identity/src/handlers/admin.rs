@@ -167,10 +167,7 @@ pub async fn invite_user(
     let auth = authenticate(&headers, &state).await?;
     auth.require_capability(Capability::InviteUsers).map_err(|_| AppError::Forbidden)?;
     let reason = validate_reason(&body.reason)?;
-    let email = body.email.trim().to_lowercase();
-    if !email.ends_with("@tongji.edu.cn") {
-        return Err(crate::error::IdentityError::InvalidEmailDomain.into());
-    }
+    let email = super::normalize_campus_email(&body.email)?;
     let handle = body.handle.trim().to_lowercase();
     super::validate_handle(&handle)?;
     if repo::find_account_by_email(&state.db, state.email_encryption.as_ref(), &email)
@@ -255,7 +252,8 @@ pub async fn change_role(
         return Err(AppError::Conflict("account already has that role".into()));
     }
     sqlx::query(
-        "UPDATE identity.accounts SET role = $1::identity.account_role, updated_at = now() \
+        "UPDATE identity.accounts SET role = $1::identity.account_role, updated_at = now(), \
+                auth_version = auth_version + 1, legacy_access_revoked_before = now() \
          WHERE id = $2",
     )
     .bind(&body.role)
@@ -312,6 +310,13 @@ pub async fn revoke_sessions(
     .execute(&mut *tx)
     .await?
     .rows_affected();
+    sqlx::query(
+        "UPDATE identity.accounts SET auth_version = auth_version + 1, \
+                legacy_access_revoked_before = now() WHERE id = $1",
+    )
+    .bind(account_id)
+    .execute(&mut *tx)
+    .await?;
     let metadata = serde_json::json!({ "revokedSessionCount": revoked });
     governance::record_account_event_tx(
         &mut tx,
@@ -382,6 +387,13 @@ async fn create_sanction(
         sqlx::query(
             "UPDATE identity.sessions SET revoked_at = now() \
              WHERE account_id = $1 AND revoked_at IS NULL",
+        )
+        .bind(account_id)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "UPDATE identity.accounts SET auth_version = auth_version + 1, \
+                    legacy_access_revoked_before = now() WHERE id = $1",
         )
         .bind(account_id)
         .execute(&mut *tx)

@@ -186,6 +186,21 @@ async fn run_migrations(pool: &PgPool) {
             .expect("migration 0025 failed");
     }
 
+    let has_auth_hardening: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM information_schema.columns \
+         WHERE table_schema = 'identity' AND table_name = 'email_codes' \
+           AND column_name = 'purpose')",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or(false);
+    if !has_auth_hardening {
+        sqlx::raw_sql(include_str!("../../../../migrations/0033_identity_auth_hardening.sql"))
+            .execute(pool)
+            .await
+            .expect("migration 0033 failed");
+    }
+
     // Clean test data from previous runs (always run, even if migrations were skipped).
     sqlx::query("DELETE FROM governance.audit_events").execute(pool).await.ok();
     sqlx::query("DELETE FROM identity.sessions").execute(pool).await.ok();
@@ -224,12 +239,28 @@ pub fn brute_force_code(code_hash: &str) -> String {
 /// Insert a valid verification code for an email into the test DB.
 #[allow(dead_code)]
 pub async fn insert_valid_code(pool: &PgPool, email: &str, code: &str) {
+    let account_exists: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM identity.accounts WHERE email = $1)")
+            .bind(email)
+            .fetch_one(pool)
+            .await
+            .expect("check test account");
+    let purpose = if account_exists { "login" } else { "registration" };
+    insert_valid_code_for_purpose(pool, email, code, purpose).await;
+}
+
+/// Insert a delivered code bound to an explicit security purpose.
+#[allow(dead_code)]
+pub async fn insert_valid_code_for_purpose(pool: &PgPool, email: &str, code: &str, purpose: &str) {
     let code_hash = hex::encode(Sha256::digest(code));
     sqlx::query(
-        "INSERT INTO identity.email_codes (email, code_hash, expires_at) \
-         VALUES ($1, $2, now() + interval '10 minutes')",
+        "INSERT INTO identity.email_codes \
+         (email, purpose, request_id, code_hash, expires_at, delivery_accepted_at) \
+         VALUES ($1, $2, $3, $4, now() + interval '10 minutes', now())",
     )
     .bind(email)
+    .bind(purpose)
+    .bind(uuid::Uuid::new_v4())
     .bind(&code_hash)
     .execute(pool)
     .await

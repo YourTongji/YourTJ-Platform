@@ -23,11 +23,7 @@ export interface paths {
             };
             requestBody: {
                 content: {
-                    "application/json": {
-                        /** Format: email */
-                        email: string;
-                        captchaToken: string;
-                    };
+                    "application/json": components["schemas"]["EmailCodeRequest"];
                 };
             };
             responses: {
@@ -67,11 +63,7 @@ export interface paths {
             };
             requestBody: {
                 content: {
-                    "application/json": {
-                        email: string;
-                        code: string;
-                        handle?: string;
-                    };
+                    "application/json": components["schemas"]["EmailCodeVerification"];
                 };
             };
             responses: {
@@ -85,6 +77,7 @@ export interface paths {
                     };
                 };
                 400: components["responses"]["BadRequest"];
+                409: components["responses"]["Conflict"];
             };
         };
         delete?: never;
@@ -102,7 +95,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Exchange a refresh token for new tokens */
+        /**
+         * Exchange a refresh token for new tokens
+         * @description Rotates the token exactly once. Reuse of a consumed token revokes its session family.
+         */
         post: {
             parameters: {
                 query?: never;
@@ -110,7 +106,11 @@ export interface paths {
                 path?: never;
                 cookie?: never;
             };
-            requestBody?: never;
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["RefreshInput"];
+                };
+            };
             responses: {
                 /** @description ok */
                 200: {
@@ -139,7 +139,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Revoke the current session */
+        /** Revoke the current device session family */
         post: {
             parameters: {
                 query?: never;
@@ -156,6 +156,42 @@ export interface paths {
                     };
                     content?: never;
                 };
+                401: components["responses"]["Unauthorized"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/logout-all": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Revoke every session for the current account */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description all sessions revoked */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                401: components["responses"]["Unauthorized"];
             };
         };
         delete?: never;
@@ -226,6 +262,120 @@ export interface paths {
                 };
             };
         };
+        trace?: never;
+    };
+    "/me/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List active device sessions */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description Opaque pagination cursor */
+                    cursor?: components["parameters"]["Cursor"];
+                    limit?: components["parameters"]["Limit"];
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["SessionPage"];
+                    };
+                };
+                401: components["responses"]["Unauthorized"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/me/sessions/revoke-others": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Revoke every session except the current one */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description other sessions revoked */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                401: components["responses"]["Unauthorized"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/me/sessions/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Revoke one device session */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description session revoked */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                401: components["responses"]["Unauthorized"];
+                404: components["responses"]["NotFound"];
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/me/activity": {
@@ -993,7 +1143,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Request a password-reset code */
+        /**
+         * Request a password-reset code
+         * @description Always returns the same successful response for valid campus-email syntax, whether or not an eligible password account exists.
+         */
         post: {
             parameters: {
                 query?: never;
@@ -1011,7 +1164,7 @@ export interface paths {
                 };
             };
             responses: {
-                /** @description sent */
+                /** @description Request accepted without revealing account eligibility or provider delivery */
                 204: {
                     headers: {
                         [name: string]: unknown;
@@ -1037,7 +1190,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Reset password with code */
+        /**
+         * Reset password with code
+         * @description Accepts only a password-reset-purpose code and revokes every access and refresh session on success.
+         */
         post: {
             parameters: {
                 query?: never;
@@ -1051,6 +1207,7 @@ export interface paths {
                         /** Format: email */
                         email: string;
                         code: string;
+                        /** Format: password */
                         newPassword: string;
                     };
                 };
@@ -1081,7 +1238,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Change the authenticated account's password */
+        /**
+         * Change the authenticated account's password
+         * @description Requires the current password, preserves the current device session, and revokes other sessions.
+         */
         post: {
             parameters: {
                 query?: never;
@@ -1092,7 +1252,9 @@ export interface paths {
             requestBody: {
                 content: {
                     "application/json": {
+                        /** Format: password */
                         currentPassword: string;
+                        /** Format: password */
                         newPassword: string;
                     };
                 };
@@ -6218,9 +6380,42 @@ export interface components {
             createdAt?: number;
         };
         AuthTokens: {
-            accessToken?: string;
-            refreshToken?: string;
-            account?: components["schemas"]["Account"];
+            accessToken: string;
+            refreshToken: string;
+            account: components["schemas"]["Account"];
+        };
+        /** @enum {string} */
+        EmailCodePurpose: "login" | "registration";
+        EmailCodeRequest: {
+            /** Format: email */
+            email: string;
+            captchaToken: string;
+            /** @description Optional only for rolling compatibility. New clients must send it; omission binds a concrete login or registration purpose when the code is issued. */
+            purpose?: components["schemas"]["EmailCodePurpose"];
+        };
+        EmailCodeVerification: {
+            /** Format: email */
+            email: string;
+            code: string;
+            /** @description Optional only for rolling compatibility. When present it must match the issued code; omission can consume only login or registration codes, never password-reset codes. */
+            purpose?: components["schemas"]["EmailCodePurpose"];
+            handle?: string;
+            /** Format: password */
+            password?: string;
+        };
+        RefreshInput: {
+            refreshToken: string;
+        };
+        Session: {
+            id: string;
+            isCurrent: boolean;
+            deviceLabel?: string | null;
+            createdAt: number;
+            lastUsedAt: number;
+            expiresAt: number;
+        };
+        SessionPage: components["schemas"]["Page"] & {
+            items?: components["schemas"]["Session"][];
         };
         Department: {
             id?: string;

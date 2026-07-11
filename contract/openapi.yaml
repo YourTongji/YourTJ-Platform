@@ -117,10 +117,55 @@ components:
         createdAt: { type: integer }
     AuthTokens:
       type: object
+      required: [accessToken, refreshToken, account]
       properties:
         accessToken: { type: string }
         refreshToken: { type: string }
         account: { $ref: "#/components/schemas/Account" }
+    EmailCodePurpose:
+      type: string
+      enum: [login, registration]
+    EmailCodeRequest:
+      type: object
+      required: [email, captchaToken]
+      properties:
+        email: { type: string, format: email }
+        captchaToken: { type: string, minLength: 1 }
+        purpose:
+          allOf: [{ $ref: "#/components/schemas/EmailCodePurpose" }]
+          description: Optional only for rolling compatibility. New clients must send it; omission binds a concrete login or registration purpose when the code is issued.
+    EmailCodeVerification:
+      type: object
+      required: [email, code]
+      properties:
+        email: { type: string, format: email }
+        code: { type: string, pattern: '^[0-9]{6}$' }
+        purpose:
+          allOf: [{ $ref: "#/components/schemas/EmailCodePurpose" }]
+          description: Optional only for rolling compatibility. When present it must match the issued code; omission can consume only login or registration codes, never password-reset codes.
+        handle: { type: string, minLength: 3, maxLength: 30 }
+        password: { type: string, format: password, minLength: 8, maxLength: 128 }
+    RefreshInput:
+      type: object
+      required: [refreshToken]
+      properties:
+        refreshToken: { type: string, minLength: 1, maxLength: 256 }
+    Session:
+      type: object
+      required: [id, isCurrent, createdAt, lastUsedAt, expiresAt]
+      properties:
+        id: { type: string }
+        isCurrent: { type: boolean }
+        deviceLabel: { type: string, nullable: true, maxLength: 200 }
+        createdAt: { type: integer }
+        lastUsedAt: { type: integer }
+        expiresAt: { type: integer }
+    SessionPage:
+      allOf:
+        - $ref: "#/components/schemas/Page"
+        - type: object
+          properties:
+            items: { type: array, items: { $ref: "#/components/schemas/Session" } }
 
     # ---- courses / reviews ----
     Department: { type: object, properties: { id: { type: string }, name: { type: string } } }
@@ -1156,7 +1201,7 @@ paths:
       summary: Send a verification code to a @tongji.edu.cn address
       requestBody:
         required: true
-        content: { application/json: { schema: { type: object, required: [email, captchaToken], properties: { email: { type: string, format: email }, captchaToken: { type: string, minLength: 1 } } } } }
+        content: { application/json: { schema: { $ref: "#/components/schemas/EmailCodeRequest" } } }
       responses:
         "204": { description: sent }
         "429": { $ref: "#/components/responses/RateLimited" }
@@ -1168,23 +1213,33 @@ paths:
       summary: Verify a code and log in / register
       requestBody:
         required: true
-        content: { application/json: { schema: { type: object, required: [email, code], properties: { email: { type: string }, code: { type: string }, handle: { type: string } } } } }
+        content: { application/json: { schema: { $ref: "#/components/schemas/EmailCodeVerification" } } }
       responses:
         "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/AuthTokens" } } } }
         "400": { $ref: "#/components/responses/BadRequest" }
+        "409": { $ref: "#/components/responses/Conflict" }
   /auth/refresh:
     post:
       tags: [auth]
       security: []
       summary: Exchange a refresh token for new tokens
+      description: Rotates the token exactly once. Reuse of a consumed token revokes its session family.
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/RefreshInput" } } }
       responses:
         "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/AuthTokens" } } } }
         "401": { $ref: "#/components/responses/Unauthorized" }
   /auth/logout:
     post:
       tags: [auth]
-      summary: Revoke the current session
-      responses: { "204": { description: ok } }
+      summary: Revoke the current device session family
+      responses: { "204": { description: ok }, "401": { $ref: "#/components/responses/Unauthorized" } }
+  /auth/logout-all:
+    post:
+      tags: [auth]
+      summary: Revoke every session for the current account
+      responses: { "204": { description: all sessions revoked }, "401": { $ref: "#/components/responses/Unauthorized" } }
   /me:
     get:
       tags: [identity]
@@ -1199,6 +1254,30 @@ paths:
         content: { application/json: { schema: { type: object, properties: { handle: { type: string }, avatarUrl: { type: string } } } } }
       responses:
         "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Account" } } } }
+  /me/sessions:
+    get:
+      tags: [identity]
+      summary: List active device sessions
+      parameters: [{ $ref: "#/components/parameters/Cursor" }, { $ref: "#/components/parameters/Limit" }]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/SessionPage" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /me/sessions/revoke-others:
+    post:
+      tags: [identity]
+      summary: Revoke every session except the current one
+      responses:
+        "204": { description: other sessions revoked }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /me/sessions/{id}:
+    delete:
+      tags: [identity]
+      summary: Revoke one device session
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "204": { description: session revoked }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /me/activity:
     get:
       tags: [activity]
@@ -1338,13 +1417,13 @@ paths:
   # /credit/tasks POST and /credit/tasks/{id}/action confirm; backend only
   # exposes the canonical /credit/tasks routes.
 
-  # ============ password auth — local-only, not in OpenAPI for mobile thin clients ============
+  # ============ password auth ============
   /auth/password/login:
     post:
       tags: [auth]
       security: []
       summary: Campus email + password login
-      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [email, password], properties: { email: { type: string, format: email }, password: { type: string, format: password } } } } } }
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [email, password], properties: { email: { type: string, format: email }, password: { type: string, format: password, minLength: 1, maxLength: 128 } } } } } }
       responses:
         "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/AuthTokens" } } } }
         "400": { $ref: "#/components/responses/BadRequest" }
@@ -1354,9 +1433,10 @@ paths:
       tags: [auth]
       security: []
       summary: Request a password-reset code
+      description: Always returns the same successful response for valid campus-email syntax, whether or not an eligible password account exists.
       requestBody: { required: true, content: { application/json: { schema: { type: object, required: [email, captchaToken], properties: { email: { type: string, format: email }, captchaToken: { type: string, minLength: 1 } } } } } }
       responses:
-        "204": { description: sent }
+        "204": { description: Request accepted without revealing account eligibility or provider delivery }
         "429": { $ref: "#/components/responses/RateLimited" }
         "503": { $ref: "#/components/responses/ServiceUnavailable" }
   /auth/password/reset:
@@ -1364,6 +1444,7 @@ paths:
       tags: [auth]
       security: []
       summary: Reset password with code
+      description: Accepts only a password-reset-purpose code and revokes every access and refresh session on success.
       requestBody:
         required: true
         content:
@@ -1373,8 +1454,8 @@ paths:
               required: [email, code, newPassword]
               properties:
                 email: { type: string, format: email }
-                code: { type: string }
-                newPassword: { type: string }
+                code: { type: string, pattern: '^[0-9]{6}$' }
+                newPassword: { type: string, format: password, minLength: 8, maxLength: 128 }
       responses:
         "204": { description: ok }
         "400": { $ref: "#/components/responses/BadRequest" }
@@ -1382,6 +1463,7 @@ paths:
     post:
       tags: [auth]
       summary: Change the authenticated account's password
+      description: Requires the current password, preserves the current device session, and revokes other sessions.
       requestBody:
         required: true
         content:
@@ -1390,8 +1472,8 @@ paths:
               type: object
               required: [currentPassword, newPassword]
               properties:
-                currentPassword: { type: string }
-                newPassword: { type: string }
+                currentPassword: { type: string, format: password, minLength: 1, maxLength: 128 }
+                newPassword: { type: string, format: password, minLength: 8, maxLength: 128 }
       responses:
         "204": { description: ok }
         "400": { $ref: "#/components/responses/BadRequest" }

@@ -3,6 +3,10 @@ import type { components } from "./schema";
 export type Schema = components["schemas"];
 
 export type Account = Schema["Account"] & { trustLevel?: number };
+export type AuthTokens = Schema["AuthTokens"];
+export type DeviceSession = Schema["Session"];
+export type DeviceSessionPage = Schema["SessionPage"];
+export type EmailCodePurpose = Schema["EmailCodePurpose"];
 export type ActivityCalendar = Schema["ActivityCalendar"];
 export type ActivityDay = Schema["ActivityDay"];
 export type ActivityPolicy = Schema["ActivityPolicy"];

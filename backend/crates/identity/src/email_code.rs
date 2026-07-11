@@ -7,6 +7,33 @@
 use ring::rand::{SecureRandom, SystemRandom};
 use sha2::{Digest, Sha256};
 
+/// Security purpose bound to a verification code at issuance time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CodePurpose {
+    Login,
+    Registration,
+    PasswordReset,
+}
+
+impl CodePurpose {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Login => "login",
+            Self::Registration => "registration",
+            Self::PasswordReset => "password_reset",
+        }
+    }
+
+    pub fn from_stored(value: &str) -> Option<Self> {
+        match value {
+            "login" => Some(Self::Login),
+            "registration" => Some(Self::Registration),
+            "password_reset" => Some(Self::PasswordReset),
+            _ => None,
+        }
+    }
+}
+
 /// Generate a 6-digit verification code (e.g. "482913").
 pub fn generate_code() -> String {
     let rng = SystemRandom::new();

@@ -17,6 +17,7 @@
 
 - 校园邮箱不出现在公开 profile、论坛或现有 staff directory DTO。
 - Identity 支持 email-at-rest encryption/blind index 配置。
+- 设备 session 只向账号本人展示 bounded user-agent label 和必要时间；新认证流程不持久化精确 IP。
 - Staff 无通用 DM 浏览接口，只能访问 participant 报告的最小证据。
 - Governance audit 和制裁保留 actor/reason 历史，credit ledger append-only。
 
@@ -34,6 +35,7 @@
 |---|---|---|---|
 | 资格 PII | 校园邮箱、邮箱验证状态 | identity purpose only | 加密/盲索引、绝不公开、限制保留 |
 | 安全凭据 | password hash、code hash、refresh hash、keys/tokens | security code only | 不记录明文、最短保留、可撤销 |
+| 会话元数据 | bounded user-agent、创建/最近使用/到期时间 | 账号本人、安全代码 | 不收集精确 IP，随 session retention 删除 |
 | 公开身份 | handle、公开头像、display name、bio | 按 profile visibility | 用户可控、handle history 防冒用 |
 | 公共内容 | thread、comment、review、reaction | 按 board/content policy | revision、治理、导出/删除规则 |
 | 社交关系 | follow、block、mute、subscription | 本人及 policy 允许对象 | block/mute 默认私密、最小暴露 |

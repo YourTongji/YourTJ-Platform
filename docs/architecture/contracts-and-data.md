@@ -91,6 +91,10 @@ Fresh database 必须只通过 sqlx migration ledger 建立。普通启动、CI 
 ## 身份、隐私与审计
 
 - 公开 handle 与内部 account id 可跨域使用，校园邮箱只在 identity 的目的限定接口中处理。
+- Email code 在 issuance 时写入具体 purpose；兼容客户端省略 purpose 时只能消费记录中已持久化的
+  login/registration purpose，绝不根据验证时的账号状态重新推断，也不能触及 password-reset code。
+- Access JWT 的 session id/auth version 是 revocation binding，不是客户端授权事实；每次受保护请求仍
+  查询账号状态和 session。滚动窗口内的 legacy JWT 受账号级 revoked-before timestamp 约束。
 - 新 PII migration 同时更新[隐私与数据生命周期](../security/privacy-and-data-lifecycle.md)。
 - Staff write 记录 actor kind/id/role、action、target、reason、result 和 correlation；metadata 最小化。
 - Secrets、code、token、signature-as-credential、raw email、完整请求 body 和任意 DM 不进入日志/审计。

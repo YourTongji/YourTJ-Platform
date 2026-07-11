@@ -16,7 +16,8 @@
 ### Current
 
 - 持久角色为 `user < mod < admin`，服务端映射成 named capabilities 并返回给 Web。
-- identity 用户管理拒绝 self/equal/higher-role target，角色变化与 suspension 撤销 session。
+- identity 用户管理拒绝 self/equal/higher-role target；角色变化、管理员强制注销与 suspension 同时
+  撤销 refresh session 和已签发 access JWT。
 - forum/review moderation 通过 identity 的最小角色边界执行作者层级检查。
 - `governance.audit_events` 是 append-only account/system/service actor 记录；多数管理 mutation
   在业务事务中写入，reported-DM evidence list 也会审计。

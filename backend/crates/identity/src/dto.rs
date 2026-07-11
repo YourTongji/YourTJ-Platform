@@ -5,12 +5,30 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Public email-code purposes. Password reset has its own dedicated endpoint.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EmailCodePurpose {
+    Login,
+    Registration,
+}
+
+impl From<EmailCodePurpose> for crate::email_code::CodePurpose {
+    fn from(value: EmailCodePurpose) -> Self {
+        match value {
+            EmailCodePurpose::Login => Self::Login,
+            EmailCodePurpose::Registration => Self::Registration,
+        }
+    }
+}
+
 /// POST /auth/email/request-code
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RequestCodeInput {
     pub email: String,
     pub captcha_token: String,
+    pub purpose: Option<EmailCodePurpose>,
 }
 
 /// POST /auth/email/verify
@@ -21,6 +39,7 @@ pub struct VerifyEmailInput {
     pub code: String,
     pub handle: Option<String>,
     pub password: Option<String>,
+    pub purpose: Option<EmailCodePurpose>,
 }
 
 /// POST /auth/password/login
@@ -83,6 +102,18 @@ pub struct AccountDto {
 #[serde(rename_all = "camelCase")]
 pub struct RefreshInput {
     pub refresh_token: String,
+}
+
+/// One revocable device session owned by the authenticated account.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionDto {
+    pub id: String,
+    pub is_current: bool,
+    pub device_label: Option<String>,
+    pub created_at: i64,
+    pub last_used_at: i64,
+    pub expires_at: i64,
 }
 
 /// PATCH /me

@@ -65,6 +65,51 @@ async fn run_migrations(pool: &PgPool) {
         }
     }
 
+    let has_password_hash: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM information_schema.columns \
+         WHERE table_schema = 'identity' AND table_name = 'accounts' \
+           AND column_name = 'password_hash')",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or(false);
+    if !has_password_hash {
+        sqlx::raw_sql(include_str!("../../../../migrations/0011_password_auth.sql"))
+            .execute(pool)
+            .await
+            .expect("migration 0011 failed");
+    }
+
+    let has_email_blind_index: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM information_schema.columns \
+         WHERE table_schema = 'identity' AND table_name = 'email_codes' \
+           AND column_name = 'email_blind_index')",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or(false);
+    if !has_email_blind_index {
+        sqlx::raw_sql(include_str!("../../../../migrations/0016_email_encryption.sql"))
+            .execute(pool)
+            .await
+            .expect("migration 0016 failed");
+    }
+
+    let has_auth_hardening: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM information_schema.columns \
+         WHERE table_schema = 'identity' AND table_name = 'email_codes' \
+           AND column_name = 'purpose')",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or(false);
+    if !has_auth_hardening {
+        sqlx::raw_sql(include_str!("../../../../migrations/0033_identity_auth_hardening.sql"))
+            .execute(pool)
+            .await
+            .expect("migration 0033 failed");
+    }
+
     let has_activity_schema: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM information_schema.schemata WHERE schema_name = 'activity')",
     )

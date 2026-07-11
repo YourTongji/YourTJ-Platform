@@ -16,6 +16,10 @@ pub struct JwtClaims {
     pub sub: String,
     pub exp: usize,
     pub iat: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sid: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ver: Option<i64>,
 }
 
 /// An authenticated account, resolved from the bearer token in a header map.

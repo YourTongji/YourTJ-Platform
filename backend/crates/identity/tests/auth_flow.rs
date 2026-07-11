@@ -290,10 +290,12 @@ async fn test_verify_code_expired_rejects() {
     let email = "eve@tongji.edu.cn";
 
     sqlx::query(
-        "INSERT INTO identity.email_codes (email, code_hash, expires_at, attempts) \
-         VALUES ($1, $2, now() - interval '1 hour', 0)",
+        "INSERT INTO identity.email_codes \
+         (email, purpose, request_id, code_hash, expires_at, attempts, delivery_accepted_at) \
+         VALUES ($1, 'registration', $2, $3, now() - interval '1 hour', 0, now())",
     )
     .bind(email)
+    .bind(uuid::Uuid::new_v4())
     .bind(hex::encode(sha2::Sha256::digest("123456")))
     .execute(&pool)
     .await
@@ -356,10 +358,12 @@ async fn test_verify_code_exhausted_after_5_attempts() {
 
     let code_hash = hex::encode(sha2::Sha256::digest("111111"));
     sqlx::query(
-        "INSERT INTO identity.email_codes (email, code_hash, expires_at, attempts) \
-         VALUES ($1, $2, now() + interval '10 minutes', 5)",
+        "INSERT INTO identity.email_codes \
+         (email, purpose, request_id, code_hash, expires_at, attempts, delivery_accepted_at) \
+         VALUES ($1, 'registration', $2, $3, now() + interval '10 minutes', 5, now())",
     )
     .bind(email)
+    .bind(uuid::Uuid::new_v4())
     .bind(&code_hash)
     .execute(&pool)
     .await
@@ -534,13 +538,13 @@ async fn test_refresh_revoked_token_rejects() {
 async fn test_logout_revokes_session() {
     let (pool, _) = create_test_app().await;
 
-    helpers::insert_valid_code(&pool, "kate@tongji.edu.cn", "111111").await;
     sqlx::query("INSERT INTO identity.accounts (email, handle) VALUES ($1, $2)")
         .bind("kate@tongji.edu.cn")
         .bind("kate")
         .execute(&pool)
         .await
         .unwrap();
+    helpers::insert_valid_code(&pool, "kate@tongji.edu.cn", "111111").await;
 
     let app = create_test_app_with_pool(pool.clone()).await;
 

@@ -15,20 +15,24 @@
 
 ### Current
 
-- 校园邮箱验证码可登录或注册，账号使用 JWT access 与可撤销 refresh session。
-- 后端已有密码登录、忘记密码、重置密码和修改密码，密码使用 Argon2id。
+- 校园邮箱验证码按 `login`、`registration`、`password_reset` 绑定用途；只有 provider accepted
+  且未使用的 code 可在锁行事务中原子消费，迁移前 code 全部失效。
+- 后端已有密码登录、忘记密码、重置密码和修改密码，Argon2id 工作通过 bounded blocking task
+  执行；不存在账号、无密码和密码错误使用相同登录响应。
+- 新 access JWT 绑定 server-side session 与账号 auth version；refresh rotation 只创建一个 successor，
+  consumed token 重放会撤销整个 token family。
+- 后端支持当前设备、其他设备和全部设备撤销，以及本人设备 session 列表；密码 reset 撤销全部
+  session，已认证 change 保留当前 session 并撤销其他 session。
 - 账号状态、角色、禁言/封禁会参与受保护请求判断。
 - 校园邮箱不进入公开 profile DTO；支持加密和 blind index 配置。
 
 ### Partial
 
 - Web 只提供混合的验证码登录/注册表单，没有暴露密码登录和完整找回流程。
-- 验证码没有 purpose 和 `used_at`，成功验证不是严格的原子一次性消费。
-- 密码重置或修改后没有撤销其他 refresh session。
-- 账号不存在、无密码和密码错误的响应可被用来枚举账号。
+- Web 尚未提供设备中心、全部设备注销和 password login/reset UI；生成类型和 API client 已具备。
 - 未填写 handle 时可能使用邮箱前缀，形成公开身份关联风险。
 - access 与 refresh token 都保存在 localStorage；富文本上线前必须重新评估 XSS 后果。
-- 没有设备中心、recent-auth、条款版本确认、onboarding、导出或自助删除。
+- Web 尚无跨标签页 refresh 协调；没有 recent-auth、条款版本确认、onboarding、导出或自助删除。
 
 ## 登录与注册体验
 
@@ -58,9 +62,11 @@ code 不可使用。
 
 ## 密码与会话
 
-- 密码登录、忘记密码和验证码请求对“账号是否存在”提供同等级别的外部响应。
+- 密码登录和忘记密码对“账号是否存在”提供中性外部响应。忘记密码即使 provider 失败也返回
+  相同的 204，失败 code 保持不可用并由不含 PII 的运维指标告警。
 - 修改密码要求当前密码或 recent-auth；重置密码依赖 reset-purpose code。
-- 密码修改、重置、角色变化和 suspend 撤销现有 refresh session；产品需决定是否保留当前设备。
+- recent-auth password change 保留当前设备并撤销其他设备；password reset、角色变化和 suspend
+  撤销全部设备及已签发 access token。
 - refresh token rotation 必须识别重放；设备中心显示有限的设备/时间信息，不暴露精确历史 IP。
 - 支持撤销单设备、撤销其他设备和全设备注销。
 - Web refresh credential 的长期目标是 `HttpOnly + Secure + SameSite` cookie；在迁移决策完成前，
@@ -117,7 +123,6 @@ Identity crate 拥有 accounts、email codes、password hash、sessions、accoun
 
 - 密码登录是否只接受校园邮箱，还是也接受 handle；推荐只接受邮箱以降低改名和枚举复杂度。
 - 新注册是否必须设置密码；推荐允许验证码账号稍后设置，但 onboarding 明确提示恢复能力。
-- 密码改变后是否保留当前设备；推荐仅在 recent-auth 修改时保留当前设备，reset 全部撤销。
 - 毕业用户的资格、恢复和邮箱换绑政策。
 - refresh cookie 的跨端迁移、CSRF 防护和旧 token 撤销计划。
 - Staff WebAuthn/passkey、recovery code 和 break-glass 的注册、丢失与撤销政策。
@@ -127,6 +132,6 @@ Identity crate 拥有 accounts、email codes、password hash、sessions、accoun
 - 密码与验证码两种登录都能从 Web 完成，注册和找回路径互不混淆。
 - code 跨 purpose、并发重放、过期、超尝试次数均失败且无状态竞争。
 - 外部响应不能可靠区分不存在账号、无密码和错误密码。
-- 密码重置、角色变化和 suspend 后旧 refresh token 不可继续使用。
+- 密码重置、角色变化、session revoke 和 suspend 后对应旧 access/refresh token 都不可继续使用。
 - 公共 API、日志、通知和审计不泄露邮箱、code、password hash 或 refresh secret。
 - handler→repo→PostgreSQL 集成测试覆盖上述正向与负向旅程。

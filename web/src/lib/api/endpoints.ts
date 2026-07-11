@@ -17,6 +17,7 @@ import type {
   AdminTagUpdateInput,
   Announcement,
   AnnouncementInput,
+  AuthTokens,
   Board,
   Bookmark,
   Calendar,
@@ -26,10 +27,12 @@ import type {
   CourseDetail,
   CourseNature,
   Department,
+  DeviceSessionPage,
   DmConversation,
   DmMessage,
   DmReportReason,
   DmReport,
+  EmailCodePurpose,
   Faculty,
   LatestUpdate,
   LedgerEntry,
@@ -78,23 +81,74 @@ function walletHeaders(authorization: WalletAuthorization) {
 }
 
 export const api = {
-  requestEmailCode(email: string, captchaToken: string) {
+  requestEmailCode(email: string, captchaToken: string, purpose?: EmailCodePurpose) {
     return apiRequest<void>("/auth/email/request-code", {
+      method: "POST",
+      body: { email, captchaToken, purpose },
+      auth: false,
+    });
+  },
+
+  verifyEmail(input: {
+    email: string;
+    code: string;
+    purpose?: EmailCodePurpose;
+    handle?: string;
+    password?: string;
+  }) {
+    return apiRequest<AuthTokens>("/auth/email/verify", {
+      method: "POST",
+      body: input,
+      auth: false,
+    });
+  },
+
+  passwordLogin(input: { email: string; password: string }) {
+    return apiRequest<AuthTokens>("/auth/password/login", {
+      method: "POST",
+      body: input,
+      auth: false,
+    });
+  },
+
+  passwordForgot(email: string, captchaToken: string) {
+    return apiRequest<void>("/auth/password/forgot", {
       method: "POST",
       body: { email, captchaToken },
       auth: false,
     });
   },
 
-  verifyEmail(input: { email: string; code: string; handle?: string; password?: string }) {
-    return apiRequest<{ accessToken: string; refreshToken: string; account: Account }>(
-      "/auth/email/verify",
-      { method: "POST", body: input, auth: false },
-    );
+  passwordReset(input: { email: string; code: string; newPassword: string }) {
+    return apiRequest<void>("/auth/password/reset", {
+      method: "POST",
+      body: input,
+      auth: false,
+    });
+  },
+
+  passwordChange(input: { currentPassword: string; newPassword: string }) {
+    return apiRequest<void>("/auth/password/change", { method: "POST", body: input });
   },
 
   logout() {
     return apiRequest<void>("/auth/logout", { method: "POST" });
+  },
+
+  logoutAll() {
+    return apiRequest<void>("/auth/logout-all", { method: "POST" });
+  },
+
+  sessions(cursor?: string | null) {
+    return apiRequest<DeviceSessionPage>("/me/sessions", { query: { cursor, limit: 30 } });
+  },
+
+  revokeSession(id: string) {
+    return apiRequest<void>(`/me/sessions/${encodeURIComponent(id)}`, { method: "DELETE" });
+  },
+
+  revokeOtherSessions() {
+    return apiRequest<void>("/me/sessions/revoke-others", { method: "POST" });
   },
 
   me() {
