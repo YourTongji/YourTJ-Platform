@@ -14,6 +14,10 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use shared::{AppError, AppResult, AppState};
 
+mod quality;
+
+pub use quality::{SearchHighlightDto, SearchHighlightRangeDto};
+
 const DEFAULT_LIMIT: usize = 10;
 const MAX_LIMIT: usize = 30;
 const MAX_VISIBLE_RESULTS: usize = 240;
@@ -205,6 +209,8 @@ pub struct SearchResultDto {
     pub has_more: bool,
     pub has_more_scopes: Vec<String>,
     pub failed_scopes: Vec<String>,
+    pub highlights: Vec<SearchHighlightDto>,
+    pub suggested_query: Option<String>,
 }
 
 struct ResultPage<T> {
@@ -444,6 +450,15 @@ async fn global_search(
         });
         (has_more, cursor)
     });
+    let quality = quality::build_search_quality(
+        search.query,
+        &courses.items,
+        &reviews.items,
+        &threads.items,
+        &users.items,
+        &boards.items,
+        &tags.items,
+    );
     Ok(Json(SearchResultDto {
         courses: courses.items,
         reviews: reviews.items,
@@ -455,6 +470,8 @@ async fn global_search(
         has_more,
         has_more_scopes,
         failed_scopes,
+        highlights: quality.highlights,
+        suggested_query: quality.suggested_query,
     }))
 }
 

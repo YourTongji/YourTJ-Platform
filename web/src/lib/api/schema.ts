@@ -2345,7 +2345,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Privacy-safe typed federated search across catalogue and community objects */
+        /**
+         * Privacy-safe typed federated search across catalogue and community objects
+         * @description Meilisearch ranks candidate ids. Owner domains rehydrate and authorize every hit before canonical highlight ranges or conservative spelling suggestions are computed.
+         */
         get: {
             parameters: {
                 query: {
@@ -9886,6 +9889,19 @@ export interface components {
         };
         /** @enum {string} */
         SearchResultScope: "course" | "review" | "thread" | "user" | "board" | "tag";
+        /** @description Half-open Unicode character offsets into the named canonical field; clients render text nodes and never HTML. */
+        SearchHighlightRange: {
+            start: number;
+            end: number;
+        };
+        /** @description Presentation metadata computed only after the owning domain rehydrates and authorizes the result. */
+        SearchHighlight: {
+            scope: components["schemas"]["SearchResultScope"];
+            id: string;
+            /** @enum {string} */
+            field: "name" | "code" | "teacherName" | "department" | "courseName" | "comment" | "title" | "bodyExcerpt" | "board" | "authorHandle" | "handle" | "displayName" | "slug" | "description";
+            ranges: components["schemas"]["SearchHighlightRange"][];
+        };
         SearchResult: {
             courses: components["schemas"]["CourseSearchHit"][];
             reviews: components["schemas"]["ReviewSearchHit"][];
@@ -9900,6 +9916,10 @@ export interface components {
             hasMoreScopes: components["schemas"]["SearchResultScope"][];
             /** @description Included sections that failed while other sections remained usable. Never contains internal errors. */
             failedScopes: components["schemas"]["SearchResultScope"][];
+            /** @description Safe ranges over the returned canonical fields; never snippets or markup copied from the search index. */
+            highlights: components["schemas"]["SearchHighlight"][];
+            /** @description Conservative spelling suggestion inferred only from words in the visible, owner-rehydrated result set; null when ambiguous. */
+            suggestedQuery: string | null;
         };
         Calendar: {
             id?: string;

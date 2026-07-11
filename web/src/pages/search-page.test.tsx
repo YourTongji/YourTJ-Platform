@@ -91,6 +91,13 @@ describe("SearchPage", () => {
       hasMore: scope === "thread" && !cursor,
       hasMoreScopes: scope === "all" ? ["thread"] : scope === "thread" && !cursor ? ["thread"] : [],
       failedScopes: [],
+      highlights: scope === "all" || scope === "thread" ? [{
+        scope: "thread",
+        id: cursor ? "30" : "3",
+        field: "title",
+        ranges: [{ start: 0, end: 2 }],
+      }] : [],
+      suggestedQuery: scope === "all" ? "演算法" : null,
     }));
   });
 
@@ -103,13 +110,15 @@ describe("SearchPage", () => {
     expect(screen.getByRole("link", { name: /Alice/ })).toHaveAttribute("href", "/profile/alice");
     expect(screen.getByRole("link", { name: /学习交流/ })).toHaveAttribute("href", "/forum?board=5");
     expect(screen.getByRole("link", { name: /#算法/ })).toHaveAttribute("href", "/forum?tag=algorithm");
+    expect(screen.getByText("算法", { selector: "mark" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "“演算法”" })).toBeVisible();
 
     await user.click(screen.getByRole("button", { name: "社区帖子" }));
     await waitFor(() => expect(apiMocks.search).toHaveBeenLastCalledWith("算法", "thread", 30, null));
     expect(screen.queryByText("讲解清晰")).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "加载更多社区帖子" }));
-    expect(await screen.findByText("算法进阶讨论")).toBeVisible();
+    expect(await screen.findByRole("link", { name: /算法进阶讨论/ })).toBeVisible();
     await waitFor(() => expect(apiMocks.search).toHaveBeenLastCalledWith(
       "算法",
       "thread",
@@ -117,6 +126,16 @@ describe("SearchPage", () => {
       "thread-cursor-1",
     ));
     await expectNoAccessibilityViolations(view.container);
+  });
+
+  it("applies the privacy-safe spelling suggestion as a new search", async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(await screen.findByRole("button", { name: "“演算法”" }));
+
+    await waitFor(() => expect(apiMocks.search).toHaveBeenLastCalledWith("演算法", "all", 6, null));
+    expect(screen.getByRole("textbox", { name: "全站搜索关键词" })).toHaveValue("演算法");
   });
 
   it("distinguishes an unavailable section from a genuine empty result", async () => {
@@ -131,6 +150,8 @@ describe("SearchPage", () => {
       hasMore: false,
       hasMoreScopes: [],
       failedScopes: ["thread"],
+      highlights: [],
+      suggestedQuery: null,
     });
     const view = renderPage();
 

@@ -706,9 +706,28 @@ components:
     SearchResultScope:
       type: string
       enum: [course, review, thread, user, board, tag]
+    SearchHighlightRange:
+      type: object
+      required: [start, end]
+      description: Half-open Unicode character offsets into the named canonical field; clients render text nodes and never HTML.
+      properties:
+        start: { type: integer, minimum: 0 }
+        end: { type: integer, minimum: 1 }
+    SearchHighlight:
+      type: object
+      required: [scope, id, field, ranges]
+      description: Presentation metadata computed only after the owning domain rehydrates and authorizes the result.
+      properties:
+        scope: { $ref: "#/components/schemas/SearchResultScope" }
+        id: { type: string }
+        field: { type: string, enum: [name, code, teacherName, department, courseName, comment, title, bodyExcerpt, board, authorHandle, handle, displayName, slug, description] }
+        ranges:
+          type: array
+          maxItems: 8
+          items: { $ref: "#/components/schemas/SearchHighlightRange" }
     SearchResult:
       type: object
-      required: [courses, reviews, threads, users, boards, tags, nextCursor, hasMore, hasMoreScopes, failedScopes]
+      required: [courses, reviews, threads, users, boards, tags, nextCursor, hasMore, hasMoreScopes, failedScopes, highlights, suggestedQuery]
       properties:
         courses: { type: array, items: { $ref: "#/components/schemas/CourseSearchHit" } }
         reviews: { type: array, items: { $ref: "#/components/schemas/ReviewSearchHit" } }
@@ -729,6 +748,14 @@ components:
           type: array
           items: { $ref: "#/components/schemas/SearchResultScope" }
           description: Included sections that failed while other sections remained usable. Never contains internal errors.
+        highlights:
+          type: array
+          items: { $ref: "#/components/schemas/SearchHighlight" }
+          description: Safe ranges over the returned canonical fields; never snippets or markup copied from the search index.
+        suggestedQuery:
+          type: string
+          nullable: true
+          description: Conservative spelling suggestion inferred only from words in the visible, owner-rehydrated result set; null when ambiguous.
 
     # ---- selection (选课/PK) ----
     Calendar: { type: object, properties: { id: { type: string }, name: { type: string }, isCurrent: { type: boolean } } }
@@ -2779,6 +2806,7 @@ paths:
       tags: [search]
       security: [{}, { bearer: [] }]
       summary: Privacy-safe typed federated search across catalogue and community objects
+      description: Meilisearch ranks candidate ids. Owner domains rehydrate and authorize every hit before canonical highlight ranges or conservative spelling suggestions are computed.
       parameters:
         - { name: q, in: query, required: true, schema: { type: string, minLength: 2, maxLength: 100 } }
         - { name: type, in: query, schema: { type: string, enum: [course, teacher, review, thread, user, board, tag, all], default: all } }

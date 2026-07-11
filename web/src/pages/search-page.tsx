@@ -4,12 +4,14 @@ import * as React from "react";
 import { Link, useSearchParams } from "react-router";
 
 import { PageHeader } from "@/components/common/page-header";
+import { HighlightedText } from "@/components/search/highlighted-text";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { api } from "@/lib/api/endpoints";
+import type { SearchResult } from "@/lib/api/types";
 import { formatNumber, formatUnixTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -33,6 +35,12 @@ const scopeLabels: Record<Exclude<SearchScope, "all">, string> = {
   board: "板块",
   tag: "标签",
 };
+
+type SearchHighlight = SearchResult["highlights"][number];
+
+function highlightKey(scope: string, id: string, field: string) {
+  return `${scope}:${id}:${field}`;
+}
 
 export function SearchPage() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -59,16 +67,30 @@ export function SearchPage() {
     setSearchParams(next);
   }
 
-  const pages = result.data?.pages ?? [];
+  const pages = React.useMemo(() => result.data?.pages ?? [], [result.data?.pages]);
   const courses = pages.flatMap((page) => page.courses);
   const reviews = pages.flatMap((page) => page.reviews);
   const threads = pages.flatMap((page) => page.threads);
   const users = pages.flatMap((page) => page.users);
   const boards = pages.flatMap((page) => page.boards);
   const tags = pages.flatMap((page) => page.tags);
+  const highlightMap = React.useMemo(() => {
+    const map = new Map<string, SearchHighlight["ranges"]>();
+    for (const page of pages) {
+      for (const highlight of page.highlights) {
+        map.set(highlightKey(highlight.scope, highlight.id, highlight.field), highlight.ranges);
+      }
+    }
+    return map;
+  }, [pages]);
+  const suggestedQuery = pages.find((page) => page.suggestedQuery)?.suggestedQuery ?? null;
   const moreScopes = new Set(pages[0]?.hasMoreScopes ?? []);
   const failedScopes = Array.from(new Set(pages.flatMap((page) => page.failedScopes)));
   const total = courses.length + reviews.length + threads.length + users.length + boards.length + tags.length;
+
+  function rangesFor(resultScope: Exclude<SearchScope, "all">, id: string, field: string) {
+    return highlightMap.get(highlightKey(resultScope, id, field));
+  }
 
   return (
     <div className="mx-auto max-w-4xl">
@@ -164,6 +186,21 @@ export function SearchPage() {
                 </CardContent>
               </Card>
             ) : null}
+            {suggestedQuery && suggestedQuery.toLocaleLowerCase() !== query.toLocaleLowerCase() ? (
+              <p className="text-sm text-muted-foreground">
+                你是不是要搜索
+                {" "}
+                <Button
+                  type="button"
+                  variant="link"
+                  className="h-auto p-0 align-baseline font-semibold"
+                  onClick={() => updateSearch(suggestedQuery)}
+                >
+                  “{suggestedQuery}”
+                </Button>
+                ？
+              </p>
+            ) : null}
             <p className="text-sm text-muted-foreground">当前返回 {total} 条经可见性复核的结果</p>
 
             {(scope === "all" || scope === "course") && courses.length > 0 ? (
@@ -178,12 +215,25 @@ export function SearchPage() {
                     <Link key={course.id} to={`/courses/${course.id}`} className="rounded-xl border bg-card p-4 transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50">
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0">
-                          <h3 className="truncate font-semibold">{course.name}</h3>
-                          <p className="mt-1 text-sm text-muted-foreground">{course.code} · {course.teacherName ?? "教师待同步"}</p>
+                          <h3 className="truncate font-semibold">
+                            <HighlightedText text={course.name} ranges={rangesFor("course", course.id, "name")} />
+                          </h3>
+                          <p className="mt-1 text-sm text-muted-foreground">
+                            <HighlightedText text={course.code} ranges={rangesFor("course", course.id, "code")} />
+                            {" · "}
+                            {course.teacherName
+                              ? <HighlightedText text={course.teacherName} ranges={rangesFor("course", course.id, "teacherName")} />
+                              : "教师待同步"}
+                          </p>
                         </div>
                         <Badge variant="secondary" className="shrink-0">{course.reviewAvg?.toFixed(1) ?? "暂无"} 分</Badge>
                       </div>
-                      <p className="mt-3 text-xs text-muted-foreground">{course.department ?? "院系待同步"} · {course.reviewCount} 条课评</p>
+                      <p className="mt-3 text-xs text-muted-foreground">
+                        {course.department
+                          ? <HighlightedText text={course.department} ranges={rangesFor("course", course.id, "department")} />
+                          : "院系待同步"}
+                        {` · ${course.reviewCount} 条课评`}
+                      </p>
                     </Link>
                   ))}
                 </div>
@@ -206,11 +256,15 @@ export function SearchPage() {
                   {reviews.map((review) => (
                     <Link key={review.id} to={`/courses/${review.courseId}`} className="block rounded-xl border bg-card p-4 transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50">
                       <div className="flex flex-wrap items-center gap-2">
-                        <h3 className="font-semibold">{review.courseName}</h3>
+                        <h3 className="font-semibold">
+                          <HighlightedText text={review.courseName} ranges={rangesFor("review", review.id, "courseName")} />
+                        </h3>
                         <Badge variant="secondary">{review.rating} 星</Badge>
                       </div>
                       <p className={cn("mt-2 text-sm", review.comment ? "line-clamp-3" : "text-muted-foreground")}>
-                        {review.comment ?? "该课评没有文字内容"}
+                        {review.comment
+                          ? <HighlightedText text={review.comment} ranges={rangesFor("review", review.id, "comment")} />
+                          : "该课评没有文字内容"}
                       </p>
                       <p className="mt-2 text-xs text-muted-foreground">
                         {review.approveCount} 人赞同 · {formatUnixTime(review.createdAt)}
@@ -246,10 +300,17 @@ export function SearchPage() {
                       </Avatar>
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-2">
-                          <h3 className="truncate font-semibold">{user.displayName ?? user.handle}</h3>
+                          <h3 className="truncate font-semibold">
+                            <HighlightedText
+                              text={user.displayName ?? user.handle}
+                              ranges={rangesFor("user", user.id, user.displayName ? "displayName" : "handle")}
+                            />
+                          </h3>
                           {user.following ? <Badge variant="secondary">已关注</Badge> : null}
                         </div>
-                        <p className="truncate text-sm text-muted-foreground">@{user.handle}</p>
+                        <p className="truncate text-sm text-muted-foreground">
+                          @<HighlightedText text={user.handle} ranges={rangesFor("user", user.id, "handle")} />
+                        </p>
                         <p className="mt-1 text-xs text-muted-foreground">{formatNumber(user.followerCount)} 位关注者</p>
                       </div>
                     </Link>
@@ -274,12 +335,21 @@ export function SearchPage() {
                   {threads.map((thread) => (
                     <Link key={thread.id} to={`/forum/threads/${thread.id}`} className="block rounded-xl border bg-card p-4 transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50">
                       <div className="flex flex-wrap items-center gap-2">
-                        <h3 className="font-semibold">{thread.title}</h3>
-                        <Badge variant="outline">{thread.board}</Badge>
+                        <h3 className="font-semibold">
+                          <HighlightedText text={thread.title} ranges={rangesFor("thread", thread.id, "title")} />
+                        </h3>
+                        <Badge variant="outline">
+                          <HighlightedText text={thread.board} ranges={rangesFor("thread", thread.id, "board")} />
+                        </Badge>
                       </div>
-                      {thread.bodyExcerpt ? <p className="mt-2 line-clamp-3 text-sm text-muted-foreground">{thread.bodyExcerpt}</p> : null}
+                      {thread.bodyExcerpt ? (
+                        <p className="mt-2 line-clamp-3 text-sm text-muted-foreground">
+                          <HighlightedText text={thread.bodyExcerpt} ranges={rangesFor("thread", thread.id, "bodyExcerpt")} />
+                        </p>
+                      ) : null}
                       <p className="mt-2 text-xs text-muted-foreground">
-                        {thread.authorHandle} · {thread.replyCount} 条回复 · {formatUnixTime(thread.createdAt)}
+                        <HighlightedText text={thread.authorHandle} ranges={rangesFor("thread", thread.id, "authorHandle")} />
+                        {` · ${thread.replyCount} 条回复 · ${formatUnixTime(thread.createdAt)}`}
                       </p>
                     </Link>
                   ))}
@@ -306,8 +376,14 @@ export function SearchPage() {
                       to={`/forum?board=${encodeURIComponent(board.id)}`}
                       className="rounded-xl border bg-card p-4 transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
                     >
-                      <h3 className="font-semibold">{board.name}</h3>
-                      <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">{board.description ?? "浏览该板块的公开讨论"}</p>
+                      <h3 className="font-semibold">
+                        <HighlightedText text={board.name} ranges={rangesFor("board", board.id, "name")} />
+                      </h3>
+                      <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">
+                        {board.description
+                          ? <HighlightedText text={board.description} ranges={rangesFor("board", board.id, "description")} />
+                          : "浏览该板块的公开讨论"}
+                      </p>
                       <p className="mt-3 text-xs text-muted-foreground">{formatNumber(board.threadCount)} 个帖子</p>
                     </Link>
                   ))}
@@ -334,7 +410,9 @@ export function SearchPage() {
                       to={`/forum?tag=${encodeURIComponent(tag.slug)}`}
                       className="rounded-full border bg-card px-4 py-2 text-sm transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
                     >
-                      <span className="font-semibold">#{tag.name}</span>
+                      <span className="font-semibold">
+                        #<HighlightedText text={tag.name} ranges={rangesFor("tag", tag.id, "name")} />
+                      </span>
                       <span className="ml-2 text-muted-foreground">{formatNumber(tag.threadCount)}</span>
                     </Link>
                   ))}

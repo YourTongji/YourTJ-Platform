@@ -103,9 +103,11 @@
   摘要、列表级 viewer state 与用户 following；`hot` 仍是热榜而不是个性化 recommended 模型。
 - Avatar/banner 与主题/评论已完成 owner 上传、审核状态恢复和 clean binding；课评/私信仍没有 binding，
   scanner/变体/EXIF 和实际 GC worker 尚未完成，因此这些子链路不等于媒体产品闭环。
-- 聚合搜索已有六类 typed 结果、有效 type filter、独立 Web 综合结果页与全局搜索入口；仍缺每类
-  highlight/纠错，以及 transactional outbox 驱动的索引可靠更新。单类 cursor、all 页“查看更多”
-  和局部失败状态已完成。
+- 聚合搜索已有六类 typed 结果、有效 type filter、独立 Web 综合结果页与全局搜索入口；高亮由 owner
+  domain 回表授权后的 canonical text 计算 Unicode character ranges，Web 只拆分文本节点并用 `mark`
+  渲染，不接受索引 HTML/snippet。拼写建议只从本页已授权 canonical fields 推导，候选歧义时不返回；
+  仍缺拼音/别名，以及 transactional outbox 驱动的索引可靠更新。单类 cursor、all 页“查看更多”和
+  局部失败状态已完成。
 - 推广尚无通用 `asset_usages` binding/GC 和匿名 clean 图片交付；这些缺口不影响无图片卡片和登录
   用户通过 media 授权 URL 显示 clean asset。效果数据已按日聚合，但不等于商业广告归因或跨域画像。
 
@@ -275,6 +277,10 @@ Feed 卡片只显示真实作者、正文摘要、asset、viewer state 和计数
 过滤、拼音/别名/纠错、加载/无结果/局部失败状态。
 
 - `type` 过滤在查询和响应两端生效，不能取全量后在 Web 隐藏。
+- 高亮只能使用 owner-rehydrated canonical field 的半开 Unicode character ranges；不得向客户端传
+  Meilisearch HTML/snippet。客户端必须渲染可信文本节点，越界、重叠或过量 ranges fail closed。
+- 拼写建议必须保守且隐私安全：只使用本次响应中已通过 owner 授权的 canonical words，歧义时返回 null；
+  不能从被过滤命中的索引文档、私有内容或搜索日志补全建议。拼音/别名尚未实现。
 - courses/reviews/threads 的 DTO 与对应详情模型有明确映射，前端不把 minimal hit 当完整对象。
 - user search 遵守 discoverability、block 和账号状态。
 - 评论正文是否成为独立 hit 为 `Decision needed`；推荐以 comment hit + parent thread context +
