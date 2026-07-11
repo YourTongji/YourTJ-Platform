@@ -202,12 +202,11 @@ pub async fn run() -> anyhow::Result<()> {
         tracing::info!("forum email digest scheduled (every 7 days)");
     }
 
-    // 7. Promotion event receipt retention (daily).
+    // 7. Promotion event receipt retention.
     {
         let db = state.db.clone();
         tokio::spawn(async move {
             loop {
-                tokio::time::sleep(std::time::Duration::from_secs(86400)).await;
                 match platform::purge_expired_promotion_event_receipts(&db).await {
                     Ok(removed) if removed > 0 => {
                         tracing::info!(removed, "expired promotion event receipts removed");
@@ -217,9 +216,10 @@ pub async fn run() -> anyhow::Result<()> {
                         tracing::warn!(?error, "promotion event receipt retention failed");
                     }
                 }
+                tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
             }
         });
-        tracing::info!("promotion event receipt retention scheduled (every 24h)");
+        tracing::info!("promotion event receipt retention scheduled (hourly)");
     }
 
     // 8. Badge credit mint bridge (every 60 seconds).

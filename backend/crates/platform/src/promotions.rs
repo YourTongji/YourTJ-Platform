@@ -749,13 +749,20 @@ async fn record_metric_event(
                  (token_id, promotion_id, issued_version, event_type) \
                VALUES ($1, $2, $3, 'click') \
                ON CONFLICT (token_id, event_type) DO NOTHING \
-               RETURNING promotion_id \
+               RETURNING token_id, promotion_id \
+             ), attributed AS ( \
+               SELECT accepted.promotion_id, timezone('UTC', impression.recorded_at)::date \
+                        AS metric_date \
+               FROM accepted \
+               JOIN platform.promotion_event_receipts impression \
+                 ON impression.token_id = accepted.token_id \
+                AND impression.event_type = 'impression' \
              ) \
              UPDATE platform.promotion_daily_metrics metric SET \
                clicks = metric.clicks + 1, updated_at = now() \
-             FROM accepted \
-             WHERE metric.promotion_id = accepted.promotion_id \
-               AND metric.metric_date = timezone('UTC', now())::date",
+             FROM attributed \
+             WHERE metric.promotion_id = attributed.promotion_id \
+               AND metric.metric_date = attributed.metric_date",
         )
         .bind(token_id)
         .bind(claims.promotion_id)

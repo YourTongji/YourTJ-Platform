@@ -81,7 +81,8 @@
   optimistic version、独立 capability、reason/audit 和后台 UI。目标只接受安全站内相对路径，素材只
   接受当前操作者拥有的 clean image asset id，不保存图片 URL。公开列表为每次展示签发不含账号、IP
   或设备标识的两小时票据；卡片持续达到 50% 可见 500ms 才记曝光，点击会补齐可能丢失的曝光。同一
-  票据的曝光/点击分别幂等，后台提供 30 天汇总和最多 93 天 UTC 日趋势。
+  票据的曝光/点击分别幂等；跨 UTC 零点的点击仍归入原 impression 的 UTC 日期，避免 click 被静默
+  丢弃。后台提供 30 天汇总和最多 93 天 UTC 日趋势。
 
 ### Partial
 

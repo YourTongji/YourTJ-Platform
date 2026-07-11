@@ -186,8 +186,8 @@ Legal hold 有合法目的、授权者、范围、到期和审计，不得成为
   reason 以 upload id 审计，token 仅存 hash 且不进入 URL、日志或 audit。
 - 推广保存平台 clean asset id 和站内目标路径，不保存远程图片 URL。曝光/点击只使用两小时有效的
   随机签名展示票据去重，票据不含账号、IP、设备或 audience 身份；原始 receipt 48 小时后由 worker
-  删除，长期只保留 promotion × UTC day 的曝光/点击总数。该数据不能用于个人级 attribution、跨域
-  画像或重建访问者身份。
+  删除；worker 启动时立即执行并按小时复查，点击归因到同一票据 impression 的 UTC day。长期只保留
+  promotion × UTC day 的曝光/点击总数。该数据不能用于个人级 attribution、跨域画像或重建访问者身份。
 - Captcha 只收到完成验证必要的信息，不发送邮箱、正文或私信；其 metadata 保留需进入隐私说明。
 - PR preview 不注入生产邮件/OSS/PII 凭据，不使用生产数据快照。
 

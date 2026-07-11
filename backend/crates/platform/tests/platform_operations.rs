@@ -334,9 +334,11 @@ async fn promotions_require_admin_capability_safe_links_and_owned_clean_assets()
     assert_eq!(unsafe_link.status(), StatusCode::BAD_REQUEST);
 
     let mut created_ids = Vec::new();
-    for (priority, title) in
-        [(1000, "Primary first-party promotion"), (999, "Secondary first-party promotion")]
-    {
+    for (priority, title) in [
+        (1000, "Primary first-party promotion"),
+        (999, "Secondary first-party promotion"),
+        (998, "Midnight attribution promotion"),
+    ] {
         let response = app
             .clone()
             .oneshot(json_request(
@@ -384,6 +386,10 @@ async fn promotions_require_admin_capability_safe_links_and_owned_clean_assets()
         .iter()
         .position(|item| item["id"] == created_ids[1])
         .expect("second promotion returned");
+    let third_position = items
+        .iter()
+        .position(|item| item["id"] == created_ids[2])
+        .expect("third promotion returned");
     assert!(first_position < second_position);
     let first_token = items[first_position]["trackingToken"]
         .as_str()
@@ -392,6 +398,10 @@ async fn promotions_require_admin_capability_safe_links_and_owned_clean_assets()
     let second_token = items[second_position]["trackingToken"]
         .as_str()
         .expect("second anonymous promotion tracking token")
+        .to_owned();
+    let third_token = items[third_position]["trackingToken"]
+        .as_str()
+        .expect("third anonymous promotion tracking token")
         .to_owned();
     assert!(items[first_position]["metrics"].is_null());
 
@@ -428,6 +438,60 @@ async fn promotions_require_admin_capability_safe_links_and_owned_clean_assets()
     .await
     .expect("click-derived promotion delivery");
     assert_eq!(inferred_delivery, (1, 1));
+
+    let midnight_impression = app
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            format!("/api/v2/promotions/{}/events", created_ids[2]),
+            None,
+            json!({ "eventType": "impression", "trackingToken": third_token }),
+        ))
+        .await
+        .expect("promotion midnight impression response");
+    assert_eq!(midnight_impression.status(), StatusCode::NO_CONTENT);
+    let third_id = created_ids[2].parse::<i64>().expect("numeric third promotion id");
+    sqlx::query(
+        "UPDATE platform.promotion_event_receipts \
+         SET recorded_at = date_trunc('day', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC' \
+                           - interval '1 second' \
+         WHERE promotion_id = $1 AND event_type = 'impression'",
+    )
+    .bind(third_id)
+    .execute(&pool)
+    .await
+    .expect("move receipt across UTC boundary");
+    sqlx::query(
+        "UPDATE platform.promotion_daily_metrics \
+         SET metric_date = (timezone('UTC', now())::date - 1) \
+         WHERE promotion_id = $1",
+    )
+    .bind(third_id)
+    .execute(&pool)
+    .await
+    .expect("move aggregate across UTC boundary");
+    let midnight_click = app
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            format!("/api/v2/promotions/{}/events", created_ids[2]),
+            None,
+            json!({ "eventType": "click", "trackingToken": third_token }),
+        ))
+        .await
+        .expect("promotion midnight click response");
+    assert_eq!(midnight_click.status(), StatusCode::NO_CONTENT);
+    let midnight_metrics: (i64, i64, i64) = sqlx::query_as(
+        "SELECT COALESCE(SUM(impressions), 0)::bigint, \
+                COALESCE(SUM(clicks), 0)::bigint, \
+                COUNT(*) FILTER (WHERE metric_date = timezone('UTC', now())::date)::bigint \
+         FROM platform.promotion_daily_metrics WHERE promotion_id = $1",
+    )
+    .bind(third_id)
+    .fetch_one(&pool)
+    .await
+    .expect("midnight-attributed promotion metrics");
+    assert_eq!(midnight_metrics, (1, 1, 0));
     let mismatched_token = app
         .clone()
         .oneshot(json_request(
@@ -554,5 +618,5 @@ async fn promotions_require_admin_capability_safe_links_and_owned_clean_assets()
     .fetch_one(&pool)
     .await
     .expect("read promotion audit events");
-    assert_eq!(audit_count, 2);
+    assert_eq!(audit_count, 3);
 }
