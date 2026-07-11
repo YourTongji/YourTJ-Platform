@@ -28,6 +28,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { ApiError } from "@/lib/api/client";
@@ -458,7 +459,16 @@ type WatchedWordAction = "block" | "censor" | "queue";
 
 function CommunityManager() {
   const queryClient = useQueryClient();
-  const [board, setBoard] = React.useState({ slug: "", name: "" });
+  const emptyBoard = {
+    slug: "",
+    name: "",
+    description: "",
+    position: "0",
+    isLocked: false,
+    minTrustToPost: "0",
+    isQa: false,
+  };
+  const [board, setBoard] = React.useState(emptyBoard);
   const [editingBoard, setEditingBoard] = React.useState<Board | null>(null);
   const [boardDecision, setBoardDecision] = React.useState<ResourceDecision<Board> | null>(null);
   const [boardConflict, setBoardConflict] = React.useState<string | null>(null);
@@ -473,7 +483,7 @@ function CommunityManager() {
   const watchedWords = useQuery({ queryKey: ["admin", "watched-words"], queryFn: api.adminWatchedWords });
 
   function resetBoardForm() {
-    setBoard({ slug: "", name: "" });
+    setBoard(emptyBoard);
     setEditingBoard(null);
   }
 
@@ -491,10 +501,24 @@ function CommunityManager() {
         await api.updateAdminBoard(decision.item.id, {
           slug: board.slug.trim(),
           name: board.name.trim(),
+          description: board.description.trim(),
+          position: Number(board.position),
+          isLocked: board.isLocked,
+          minTrustToPost: Number(board.minTrustToPost),
+          isQa: board.isQa,
           reason,
         });
       } else {
-        await api.createAdminBoard({ slug: board.slug.trim(), name: board.name.trim(), reason });
+        await api.createAdminBoard({
+          slug: board.slug.trim(),
+          name: board.name.trim(),
+          description: board.description.trim() || undefined,
+          position: Number(board.position),
+          isLocked: board.isLocked,
+          minTrustToPost: Number(board.minTrustToPost),
+          isQa: board.isQa,
+          reason,
+        });
       }
     },
     onSuccess: async (_, variables) => {
@@ -567,10 +591,18 @@ function CommunityManager() {
   const boardIsValid = board.slug.trim().length >= 1
     && board.slug.trim().length <= 64
     && board.name.trim().length >= 1
-    && board.name.trim().length <= 100;
+    && board.name.trim().length <= 100
+    && board.description.trim().length <= 500
+    && Number.isInteger(Number(board.position))
+    && Number(board.position) >= 0;
   const boardHasChanges = !editingBoard
     || board.slug.trim() !== editingBoard.slug
-    || board.name.trim() !== editingBoard.name;
+    || board.name.trim() !== editingBoard.name
+    || board.description.trim() !== (editingBoard.description ?? "").trim()
+    || Number(board.position) !== editingBoard.position
+    || board.isLocked !== editingBoard.isLocked
+    || Number(board.minTrustToPost) !== editingBoard.minTrustToPost
+    || board.isQa !== editingBoard.isQa;
   const tagIsValid = tag.slug.trim().length >= 1
     && tag.slug.trim().length <= 64
     && tag.name.trim().length >= 1
@@ -604,6 +636,25 @@ function CommunityManager() {
                 <Label htmlFor="board-name">名称</Label>
                 <Input id="board-name" className="mt-1" maxLength={100} value={board.name} onChange={(event) => setBoard((value) => ({ ...value, name: event.target.value }))} />
               </div>
+              <div>
+                <Label htmlFor="board-position">排序</Label>
+                <Input id="board-position" className="mt-1" type="number" min={0} value={board.position} onChange={(event) => setBoard((value) => ({ ...value, position: event.target.value }))} />
+              </div>
+              <div>
+                <Label htmlFor="board-trust">最低发帖等级</Label>
+                <Select value={board.minTrustToPost} onValueChange={(value) => setBoard((state) => ({ ...state, minTrustToPost: value }))}>
+                  <SelectTrigger id="board-trust" className="mt-1"><SelectValue /></SelectTrigger>
+                  <SelectContent>{[0, 1, 2, 3].map((level) => <SelectItem key={level} value={String(level)}>等级 {level}</SelectItem>)}</SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div>
+              <Label htmlFor="board-description">说明</Label>
+              <Textarea id="board-description" className="mt-1" maxLength={500} value={board.description} onChange={(event) => setBoard((value) => ({ ...value, description: event.target.value }))} />
+            </div>
+            <div className="flex flex-wrap gap-5 text-sm">
+              <Label className="flex items-center gap-2"><Switch checked={board.isLocked} onCheckedChange={(checked) => setBoard((value) => ({ ...value, isLocked: checked }))} />锁定发帖</Label>
+              <Label className="flex items-center gap-2"><Switch checked={board.isQa} onCheckedChange={(checked) => setBoard((value) => ({ ...value, isQa: checked }))} />问答板块</Label>
             </div>
             <div className="flex flex-wrap gap-2">
               <Button
@@ -625,9 +676,14 @@ function CommunityManager() {
                       <div className="min-w-0">
                         <p className="truncate font-medium">{item.name}</p>
                         <p className="truncate text-xs text-muted-foreground">/{item.slug} · {formatNumber(item.threadCount)} 个主题</p>
+                        <div className="mt-1 flex flex-wrap gap-1">
+                          {item.isLocked ? <Badge variant="outline">已锁定</Badge> : null}
+                          {(item.minTrustToPost ?? 0) > 0 ? <Badge variant="outline">等级 {item.minTrustToPost}+</Badge> : null}
+                          {item.isQa ? <Badge variant="outline">问答</Badge> : null}
+                        </div>
                       </div>
                       <div className="flex shrink-0 gap-1">
-                        <Button type="button" variant="ghost" size="sm" onClick={() => { setEditingBoard(item); setBoard({ slug: item.slug ?? "", name: item.name ?? "" }); }}><Pencil className="size-3.5" />编辑</Button>
+                        <Button type="button" variant="ghost" size="sm" onClick={() => { setEditingBoard(item); setBoard({ slug: item.slug ?? "", name: item.name ?? "", description: item.description ?? "", position: String(item.position ?? 0), isLocked: item.isLocked ?? false, minTrustToPost: String(item.minTrustToPost ?? 0), isQa: item.isQa ?? false }); }}><Pencil className="size-3.5" />编辑</Button>
                         <Button
                           type="button"
                           variant="ghost"

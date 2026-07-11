@@ -15,6 +15,11 @@ export type AdminAuditEvent = Schema["AdminAuditEvent"];
 export interface AdminBoardCreateInput {
   slug: string;
   name: string;
+  description?: string;
+  position?: number;
+  isLocked?: boolean;
+  minTrustToPost?: number;
+  isQa?: boolean;
   reason: string;
 }
 export type AdminBoardUpdateInput = Partial<Omit<AdminBoardCreateInput, "reason">> & {

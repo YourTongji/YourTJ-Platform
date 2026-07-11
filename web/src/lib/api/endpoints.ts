@@ -371,7 +371,7 @@ export const api = {
   },
 
   boards() {
-    return apiRequest<Board[]>("/forum/boards", { auth: false });
+    return apiRequest<Board[]>("/forum/boards");
   },
 
   tags() {
@@ -381,7 +381,7 @@ export const api = {
   threads(query: {
     board?: string;
     tag?: string;
-    feed?: "hot" | "new" | "following" | "unread";
+    feed?: "hot" | "new" | "subscriptions" | "unread";
     cursor?: string | null;
   }) {
     return apiRequest<Page<ThreadFeed>>("/forum/threads", {
@@ -450,10 +450,17 @@ export const api = {
   },
 
   votePost(id: string, value: "up" | "down", postType: "thread" | "comment" = "thread") {
-    return apiRequest<{ ok: boolean; voteCount: number }>(`/forum/posts/${encodeURIComponent(id)}/vote`, {
+    return apiRequest<{ ok: boolean; voteCount: number; viewerVote: "up" | "down" | null }>(`/forum/posts/${encodeURIComponent(id)}/vote`, {
       method: "POST",
       body: { value, postType },
     });
+  },
+
+  removePostVote(id: string, postType: "thread" | "comment" = "thread") {
+    return apiRequest<{ ok: boolean; voteCount: number; viewerVote: null }>(
+      `/forum/posts/${encodeURIComponent(id)}/vote`,
+      { method: "DELETE", query: { postType } },
+    );
   },
 
   flagPost(
@@ -468,10 +475,17 @@ export const api = {
     });
   },
 
-  bookmarkPost(id: string, note?: string) {
+  bookmarkPost(id: string, postType: "thread" | "comment" = "thread", note?: string) {
     return apiRequest<void>(`/forum/posts/${encodeURIComponent(id)}/bookmark`, {
       method: "PUT",
-      body: { note },
+      body: { postType, note },
+    });
+  },
+
+  removeBookmark(id: string, postType: "thread" | "comment" = "thread") {
+    return apiRequest<void>(`/forum/posts/${encodeURIComponent(id)}/bookmark`, {
+      method: "DELETE",
+      query: { postType },
     });
   },
 
@@ -479,14 +493,26 @@ export const api = {
     return apiRequest<Page<Bookmark>>("/forum/bookmarks", { query: { cursor, limit: 30 } });
   },
 
-  subscriptions() {
-    return apiRequest<Array<{ targetType?: string; targetId?: string; level?: string }>>(
+  subscriptions(cursor?: string | null, targetType?: "board" | "thread") {
+    return apiRequest<Page<{ targetType: "board" | "thread"; targetId: string; level: string; createdAt: number }>>(
       "/forum/subscriptions",
+      { query: { cursor, type: targetType, limit: 30 } },
     );
   },
 
   setSubscription(body: { targetType: "board" | "thread"; targetId: string; level: string }) {
     return apiRequest<void>("/forum/subscriptions", { method: "PUT", body });
+  },
+
+  deleteSubscription(body: { targetType: "board" | "thread"; targetId: string }) {
+    return apiRequest<void>("/forum/subscriptions", { method: "DELETE", body });
+  },
+
+  reportThreadRead(id: string, lastReadCommentId?: string | null) {
+    return apiRequest<void>(`/forum/threads/${encodeURIComponent(id)}/read`, {
+      method: "POST",
+      body: { lastReadCommentId },
+    });
   },
 
   ignoredUsers(cursor?: string | null) {
@@ -576,10 +602,17 @@ export const api = {
   },
 
   votePoll(id: string, optionId: string) {
-    return apiRequest<{ ok: boolean }>(`/forum/polls/${encodeURIComponent(id)}/vote`, {
+    return apiRequest<{ ok: boolean; myVotes: string[] }>(`/forum/polls/${encodeURIComponent(id)}/vote`, {
       method: "POST",
       body: { optionId },
     });
+  },
+
+  removePollVote(id: string, optionId: string) {
+    return apiRequest<{ ok: boolean; myVotes: string[] }>(
+      `/forum/polls/${encodeURIComponent(id)}/vote`,
+      { method: "DELETE", query: { optionId } },
+    );
   },
 
   pollResults(id: string) {

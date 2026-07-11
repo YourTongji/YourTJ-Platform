@@ -2583,7 +2583,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List boards */
+        /** List boards with optional viewer posting access */
         get: {
             parameters: {
                 query?: never;
@@ -2655,13 +2655,14 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Thread feed (hot/new/following/unread) */
+        /** Thread feed (hot/new/subscriptions/unread) */
         get: {
             parameters: {
                 query?: {
                     board?: string;
+                    /** @description Exact tag slug */
                     tag?: string;
-                    sort?: "hot" | "new" | "following" | "unread";
+                    sort?: "hot" | "new" | "subscriptions" | "unread";
                     /** @description Opaque pagination cursor */
                     cursor?: components["parameters"]["Cursor"];
                     limit?: components["parameters"]["Limit"];
@@ -2684,7 +2685,10 @@ export interface paths {
             };
         };
         put?: never;
-        /** Create thread (TL/sanction/word-filter check) */
+        /**
+         * Create thread with board, trust-level, sanction, and content-policy checks
+         * @description Ordinary accounts require an unlocked board and trustLevel >= minTrustToPost. Accounts with moderation.content may bypass only those two board gates.
+         */
         post: {
             parameters: {
                 query?: never;
@@ -2715,6 +2719,51 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/forum/boards/{boardId}/threads": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List visible threads in one board */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description Exact tag slug */
+                    tag?: string;
+                    sort?: "hot" | "new";
+                    /** @description Opaque pagination cursor */
+                    cursor?: components["parameters"]["Cursor"];
+                    limit?: components["parameters"]["Limit"];
+                };
+                header?: never;
+                path: {
+                    boardId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ThreadFeedPage"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/forum/threads/{id}": {
         parameters: {
             query?: never;
@@ -2722,7 +2771,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Thread detail */
+        /** Thread detail with optional viewer state */
         get: {
             parameters: {
                 query?: never;
@@ -2889,7 +2938,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Comments */
+        /** Comments with optional viewer state */
         get: {
             parameters: {
                 query?: {
@@ -3090,7 +3139,31 @@ export interface paths {
                 };
             };
         };
-        delete?: never;
+        /** Remove the current account's vote */
+        delete: {
+            parameters: {
+                query: {
+                    postType: "thread" | "comment";
+                };
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description removed or already absent */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["VoteResponse"];
+                    };
+                };
+            };
+        };
         options?: never;
         head?: never;
         patch?: never;
@@ -3156,7 +3229,7 @@ export interface paths {
                 };
                 cookie?: never;
             };
-            requestBody?: {
+            requestBody: {
                 content: {
                     "application/json": components["schemas"]["BookmarkInput"];
                 };
@@ -3175,7 +3248,9 @@ export interface paths {
         /** Remove bookmark */
         delete: {
             parameters: {
-                query?: never;
+                query: {
+                    postType: "thread" | "comment";
+                };
                 header?: never;
                 path: {
                     id: string;
@@ -3184,7 +3259,7 @@ export interface paths {
             };
             requestBody?: never;
             responses: {
-                /** @description ok */
+                /** @description removed or already absent */
                 204: {
                     headers: {
                         [name: string]: unknown;
@@ -3266,7 +3341,7 @@ export interface paths {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": components["schemas"]["Subscription"][];
+                        "application/json": components["schemas"]["SubscriptionPage"];
                     };
                 };
             };
@@ -3900,9 +3975,35 @@ export interface paths {
                         "application/json": components["schemas"]["PollVoteResponse"];
                     };
                 };
+                409: components["responses"]["Conflict"];
             };
         };
-        delete?: never;
+        /** Remove the current account's vote for one poll option */
+        delete: {
+            parameters: {
+                query: {
+                    optionId: string;
+                };
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description removed or already absent */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["PollVoteResponse"];
+                    };
+                };
+                409: components["responses"]["Conflict"];
+            };
+        };
         options?: never;
         head?: never;
         patch?: never;
@@ -7206,15 +7307,19 @@ export interface components {
             fetchedAt?: number;
         };
         Board: {
-            id?: string;
-            slug?: string;
-            name?: string;
-            parentId?: string | null;
-            description?: string | null;
-            position?: number;
-            isLocked?: boolean;
-            minTrustToPost?: number;
-            threadCount?: number;
+            id: string;
+            slug: string;
+            name: string;
+            parentId: string | null;
+            description: string | null;
+            position: number;
+            isLocked: boolean;
+            minTrustToPost: number;
+            isQa: boolean;
+            threadCount: number;
+            canPost: boolean;
+            /** @enum {string|null} */
+            postingRestriction: "login_required" | "board_locked" | "trust_level" | null;
         };
         Tag: {
             id?: string;
@@ -7263,8 +7368,12 @@ export interface components {
             createdAt: number;
             lastActivityAt: number;
             solvedAnswerId: string | null;
+            /** @enum {string|null} */
+            viewerVote: "up" | "down" | null;
+            isBookmarked: boolean;
             myLastReadCommentId: string | null;
-            mySubscriptionLevel: string | null;
+            /** @enum {string|null} */
+            mySubscriptionLevel: "watching" | "tracking" | "muted" | null;
             poll: components["schemas"]["Poll"] | null;
         };
         ThreadInput: {
@@ -7310,6 +7419,9 @@ export interface components {
             authorId: string;
             body: string;
             voteCount: number;
+            /** @enum {string|null} */
+            viewerVote: "up" | "down" | null;
+            isBookmarked: boolean;
             isDeleted: boolean;
             isHidden: boolean;
             editedAt: number | null;
@@ -7334,6 +7446,8 @@ export interface components {
         VoteResponse: {
             ok: boolean;
             voteCount: number;
+            /** @enum {string|null} */
+            viewerVote: "up" | "down" | null;
         };
         FlagInput: {
             /** @enum {string} */
@@ -7354,11 +7468,14 @@ export interface components {
         };
         Subscription: {
             /** @enum {string} */
-            targetType?: "board" | "thread";
-            targetId?: string;
+            targetType: "board" | "thread";
+            targetId: string;
             /** @enum {string} */
-            level?: "watching" | "tracking" | "muted";
-            createdAt?: number;
+            level: "watching" | "tracking" | "muted";
+            createdAt: number;
+        };
+        SubscriptionPage: components["schemas"]["Page"] & {
+            items?: components["schemas"]["Subscription"][];
         };
         SubscriptionInput: {
             /** @enum {string} */
@@ -7379,6 +7496,8 @@ export interface components {
             createdAt?: number;
         };
         BookmarkInput: {
+            /** @enum {string} */
+            postType: "thread" | "comment";
             note?: string;
         };
         ModAction: {
@@ -7439,6 +7558,7 @@ export interface components {
             prefs: components["schemas"]["NotificationPreferences"];
         };
         ReadTrackingInput: {
+            /** @description When null or omitted, mark through the thread's current last visible comment. */
             lastReadCommentId?: string | null;
         };
         Sanction: {
@@ -7471,11 +7591,25 @@ export interface components {
         AdminBoardCreateInput: {
             slug: string;
             name: string;
+            description?: string;
+            /** @default 0 */
+            position: number;
+            /** @default false */
+            isLocked: boolean;
+            /** @default 0 */
+            minTrustToPost: number;
+            /** @default false */
+            isQa: boolean;
             reason: string;
         };
         AdminBoardUpdateInput: {
             slug?: string;
             name?: string;
+            description?: string;
+            position?: number;
+            isLocked?: boolean;
+            minTrustToPost?: number;
+            isQa?: boolean;
             reason: string;
         };
         AdminTagCreateInput: {
@@ -7780,6 +7914,7 @@ export interface components {
         };
         PollVoteResponse: {
             ok: boolean;
+            myVotes: string[];
         };
         DraftOutput: {
             draftKey?: string;

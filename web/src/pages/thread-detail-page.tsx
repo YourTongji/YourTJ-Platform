@@ -6,7 +6,6 @@ import { toast } from "sonner";
 
 import { PageHeader } from "@/components/common/page-header";
 import { EmptyState, ErrorState, LoadingState } from "@/components/common/states";
-import { TeaBadge } from "@/components/common/tea-badge";
 import {
   CommentModerationControls,
   ThreadModerationControls,
@@ -24,7 +23,10 @@ import { formatUnixTime } from "@/lib/format";
 function CommentCard({ comment, threadId }: { comment: Comment; threadId: string }) {
   const queryClient = useQueryClient();
   const vote = useMutation({
-    mutationFn: (value: "up" | "down") => api.votePost(comment.id ?? "", value, "comment"),
+    mutationFn: (value: "up" | "down") =>
+      comment.viewerVote === value
+        ? api.removePostVote(comment.id ?? "", "comment")
+        : api.votePost(comment.id ?? "", value, "comment"),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["thread-comments", threadId] });
     },
@@ -35,13 +37,23 @@ function CommentCard({ comment, threadId }: { comment: Comment; threadId: string
     onSuccess: () => toast.success("已提交举报"),
     onError: (error) => toast.error(error instanceof Error ? error.message : "举报失败"),
   });
+  const bookmark = useMutation({
+    mutationFn: () =>
+      comment.isBookmarked
+        ? api.removeBookmark(comment.id ?? "", "comment")
+        : api.bookmarkPost(comment.id ?? "", "comment"),
+    onSuccess: async () => {
+      toast.success(comment.isBookmarked ? "已取消收藏" : "已收藏");
+      await queryClient.invalidateQueries({ queryKey: ["thread-comments", threadId] });
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : "收藏失败"),
+  });
   return (
     <Card>
       <CardContent className="p-4">
         <div className="flex items-start justify-between gap-3">
           <div className="flex flex-wrap items-center gap-2 text-sm">
             <span className="font-medium">{comment.authorHandle}</span>
-            <TeaBadge level={1} />
             <span className="text-muted-foreground">{formatUnixTime(comment.createdAt)}</span>
             {comment.isHidden ? <Badge variant="outline">已隐藏</Badge> : null}
             {comment.isDeleted ? <Badge variant="outline">已删除</Badge> : null}
@@ -53,13 +65,32 @@ function CommentCard({ comment, threadId }: { comment: Comment; threadId: string
         </div>
         <p className="mt-3 whitespace-pre-wrap text-sm leading-relaxed">{comment.body}</p>
         <div className="mt-3 flex gap-2">
-          <Button size="sm" variant="ghost" onClick={() => vote.mutate("up")} disabled={vote.isPending}>
+          <Button
+            size="sm"
+            variant={comment.viewerVote === "up" ? "secondary" : "ghost"}
+            onClick={() => vote.mutate("up")}
+            disabled={vote.isPending}
+          >
             <ThumbsUp className="h-4 w-4" />
             顶
           </Button>
-          <Button size="sm" variant="ghost" onClick={() => vote.mutate("down")} disabled={vote.isPending}>
+          <Button
+            size="sm"
+            variant={comment.viewerVote === "down" ? "secondary" : "ghost"}
+            onClick={() => vote.mutate("down")}
+            disabled={vote.isPending}
+          >
             <ThumbsDown className="h-4 w-4" />
             踩
+          </Button>
+          <Button
+            size="sm"
+            variant={comment.isBookmarked ? "secondary" : "ghost"}
+            onClick={() => bookmark.mutate()}
+            disabled={bookmark.isPending}
+          >
+            <Bookmark className="h-4 w-4" />
+            {comment.isBookmarked ? "已收藏" : "收藏"}
           </Button>
           <Button size="sm" variant="ghost" onClick={() => flag.mutate()} disabled={flag.isPending}>
             <Flag className="h-4 w-4" />
@@ -80,10 +111,13 @@ function PollCard({
 }) {
   const queryClient = useQueryClient();
   const totalVotes = (poll.options ?? []).reduce((sum, option) => sum + (option.voteCount ?? 0), 0);
+  const isClosed = poll.closesAt != null && poll.closesAt <= Math.floor(Date.now() / 1000);
   const vote = useMutation({
-    mutationFn: (optionId: string) => api.votePoll(poll.id ?? "", optionId),
+    mutationFn: (optionId: string) =>
+      (poll.myVotes ?? []).includes(optionId)
+        ? api.removePollVote(poll.id ?? "", optionId)
+        : api.votePoll(poll.id ?? "", optionId),
     onSuccess: async () => {
-      toast.success("投票已提交");
       await queryClient.invalidateQueries({ queryKey: ["thread", threadId] });
     },
     onError: (error) => toast.error(error instanceof Error ? error.message : "投票失败"),
@@ -103,8 +137,8 @@ function PollCard({
             <button
               key={option.id}
               onClick={() => option.id && vote.mutate(option.id)}
-              disabled={!option.id || vote.isPending}
-              className="w-full rounded-md border p-3 text-left transition-colors hover:bg-accent disabled:opacity-70"
+              disabled={!option.id || vote.isPending || isClosed}
+              className={`w-full rounded-md border p-3 text-left transition-colors hover:bg-accent disabled:opacity-70 ${hasVoted ? "border-primary bg-primary/5" : ""}`}
             >
               <div className="flex items-center justify-between gap-3">
                 <span className="font-medium">{option.label}</span>
@@ -117,7 +151,10 @@ function PollCard({
             </button>
           );
         })}
-        <p className="text-xs text-muted-foreground">共 {totalVotes} 票{poll.multiSelect ? " · 可多选" : ""}</p>
+        <p className="text-xs text-muted-foreground">
+          共 {totalVotes} 票{poll.multiSelect ? " · 可多选" : ""}
+          {isClosed ? " · 已截止" : ""}
+        </p>
       </CardContent>
     </Card>
   );
@@ -162,6 +199,7 @@ export function ThreadDetailPage() {
   const { id } = useParams();
   const threadId = id ?? "";
   const queryClient = useQueryClient();
+  const { isAuthenticated } = useAuth();
   const thread = useQuery({
     queryKey: ["thread", threadId],
     queryFn: () => api.thread(threadId),
@@ -174,15 +212,24 @@ export function ThreadDetailPage() {
     enabled: Boolean(threadId),
   });
   const vote = useMutation({
-    mutationFn: (value: "up" | "down") => api.votePost(threadId, value, "thread"),
+    mutationFn: (value: "up" | "down") =>
+      thread.data?.viewerVote === value
+        ? api.removePostVote(threadId, "thread")
+        : api.votePost(threadId, value, "thread"),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["thread", threadId] });
     },
     onError: (error) => toast.error(error instanceof Error ? error.message : "投票失败"),
   });
   const bookmark = useMutation({
-    mutationFn: () => api.bookmarkPost(threadId),
-    onSuccess: () => toast.success("已收藏"),
+    mutationFn: () =>
+      thread.data?.isBookmarked
+        ? api.removeBookmark(threadId, "thread")
+        : api.bookmarkPost(threadId, "thread"),
+    onSuccess: async () => {
+      toast.success(thread.data?.isBookmarked ? "已取消收藏" : "已收藏");
+      await queryClient.invalidateQueries({ queryKey: ["thread", threadId] });
+    },
     onError: (error) => toast.error(error instanceof Error ? error.message : "收藏失败"),
   });
   const flag = useMutation({
@@ -191,13 +238,26 @@ export function ThreadDetailPage() {
     onError: (error) => toast.error(error instanceof Error ? error.message : "举报失败"),
   });
   const subscribe = useMutation({
-    mutationFn: (level: string) => api.setSubscription({ targetType: "thread", targetId: threadId, level }),
+    mutationFn: (level: string) =>
+      level === "none"
+        ? api.deleteSubscription({ targetType: "thread", targetId: threadId })
+        : api.setSubscription({ targetType: "thread", targetId: threadId, level }),
     onSuccess: async () => {
       toast.success("订阅已更新");
       await queryClient.invalidateQueries({ queryKey: ["thread", threadId] });
     },
     onError: (error) => toast.error(error instanceof Error ? error.message : "订阅失败"),
   });
+
+  React.useEffect(() => {
+    if (!isAuthenticated || !threadId || !thread.data?.id) {
+      return;
+    }
+    void api
+      .reportThreadRead(threadId, null)
+      .then(() => queryClient.invalidateQueries({ queryKey: ["forum", "threads"] }))
+      .catch(() => undefined);
+  }, [isAuthenticated, queryClient, thread.data?.id, threadId]);
 
   if (thread.isLoading) {
     return <LoadingState label="加载帖子" />;
@@ -226,19 +286,24 @@ export function ThreadDetailPage() {
         description={`${item.authorHandle} · ${formatUnixTime(item.createdAt)}`}
         actions={
           <>
-            <Select value={item.mySubscriptionLevel ?? "tracking"} onValueChange={(value) => subscribe.mutate(value)}>
+            <Select value={item.mySubscriptionLevel ?? "none"} onValueChange={(value) => subscribe.mutate(value)}>
               <SelectTrigger className="w-32">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
+                <SelectItem value="none">不订阅</SelectItem>
                 <SelectItem value="watching">关注</SelectItem>
                 <SelectItem value="tracking">跟踪</SelectItem>
                 <SelectItem value="muted">静音</SelectItem>
               </SelectContent>
             </Select>
-            <Button variant="outline" onClick={() => bookmark.mutate()} disabled={bookmark.isPending}>
+            <Button
+              variant={item.isBookmarked ? "secondary" : "outline"}
+              onClick={() => bookmark.mutate()}
+              disabled={bookmark.isPending}
+            >
               <Bookmark className="h-4 w-4" />
-              收藏
+              {item.isBookmarked ? "已收藏" : "收藏"}
             </Button>
             <ThreadModerationControls thread={item} boards={boards.data ?? []} />
           </>
@@ -248,7 +313,6 @@ export function ThreadDetailPage() {
       <Card>
         <CardContent className="p-5">
           <div className="mb-3 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-            <TeaBadge level={3} />
             <Badge variant="secondary">{item.replyCount ?? 0} 回复</Badge>
             <Badge variant="secondary">{item.voteCount ?? 0} 票</Badge>
             {item.pinnedAt ? <Badge>置顶</Badge> : null}
@@ -260,11 +324,19 @@ export function ThreadDetailPage() {
           </div>
           <p className="whitespace-pre-wrap text-sm leading-7">{item.body || "这条帖子没有正文。"}</p>
           <div className="mt-5 flex flex-wrap gap-2">
-            <Button variant="secondary" onClick={() => vote.mutate("up")} disabled={vote.isPending}>
+            <Button
+              variant={item.viewerVote === "up" ? "default" : "secondary"}
+              onClick={() => vote.mutate("up")}
+              disabled={vote.isPending}
+            >
               <ThumbsUp className="h-4 w-4" />
               顶
             </Button>
-            <Button variant="secondary" onClick={() => vote.mutate("down")} disabled={vote.isPending}>
+            <Button
+              variant={item.viewerVote === "down" ? "default" : "secondary"}
+              onClick={() => vote.mutate("down")}
+              disabled={vote.isPending}
+            >
               <ThumbsDown className="h-4 w-4" />
               踩
             </Button>

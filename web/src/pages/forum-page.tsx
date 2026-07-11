@@ -6,7 +6,6 @@ import { toast } from "sonner";
 
 import { PageHeader } from "@/components/common/page-header";
 import { EmptyState, ErrorState, LoadingState } from "@/components/common/states";
-import { TeaBadge } from "@/components/common/tea-badge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -31,7 +30,6 @@ function ThreadCard({ thread, boards }: { thread: ThreadFeed; boards: Board[] })
             <div className="min-w-0">
               <div className="mb-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                 <span className="font-medium text-foreground">{thread.authorHandle}</span>
-                <TeaBadge level={2} />
                 <span>{formatUnixTime(thread.lastActivityAt ?? thread.createdAt)}</span>
                 {board ? <Badge variant="outline">{board.name}</Badge> : null}
                 {thread.unreadCount ? <Badge>{thread.unreadCount} 未读</Badge> : null}
@@ -70,6 +68,7 @@ function CreateThreadDialog({ boards }: { boards: Board[] }) {
   const [tags, setTags] = React.useState("");
   const [pollQuestion, setPollQuestion] = React.useState("");
   const [pollOptions, setPollOptions] = React.useState("");
+  const selectedBoard = boards.find((board) => board.id === boardId);
   const mutation = useMutation({
     mutationFn: () =>
       api.createThread({
@@ -133,13 +132,23 @@ function CreateThreadDialog({ boards }: { boards: Board[] }) {
                 </SelectTrigger>
                 <SelectContent>
                   {boards.map((board) => (
-                    <SelectItem key={board.id} value={board.id ?? ""} disabled={board.isLocked}>
+                    <SelectItem key={board.id} value={board.id ?? ""} disabled={!board.canPost}>
                       {board.name}
+                      {!board.canPost
+                        ? board.postingRestriction === "trust_level"
+                          ? `（需信任等级 ${board.minTrustToPost}）`
+                          : board.postingRestriction === "board_locked"
+                            ? "（已锁定）"
+                            : "（需登录）"
+                        : ""}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             </div>
+            {selectedBoard && !selectedBoard.canPost ? (
+              <p className="text-sm text-destructive">你当前没有在此板块发帖的权限。</p>
+            ) : null}
             <div className="space-y-2">
               <Label>标题</Label>
               <Input value={title} onChange={(event) => setTitle(event.target.value)} maxLength={120} />
@@ -167,7 +176,10 @@ function CreateThreadDialog({ boards }: { boards: Board[] }) {
           </div>
         )}
         <DialogFooter>
-          <Button onClick={() => mutation.mutate()} disabled={!boardId || !title || mutation.isPending}>
+          <Button
+            onClick={() => mutation.mutate()}
+            disabled={!boardId || !title.trim() || !selectedBoard?.canPost || mutation.isPending}
+          >
             <Send className="h-4 w-4" />
             发布
           </Button>
@@ -178,14 +190,23 @@ function CreateThreadDialog({ boards }: { boards: Board[] }) {
 }
 
 export function ForumPage() {
+  const { isAuthenticated } = useAuth();
   const [params, setParams] = useSearchParams();
-  const feed = (params.get("feed") as "hot" | "new" | "following" | "unread" | null) ?? "hot";
+  const feed =
+    (params.get("feed") as "hot" | "new" | "subscriptions" | "unread" | null) ??
+    "hot";
   const board = params.get("board") ?? "all";
+  const tag = params.get("tag") ?? "all";
   const boards = useQuery({ queryKey: ["forum", "boards"], queryFn: api.boards });
   const tags = useQuery({ queryKey: ["forum", "tags"], queryFn: api.tags });
   const threads = useQuery({
-    queryKey: ["forum", "threads", feed, board],
-    queryFn: () => api.threads({ feed, board: board === "all" ? undefined : board }),
+    queryKey: ["forum", "threads", feed, board, tag],
+    queryFn: () =>
+      api.threads({
+        feed,
+        board: board === "all" ? undefined : board,
+        tag: tag === "all" ? undefined : tag,
+      }),
   });
 
   function update(next: Record<string, string | null>) {
@@ -218,8 +239,8 @@ export function ForumPage() {
               <TabsList>
                 <TabsTrigger value="hot">热门</TabsTrigger>
                 <TabsTrigger value="new">最新</TabsTrigger>
-                <TabsTrigger value="following">关注</TabsTrigger>
-                <TabsTrigger value="unread">未读</TabsTrigger>
+                <TabsTrigger value="subscriptions" disabled={!isAuthenticated}>订阅</TabsTrigger>
+                <TabsTrigger value="unread" disabled={!isAuthenticated}>未读</TabsTrigger>
               </TabsList>
             </Tabs>
             <Select value={board} onValueChange={(value) => update({ board: value })}>
@@ -281,11 +302,20 @@ export function ForumPage() {
           <Card>
             <CardHeader>
               <CardTitle>热门标签</CardTitle>
-              <CardDescription>后端 tag 查询已接入；当前 Rust feed 暂未按 tag 过滤。</CardDescription>
+              <CardDescription>按标签筛选公开讨论。</CardDescription>
             </CardHeader>
             <CardContent className="flex flex-wrap gap-2">
+              {tag !== "all" ? (
+                <Button size="sm" variant="outline" onClick={() => update({ tag: null })}>
+                  清除 #{tag}
+                </Button>
+              ) : null}
               {(tags.data ?? []).slice(0, 18).map((tag) => (
-                <Badge key={tag.id} variant="secondary">#{tag.name}</Badge>
+                <button key={tag.id} type="button" onClick={() => update({ tag: tag.slug ?? null })}>
+                  <Badge variant={params.get("tag") === tag.slug ? "default" : "secondary"}>
+                    #{tag.name}
+                  </Badge>
+                </button>
               ))}
             </CardContent>
           </Card>

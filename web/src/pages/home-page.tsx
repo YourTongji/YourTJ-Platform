@@ -50,6 +50,7 @@ export function HomePage() {
           isLoading={threads.isLoading}
           error={threads.error}
           onRetry={() => void threads.refetch()}
+          isAuthenticated={Boolean(account)}
         />
       </div>
 
