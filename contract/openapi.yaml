@@ -15,6 +15,7 @@ servers:
 tags:
   - { name: auth }
   - { name: identity }
+  - { name: activity }
   - { name: wallet }
   - { name: credit }
   - { name: search }
@@ -96,6 +97,9 @@ components:
         handle: { type: string }
         avatarUrl: { type: string, nullable: true }
         role: { type: string, enum: [user, mod, admin] }
+        capabilities:
+          type: array
+          items: { type: string }
         trustLevel: { type: integer }
         createdAt: { type: integer }
     AuthTokens:
@@ -400,7 +404,7 @@ components:
     NotificationPrefsInput: { type: object, required: [prefs], properties: { prefs: { type: object } } }
     ReadTrackingInput: { type: object, properties: { lastReadCommentId: { type: string, nullable: true } } }
     Sanction: { type: object, properties: { id: { type: string }, accountId: { type: string }, kind: { type: string, enum: [silence, suspend] }, reason: { type: string }, issuedBy: { type: string }, startsAt: { type: integer }, endsAt: { type: integer, nullable: true }, revokedAt: { type: integer, nullable: true }, createdAt: { type: integer } } }
-    SanctionInput: { type: object, required: [reason], properties: { reason: { type: string }, endsAt: { type: integer, nullable: true } } }
+    SanctionInput: { type: object, required: [reason], properties: { reason: { type: string, minLength: 3, maxLength: 500 }, endsAt: { type: integer, nullable: true } } }
     UnsanctionInput: { type: object, required: [sanctionId], properties: { sanctionId: { type: string } } }
     WatchedWord: { type: object, properties: { id: { type: string }, word: { type: string }, action: { type: string, enum: [block, censor, queue] }, createdAt: { type: integer } } }
     WatchedWordInput: { type: object, required: [word, action], properties: { word: { type: string }, action: { type: string, enum: [block, censor, queue] } } }
@@ -409,11 +413,18 @@ components:
     Setting: { type: object, properties: { key: { type: string }, value: { type: string } } }
     Announcement:
       type: object
+      required: [id, title, createdAt]
       properties:
         id: { type: string }
         title: { type: string }
-        body: { type: string }
+        body: { type: string, nullable: true }
         createdAt: { type: integer }
+    AnnouncementInput:
+      type: object
+      required: [title]
+      properties:
+        title: { type: string, minLength: 1, maxLength: 200 }
+        body: { type: string, nullable: true, maxLength: 20000 }
 
     # ---- typed pages ----
     CoursePage:
@@ -472,17 +483,24 @@ components:
     # ---- forum: DM ----
     DmConversation:
       type: object
+      required: [id, participantId, participantHandle, unreadCount, createdAt]
       properties:
         id: { type: string }
-        otherAccountId: { type: string }
-        otherHandle: { type: string }
-        otherAvatarUrl: { type: string, nullable: true }
-        lastMessageBody: { type: string, nullable: true }
+        participantId: { type: string }
+        participantHandle: { type: string }
+        participantAvatarUrl: { type: string, nullable: true }
+        lastMessageExcerpt: { type: string, nullable: true }
         lastMessageAt: { type: integer, nullable: true }
-        unreadCount: { type: integer }
+        unreadCount: { type: integer, minimum: 0 }
         createdAt: { type: integer }
+    DmConversationInput:
+      type: object
+      required: [recipientHandle]
+      properties:
+        recipientHandle: { type: string, minLength: 3, maxLength: 30 }
     DmMessage:
       type: object
+      required: [id, conversationId, senderId, senderHandle, body, createdAt]
       properties:
         id: { type: string }
         conversationId: { type: string }
@@ -490,6 +508,45 @@ components:
         senderHandle: { type: string }
         body: { type: string }
         createdAt: { type: integer }
+    DmMessageInput:
+      type: object
+      required: [body]
+      properties:
+        body: { type: string, minLength: 1, maxLength: 16000 }
+    DmReadInput:
+      type: object
+      properties:
+        lastReadMessageId: { type: string, nullable: true }
+    DmReportInput:
+      type: object
+      required: [reason]
+      properties:
+        reason: { type: string, enum: [spam, abuse, harassment, fraud, illegal, other] }
+        note: { type: string, maxLength: 1000 }
+    DmReport:
+      type: object
+      required: [id, messageId, conversationId, reporterId, senderId, reason, status, createdAt]
+      properties:
+        id: { type: string }
+        messageId: { type: string }
+        conversationId: { type: string }
+        reporterId: { type: string }
+        reporterHandle: { type: string }
+        senderId: { type: string }
+        senderHandle: { type: string }
+        messageExcerpt: { type: string }
+        reason: { type: string, enum: [spam, abuse, harassment, fraud, illegal, other] }
+        note: { type: string, nullable: true }
+        status: { type: string, enum: [open, upheld, rejected] }
+        handledBy: { type: string, nullable: true }
+        handledAt: { type: integer, nullable: true }
+        createdAt: { type: integer }
+    DmReportResolutionInput:
+      type: object
+      required: [action]
+      properties:
+        action: { type: string, enum: [uphold, reject] }
+        note: { type: string, maxLength: 1000 }
     # ---- forum: polls ----
     PollResult:
       type: object
@@ -527,20 +584,73 @@ components:
         avatarUrl: { type: string, nullable: true }
         createdAt: { type: integer }
     # ---- identity: public profile ----
+    UserBadge:
+      type: object
+      required: [slug, name]
+      properties:
+        slug: { type: string }
+        name: { type: string }
     UserProfile:
       type: object
+      required: [handle, role, trustLevel, badges, threadCount, commentCount, votesReceived, createdAt]
       properties:
         handle: { type: string }
         avatarUrl: { type: string, nullable: true }
         role: { type: string, enum: [user, mod, admin] }
+        trustLevel: { type: integer, minimum: 0 }
+        badges: { type: array, items: { $ref: "#/components/schemas/UserBadge" } }
+        threadCount: { type: integer, minimum: 0 }
+        commentCount: { type: integer, minimum: 0 }
+        votesReceived: { type: integer, minimum: 0 }
         createdAt: { type: integer }
     UserProfileWithStats:
-      allOf:
-        - $ref: "#/components/schemas/UserProfile"
-        - type: object
-          properties:
-            threadCount: { type: integer }
-            commentCount: { type: integer }
+      allOf: [{ $ref: "#/components/schemas/UserProfile" }]
+      deprecated: true
+    # ---- activity ----
+    ActivityWeights:
+      type: object
+      required: [thread, comment, like]
+      properties:
+        thread: { type: integer, minimum: 0, maximum: 1000 }
+        comment: { type: integer, minimum: 0, maximum: 1000 }
+        like: { type: integer, minimum: 0, maximum: 1000 }
+    ActivityDay:
+      type: object
+      required: [date, threads, comments, likes, score]
+      properties:
+        date: { type: string, format: date }
+        threads: { type: integer, minimum: 0 }
+        comments: { type: integer, minimum: 0 }
+        likes: { type: integer, minimum: 0, description: Positive likes given by the user. }
+        score: { type: integer, minimum: 0 }
+    ActivityCalendar:
+      type: object
+      description: A continuous Asia/Shanghai calendar; days without activity are returned with zero counts.
+      required: [timezone, from, to, policyVersion, weights, days]
+      properties:
+        timezone: { type: string, enum: [Asia/Shanghai] }
+        from: { type: string, format: date }
+        to: { type: string, format: date }
+        policyVersion: { type: integer, minimum: 1 }
+        weights: { $ref: "#/components/schemas/ActivityWeights" }
+        days: { type: array, items: { $ref: "#/components/schemas/ActivityDay" } }
+    ActivityPolicy:
+      type: object
+      required: [version, timezone, weights, reason, changedBy, createdAt]
+      properties:
+        version: { type: integer, minimum: 1 }
+        timezone: { type: string, enum: [Asia/Shanghai] }
+        weights: { $ref: "#/components/schemas/ActivityWeights" }
+        reason: { type: string }
+        changedBy: { type: string }
+        createdAt: { type: integer }
+    ActivityPolicyUpdateInput:
+      type: object
+      required: [expectedVersion, weights, reason]
+      properties:
+        expectedVersion: { type: integer, minimum: 1 }
+        weights: { $ref: "#/components/schemas/ActivityWeights" }
+        reason: { type: string, minLength: 1, maxLength: 500 }
     # ---- platform ----
     OneboxResult:
       type: object
@@ -596,6 +706,67 @@ components:
         - { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/Upload" } } } }
 
     # ---- admin ----
+    AdminUser:
+      type: object
+      required: [id, handle, role, status, trustLevel, createdAt]
+      properties:
+        id: { type: string }
+        handle: { type: string }
+        avatarUrl: { type: string, nullable: true }
+        role: { type: string, enum: [user, mod, admin] }
+        status: { type: string, enum: [active, suspended, deleted] }
+        trustLevel: { type: integer, minimum: 0 }
+        lastActiveAt: { type: integer, nullable: true }
+        createdAt: { type: integer }
+    AdminUserInviteInput:
+      type: object
+      required: [email, handle, reason]
+      properties:
+        email: { type: string, format: email }
+        handle: { type: string, minLength: 3, maxLength: 30 }
+        role: { type: string, enum: [user, mod], default: user }
+        reason: { type: string, minLength: 3, maxLength: 500 }
+    AdminReasonInput:
+      type: object
+      required: [reason]
+      properties:
+        reason: { type: string, minLength: 3, maxLength: 500 }
+    AdminUserRoleInput:
+      type: object
+      required: [role, reason]
+      properties:
+        role: { type: string, enum: [user, mod, admin] }
+        reason: { type: string, minLength: 1, maxLength: 500 }
+    AdminOverview:
+      type: object
+      required: [totalUsers, activeUsers, suspendedUsers, pendingReviewReports, pendingForumFlags, pendingDmReports, pendingMediaUploads, threadsToday, commentsToday, likesToday]
+      properties:
+        totalUsers: { type: integer, minimum: 0 }
+        activeUsers: { type: integer, minimum: 0 }
+        suspendedUsers: { type: integer, minimum: 0 }
+        moderators: { type: integer, minimum: 0 }
+        administrators: { type: integer, minimum: 0 }
+        pendingReviewReports: { type: integer, minimum: 0 }
+        pendingForumFlags: { type: integer, minimum: 0 }
+        pendingDmReports: { type: integer, minimum: 0 }
+        pendingMediaUploads: { type: integer, minimum: 0 }
+        threadsToday: { type: integer, minimum: 0 }
+        commentsToday: { type: integer, minimum: 0 }
+        likesToday: { type: integer, minimum: 0 }
+    AdminAuditEvent:
+      type: object
+      required: [id, actorKind, action, targetType, targetId, createdAt]
+      properties:
+        id: { type: string }
+        actorKind: { type: string, enum: [account, system, service] }
+        actorId: { type: string, nullable: true }
+        actorHandle: { type: string, nullable: true }
+        action: { type: string }
+        targetType: { type: string }
+        targetId: { type: string }
+        reason: { type: string, nullable: true }
+        metadata: { type: object, nullable: true }
+        createdAt: { type: integer }
     Badge:
       type: object
       properties:
@@ -637,6 +808,26 @@ components:
       allOf:
         - $ref: "#/components/schemas/Page"
         - { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/Badge" } } } }
+    ActivityPolicyPage:
+      allOf:
+        - $ref: "#/components/schemas/Page"
+        - { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/ActivityPolicy" } } } }
+    AdminUserPage:
+      allOf:
+        - $ref: "#/components/schemas/Page"
+        - { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/AdminUser" } } } }
+    AdminAuditEventPage:
+      allOf:
+        - $ref: "#/components/schemas/Page"
+        - { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/AdminAuditEvent" } } } }
+    DmReportPage:
+      allOf:
+        - $ref: "#/components/schemas/Page"
+        - { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/DmReport" } } } }
+    AnnouncementPage:
+      allOf:
+        - $ref: "#/components/schemas/Page"
+        - { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/Announcement" } } } }
 
 paths:
   # ============ auth & identity ============
@@ -689,6 +880,18 @@ paths:
         content: { application/json: { schema: { type: object, properties: { handle: { type: string }, avatarUrl: { type: string } } } } }
       responses:
         "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Account" } } } }
+  /me/activity:
+    get:
+      tags: [activity]
+      summary: Current user's daily public activity calendar
+      description: Returns every Asia/Shanghai calendar day in the requested inclusive range, including zero-count days. The maximum range is 371 days.
+      parameters:
+        - { name: from, in: query, schema: { type: string, format: date } }
+        - { name: to, in: query, schema: { type: string, format: date } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/ActivityCalendar" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
   /me/drafts:
     get:
       tags: [identity]
@@ -734,7 +937,7 @@ paths:
       security: []
       summary: Public user profile
       parameters: [{ name: handle, in: path, required: true, schema: { type: string } }]
-      responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/UserProfileWithStats" } } } } }
+      responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/UserProfile" } } } } }
   /users/{handle}/threads:
     get:
       tags: [identity]
@@ -1173,11 +1376,12 @@ paths:
     get:
       tags: [forum]
       summary: List DM conversations
+      parameters: [{ $ref: "#/components/parameters/Cursor" }, { $ref: "#/components/parameters/Limit" }]
       responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/DmConversationPage" } } } } }
     post:
       tags: [forum]
       summary: Create or get DM conversation
-      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [recipientId], properties: { recipientId: { type: string } } } } } }
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/DmConversationInput" } } } }
       responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/DmConversation" } } } } }
   /forum/dm/conversations/{id}/messages:
     get:
@@ -1189,8 +1393,22 @@ paths:
       tags: [forum]
       summary: Send a message
       parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
-      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [body], properties: { body: { type: string } } } } } }
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/DmMessageInput" } } } }
       responses: { "201": { description: created, content: { application/json: { schema: { $ref: "#/components/schemas/DmMessage" } } } } }
+  /forum/dm/conversations/{id}/read:
+    post:
+      tags: [forum]
+      summary: Mark a DM conversation read through a message
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      requestBody: { content: { application/json: { schema: { $ref: "#/components/schemas/DmReadInput" } } } }
+      responses: { "204": { description: read position updated }, "404": { $ref: "#/components/responses/NotFound" } }
+  /forum/dm/messages/{id}/report:
+    post:
+      tags: [forum]
+      summary: Report a private message to moderators
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/DmReportInput" } } } }
+      responses: { "202": { description: queued }, "404": { $ref: "#/components/responses/NotFound" }, "409": { $ref: "#/components/responses/Conflict" } }
   /forum/polls/{id}/vote:
     post:
       tags: [forum]
@@ -1282,6 +1500,68 @@ paths:
       responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/OneboxResult" } } } } }
 
   # ============ admin (role: mod/admin) ============
+  /admin/overview:
+    get:
+      tags: [admin]
+      summary: Administration dashboard counters
+      responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/AdminOverview" } } } }, "403": { $ref: "#/components/responses/Forbidden" } }
+  /admin/audit-events:
+    get:
+      tags: [admin]
+      summary: Cursor-paginated immutable administration audit events
+      parameters:
+        - { name: actorId, in: query, schema: { type: string } }
+        - { name: action, in: query, schema: { type: string } }
+        - { name: targetType, in: query, schema: { type: string } }
+        - { $ref: "#/components/parameters/Cursor" }
+        - { $ref: "#/components/parameters/Limit" }
+      responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/AdminAuditEventPage" } } } }, "403": { $ref: "#/components/responses/Forbidden" } }
+  /admin/activity-policy:
+    get:
+      tags: [admin, activity]
+      summary: Current activity scoring policy
+      responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/ActivityPolicy" } } } }, "403": { $ref: "#/components/responses/Forbidden" } }
+    put:
+      tags: [admin, activity]
+      summary: Publish a new activity scoring policy revision
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/ActivityPolicyUpdateInput" } } } }
+      responses: { "200": { description: updated, content: { application/json: { schema: { $ref: "#/components/schemas/ActivityPolicy" } } } }, "403": { $ref: "#/components/responses/Forbidden" }, "409": { $ref: "#/components/responses/Conflict" } }
+  /admin/activity-policy/history:
+    get:
+      tags: [admin, activity]
+      summary: Activity scoring policy revision history
+      parameters: [{ $ref: "#/components/parameters/Cursor" }, { $ref: "#/components/parameters/Limit" }]
+      responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/ActivityPolicyPage" } } } }, "403": { $ref: "#/components/responses/Forbidden" } }
+  /admin/users:
+    get:
+      tags: [admin]
+      summary: Search and filter the administration user directory
+      parameters:
+        - { name: q, in: query, schema: { type: string } }
+        - { name: role, in: query, schema: { type: string, enum: [user, mod, admin] } }
+        - { name: status, in: query, schema: { type: string, enum: [active, suspended, deleted] } }
+        - { $ref: "#/components/parameters/Cursor" }
+        - { $ref: "#/components/parameters/Limit" }
+      responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/AdminUserPage" } } } }, "403": { $ref: "#/components/responses/Forbidden" } }
+    post:
+      tags: [admin]
+      summary: Invite and provision a campus account
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/AdminUserInviteInput" } } } }
+      responses: { "201": { description: invited, content: { application/json: { schema: { $ref: "#/components/schemas/AdminUser" } } } }, "403": { $ref: "#/components/responses/Forbidden" }, "409": { $ref: "#/components/responses/Conflict" } }
+  /admin/users/{id}/role:
+    patch:
+      tags: [admin]
+      summary: Change a user's platform role
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/AdminUserRoleInput" } } } }
+      responses: { "200": { description: updated, content: { application/json: { schema: { $ref: "#/components/schemas/AdminUser" } } } }, "403": { $ref: "#/components/responses/Forbidden" }, "404": { $ref: "#/components/responses/NotFound" }, "409": { $ref: "#/components/responses/Conflict" } }
+  /admin/users/{id}/sessions/revoke:
+    post:
+      tags: [admin]
+      summary: Revoke every active session for a user
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/AdminReasonInput" } } } }
+      responses: { "204": { description: revoked }, "403": { $ref: "#/components/responses/Forbidden" }, "404": { $ref: "#/components/responses/NotFound" } }
   /admin/reviews:
     get:
       tags: [admin]
@@ -1342,6 +1622,22 @@ paths:
       parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
       requestBody: { content: { application/json: { schema: { type: object, properties: { action: { type: string }, note: { type: string } } } } } }
       responses: { "200": { description: ok } }
+  /admin/dm/reports:
+    get:
+      tags: [admin]
+      summary: Private-message report queue; unreported conversations are never exposed
+      parameters:
+        - { name: status, in: query, schema: { type: string, enum: [open, upheld, rejected], default: open } }
+        - { $ref: "#/components/parameters/Cursor" }
+        - { $ref: "#/components/parameters/Limit" }
+      responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/DmReportPage" } } } }, "403": { $ref: "#/components/responses/Forbidden" } }
+  /admin/dm/reports/{id}/resolve:
+    post:
+      tags: [admin]
+      summary: Resolve a private-message report
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/DmReportResolutionInput" } } } }
+      responses: { "200": { description: resolved, content: { application/json: { schema: { $ref: "#/components/schemas/DmReport" } } } }, "403": { $ref: "#/components/responses/Forbidden" }, "404": { $ref: "#/components/responses/NotFound" } }
   /admin/settings:
     get: { tags: [admin], summary: All settings, responses: { "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Setting" } } } } } } }
   /admin/settings/{key}:
@@ -1351,6 +1647,29 @@ paths:
       parameters: [{ name: key, in: path, required: true, schema: { type: string } }]
       requestBody: { required: true, content: { application/json: { schema: { type: object, required: [value], properties: { value: { type: string } } } } } }
       responses: { "200": { description: ok } }
+  /admin/announcements:
+    get:
+      tags: [admin]
+      summary: List announcements for administration
+      parameters: [{ $ref: "#/components/parameters/Cursor" }, { $ref: "#/components/parameters/Limit" }]
+      responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/AnnouncementPage" } } } }, "403": { $ref: "#/components/responses/Forbidden" } }
+    post:
+      tags: [admin]
+      summary: Publish an announcement
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/AnnouncementInput" } } } }
+      responses: { "201": { description: created, content: { application/json: { schema: { $ref: "#/components/schemas/Announcement" } } } }, "403": { $ref: "#/components/responses/Forbidden" } }
+  /admin/announcements/{id}:
+    patch:
+      tags: [admin]
+      summary: Update an announcement
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/AnnouncementInput" } } } }
+      responses: { "200": { description: updated, content: { application/json: { schema: { $ref: "#/components/schemas/Announcement" } } } }, "403": { $ref: "#/components/responses/Forbidden" }, "404": { $ref: "#/components/responses/NotFound" } }
+    delete:
+      tags: [admin]
+      summary: Delete an announcement
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses: { "204": { description: deleted }, "403": { $ref: "#/components/responses/Forbidden" }, "404": { $ref: "#/components/responses/NotFound" } }
   /admin/selection/sync:
     post: { tags: [admin], summary: Trigger 一系统 sync job, responses: { "202": { description: queued } } }
   /admin/reviews/reindex:
@@ -1396,13 +1715,13 @@ paths:
   /admin/forum/mod-actions:
     get: { tags: [admin], summary: Staff action log, parameters: [{ $ref: "#/components/parameters/Cursor" }, { $ref: "#/components/parameters/Limit" }], responses: { "200": { description: ok } } }
   /admin/users/{id}/silence:
-    post: { tags: [admin], summary: Silence user, parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { "204": { description: silenced } } }
+    post: { tags: [admin], summary: Silence user, parameters: [{ name: id, in: path, required: true, schema: { type: string } }], requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/SanctionInput" } } } }, responses: { "204": { description: silenced }, "403": { $ref: "#/components/responses/Forbidden" }, "404": { $ref: "#/components/responses/NotFound" } } }
   /admin/users/{id}/suspend:
-    post: { tags: [admin], summary: Suspend user, parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { "204": { description: suspended } } }
+    post: { tags: [admin], summary: Suspend user, parameters: [{ name: id, in: path, required: true, schema: { type: string } }], requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/SanctionInput" } } } }, responses: { "204": { description: suspended }, "403": { $ref: "#/components/responses/Forbidden" }, "404": { $ref: "#/components/responses/NotFound" } } }
   /admin/users/{id}/unsanction:
-    post: { tags: [admin], summary: Revoke sanction, parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { "204": { description: revoked } } }
+    post: { tags: [admin], summary: Revoke sanction, parameters: [{ name: id, in: path, required: true, schema: { type: string } }], requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/UnsanctionInput" } } } }, responses: { "204": { description: revoked }, "403": { $ref: "#/components/responses/Forbidden" }, "404": { $ref: "#/components/responses/NotFound" } } }
   /admin/users/{id}/sanctions:
-    get: { tags: [admin], summary: List sanctions for user, parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { "200": { description: ok } } }
+    get: { tags: [admin], summary: List sanctions for user, parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Sanction" } } } } }, "403": { $ref: "#/components/responses/Forbidden" }, "404": { $ref: "#/components/responses/NotFound" } } }
   /admin/platform/badges:
     get: { tags: [admin], summary: List all badges, responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/BadgePage" } } } } } }
     post: { tags: [admin], summary: Create a badge, requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/BadgeInput" } } } }, responses: { "201": { description: created, content: { application/json: { schema: { $ref: "#/components/schemas/Badge" } } } } } }
