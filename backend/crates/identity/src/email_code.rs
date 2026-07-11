@@ -3,9 +3,41 @@
 //! Each code is a 6-digit random number generated from the system's
 //! cryptographic RNG. Codes are stored as a SHA-256 hash and compared
 //! in constant time to prevent timing side-channels.
+//!
+//! Every code is scoped to a `CodePurpose` so a login code cannot be
+//! redeemed for password reset and vice versa.
 
 use ring::rand::{SecureRandom, SystemRandom};
 use sha2::{Digest, Sha256};
+
+/// The purpose a verification code was issued for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CodePurpose {
+    Login,
+    Registration,
+    PasswordReset,
+}
+
+impl CodePurpose {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            CodePurpose::Login => "login",
+            CodePurpose::Registration => "registration",
+            CodePurpose::PasswordReset => "password_reset",
+        }
+    }
+
+    /// Parse from a string — returns None for unknown values so the caller
+    /// can return a 400-level error instead of panicking.
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "login" => Some(CodePurpose::Login),
+            "registration" => Some(CodePurpose::Registration),
+            "password_reset" => Some(CodePurpose::PasswordReset),
+            _ => None,
+        }
+    }
+}
 
 /// Generate a 6-digit verification code (e.g. "482913").
 pub fn generate_code() -> String {
@@ -76,5 +108,18 @@ mod tests {
         assert!(!verify_code("12345", &hash));
         assert!(!verify_code("1234567", &hash));
         assert!(!verify_code("", &hash));
+    }
+
+    #[test]
+    fn purpose_round_trips() {
+        for purpose in [CodePurpose::Login, CodePurpose::Registration, CodePurpose::PasswordReset] {
+            assert_eq!(CodePurpose::from_str(purpose.as_str()), Some(purpose));
+        }
+    }
+
+    #[test]
+    fn unknown_purpose_returns_none() {
+        assert_eq!(CodePurpose::from_str("recent_auth"), None);
+        assert_eq!(CodePurpose::from_str(""), None);
     }
 }

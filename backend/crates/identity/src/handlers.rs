@@ -19,7 +19,7 @@ use crate::dto::{
     PasswordChangeInput, PasswordForgotInput, PasswordLoginInput, PasswordResetInput, RefreshInput,
     RequestCodeInput, UpdateMeInput, VerifyEmailInput, WalletDto,
 };
-use crate::email_code::{generate_code, hash_code, verify_code};
+use crate::email_code::{generate_code, hash_code, verify_code, CodePurpose};
 use crate::error::IdentityError;
 use crate::password;
 use crate::repo;
@@ -111,6 +111,10 @@ pub async fn request_code(
     if !email.ends_with("@tongji.edu.cn") {
         return Err(IdentityError::InvalidEmailDomain.into());
     }
+
+    // Validate purpose.
+    let purpose = CodePurpose::from_str(&body.purpose).ok_or(IdentityError::InvalidPurpose)?;
+
     shared::captcha::require_captcha(
         state.captcha_verifier.as_deref(),
         state.redis.as_ref(),
@@ -134,6 +138,7 @@ pub async fn request_code(
     let code = generate_code();
     let code_hash = hash_code(&code);
     let expires_at = Utc::now() + chrono::Duration::minutes(10);
+    let request_id = uuid::Uuid::new_v4();
 
     repo::insert_email_code(
         &state.db,
@@ -141,6 +146,8 @@ pub async fn request_code(
         &email,
         &code_hash,
         expires_at,
+        purpose.as_str(),
+        request_id,
     )
     .await?;
 
@@ -163,10 +170,11 @@ pub async fn verify_email(
         return Err(IdentityError::InvalidEmailDomain.into());
     }
 
-    // Look up the live code row.
-    let code_row = repo::find_email_code(&state.db, state.email_encryption.as_ref(), &email)
-        .await?
-        .ok_or(IdentityError::CodeExpired)?;
+    // Look up the live code row for login purpose.
+    let code_row =
+        repo::find_email_code(&state.db, state.email_encryption.as_ref(), &email, "login")
+            .await?
+            .ok_or(IdentityError::CodeExpired)?;
 
     if code_row.attempts >= 5 {
         return Err(IdentityError::CodeExhausted.into());
@@ -725,6 +733,7 @@ pub async fn password_forgot(
     let code = generate_code();
     let code_hash = hash_code(&code);
     let expires_at = Utc::now() + chrono::Duration::minutes(10);
+    let request_id = uuid::Uuid::new_v4();
 
     repo::insert_email_code(
         &state.db,
@@ -732,6 +741,8 @@ pub async fn password_forgot(
         &email,
         &code_hash,
         expires_at,
+        "password_reset",
+        request_id,
     )
     .await?;
 
@@ -762,10 +773,11 @@ pub async fn password_reset(
         return Err(IdentityError::NoPasswordSet.into());
     }
 
-    // Look up the live code row.
-    let code_row = repo::find_email_code(&state.db, state.email_encryption.as_ref(), &email)
-        .await?
-        .ok_or(IdentityError::CodeExpired)?;
+    // Look up the live code row for password_reset purpose.
+    let code_row =
+        repo::find_email_code(&state.db, state.email_encryption.as_ref(), &email, "password_reset")
+            .await?
+            .ok_or(IdentityError::CodeExpired)?;
 
     if code_row.attempts >= 5 {
         return Err(IdentityError::CodeExhausted.into());

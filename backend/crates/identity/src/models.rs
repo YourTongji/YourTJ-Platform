@@ -30,6 +30,10 @@ pub struct EmailCodeRow {
     #[allow(dead_code)]
     pub expires_at: DateTime<Utc>,
     pub attempts: i32,
+    #[allow(dead_code)]
+    pub purpose: Option<String>,
+    #[allow(dead_code)]
+    pub used_at: Option<DateTime<Utc>>,
 }
 
 /// A row from `identity.sessions`.

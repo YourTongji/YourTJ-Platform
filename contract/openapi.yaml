@@ -1061,7 +1061,7 @@ paths:
       summary: Send a verification code to a @tongji.edu.cn address
       requestBody:
         required: true
-        content: { application/json: { schema: { type: object, required: [email, captchaToken], properties: { email: { type: string, format: email }, captchaToken: { type: string, minLength: 1 } } } } }
+        content: { application/json: { schema: { type: object, required: [email, purpose, captchaToken], properties: { email: { type: string, format: email }, purpose: { type: string, enum: [login, registration, password_reset] }, captchaToken: { type: string, minLength: 1 } } } } }
       responses:
         "204": { description: sent }
         "429": { $ref: "#/components/responses/RateLimited" }

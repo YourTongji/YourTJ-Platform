@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "camelCase")]
 pub struct RequestCodeInput {
     pub email: String,
+    pub purpose: String, // login, registration, password_reset
     pub captcha_token: String,
 }
 

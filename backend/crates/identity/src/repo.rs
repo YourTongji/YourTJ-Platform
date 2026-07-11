@@ -80,11 +80,13 @@ pub async fn insert_email_code(
     email: &str,
     code_hash: &str,
     expires_at: DateTime<Utc>,
+    purpose: &str,
+    request_id: uuid::Uuid,
 ) -> AppResult<()> {
     let blind_index = encryption.map(|encryption| encryption.blind_index(email));
     // Mark previous codes as exhausted.
     sqlx::query(
-        "UPDATE identity.email_codes SET attempts = 99 \
+        "UPDATE identity.email_codes SET attempts = max_attempts \
          WHERE (email = $1 OR email_blind_index = $2) AND expires_at > now()",
     )
     .bind(email)
@@ -94,14 +96,17 @@ pub async fn insert_email_code(
 
     sqlx::query(
         "INSERT INTO identity.email_codes \
-         (email, email_blind_index, email_key_version, code_hash, expires_at) \
-         VALUES ($1, $2, $3, $4, $5)",
+         (email, email_blind_index, email_key_version, code_hash, expires_at, \
+          purpose, request_id, delivery_status) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending')",
     )
     .bind(encryption.is_none().then_some(email))
     .bind(&blind_index)
     .bind(encryption.map(|encryption| i16::from(encryption.active_version())))
     .bind(code_hash)
     .bind(expires_at)
+    .bind(purpose)
+    .bind(request_id)
     .execute(pool)
     .await?;
 
@@ -120,22 +125,29 @@ pub async fn invalidate_email_code(pool: &PgPool, code_hash: &str) -> AppResult<
     Ok(())
 }
 
-/// Look up the most recent live code for `email` (not expired & not exhausted).
+/// Look up the most recent live code for `email` matching `purpose`.
+///
+/// Backward compat: codes with NULL purpose match any purpose so existing
+/// in-flight codes remain usable during the migration window.
 pub async fn find_email_code(
     pool: &PgPool,
     encryption: Option<&EmailEncryption>,
     email: &str,
+    purpose: &str,
 ) -> AppResult<Option<EmailCodeRow>> {
     let blind_index = encryption.map(|encryption| encryption.blind_index(email));
     let row = sqlx::query_as::<_, EmailCodeRow>(
-        "SELECT $1::text AS email, code_hash, expires_at, attempts \
+        "SELECT $1::text AS email, code_hash, expires_at, attempts, purpose, used_at \
          FROM identity.email_codes \
          WHERE (email = $1 OR email_blind_index = $2) \
-           AND expires_at > now() AND attempts < 5 \
+           AND expires_at > now() AND attempts < max_attempts \
+           AND used_at IS NULL \
+           AND (purpose IS NULL OR purpose = $3) \
          ORDER BY created_at DESC LIMIT 1",
     )
     .bind(email)
     .bind(&blind_index)
+    .bind(purpose)
     .fetch_optional(pool)
     .await?;
     Ok(row)
@@ -152,7 +164,7 @@ pub async fn increment_code_attempts(
         "UPDATE identity.email_codes \
          SET attempts = attempts + 1 \
          WHERE (email = $1 OR email_blind_index = $2) \
-           AND expires_at > now() AND attempts < 5",
+           AND expires_at > now() AND attempts < max_attempts",
     )
     .bind(email)
     .bind(&blind_index)
