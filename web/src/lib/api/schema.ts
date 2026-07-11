@@ -11743,11 +11743,17 @@ export interface components {
             reason: string;
         };
         OneboxResult: {
-            url?: string;
-            title?: string | null;
-            description?: string | null;
-            image?: string | null;
-            siteName?: string | null;
+            /**
+             * @description plain means the host is not allowlisted; card means metadata was fetched or read from cache.
+             * @enum {string}
+             */
+            type: "plain" | "card";
+            url: string;
+            title: string | null;
+            description: string | null;
+            /** @description Reserved for a future platform-proxied image; remote preview images are currently returned as null. */
+            imageUrl: string | null;
+            siteName: string | null;
         };
         /**
          * @description Optional intended image surface persisted across moderation and page reloads; it is not a business binding.

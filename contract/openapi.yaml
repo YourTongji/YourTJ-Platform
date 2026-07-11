@@ -1984,11 +1984,19 @@ components:
     # ---- platform ----
     OneboxResult:
       type: object
+      required: [type, url, title, description, imageUrl, siteName]
       properties:
+        type:
+          type: string
+          enum: [plain, card]
+          description: plain means the host is not allowlisted; card means metadata was fetched or read from cache.
         url: { type: string }
         title: { type: string, nullable: true }
         description: { type: string, nullable: true }
-        image: { type: string, nullable: true }
+        imageUrl:
+          type: string
+          nullable: true
+          description: Reserved for a future platform-proxied image; remote preview images are currently returned as null.
         siteName: { type: string, nullable: true }
     # ---- media ----
     MediaUsage:

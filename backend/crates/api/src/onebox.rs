@@ -615,7 +615,7 @@ mod tests {
 
     use super::{
         compute_url_hash, is_persistently_cacheable_url, is_public_ip, matches_domain,
-        normalize_target_url, parse_og_tags, parse_target_url,
+        normalize_target_url, parse_og_tags, parse_target_url, OneboxResult,
     };
 
     #[test]
@@ -696,6 +696,26 @@ mod tests {
         assert_eq!(result.description.as_deref(), Some("A & B"));
         assert_eq!(result.site_name.as_deref(), Some("Campus"));
         assert!(result.image_url.is_none());
+    }
+
+    #[test]
+    fn result_serializes_the_public_contract_field_names() {
+        let result = OneboxResult {
+            r#type: "card".into(),
+            url: "https://example.com/".into(),
+            title: Some("Example".into()),
+            description: None,
+            image_url: None,
+            site_name: Some("Example Site".into()),
+        };
+
+        let value = serde_json::to_value(result).expect("Onebox result must serialize");
+        assert_eq!(value["type"], "card");
+        assert_eq!(value["url"], "https://example.com/");
+        assert_eq!(value["imageUrl"], serde_json::Value::Null);
+        assert_eq!(value["siteName"], "Example Site");
+        assert!(value.get("image").is_none());
+        assert!(value.get("image_url").is_none());
     }
 
     #[test]
