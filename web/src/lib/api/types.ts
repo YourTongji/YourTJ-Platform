@@ -58,6 +58,7 @@ export type DmReport = Schema["DmReport"];
 export type LedgerEntry = Schema["LedgerEntry"];
 export type LedgerVerify = Schema["LedgerVerify"];
 export type Notification = Schema["Notification"];
+export type NotificationPreferences = Schema["NotificationPreferences"];
 export type Product = Schema["Product"];
 export type Purchase = Schema["Purchase"];
 export type Review = Schema["Review"];

@@ -5,6 +5,7 @@ mod helpers;
 
 use axum::body::Body;
 use axum::http::{header, Method, Request, StatusCode};
+use forum::notification_hooks::create_notification;
 use helpers::{create_test_account, create_test_app, read_json};
 use serde_json::json;
 use sqlx::PgPool;
@@ -59,6 +60,29 @@ async fn mark_notifications_read(
         )
         .await
         .expect("mark-read response")
+}
+
+async fn notification_preferences(
+    app: &axum::Router,
+    token: &str,
+    method: Method,
+    body: Option<serde_json::Value>,
+) -> axum::response::Response {
+    let mut request = Request::builder()
+        .method(method)
+        .uri("/api/v2/me/notification-prefs")
+        .header(header::AUTHORIZATION, format!("Bearer {token}"));
+    let body = match body {
+        Some(value) => {
+            request = request.header(header::CONTENT_TYPE, "application/json");
+            Body::from(value.to_string())
+        }
+        None => Body::empty(),
+    };
+    app.clone()
+        .oneshot(request.body(body).expect("build notification preference request"))
+        .await
+        .expect("notification preference response")
 }
 
 #[tokio::test]
@@ -170,4 +194,94 @@ async fn rejects_invalid_list_limits_and_ambiguous_mark_read_input() {
         mark_notifications_read(&app, &token, json!({ "ids": ["1"], "all": true })).await.status(),
         StatusCode::BAD_REQUEST
     );
+}
+
+#[tokio::test]
+async fn notification_preferences_are_typed_persisted_and_enforced() {
+    let (pool, app) = create_test_app().await;
+    let (account_id, token) =
+        create_test_account(&pool, "notify-prefs@tongji.edu.cn", "notify-prefs").await;
+
+    let default_response = notification_preferences(&app, &token, Method::GET, None).await;
+    assert_eq!(default_response.status(), StatusCode::OK);
+    let default_body = read_json(default_response).await;
+    assert_eq!(default_body["prefs"]["inApp"]["replies"], true);
+    assert_eq!(default_body["prefs"]["inApp"]["directMessages"], true);
+    assert_eq!(default_body["prefs"]["email"]["weeklyDigest"], false);
+
+    let updated_preferences = json!({
+        "prefs": {
+            "inApp": {
+                "replies": false,
+                "mentions": true,
+                "quotes": true,
+                "votes": true,
+                "badges": true,
+                "subscriptions": true,
+                "directMessages": true
+            },
+            "email": { "weeklyDigest": true }
+        }
+    });
+    let update_response =
+        notification_preferences(&app, &token, Method::PUT, Some(updated_preferences.clone()))
+            .await;
+    assert_eq!(update_response.status(), StatusCode::OK);
+    assert_eq!(read_json(update_response).await, updated_preferences);
+
+    create_notification(&pool, account_id, "reply", json!({ "threadId": "1" }), None, None).await;
+    create_notification(
+        &pool,
+        account_id,
+        "content_moderated",
+        json!({ "threadId": "1" }),
+        None,
+        None,
+    )
+    .await;
+    let event_types: Vec<String> = sqlx::query_scalar(
+        "SELECT type FROM forum.notifications WHERE account_id = $1 ORDER BY id",
+    )
+    .bind(account_id)
+    .fetch_all(&pool)
+    .await
+    .expect("load notification event types");
+    assert_eq!(event_types, vec!["content_moderated"]);
+
+    let stored: serde_json::Value =
+        sqlx::query_scalar("SELECT prefs FROM forum.notification_prefs WHERE account_id = $1")
+            .bind(account_id)
+            .fetch_one(&pool)
+            .await
+            .expect("load stored notification preferences");
+    assert_eq!(stored, updated_preferences["prefs"]);
+}
+
+#[tokio::test]
+async fn notification_preferences_reject_unknown_or_incomplete_shapes() {
+    let (pool, app) = create_test_app().await;
+    let (_, token) = create_test_account(&pool, "notify-shape@tongji.edu.cn", "notify-shape").await;
+
+    let legacy_response = notification_preferences(
+        &app,
+        &token,
+        Method::PUT,
+        Some(json!({ "prefs": { "emailPush": true } })),
+    )
+    .await;
+    assert_eq!(legacy_response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+    let incomplete_response = notification_preferences(
+        &app,
+        &token,
+        Method::PUT,
+        Some(json!({
+            "prefs": {
+                "inApp": { "replies": false },
+                "email": { "weeklyDigest": false }
+            }
+        })),
+    )
+    .await;
+    assert_eq!(incomplete_response.status(), StatusCode::UNPROCESSABLE_ENTITY);
 }

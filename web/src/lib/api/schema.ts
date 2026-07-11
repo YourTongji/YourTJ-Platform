@@ -7103,11 +7103,35 @@ export interface components {
             /** @description Mark every notification for the current account. Cannot be combined with ids. */
             all?: boolean;
         };
+        InAppNotificationPrefs: {
+            /** @default true */
+            replies: boolean;
+            /** @default true */
+            mentions: boolean;
+            /** @default true */
+            quotes: boolean;
+            /** @default true */
+            votes: boolean;
+            /** @default true */
+            badges: boolean;
+            /** @default true */
+            subscriptions: boolean;
+            /** @default true */
+            directMessages: boolean;
+        };
+        EmailNotificationPrefs: {
+            /** @default false */
+            weeklyDigest: boolean;
+        };
+        NotificationPreferences: {
+            inApp: components["schemas"]["InAppNotificationPrefs"];
+            email: components["schemas"]["EmailNotificationPrefs"];
+        };
         NotificationPrefs: {
-            prefs?: Record<string, never>;
+            prefs: components["schemas"]["NotificationPreferences"];
         };
         NotificationPrefsInput: {
-            prefs: Record<string, never>;
+            prefs: components["schemas"]["NotificationPreferences"];
         };
         ReadTrackingInput: {
             lastReadCommentId?: string | null;

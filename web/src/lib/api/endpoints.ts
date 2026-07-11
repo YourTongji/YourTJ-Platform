@@ -39,6 +39,7 @@ import type {
   LedgerVerify,
   Major,
   Notification,
+  NotificationPreferences,
   Page,
   Poll,
   Product,
@@ -583,11 +584,11 @@ export const api = {
   },
 
   notificationPrefs() {
-    return apiRequest<{ prefs?: Record<string, unknown> }>("/me/notification-prefs");
+    return apiRequest<{ prefs: NotificationPreferences }>("/me/notification-prefs");
   },
 
-  updateNotificationPrefs(prefs: Record<string, unknown>) {
-    return apiRequest<{ prefs?: Record<string, unknown> }>("/me/notification-prefs", {
+  updateNotificationPrefs(prefs: NotificationPreferences) {
+    return apiRequest<{ prefs: NotificationPreferences }>("/me/notification-prefs", {
       method: "PUT",
       body: { prefs },
     });

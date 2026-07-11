@@ -19,6 +19,10 @@ pub async fn create_notification(
     aggregation_key: Option<&str>,
     actor_id: Option<i64>,
 ) {
+    if !is_notification_enabled(pool, account_id, r#type).await {
+        return;
+    }
+
     // Check ignore: if the recipient has ignored the actor, drop the notification.
     if let Some(aid) = actor_id {
         let ignored: bool = sqlx::query_scalar(
@@ -75,6 +79,10 @@ pub async fn create_notification_aggregated(
     payload: Value,
     actor_id: Option<i64>,
 ) {
+    if !is_notification_enabled(pool, account_id, r#type).await {
+        return;
+    }
+
     // Check ignore: if the recipient has ignored the actor, drop the notification.
     if let Some(aid) = actor_id {
         let ignored: bool = sqlx::query_scalar(
@@ -151,8 +159,42 @@ pub async fn is_notification_enabled(pool: &PgPool, account_id: i64, r#type: &st
             .await
             .unwrap_or(None);
 
-    match prefs {
-        Some(ref v) => v.get(r#type).and_then(|x| x.as_bool()).unwrap_or(true),
-        None => true,
+    let Some(prefs) = prefs else {
+        return true;
+    };
+    let Some(category) = in_app_category(r#type) else {
+        return true;
+    };
+    prefs
+        .get("inApp")
+        .and_then(|value| value.get(category))
+        .and_then(Value::as_bool)
+        .or_else(|| prefs.get(r#type).and_then(Value::as_bool))
+        .unwrap_or(true)
+}
+
+fn in_app_category(event_type: &str) -> Option<&'static str> {
+    match event_type {
+        "reply" => Some("replies"),
+        "mention" => Some("mentions"),
+        "quote" => Some("quotes"),
+        "vote" => Some("votes"),
+        "badge" => Some("badges"),
+        "watching" => Some("subscriptions"),
+        "dm" => Some("directMessages"),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::in_app_category;
+
+    #[test]
+    fn maps_only_optional_interaction_events_to_user_preferences() {
+        assert_eq!(in_app_category("reply"), Some("replies"));
+        assert_eq!(in_app_category("dm"), Some("directMessages"));
+        assert_eq!(in_app_category("content_moderated"), None);
+        assert_eq!(in_app_category("security"), None);
     }
 }

@@ -610,8 +610,41 @@ components:
         all:
           type: boolean
           description: Mark every notification for the current account. Cannot be combined with ids.
-    NotificationPrefs: { type: object, properties: { prefs: { type: object } } }
-    NotificationPrefsInput: { type: object, required: [prefs], properties: { prefs: { type: object } } }
+    InAppNotificationPrefs:
+      type: object
+      additionalProperties: false
+      required: [replies, mentions, quotes, votes, badges, subscriptions, directMessages]
+      properties:
+        replies: { type: boolean, default: true }
+        mentions: { type: boolean, default: true }
+        quotes: { type: boolean, default: true }
+        votes: { type: boolean, default: true }
+        badges: { type: boolean, default: true }
+        subscriptions: { type: boolean, default: true }
+        directMessages: { type: boolean, default: true }
+    EmailNotificationPrefs:
+      type: object
+      additionalProperties: false
+      required: [weeklyDigest]
+      properties:
+        weeklyDigest: { type: boolean, default: false }
+    NotificationPreferences:
+      type: object
+      additionalProperties: false
+      required: [inApp, email]
+      properties:
+        inApp: { $ref: "#/components/schemas/InAppNotificationPrefs" }
+        email: { $ref: "#/components/schemas/EmailNotificationPrefs" }
+    NotificationPrefs:
+      type: object
+      additionalProperties: false
+      required: [prefs]
+      properties: { prefs: { $ref: "#/components/schemas/NotificationPreferences" } }
+    NotificationPrefsInput:
+      type: object
+      additionalProperties: false
+      required: [prefs]
+      properties: { prefs: { $ref: "#/components/schemas/NotificationPreferences" } }
     ReadTrackingInput: { type: object, properties: { lastReadCommentId: { type: string, nullable: true } } }
     Sanction: { type: object, properties: { id: { type: string }, accountId: { type: string }, kind: { type: string, enum: [silence, suspend] }, reason: { type: string }, issuedBy: { type: string, nullable: true }, startsAt: { type: integer }, endsAt: { type: integer, nullable: true }, revokedAt: { type: integer, nullable: true }, createdAt: { type: integer } } }
     SanctionInput: { type: object, required: [reason], properties: { reason: { type: string, minLength: 3, maxLength: 500 }, endsAt: { type: integer, nullable: true } } }

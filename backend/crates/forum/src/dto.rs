@@ -216,18 +216,60 @@ pub struct ModActionDto {
     pub created_at: i64,
 }
 
+/// User-controlled in-app interaction categories.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct InAppNotificationPreferences {
+    pub replies: bool,
+    pub mentions: bool,
+    pub quotes: bool,
+    pub votes: bool,
+    pub badges: bool,
+    pub subscriptions: bool,
+    pub direct_messages: bool,
+}
+
+impl Default for InAppNotificationPreferences {
+    fn default() -> Self {
+        Self {
+            replies: true,
+            mentions: true,
+            quotes: true,
+            votes: true,
+            badges: true,
+            subscriptions: true,
+            direct_messages: true,
+        }
+    }
+}
+
+/// User-controlled email notification channels; security mail is not optional here.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EmailNotificationPreferences {
+    pub weekly_digest: bool,
+}
+
+/// Stable event-by-channel notification preference contract.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct NotificationPreferences {
+    pub in_app: InAppNotificationPreferences,
+    pub email: EmailNotificationPreferences,
+}
+
 /// GET/PUT /api/v2/me/notification-prefs — request body.
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct NotificationPrefsInput {
-    pub prefs: serde_json::Value,
+    pub prefs: NotificationPreferences,
 }
 
 /// GET/PUT /api/v2/me/notification-prefs — response body.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NotificationPrefsDto {
-    pub prefs: serde_json::Value,
+    pub prefs: NotificationPreferences,
 }
 
 /// PUT /api/v2/me/drafts — request body.
