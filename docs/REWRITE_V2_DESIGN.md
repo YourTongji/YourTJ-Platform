@@ -646,3 +646,18 @@ Previously all system-originated ledger entries used literal `"system-signed"` a
 | Transfer/tip/task ops | 20 per 60s per account |
 | Email code | 1 per 60s per email |
 | IP code | 5 per 10min per IP |
+
+### 8.9 Outbound email delivery
+
+- Production verification and password-reset email uses Cloudflare Email Sending through the shared
+  email transport. SMTP remains an explicit fallback; local and test environments default to a
+  redacted non-delivery sink.
+- A login or password-reset code is usable only after the provider accepts the message. If delivery
+  fails, the code is invalidated and the API returns `503 SERVICE_UNAVAILABLE` so clients can retry
+  without presenting a false success state.
+- Provider credentials are runtime secrets. They must never appear in source control, logs, API
+  responses, generated artifacts, or PR preview containers. Only the production backend receives the
+  production token.
+- Invitation and digest email is best-effort because the primary mutation or scheduled batch must not
+  be rolled back by an external delivery outage; failures are logged without recipient addresses or
+  message bodies.

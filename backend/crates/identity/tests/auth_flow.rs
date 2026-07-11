@@ -6,7 +6,8 @@ mod helpers;
 use axum::body::Body;
 use axum::http::{header, Method, Request, StatusCode};
 use helpers::{
-    create_test_app, create_test_app_with_pool, create_test_app_with_pool_and_encryption,
+    create_test_app, create_test_app_with_config, create_test_app_with_pool,
+    create_test_app_with_pool_and_encryption,
 };
 use serde_json::{json, Value};
 use sha2::Digest as _;
@@ -70,6 +71,44 @@ async fn test_request_code_rate_limited() {
 
     let r2 = app.oneshot(make_req(&second_token)).await.unwrap();
     assert_eq!(r2.status(), StatusCode::TOO_MANY_REQUESTS);
+}
+
+#[tokio::test]
+async fn request_code_returns_unavailable_and_invalidates_code_when_delivery_fails() {
+    let mut config = shared::Config::from_env().expect("test Config::from_env");
+    config.email_provider = shared::config::EmailProvider::Cloudflare;
+    config.email_from = "welcome@yourtj.de".into();
+    config.cloudflare_email_account_id = "0".repeat(32);
+    config.cloudflare_email_api_token = "test-token-long-enough".into();
+    config.cloudflare_email_api_base_url = "http://127.0.0.1:1".into();
+    let (pool, app) = create_test_app_with_config(config).await;
+    let email = format!("delivery-failure-{}@tongji.edu.cn", uuid::Uuid::new_v4());
+    let captcha_token = format!("request-{}", uuid::Uuid::new_v4());
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/v2/auth/email/request-code")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header("x-forwarded-for", &captcha_token)
+                .body(Body::from(
+                    json!({ "email": email, "captchaToken": captcha_token }).to_string(),
+                ))
+                .expect("request code request"),
+        )
+        .await
+        .expect("request code response");
+
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let live_codes: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM identity.email_codes WHERE email = $1 AND attempts < 5",
+    )
+    .bind(&email)
+    .fetch_one(&pool)
+    .await
+    .expect("live code count");
+    assert_eq!(live_codes, 0);
 }
 
 /// ── verify-email ───────────────────────────────────────────────────────

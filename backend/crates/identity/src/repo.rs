@@ -108,6 +108,18 @@ pub async fn insert_email_code(
     Ok(())
 }
 
+/// Exhaust one generated code after outbound delivery fails.
+pub async fn invalidate_email_code(pool: &PgPool, code_hash: &str) -> AppResult<()> {
+    sqlx::query(
+        "UPDATE identity.email_codes SET attempts = 99 \
+         WHERE code_hash = $1 AND expires_at > now()",
+    )
+    .bind(code_hash)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 /// Look up the most recent live code for `email` (not expired & not exhausted).
 pub async fn find_email_code(
     pool: &PgPool,

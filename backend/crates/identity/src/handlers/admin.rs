@@ -211,13 +211,18 @@ pub async fn invite_user(
     .await?;
     tx.commit().await?;
 
-    shared::email::send_email(
+    let invitation = crate::email_templates::community_invitation();
+    if let Err(error) = shared::email::send_email(
         &state.config,
         &email,
-        "YourTJ 社区邀请",
-        "管理员已为您预留 YourTJ 账号。请使用校园邮箱验证码完成所有权验证和首次登录。",
+        invitation.subject,
+        &invitation.text,
+        Some(&invitation.html),
     )
-    .await;
+    .await
+    {
+        tracing::warn!(?error, account_id = account.id, "community invitation email failed");
+    }
     let row = repo::find_admin_user(&state.db, account.id).await?.ok_or(AppError::NotFound)?;
     Ok((StatusCode::CREATED, Json(admin_user_dto(row))))
 }

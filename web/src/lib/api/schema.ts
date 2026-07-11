@@ -39,6 +39,7 @@ export interface paths {
                     content?: never;
                 };
                 429: components["responses"]["RateLimited"];
+                503: components["responses"]["ServiceUnavailable"];
             };
         };
         delete?: never;
@@ -1025,6 +1026,7 @@ export interface paths {
                     content?: never;
                 };
                 429: components["responses"]["RateLimited"];
+                503: components["responses"]["ServiceUnavailable"];
             };
         };
         delete?: never;
@@ -7138,6 +7140,15 @@ export interface components {
         };
         /** @description Too many requests */
         RateLimited: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description Upstream service unavailable */
+        ServiceUnavailable: {
             headers: {
                 [name: string]: unknown;
             };

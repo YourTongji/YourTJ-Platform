@@ -2,10 +2,10 @@
 //!
 //! Queries opted-in users (`"email_digest": true` in their notification prefs),
 //! builds a summary of top threads, unread notifications, and new badges from
-//! the past week, then sends the digest via SMTP.
+//! the past week, then sends the digest through the configured email provider.
 //!
 //! Called by the bootstrap scheduled task (see `api/src/bootstrap.rs`). This
-//! module gracefully degrades to logging when SMTP is not configured.
+//! Delivery failures are isolated to the affected subscriber.
 
 use chrono::{DateTime, Utc};
 use shared::config::Config;
@@ -55,8 +55,7 @@ struct WeeklyBadge {
 ///
 /// Fetches all subscribers, gathers per-user data, builds HTML, and sends the
 /// email. Maintains a 1-second delay between recipients to avoid appearing as
-/// a bulk sender. Gracefully skips individual users on query errors and logs
-/// the email body when SMTP is not configured.
+/// a bulk sender. Gracefully skips individual users on query or delivery errors.
 ///
 /// This function is safe to call on every tick — it is a no-op when there are
 /// no subscribers or when all queries fail.
@@ -101,7 +100,17 @@ pub async fn run_digest(pool: &PgPool, config: &Config) {
         };
 
         let html = build_html(&sub.handle, &top_threads, unread_count, &badges);
-        shared::email::send_email(config, &sub.email, "YourTJ 论坛周报", &html).await;
+        if let Err(error) = shared::email::send_email(
+            config,
+            &sub.email,
+            "YourTJ 论坛周报",
+            "您的 YourTJ 论坛周报已生成，请使用支持 HTML 的邮件客户端查看。",
+            Some(&html),
+        )
+        .await
+        {
+            tracing::warn!(?error, account_id = sub.account_id, "forum digest email failed");
+        }
 
         // Rate-limit: 1-second gap between recipients
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;

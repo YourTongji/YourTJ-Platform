@@ -68,6 +68,33 @@ async fn ensure_login_allowed(
     Ok(())
 }
 
+async fn deliver_email_code(
+    state: &AppState,
+    email: &str,
+    code_hash: &str,
+    content: &crate::email_templates::EmailContent,
+) -> AppResult<()> {
+    if let Err(delivery_error) = shared::email::send_email(
+        &state.config,
+        email,
+        content.subject,
+        &content.text,
+        Some(&content.html),
+    )
+    .await
+    {
+        if let Err(invalidation_error) = repo::invalidate_email_code(&state.db, code_hash).await {
+            tracing::warn!(
+                ?invalidation_error,
+                "email delivery failed and verification code invalidation also failed"
+            );
+            return Err(invalidation_error);
+        }
+        return Err(delivery_error);
+    }
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Handlers
 // ---------------------------------------------------------------------------
@@ -117,13 +144,8 @@ pub async fn request_code(
     )
     .await?;
 
-    shared::email::send_email(
-        &state.config,
-        &email,
-        "YourTJ 验证码",
-        &format!("您的验证码是：{code}，5 分钟内有效。如非本人操作，请忽略此邮件。"),
-    )
-    .await;
+    let email_content = crate::email_templates::login_code(&code);
+    deliver_email_code(&state, &email, &code_hash, &email_content).await?;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -713,13 +735,8 @@ pub async fn password_forgot(
     )
     .await?;
 
-    shared::email::send_email(
-        &state.config,
-        &email,
-        "YourTJ 密码重置",
-        &format!("您的密码重置验证码是：{code}，10 分钟内有效。如非本人操作，请忽略此邮件。"),
-    )
-    .await;
+    let email_content = crate::email_templates::password_reset_code(&code);
+    deliver_email_code(&state, &email, &code_hash, &email_content).await?;
 
     Ok(StatusCode::NO_CONTENT)
 }
