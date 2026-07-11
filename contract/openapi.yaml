@@ -433,9 +433,14 @@ components:
         boardId: { type: string }
         title: { type: string, minLength: 1, maxLength: 200 }
         body: { type: string, nullable: true, maxLength: 50000 }
-        tags: { type: array, items: { type: string, minLength: 1, maxLength: 64 }, maxItems: 3 }
+        tags: { type: array, items: { type: string, minLength: 1, maxLength: 64 }, maxItems: 3, uniqueItems: true }
         poll: { $ref: "#/components/schemas/PollInput" }
-    ThreadUpdateInput: { type: object, properties: { title: { type: string }, body: { type: string }, tags: { type: array, items: { type: string }, maxItems: 3 } } }
+    ThreadUpdateInput:
+      type: object
+      properties:
+        title: { type: string, minLength: 1, maxLength: 200 }
+        body: { type: string, maxLength: 50000 }
+        tags: { type: array, items: { type: string, minLength: 1, maxLength: 64 }, maxItems: 3, uniqueItems: true }
     ThreadPinInput: { type: object, properties: { globally: { type: boolean } } }
     ThreadMoveInput: { type: object, required: [boardId], properties: { boardId: { type: string } } }
     AdminThreadActionInput:
@@ -469,8 +474,18 @@ components:
         createdAt: { type: integer }
         quotedCommentId: { type: string, nullable: true }
         isSolved: { type: boolean }
-    CommentInput: { type: object, required: [body], properties: { parentId: { type: string }, body: { type: string }, quotedCommentId: { type: string } } }
-    CommentUpdateInput: { type: object, required: [body], properties: { body: { type: string } } }
+    CommentInput:
+      type: object
+      required: [body]
+      properties:
+        parentId: { type: string }
+        body: { type: string, minLength: 1, maxLength: 16000 }
+        quotedCommentId: { type: string }
+    CommentUpdateInput:
+      type: object
+      required: [body]
+      properties:
+        body: { type: string, minLength: 1, maxLength: 16000 }
     VoteInput:
       type: object
       required: [value, postType]
@@ -769,6 +784,7 @@ components:
           type: array
           minItems: 2
           maxItems: 20
+          uniqueItems: true
           items: { type: string, minLength: 1, maxLength: 200 }
     PollOption:
       type: object

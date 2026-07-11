@@ -68,54 +68,6 @@ pub struct ThreadFeedQuery {
     pub limit: i64,
 }
 
-fn validate_thread_input(input: &ThreadInput) -> AppResult<()> {
-    let title_length = input.title.chars().count();
-    if input.title.trim().is_empty() || title_length > 200 {
-        return Err(AppError::BadRequest("title must be 1–200 characters".into()));
-    }
-    if input.body.as_ref().is_some_and(|body| body.chars().count() > 50_000) {
-        return Err(AppError::BadRequest("body must not exceed 50000 characters".into()));
-    }
-    if input.tags.as_ref().is_some_and(|tags| tags.len() > 3) {
-        return Err(AppError::BadRequest("tags must not contain more than 3 items".into()));
-    }
-    if let Some(tags) = input.tags.as_ref() {
-        if tags.iter().any(|tag| tag.trim().is_empty() || tag.chars().count() > 64) {
-            return Err(AppError::BadRequest("each tag must be 1–64 characters".into()));
-        }
-    }
-
-    if let Some(poll) = input.poll.as_ref() {
-        let question_length = poll.question.chars().count();
-        if poll.question.trim().is_empty() || question_length > 500 {
-            return Err(AppError::BadRequest("poll question must be 1–500 characters".into()));
-        }
-        if !(2..=20).contains(&poll.options.len()) {
-            return Err(AppError::BadRequest("poll requires 2–20 options".into()));
-        }
-        let mut normalized_options = std::collections::HashSet::new();
-        for option in &poll.options {
-            let normalized = option.trim().to_lowercase();
-            if normalized.is_empty() || option.chars().count() > 200 {
-                return Err(AppError::BadRequest("poll options must be 1–200 characters".into()));
-            }
-            if !normalized_options.insert(normalized) {
-                return Err(AppError::BadRequest("poll options must be unique".into()));
-            }
-        }
-        if let Some(closes_at) = poll.closes_at {
-            if chrono::DateTime::from_timestamp(closes_at, 0).is_none()
-                || closes_at <= chrono::Utc::now().timestamp()
-            {
-                return Err(AppError::BadRequest(
-                    "poll closesAt must be a future timestamp".into(),
-                ));
-            }
-        }
-    }
-    Ok(())
-}
-
 // ---------------------------------------------------------------------------
 // handlers
 // ---------------------------------------------------------------------------
@@ -389,7 +341,9 @@ pub async fn create_thread(
     )
     .await
     .map_err(|_r| AppError::Unauthorized)?;
-    validate_thread_input(&body)?;
+    let prepared = crate::content_policy::prepare_thread_create(body)?;
+    let body = prepared.input;
+    let is_queued = prepared.is_queued;
     // Check that the account is not silenced
     crate::sanctions::require_can_post(state.redis.as_ref(), &state.db, auth.id).await?;
 
@@ -414,151 +368,98 @@ pub async fn create_thread(
         .await?;
     }
 
-    // Check watched words on the body text (if provided).
-    let watched_word_action: Option<String> = body.body.as_ref().and_then(|body_text| {
-        crate::watched_words::check_watched_words(body_text).map(|(_matched, action)| action)
-    });
-    let is_queued = watched_word_action.as_deref() == Some("queue");
-
-    // Block action: reject before insert.
-    if watched_word_action.as_deref() == Some("block") {
-        return Err(AppError::BadRequest("content contains blocked words".into()));
-    }
-
     let board_id: i64 = body.board_id.parse().map_err(|_| AppError::NotFound)?;
     let row = repo::create_thread(&state.db, board_id, auth.id, &body, is_queued).await?;
 
-    // Store thread tags (request-scope, capped at 3).
-    if let Some(ref tag_slugs) = body.tags {
-        if !tag_slugs.is_empty() {
-            let resolved = repo::resolve_tag_slugs(&state.db, tag_slugs).await?;
-            let tag_ids: Vec<i64> = resolved.into_iter().map(|(id, _)| id).collect();
-            repo::set_thread_tags(&state.db, row.id, &tag_ids).await?;
-        }
-    }
-
-    // Update user_stats: threads_created +1 (best-effort).
-    let _ = sqlx::query(
-        "INSERT INTO forum.user_stats (account_id, threads_created, last_posted_at) \
-         VALUES ($1, 1, now()) \
-         ON CONFLICT (account_id) \
-         DO UPDATE SET threads_created = forum.user_stats.threads_created + 1, \
-                       last_posted_at = now()",
-    )
-    .bind(auth.id)
-    .execute(&state.db)
-    .await;
-
-    // Auto-track: creator automatically subscribes to their thread.
-    let _ = crate::repo::set_subscription(&state.db, auth.id, "thread", row.id, "tracking").await;
-
-    // Auto-award first-thread badge (fire-and-forget).
-    let pool = state.db.clone();
-    let author_id = auth.id;
-    tokio::spawn(async move {
-        match crate::badges::award_first_thread_badge(&pool, author_id).await {
-            Ok(true) => tracing::info!(author_id, "first-thread badge awarded"),
-            Ok(false) => {} // already had it or not first thread
-            Err(e) => tracing::warn!(error = %e, author_id, "failed to award first-thread badge"),
-        }
-    });
-
-    // Look up own handle for self-mention filtering.
-    let my_handle: String =
-        sqlx::query_scalar("SELECT handle FROM identity.accounts WHERE id = $1")
-            .bind(auth.id)
-            .fetch_one(&state.db)
-            .await
-            .unwrap_or_default();
-
-    // Parse @mentions from body and notify mentioned users (fire-and-forget).
-    if let Some(ref body_text) = body.body {
-        let mention_re =
-            regex::Regex::new(r"@([\p{L}\p{N}_-]+)").expect("mention regex is statically valid");
-        let handles: Vec<String> = mention_re
-            .captures_iter(body_text)
-            .map(|c| c[1].to_string())
-            .filter(|h| h != &my_handle) // skip self-mentions
-            .take(10)
-            .collect();
-
-        let thread_actor_id = auth.id;
-        if !handles.is_empty() {
-            let pool = state.db.clone();
-            let thread_author = row.author_handle.clone();
-            let thread_body = row.body.clone().unwrap_or_default();
-            let thread_body_excerpt = thread_body.chars().take(100).collect::<String>();
-            let thread_id_val = row.id;
-            tokio::spawn(async move {
-                for handle in handles {
-                    let account_id: Option<i64> =
-                        sqlx::query_scalar("SELECT id FROM identity.accounts WHERE handle = $1")
-                            .bind(&handle)
-                            .fetch_optional(&pool)
-                            .await
-                            .unwrap_or(None);
-                    if let Some(aid) = account_id {
-                        crate::notification_hooks::create_notification(
-                            &pool,
-                            aid,
-                            "mention",
-                            serde_json::json!({
-                                "threadId": thread_id_val.to_string(),
-                                "authorHandle": thread_author,
-                                "handle": handle,
-                                "bodyExcerpt": thread_body_excerpt,
-                            }),
-                            None,
-                            Some(thread_actor_id),
-                        )
-                        .await;
-                    }
+    if !is_queued {
+        let pool = state.db.clone();
+        let author_id = auth.id;
+        tokio::spawn(async move {
+            match crate::badges::award_first_thread_badge(&pool, author_id).await {
+                Ok(true) => tracing::info!(author_id, "first-thread badge awarded"),
+                Ok(false) => {}
+                Err(error) => {
+                    tracing::warn!(%error, author_id, "failed to award first-thread badge")
                 }
-            });
+            }
+        });
+    }
+
+    if !is_queued {
+        let my_handle: String =
+            sqlx::query_scalar("SELECT handle FROM identity.accounts WHERE id = $1")
+                .bind(auth.id)
+                .fetch_one(&state.db)
+                .await
+                .unwrap_or_default();
+        if let Some(ref body_text) = body.body {
+            let mention_re = regex::Regex::new(r"@([\p{L}\p{N}_-]+)")
+                .expect("mention regex is statically valid");
+            let handles: Vec<String> = mention_re
+                .captures_iter(body_text)
+                .map(|c| c[1].to_string())
+                .filter(|h| h != &my_handle) // skip self-mentions
+                .take(10)
+                .collect();
+
+            let thread_actor_id = auth.id;
+            if !handles.is_empty() {
+                let pool = state.db.clone();
+                let thread_author = row.author_handle.clone();
+                let thread_body = row.body.clone().unwrap_or_default();
+                let thread_body_excerpt = thread_body.chars().take(100).collect::<String>();
+                let thread_id_val = row.id;
+                tokio::spawn(async move {
+                    for handle in handles {
+                        let account_id: Option<i64> = sqlx::query_scalar(
+                            "SELECT id FROM identity.accounts WHERE handle = $1",
+                        )
+                        .bind(&handle)
+                        .fetch_optional(&pool)
+                        .await
+                        .unwrap_or(None);
+                        if let Some(aid) = account_id {
+                            crate::notification_hooks::create_notification(
+                                &pool,
+                                aid,
+                                "mention",
+                                serde_json::json!({
+                                    "threadId": thread_id_val.to_string(),
+                                    "authorHandle": thread_author,
+                                    "handle": handle,
+                                    "bodyExcerpt": thread_body_excerpt,
+                                }),
+                                None,
+                                Some(thread_actor_id),
+                            )
+                            .await;
+                        }
+                    }
+                });
+            }
         }
     }
 
-    // Re-read canonical visibility and content inside the background index sync.
-    let pool = state.db.clone();
-    let meili_url = state.meili_url.clone();
-    let meili_key = state.meili_master_key.clone();
-    let thread_id = row.id;
-    tokio::spawn(async move {
-        if let Err(error) =
-            crate::meili::reconcile_thread_in_meili(&pool, &meili_url, &meili_key, thread_id).await
-        {
-            tracing::warn!(%error, thread_id, "failed to reconcile created thread in search");
-        }
-    });
-
-    // Create poll if provided.
-    if let Some(ref poll_input) = body.poll {
-        let closes_at = poll_input
-            .closes_at
-            .and_then(|timestamp| chrono::DateTime::from_timestamp(timestamp, 0));
-        let _poll_id = repo::create_poll(
-            &state.db,
-            row.id,
-            &poll_input.question,
-            poll_input.multi_select,
-            closes_at,
-            &poll_input.options,
-        )
-        .await?;
+    if !is_queued {
+        let pool = state.db.clone();
+        let meili_url = state.meili_url.clone();
+        let meili_key = state.meili_master_key.clone();
+        let thread_id = row.id;
+        tokio::spawn(async move {
+            if let Err(error) =
+                crate::meili::reconcile_thread_in_meili(&pool, &meili_url, &meili_key, thread_id)
+                    .await
+            {
+                tracing::warn!(%error, thread_id, "failed to reconcile created thread in search");
+            }
+        });
     }
 
-    // Build response DTO, applying censorship for censor action.
     let mut dto = thread_to_detail_dto(&row);
+    dto.tags = body.tags.clone().unwrap_or_default();
 
-    // Load poll data into the response if a poll was created.
     if body.poll.is_some() {
         attach_poll_to_detail(&state.db, row.id, &mut dto).await;
-    }
-
-    if watched_word_action.as_deref() == Some("censor") {
-        if let Some(ref body_text) = dto.body {
-            dto.body = Some(crate::watched_words::censor_text(body_text));
-        }
     }
 
     crate::cache::invalidate_thread_surfaces(state.redis.as_ref(), row.id, board_id).await;
@@ -581,6 +482,8 @@ pub async fn update_thread(
     )
     .await
     .map_err(|_r| AppError::Unauthorized)?;
+    let prepared = crate::content_policy::prepare_thread_update(body)?;
+    let body = prepared.input;
     crate::sanctions::require_can_post(state.redis.as_ref(), &state.db, auth.id).await?;
 
     shared::ratelimit::check_token_bucket(
@@ -594,26 +497,7 @@ pub async fn update_thread(
 
     let id: i64 = id_str.parse().map_err(|_| AppError::NotFound)?;
 
-    // Staff moderate through reasoned admin actions; they never overwrite user speech.
-    let thread = repo::find_thread(&state.db, id).await?.ok_or(AppError::NotFound)?;
-    if thread.author_id != auth.id {
-        return Err(AppError::Forbidden);
-    }
-
-    // Check grace period: edits within 5 min don't create a revision
-    let now = chrono::Utc::now();
-    let within_grace = thread.created_at > now - chrono::Duration::minutes(5);
-
-    // Save revision if outside grace period and body/title changed
-    if !within_grace && (body.title.is_some() || body.body.is_some()) {
-        let old_title = Some(thread.title.as_str());
-        let old_body = thread.body.as_deref().unwrap_or("");
-        repo::create_revision(&state.db, "thread", id, auth.id, old_title, old_body).await?;
-    }
-
-    // Update the thread
-    let row =
-        repo::update_thread(&state.db, id, body.title.as_deref(), body.body.as_deref()).await?;
+    let row = repo::update_thread(&state.db, id, auth.id, &body, prepared.is_queued).await?;
 
     // Re-read canonical visibility and content inside the background index sync.
     let pool = state.db.clone();
@@ -630,7 +514,11 @@ pub async fn update_thread(
 
     crate::cache::invalidate_thread_surfaces(state.redis.as_ref(), id, row.board_id).await;
 
-    Ok(Json(thread_to_detail_dto(&row)))
+    let mut dto = thread_to_detail_dto(&row);
+    if let Some(tags) = body.tags {
+        dto.tags = tags;
+    }
+    Ok(Json(dto))
 }
 
 /// DELETE /api/v2/forum/threads/{id} — auth required (author only)

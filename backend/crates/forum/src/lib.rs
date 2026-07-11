@@ -6,6 +6,7 @@
 mod admin;
 pub mod badges;
 mod cache;
+mod content_policy;
 pub mod digest;
 mod dto;
 mod error;

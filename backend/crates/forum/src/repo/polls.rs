@@ -4,7 +4,7 @@
 //! multi-select votes are additive (UNIQUE handles duplicates).
 
 use shared::AppResult;
-use sqlx::PgPool;
+use sqlx::{PgConnection, PgPool};
 
 use crate::models::{PollOptionRow, PollRow};
 
@@ -27,7 +27,21 @@ pub async fn create_poll(
     options: &[String],
 ) -> AppResult<i64> {
     let mut tx = pool.begin().await?;
+    let poll_id =
+        create_poll_tx(&mut tx, thread_id, question, multi_select, closes_at, options).await?;
+    tx.commit().await?;
+    Ok(poll_id)
+}
 
+/// Insert a poll and its options inside the caller's transaction.
+pub(crate) async fn create_poll_tx(
+    connection: &mut PgConnection,
+    thread_id: i64,
+    question: &str,
+    multi_select: bool,
+    closes_at: Option<chrono::DateTime<chrono::Utc>>,
+    options: &[String],
+) -> AppResult<i64> {
     let poll_id: i64 = sqlx::query_scalar(
         "INSERT INTO forum.polls (thread_id, question, multi_select, closes_at) \
          VALUES ($1, $2, $3, $4) \
@@ -37,23 +51,24 @@ pub async fn create_poll(
     .bind(question)
     .bind(multi_select)
     .bind(closes_at)
-    .fetch_one(&mut *tx)
+    .fetch_one(&mut *connection)
     .await?;
 
     for (position, label) in options.iter().enumerate() {
-        let pos = i32::try_from(position).unwrap_or(0);
+        let position = i32::try_from(position).map_err(|error| {
+            shared::AppError::Internal(anyhow::anyhow!("poll position overflow: {error}"))
+        })?;
         sqlx::query(
             "INSERT INTO forum.poll_options (poll_id, position, label, vote_count) \
              VALUES ($1, $2, $3, 0)",
         )
         .bind(poll_id)
-        .bind(pos)
+        .bind(position)
         .bind(label)
-        .execute(&mut *tx)
+        .execute(&mut *connection)
         .await?;
     }
 
-    tx.commit().await?;
     Ok(poll_id)
 }
 
@@ -190,11 +205,16 @@ pub async fn get_poll_option(pool: &PgPool, option_id: i64) -> AppResult<Option<
     Ok(row)
 }
 
-/// Get a poll by its id.
+/// Get a poll by id only while its parent thread remains publicly available.
 pub async fn get_poll_by_id(pool: &PgPool, poll_id: i64) -> AppResult<Option<PollRow>> {
     let row = sqlx::query_as::<_, PollRow>(
-        "SELECT id, thread_id, question, multi_select, closes_at, created_at \
-         FROM forum.polls WHERE id = $1",
+        "SELECT poll.id, poll.thread_id, poll.question, poll.multi_select, \
+                poll.closes_at, poll.created_at \
+         FROM forum.polls poll \
+         JOIN forum.threads thread ON thread.id = poll.thread_id \
+         WHERE poll.id = $1 AND thread.status = 'visible' \
+           AND thread.deleted_at IS NULL AND thread.hidden_at IS NULL \
+           AND thread.archived_at IS NULL",
     )
     .bind(poll_id)
     .fetch_optional(pool)

@@ -91,7 +91,7 @@ pub use polls::{
     get_poll_results, get_voted_option_ids, vote_option, PollWithOptions,
 };
 pub use reads::{get_last_read_comment_id, get_unread_thread_ids, upsert_read_position};
-pub use revisions::{create_revision, list_revisions};
+pub use revisions::list_revisions;
 pub use subscriptions::{
     delete_subscription, get_following_thread_ids, get_muted_ids, get_thread_subscription,
     get_watching_subscriber_ids, list_subscriptions, set_subscription,

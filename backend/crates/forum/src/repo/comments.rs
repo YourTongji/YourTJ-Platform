@@ -7,10 +7,18 @@ use super::{base64_decode_str, base64_encode_str};
 
 #[derive(Debug, FromRow)]
 struct ThreadPostingState {
+    author_id: Option<i64>,
     deleted_at: Option<chrono::DateTime<chrono::Utc>>,
     hidden_at: Option<chrono::DateTime<chrono::Utc>>,
     closed_at: Option<chrono::DateTime<chrono::Utc>>,
     archived_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+/// Created comment plus recipient metadata read in the same transaction.
+pub struct CommentCreateOutcome {
+    pub row: CommentRowJoined,
+    pub thread_author_id: Option<i64>,
+    pub quoted_author_id: Option<i64>,
 }
 
 struct NewComment<'a> {
@@ -122,11 +130,11 @@ pub async fn create_comment(
     parent_id: Option<i64>,
     quoted_comment_id: Option<i64>,
     is_hidden: bool,
-) -> AppResult<CommentRowJoined> {
+) -> AppResult<CommentCreateOutcome> {
     let mut tx = pool.begin().await?;
 
     let thread_state: Option<ThreadPostingState> = sqlx::query_as(
-        "SELECT deleted_at, hidden_at, closed_at, archived_at \
+        "SELECT author_id, deleted_at, hidden_at, closed_at, archived_at \
          FROM forum.threads WHERE id = $1 FOR UPDATE",
     )
     .bind(thread_id)
@@ -143,7 +151,29 @@ pub async fn create_comment(
         return Err(shared::AppError::Conflict("thread is closed".into()));
     }
 
-    if let Some(pid) = parent_id {
+    let quoted_author_id = if let Some(quoted_comment_id) = quoted_comment_id {
+        let quoted_author: Option<(Option<i64>,)> = sqlx::query_as(
+            "SELECT author_id FROM forum.comments \
+             WHERE id = $1 AND thread_id = $2 \
+               AND deleted_at IS NULL AND hidden_at IS NULL \
+             FOR KEY SHARE",
+        )
+        .bind(quoted_comment_id)
+        .bind(thread_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+        quoted_author
+            .ok_or_else(|| {
+                shared::AppError::BadRequest(
+                    "quoted comment must be an available comment in this thread".into(),
+                )
+            })?
+            .0
+    } else {
+        None
+    };
+
+    let row = if let Some(pid) = parent_id {
         // Lock the parent comment row to prevent concurrent sibling inserts.
         // Fetch parent path inside the same transaction with FOR UPDATE.
         let parent_path: Option<String> = sqlx::query_scalar(
@@ -173,7 +203,7 @@ pub async fn create_comment(
         let next_index = next_sibling_index(&max_child, &parent_path);
         let path = format!("{parent_path}.{next_index:04x}");
 
-        let row = insert_comment_tx(
+        insert_comment_tx(
             &mut tx,
             NewComment {
                 thread_id,
@@ -185,9 +215,7 @@ pub async fn create_comment(
                 is_hidden,
             },
         )
-        .await?;
-        tx.commit().await?;
-        Ok(row)
+        .await?
     } else {
         // Top-level comment: find next top-level index.
         let max_path: String = sqlx::query_scalar(
@@ -201,7 +229,7 @@ pub async fn create_comment(
         let top_level = next_sibling_index(&max_path, "");
         let path = format!("{top_level:04x}");
 
-        let row = insert_comment_tx(
+        insert_comment_tx(
             &mut tx,
             NewComment {
                 thread_id,
@@ -213,10 +241,10 @@ pub async fn create_comment(
                 is_hidden,
             },
         )
-        .await?;
-        tx.commit().await?;
-        Ok(row)
-    }
+        .await?
+    };
+    tx.commit().await?;
+    Ok(CommentCreateOutcome { row, thread_author_id: thread_state.author_id, quoted_author_id })
 }
 
 /// Insert the comment row and update thread reply_count in the active transaction.
@@ -247,17 +275,15 @@ async fn insert_comment_tx(
     .fetch_one(&mut *tx)
     .await?;
 
-    // Bump thread reply_count and last_activity_at.
-    sqlx::query(
-        "UPDATE forum.threads \
-         SET reply_count = reply_count + 1, last_activity_at = now() \
-         WHERE id = $1",
-    )
-    .bind(comment.thread_id)
-    .execute(&mut *tx)
-    .await?;
-
     if !comment.is_hidden {
+        sqlx::query(
+            "UPDATE forum.threads \
+             SET reply_count = reply_count + 1, last_activity_at = now() \
+             WHERE id = $1",
+        )
+        .bind(comment.thread_id)
+        .execute(&mut *tx)
+        .await?;
         activity::contributions::activate_contribution(
             tx,
             comment.author_id,
@@ -265,6 +291,26 @@ async fn insert_comment_tx(
             &format!("forum_comment:{}", row.id),
             row.created_at,
         )
+        .await?;
+        sqlx::query(
+            "INSERT INTO forum.user_stats (account_id, comments_created, last_posted_at) \
+             VALUES ($1, 1, now()) \
+             ON CONFLICT (account_id) DO UPDATE \
+             SET comments_created = forum.user_stats.comments_created + 1, \
+                 last_posted_at = now(), updated_at = now()",
+        )
+        .bind(comment.author_id)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "INSERT INTO forum.subscriptions (account_id, target_type, target_id, level) \
+             VALUES ($1, 'thread', $2, 'tracking') \
+             ON CONFLICT (account_id, target_type, target_id) \
+             DO UPDATE SET level = EXCLUDED.level",
+        )
+        .bind(comment.author_id)
+        .bind(comment.thread_id)
+        .execute(&mut *tx)
         .await?;
     }
 
@@ -322,12 +368,78 @@ pub async fn find_comment_for_moderation(
     Ok(row)
 }
 
-/// Update a comment's body. Returns the updated row joined with author handle.
-pub async fn update_comment(pool: &PgPool, id: i64, body: &str) -> AppResult<CommentRowJoined> {
+/// Update an available comment and its revision atomically.
+pub async fn update_comment(
+    pool: &PgPool,
+    id: i64,
+    author_id: i64,
+    body: &str,
+    is_queued: bool,
+) -> AppResult<CommentRowJoined> {
+    let mut tx = pool.begin().await?;
+    let thread_id: i64 = sqlx::query_scalar("SELECT thread_id FROM forum.comments WHERE id = $1")
+        .bind(id)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or(shared::AppError::NotFound)?;
+    let thread_state: ThreadPostingState = sqlx::query_as(
+        "SELECT author_id, deleted_at, hidden_at, closed_at, archived_at \
+         FROM forum.threads WHERE id = $1 FOR UPDATE",
+    )
+    .bind(thread_id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or(shared::AppError::NotFound)?;
+    if thread_state.deleted_at.is_some() || thread_state.hidden_at.is_some() {
+        return Err(shared::AppError::NotFound);
+    }
+    if thread_state.archived_at.is_some() {
+        return Err(shared::AppError::Conflict("thread is archived".into()));
+    }
+
+    let existing = sqlx::query_as::<_, CommentRowJoined>(
+        "SELECT c.id, c.thread_id, c.parent_id, c.path, c.author_id, \
+                c.body, c.vote_count, c.deleted_at, c.hidden_at, c.edited_at, c.created_at, \
+                c.quoted_comment_id, a.handle AS author_handle \
+         FROM forum.comments c \
+         JOIN identity.accounts a ON a.id = c.author_id \
+         WHERE c.id = $1 AND c.thread_id = $2 FOR UPDATE OF c",
+    )
+    .bind(id)
+    .bind(thread_id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or(shared::AppError::NotFound)?;
+    if existing.author_id != author_id {
+        return Err(shared::AppError::Forbidden);
+    }
+    if existing.deleted_at.is_some() || existing.hidden_at.is_some() {
+        return Err(shared::AppError::NotFound);
+    }
+
+    let body_changed = existing.body != body;
+    let within_grace = existing.created_at > chrono::Utc::now() - chrono::Duration::minutes(5);
+    if body_changed && !within_grace {
+        super::revisions::create_revision_tx(
+            &mut tx,
+            "comment",
+            id,
+            author_id,
+            None,
+            &existing.body,
+        )
+        .await?;
+    }
+
     let row = sqlx::query_as::<_, CommentRowJoined>(
         "WITH updated AS ( \
-         UPDATE forum.comments SET body = $1, edited_at = now() WHERE id = $2 \
-         RETURNING id, thread_id, parent_id, path, author_id, body, vote_count, created_at, quoted_comment_id \
+         UPDATE forum.comments SET \
+           body = $1, \
+           edited_at = CASE WHEN $2 THEN now() ELSE edited_at END, \
+           hidden_at = CASE WHEN $3 THEN now() ELSE hidden_at END \
+         WHERE id = $4 \
+         RETURNING id, thread_id, parent_id, path, author_id, body, vote_count, \
+                   deleted_at, hidden_at, edited_at, created_at, quoted_comment_id \
          ) \
          SELECT u.id, u.thread_id, u.parent_id, u.path, u.author_id, \
                 u.body, u.vote_count, u.deleted_at, u.hidden_at, u.edited_at, u.created_at, \
@@ -337,8 +449,34 @@ pub async fn update_comment(pool: &PgPool, id: i64, body: &str) -> AppResult<Com
          JOIN identity.accounts a ON a.id = u.author_id",
     )
     .bind(body)
+    .bind(body_changed)
+    .bind(is_queued)
     .bind(id)
-    .fetch_one(pool)
+    .fetch_one(&mut *tx)
     .await?;
+
+    if is_queued {
+        sqlx::query(
+            "UPDATE forum.threads SET reply_count = GREATEST(reply_count - 1, 0) WHERE id = $1",
+        )
+        .bind(thread_id)
+        .execute(&mut *tx)
+        .await?;
+        activity::contributions::deactivate_contribution(
+            &mut tx,
+            &format!("forum_comment:{id}"),
+            chrono::Utc::now(),
+        )
+        .await?;
+        super::votes::deactivate_target_vote_contributions(
+            &mut tx,
+            "comment",
+            id,
+            chrono::Utc::now(),
+        )
+        .await?;
+    }
+
+    tx.commit().await?;
     Ok(row)
 }

@@ -87,10 +87,9 @@ pub async fn create_comment(
     )
     .await
     .map_err(|_r| AppError::Unauthorized)?;
-    let body_length = body.body.chars().count();
-    if body.body.trim().is_empty() || body_length > 16_000 {
-        return Err(AppError::BadRequest("body must be 1–16000 characters".into()));
-    }
+    let prepared = crate::content_policy::prepare_comment_create(body)?;
+    let body = prepared.input;
+    let is_queued = prepared.is_queued;
     // Check that the account is not silenced
     crate::sanctions::require_can_post(state.redis.as_ref(), &state.db, auth.id).await?;
 
@@ -115,16 +114,6 @@ pub async fn create_comment(
         .await?;
     }
 
-    // Check watched words on the body text.
-    let watched_word_action: Option<String> =
-        crate::watched_words::check_watched_words(&body.body).map(|(_matched, action)| action);
-    let is_queued = watched_word_action.as_deref() == Some("queue");
-
-    // Block action: reject before insert.
-    if watched_word_action.as_deref() == Some("block") {
-        return Err(AppError::BadRequest("content contains blocked words".into()));
-    }
-
     let thread_id: i64 = thread_id_str.parse().map_err(|_| AppError::NotFound)?;
 
     let parent_id: Option<i64> = body
@@ -141,7 +130,7 @@ pub async fn create_comment(
         })
         .transpose()?;
 
-    let row = repo::create_comment(
+    let outcome = repo::create_comment(
         &state.db,
         thread_id,
         auth.id,
@@ -151,47 +140,30 @@ pub async fn create_comment(
         is_queued,
     )
     .await?;
+    let row = outcome.row;
+    let thread_author_id = outcome.thread_author_id;
+    let quoted_author_id = outcome.quoted_author_id;
 
-    // Update user_stats: comments_created +1 (best-effort).
-    let _ = sqlx::query(
-        "INSERT INTO forum.user_stats (account_id, comments_created, last_posted_at) \
-         VALUES ($1, 1, now()) \
-         ON CONFLICT (account_id) \
-         DO UPDATE SET comments_created = forum.user_stats.comments_created + 1, \
-                       last_posted_at = now()",
-    )
-    .bind(auth.id)
-    .execute(&state.db)
-    .await;
-
-    // Auto-award first-comment badge (fire-and-forget).
-    let pool = state.db.clone();
-    let comment_author_id = auth.id;
-    tokio::spawn(async move {
-        match crate::badges::award_first_comment_badge(&pool, comment_author_id).await {
-            Ok(true) => {
-                tracing::info!(author_id = comment_author_id, "first-comment badge awarded")
+    if !is_queued {
+        let pool = state.db.clone();
+        let comment_author_id = auth.id;
+        tokio::spawn(async move {
+            match crate::badges::award_first_comment_badge(&pool, comment_author_id).await {
+                Ok(true) => {
+                    tracing::info!(author_id = comment_author_id, "first-comment badge awarded")
+                }
+                Ok(false) => {}
+                Err(error) => {
+                    tracing::warn!(%error, author_id = comment_author_id, "failed to award first-comment badge")
+                }
             }
-            Ok(false) => {}
-            Err(e) => {
-                tracing::warn!(error = %e, author_id = comment_author_id, "failed to award first-comment badge")
-            }
-        }
-    });
-
-    // Auto-track: commenter automatically follows the thread.
-    let _ =
-        crate::repo::set_subscription(&state.db, auth.id, "thread", thread_id, "tracking").await;
-
-    // Look up thread author for notification.
-    let thread_author_id: i64 =
-        sqlx::query_scalar("SELECT author_id FROM forum.threads WHERE id = $1")
-            .bind(thread_id)
-            .fetch_one(&state.db)
-            .await?;
+        });
+    }
 
     // Notify thread author of reply (fire-and-forget).
-    if row.author_id != thread_author_id {
+    if let Some(thread_author_id) =
+        thread_author_id.filter(|thread_author_id| !is_queued && row.author_id != *thread_author_id)
+    {
         let pool = state.db.clone();
         let actor_id = auth.id;
         let payload = serde_json::json!({
@@ -214,9 +186,12 @@ pub async fn create_comment(
     }
 
     // Notify watching subscribers (fire-and-forget), excluding thread author and commenter.
-    {
+    if !is_queued {
         let pool = state.db.clone();
-        let watcher_exclude = vec![thread_author_id, auth.id];
+        let mut watcher_exclude = vec![auth.id];
+        if let Some(thread_author_id) = thread_author_id {
+            watcher_exclude.push(thread_author_id);
+        }
         let watching_payload = serde_json::json!({
             "threadId": thread_id.to_string(),
             "commentId": row.id.to_string(),
@@ -257,13 +232,8 @@ pub async fn create_comment(
     }
 
     // Notify quoted comment author (fire-and-forget).
-    if let Some(qcid) = quoted_comment_id {
-        let quoted_author_id: Option<i64> =
-            sqlx::query_scalar("SELECT author_id FROM forum.comments WHERE id = $1")
-                .bind(qcid)
-                .fetch_optional(&state.db)
-                .await?;
-        if let Some(qaid) = quoted_author_id {
+    if !is_queued {
+        if let (Some(qcid), Some(qaid)) = (quoted_comment_id, quoted_author_id) {
             if qaid != auth.id {
                 let pool = state.db.clone();
                 let qcid_str = qcid.to_string();
@@ -297,68 +267,65 @@ pub async fn create_comment(
     }
 
     // Look up own handle for self-mention filtering.
-    let my_handle: String =
-        sqlx::query_scalar("SELECT handle FROM identity.accounts WHERE id = $1")
-            .bind(auth.id)
-            .fetch_one(&state.db)
-            .await
-            .unwrap_or_default();
+    if !is_queued {
+        let my_handle: String =
+            sqlx::query_scalar("SELECT handle FROM identity.accounts WHERE id = $1")
+                .bind(auth.id)
+                .fetch_one(&state.db)
+                .await
+                .unwrap_or_default();
+        let mention_re =
+            regex::Regex::new(r"@([\p{L}\p{N}_-]+)").expect("mention regex is statically valid");
+        let handles: Vec<String> = mention_re
+            .captures_iter(&body.body)
+            .map(|capture| capture[1].to_string())
+            .filter(|handle| handle != &my_handle)
+            .take(10)
+            .collect();
 
-    // Parse @mentions from body and notify mentioned users (fire-and-forget).
-    let mention_re =
-        regex::Regex::new(r"@([\p{L}\p{N}_-]+)").expect("mention regex is statically valid");
-    let handles: Vec<String> = mention_re
-        .captures_iter(&body.body)
-        .map(|c| c[1].to_string())
-        .filter(|h| h != &my_handle) // skip self-mentions
-        .take(10)
-        .collect();
-
-    let comment_actor_id = auth.id;
-    if !handles.is_empty() {
-        let pool = state.db.clone();
-        let comment_author = row.author_handle.clone();
-        let comment_body = row.body.chars().take(100).collect::<String>();
-        let thread_id_val = thread_id;
-        let comment_id_val = row.id;
-        tokio::spawn(async move {
-            for handle in handles {
-                let account_id: Option<i64> =
-                    sqlx::query_scalar("SELECT id FROM identity.accounts WHERE handle = $1")
-                        .bind(&handle)
-                        .fetch_optional(&pool)
-                        .await
-                        .unwrap_or(None);
-                if let Some(aid) = account_id {
-                    crate::notification_hooks::create_notification(
-                        &pool,
-                        aid,
-                        "mention",
-                        serde_json::json!({
-                            "threadId": thread_id_val.to_string(),
-                            "commentId": comment_id_val.to_string(),
-                            "authorHandle": comment_author,
-                            "handle": handle,
-                            "bodyExcerpt": comment_body,
-                        }),
-                        None,
-                        Some(comment_actor_id),
-                    )
-                    .await;
+        let comment_actor_id = auth.id;
+        if !handles.is_empty() {
+            let pool = state.db.clone();
+            let comment_author = row.author_handle.clone();
+            let comment_body = row.body.chars().take(100).collect::<String>();
+            let thread_id_val = thread_id;
+            let comment_id_val = row.id;
+            tokio::spawn(async move {
+                for handle in handles {
+                    let account_id: Option<i64> =
+                        sqlx::query_scalar("SELECT id FROM identity.accounts WHERE handle = $1")
+                            .bind(&handle)
+                            .fetch_optional(&pool)
+                            .await
+                            .unwrap_or(None);
+                    if let Some(aid) = account_id {
+                        crate::notification_hooks::create_notification(
+                            &pool,
+                            aid,
+                            "mention",
+                            serde_json::json!({
+                                "threadId": thread_id_val.to_string(),
+                                "commentId": comment_id_val.to_string(),
+                                "authorHandle": comment_author,
+                                "handle": handle,
+                                "bodyExcerpt": comment_body,
+                            }),
+                            None,
+                            Some(comment_actor_id),
+                        )
+                        .await;
+                    }
                 }
-            }
-        });
+            });
+        }
     }
 
-    // Build response DTO, applying censorship for censor action.
-    let mut dto = comment_to_dto(&row, None);
-    if watched_word_action.as_deref() == Some("censor") {
-        dto.body = crate::watched_words::censor_text(&dto.body);
+    if !is_queued {
+        crate::meili::reconcile_thread_in_background(&state, thread_id);
     }
-
     crate::cache::invalidate_thread_by_id(state.redis.as_ref(), &state.db, thread_id).await;
 
-    Ok((StatusCode::CREATED, Json(dto)))
+    Ok((StatusCode::CREATED, Json(comment_to_dto(&row, None))))
 }
 
 /// PATCH /api/v2/forum/comments/{id} — auth required (author only)
@@ -376,28 +343,14 @@ pub async fn update_comment(
     )
     .await
     .map_err(|_r| AppError::Unauthorized)?;
+    let prepared = crate::content_policy::prepare_comment_update(body)?;
     crate::sanctions::require_can_post(state.redis.as_ref(), &state.db, auth.id).await?;
 
     let id: i64 = id_str.parse().map_err(|_| AppError::NotFound)?;
 
-    // Staff moderate through reasoned admin actions; they never overwrite user speech.
-    let comment = repo::find_comment(&state.db, id).await?.ok_or(AppError::NotFound)?;
-    if comment.author_id != auth.id {
-        return Err(AppError::Forbidden);
-    }
-
-    // Check grace period: edits within 5 min don't create a revision
-    let now = chrono::Utc::now();
-    let within_grace = comment.created_at > now - chrono::Duration::minutes(5);
-
-    // Save revision if outside grace period
-    if !within_grace {
-        let old_body = comment.body.clone();
-        repo::create_revision(&state.db, "comment", id, auth.id, None, &old_body).await?;
-    }
-
-    // Update the comment
-    let row = repo::update_comment(&state.db, id, &body.body).await?;
+    let row =
+        repo::update_comment(&state.db, id, auth.id, &prepared.input.body, prepared.is_queued)
+            .await?;
 
     // Fetch solved_answer_id for Q&A solved-answer marking
     let solved_comment_id: Option<i64> =
@@ -407,6 +360,7 @@ pub async fn update_comment(
             .await?
             .flatten();
 
+    crate::meili::reconcile_thread_in_background(&state, row.thread_id);
     crate::cache::invalidate_thread_by_id(state.redis.as_ref(), &state.db, row.thread_id).await;
 
     Ok(Json(comment_to_dto(&row, solved_comment_id)))

@@ -29,6 +29,26 @@ async fn create_thread_request(
         .expect("thread response")
 }
 
+async fn update_thread_request(
+    app: &axum::Router,
+    thread_id: i64,
+    token: &str,
+    body: serde_json::Value,
+) -> axum::response::Response {
+    app.clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::PATCH)
+                .uri(format!("/api/v2/forum/threads/{thread_id}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::from(body.to_string()))
+                .expect("build thread update request"),
+        )
+        .await
+        .expect("thread update response")
+}
+
 async fn admin_thread_action_request(
     app: &axum::Router,
     thread_id: i64,
@@ -365,6 +385,7 @@ async fn invalid_thread_and_poll_inputs_leave_no_thread() {
     let cases = [
         json!({ "boardId": "1", "title": "   " }),
         json!({ "boardId": "1", "title": "Valid", "tags": ["a", "b", "c", "d"] }),
+        json!({ "boardId": "1", "title": "Unknown tag", "tags": ["missing-tag"] }),
         json!({
             "boardId": "1",
             "title": "Invalid poll",
@@ -392,6 +413,12 @@ async fn queued_thread_is_hidden_without_activity_credit() {
     let (pool, app) = create_test_app().await;
     let (author_id, token) =
         create_test_account(&pool, "queued-thread@tongji.edu.cn", "queued-thread").await;
+    let (mentioned_id, _) = create_test_account(
+        &pool,
+        "queued-thread-mentioned@tongji.edu.cn",
+        "queued-thread-mentioned",
+    )
+    .await;
     let marker = "queued-thread-marker-51af";
     sqlx::query("INSERT INTO forum.watched_words (word, action) VALUES ($1, 'queue')")
         .bind(marker)
@@ -403,13 +430,35 @@ async fn queued_thread_is_hidden_without_activity_credit() {
     let response = create_thread_request(
         &app,
         &token,
-        json!({ "boardId": "1", "title": "Queued", "body": marker }),
+        json!({
+            "boardId": "1",
+            "title": "Queued",
+            "body": format!("{marker} @queued-thread-mentioned"),
+            "poll": {
+                "question": "Private until approved",
+                "multiSelect": false,
+                "options": ["Yes", "No"]
+            }
+        }),
     )
     .await;
     assert_eq!(response.status(), StatusCode::CREATED);
     let body = read_json(response).await;
     let thread_id: i64 = body["id"].as_str().expect("thread id").parse().unwrap();
+    let poll_id = body["poll"]["id"].as_str().expect("queued poll id");
     assert!(body["hiddenAt"].is_i64());
+    let poll_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!("/api/v2/forum/polls/{poll_id}/results"))
+                .body(Body::empty())
+                .expect("build queued poll request"),
+        )
+        .await
+        .expect("queued poll response");
+    assert_eq!(poll_response.status(), StatusCode::NOT_FOUND);
     let activity_count: i64 = sqlx::query_scalar(
         "SELECT COALESCE(SUM(threads_created), 0)::bigint \
          FROM activity.daily_counts WHERE account_id = $1",
@@ -427,6 +476,31 @@ async fn queued_thread_is_hidden_without_activity_credit() {
             .await
             .expect("thread hidden state");
     assert!(hidden);
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    let notification_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM forum.notifications WHERE account_id = $1")
+            .bind(mentioned_id)
+            .fetch_one(&pool)
+            .await
+            .expect("queued mention notifications");
+    assert_eq!(notification_count, 0);
+    let public_stat_count: i32 = sqlx::query_scalar(
+        "SELECT COALESCE(MAX(threads_created), 0)::int FROM forum.user_stats WHERE account_id = $1",
+    )
+    .bind(author_id)
+    .fetch_one(&pool)
+    .await
+    .expect("queued thread stats");
+    assert_eq!(public_stat_count, 0);
+    let subscription_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM forum.subscriptions WHERE account_id = $1 AND target_id = $2",
+    )
+    .bind(author_id)
+    .bind(thread_id)
+    .fetch_one(&pool)
+    .await
+    .expect("queued thread subscription");
+    assert_eq!(subscription_count, 0);
 
     sqlx::query("DELETE FROM forum.watched_words WHERE word = $1")
         .bind(marker)
@@ -434,6 +508,355 @@ async fn queued_thread_is_hidden_without_activity_credit() {
         .await
         .expect("remove watched word");
     forum::watched_words::reload_watched_words(&pool).await.expect("reload watched words");
+}
+
+#[tokio::test]
+async fn thread_edits_share_create_validation_and_persist_canonical_censoring() {
+    let (pool, app) = create_test_app().await;
+    let (author_id, token) =
+        create_test_account(&pool, "thread-edit-policy@tongji.edu.cn", "thread-edit-policy").await;
+    let thread_id = seed_thread(&pool, author_id, "Original title", Some("Original body")).await;
+    sqlx::query(
+        "UPDATE forum.threads SET created_at = now() - interval '10 minutes' WHERE id = $1",
+    )
+    .bind(thread_id)
+    .execute(&pool)
+    .await
+    .expect("age thread");
+    let blocked_marker = "thread-edit-blocked-9d4f";
+    let censored_marker = "thread-edit-censored-63b2";
+    sqlx::query(
+        "INSERT INTO forum.watched_words (word, action) VALUES ($1, 'block'), ($2, 'censor')",
+    )
+    .bind(blocked_marker)
+    .bind(censored_marker)
+    .execute(&pool)
+    .await
+    .expect("insert edit policy words");
+    forum::watched_words::reload_watched_words(&pool).await.expect("reload watched words");
+
+    let oversized =
+        update_thread_request(&app, thread_id, &token, json!({ "body": "x".repeat(50_001) })).await;
+    assert_eq!(oversized.status(), StatusCode::BAD_REQUEST);
+    let blocked = update_thread_request(
+        &app,
+        thread_id,
+        &token,
+        json!({ "title": format!("Blocked {blocked_marker}") }),
+    )
+    .await;
+    assert_eq!(blocked.status(), StatusCode::BAD_REQUEST);
+
+    let censored = update_thread_request(
+        &app,
+        thread_id,
+        &token,
+        json!({
+            "title": format!("Title {censored_marker}"),
+            "body": format!("Body {censored_marker}")
+        }),
+    )
+    .await;
+    assert_eq!(censored.status(), StatusCode::OK);
+    let response_body = read_json(censored).await;
+    let stored: (String, Option<String>) =
+        sqlx::query_as("SELECT title, body FROM forum.threads WHERE id = $1")
+            .bind(thread_id)
+            .fetch_one(&pool)
+            .await
+            .expect("stored canonical thread");
+    assert_eq!(response_body["title"].as_str(), Some(stored.0.as_str()));
+    assert_eq!(response_body["body"].as_str(), stored.1.as_deref());
+    assert!(!stored.0.contains(censored_marker));
+    assert!(!stored.1.expect("thread body").contains(censored_marker));
+    let revisions: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM forum.post_revisions WHERE post_type = 'thread' AND post_id = $1",
+    )
+    .bind(thread_id)
+    .fetch_one(&pool)
+    .await
+    .expect("thread revision count");
+    assert_eq!(revisions, 1);
+
+    sqlx::query("DELETE FROM forum.watched_words WHERE word = ANY($1)")
+        .bind(vec![blocked_marker.to_owned(), censored_marker.to_owned()])
+        .execute(&pool)
+        .await
+        .expect("remove edit policy words");
+    forum::watched_words::reload_watched_words(&pool).await.expect("reload watched words");
+}
+
+#[tokio::test]
+async fn queued_thread_edit_removes_public_counter_and_activity() {
+    let (pool, app) = create_test_app().await;
+    let (author_id, token) =
+        create_test_account(&pool, "thread-edit-queue@tongji.edu.cn", "thread-edit-queue").await;
+    let created = create_thread_request(
+        &app,
+        &token,
+        json!({ "boardId": "1", "title": "Initially visible", "body": "clean" }),
+    )
+    .await;
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let thread_id: i64 = read_json(created).await["id"]
+        .as_str()
+        .expect("thread id")
+        .parse()
+        .expect("numeric thread id");
+    assert_eq!(board_thread_count(&pool, 1).await, 1);
+    let marker = "thread-edit-queue-marker-65d1";
+    sqlx::query("INSERT INTO forum.watched_words (word, action) VALUES ($1, 'queue')")
+        .bind(marker)
+        .execute(&pool)
+        .await
+        .expect("insert queue word");
+    forum::watched_words::reload_watched_words(&pool).await.expect("reload watched words");
+
+    let response = update_thread_request(&app, thread_id, &token, json!({ "body": marker })).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(read_json(response).await["hiddenAt"].is_i64());
+    assert_eq!(board_thread_count(&pool, 1).await, 0);
+    let activity_count: i64 = sqlx::query_scalar(
+        "SELECT COALESCE(SUM(threads_created), 0)::bigint FROM activity.daily_counts WHERE account_id = $1",
+    )
+    .bind(author_id)
+    .fetch_one(&pool)
+    .await
+    .expect("thread activity after queue edit");
+    assert_eq!(activity_count, 0);
+
+    sqlx::query("DELETE FROM forum.watched_words WHERE word = $1")
+        .bind(marker)
+        .execute(&pool)
+        .await
+        .expect("remove queue word");
+    forum::watched_words::reload_watched_words(&pool).await.expect("reload watched words");
+}
+
+#[tokio::test]
+async fn concurrent_thread_edits_allocate_serial_revision_sequences() {
+    let (pool, app) = create_test_app().await;
+    let (author_id, token) = create_test_account(
+        &pool,
+        "thread-revision-concurrency@tongji.edu.cn",
+        "thread-revision-concurrency",
+    )
+    .await;
+    let thread_id = seed_thread(&pool, author_id, "Concurrent", Some("original")).await;
+    sqlx::query(
+        "UPDATE forum.threads SET created_at = now() - interval '10 minutes' WHERE id = $1",
+    )
+    .bind(thread_id)
+    .execute(&pool)
+    .await
+    .expect("age concurrent thread");
+
+    let first = update_thread_request(&app, thread_id, &token, json!({ "body": "first edit" }));
+    let second = update_thread_request(&app, thread_id, &token, json!({ "body": "second edit" }));
+    let (first_response, second_response) = tokio::join!(first, second);
+    assert_eq!(first_response.status(), StatusCode::OK);
+    assert_eq!(second_response.status(), StatusCode::OK);
+
+    let revisions: Vec<(i32, String)> = sqlx::query_as(
+        "SELECT seq, old_body FROM forum.post_revisions \
+         WHERE post_type = 'thread' AND post_id = $1 ORDER BY seq",
+    )
+    .bind(thread_id)
+    .fetch_all(&pool)
+    .await
+    .expect("concurrent revisions");
+    assert_eq!(revisions.len(), 2);
+    assert_eq!(revisions[0], (1, "original".into()));
+    assert_eq!(revisions[1].0, 2);
+    assert!(matches!(revisions[1].1.as_str(), "first edit" | "second edit"));
+}
+
+#[tokio::test]
+async fn failed_thread_update_rolls_back_its_revision() {
+    let (pool, app) = create_test_app().await;
+    let (author_id, token) = create_test_account(
+        &pool,
+        "thread-revision-rollback@tongji.edu.cn",
+        "thread-revision-rollback",
+    )
+    .await;
+    let thread_id = seed_thread(&pool, author_id, "Rollback", Some("original")).await;
+    sqlx::query(
+        "UPDATE forum.threads SET created_at = now() - interval '10 minutes' WHERE id = $1",
+    )
+    .bind(thread_id)
+    .execute(&pool)
+    .await
+    .expect("age rollback thread");
+    sqlx::query(
+        "ALTER TABLE forum.threads DROP CONSTRAINT IF EXISTS thread_revision_rollback_test",
+    )
+    .execute(&pool)
+    .await
+    .expect("drop stale rollback constraint");
+    sqlx::query(
+        "ALTER TABLE forum.threads ADD CONSTRAINT thread_revision_rollback_test \
+         CHECK (body <> 'revision-rollback-marker')",
+    )
+    .execute(&pool)
+    .await
+    .expect("add rollback constraint");
+
+    let response = update_thread_request(
+        &app,
+        thread_id,
+        &token,
+        json!({ "body": "revision-rollback-marker" }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    sqlx::query("ALTER TABLE forum.threads DROP CONSTRAINT thread_revision_rollback_test")
+        .execute(&pool)
+        .await
+        .expect("remove rollback constraint");
+
+    let stored_body: Option<String> =
+        sqlx::query_scalar("SELECT body FROM forum.threads WHERE id = $1")
+            .bind(thread_id)
+            .fetch_one(&pool)
+            .await
+            .expect("body after rollback");
+    assert_eq!(stored_body.as_deref(), Some("original"));
+    let revision_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM forum.post_revisions WHERE post_type = 'thread' AND post_id = $1",
+    )
+    .bind(thread_id)
+    .fetch_one(&pool)
+    .await
+    .expect("revision count after rollback");
+    assert_eq!(revision_count, 0);
+}
+
+#[tokio::test]
+async fn thread_tags_poll_and_activity_roll_back_together() {
+    let (pool, app) = create_test_app().await;
+    let (author_id, token) =
+        create_test_account(&pool, "thread-create-atomic@tongji.edu.cn", "thread-create-atomic")
+            .await;
+    sqlx::query("DELETE FROM forum.tags WHERE slug = 'atomic-tag'")
+        .execute(&pool)
+        .await
+        .expect("remove stale atomic tag");
+    let tag_id: i64 = sqlx::query_scalar(
+        "INSERT INTO forum.tags (slug, name) VALUES ('atomic-tag', 'Atomic') RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("create atomic tag");
+    sqlx::query(
+        "ALTER TABLE forum.poll_options DROP CONSTRAINT IF EXISTS poll_option_atomicity_test",
+    )
+    .execute(&pool)
+    .await
+    .expect("drop stale poll constraint");
+    sqlx::query(
+        "ALTER TABLE forum.poll_options ADD CONSTRAINT poll_option_atomicity_test \
+         CHECK (label <> 'poll-rollback-marker')",
+    )
+    .execute(&pool)
+    .await
+    .expect("add poll rollback constraint");
+
+    let response = create_thread_request(
+        &app,
+        &token,
+        json!({
+            "boardId": "1",
+            "title": "Atomic thread",
+            "tags": ["atomic-tag"],
+            "poll": {
+                "question": "Atomic poll",
+                "options": ["valid option", "poll-rollback-marker"]
+            }
+        }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    sqlx::query("ALTER TABLE forum.poll_options DROP CONSTRAINT poll_option_atomicity_test")
+        .execute(&pool)
+        .await
+        .expect("remove poll rollback constraint");
+
+    let thread_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM forum.threads WHERE title = 'Atomic thread'")
+            .fetch_one(&pool)
+            .await
+            .expect("rolled-back thread count");
+    assert_eq!(thread_count, 0);
+    let thread_tag_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM forum.thread_tags WHERE tag_id = $1")
+            .bind(tag_id)
+            .fetch_one(&pool)
+            .await
+            .expect("rolled-back thread tag count");
+    assert_eq!(thread_tag_count, 0);
+    let poll_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM forum.polls")
+        .fetch_one(&pool)
+        .await
+        .expect("rolled-back poll count");
+    assert_eq!(poll_count, 0);
+    let tag_count: i32 = sqlx::query_scalar("SELECT thread_count FROM forum.tags WHERE id = $1")
+        .bind(tag_id)
+        .fetch_one(&pool)
+        .await
+        .expect("tag count after rollback");
+    assert_eq!(tag_count, 0);
+    let activity_count: i64 = sqlx::query_scalar(
+        "SELECT COALESCE(SUM(threads_created), 0)::bigint FROM activity.daily_counts WHERE account_id = $1",
+    )
+    .bind(author_id)
+    .fetch_one(&pool)
+    .await
+    .expect("activity after rollback");
+    assert_eq!(activity_count, 0);
+}
+
+#[tokio::test]
+async fn thread_edit_rejects_hidden_deleted_and_archived_targets() {
+    let (pool, app) = create_test_app().await;
+    let (author_id, token) =
+        create_test_account(&pool, "thread-edit-state@tongji.edu.cn", "thread-edit-state").await;
+    let thread_id = seed_thread(&pool, author_id, "State guarded", Some("original")).await;
+
+    sqlx::query("UPDATE forum.threads SET hidden_at = now() WHERE id = $1")
+        .bind(thread_id)
+        .execute(&pool)
+        .await
+        .expect("hide thread");
+    let hidden =
+        update_thread_request(&app, thread_id, &token, json!({ "body": "hidden edit" })).await;
+    assert_eq!(hidden.status(), StatusCode::NOT_FOUND);
+
+    sqlx::query("UPDATE forum.threads SET hidden_at = NULL, archived_at = now() WHERE id = $1")
+        .bind(thread_id)
+        .execute(&pool)
+        .await
+        .expect("archive thread");
+    let archived =
+        update_thread_request(&app, thread_id, &token, json!({ "body": "archived edit" })).await;
+    assert_eq!(archived.status(), StatusCode::CONFLICT);
+
+    sqlx::query("UPDATE forum.threads SET archived_at = NULL, deleted_at = now() WHERE id = $1")
+        .bind(thread_id)
+        .execute(&pool)
+        .await
+        .expect("delete thread");
+    let deleted =
+        update_thread_request(&app, thread_id, &token, json!({ "body": "deleted edit" })).await;
+    assert_eq!(deleted.status(), StatusCode::NOT_FOUND);
+
+    let stored_body: Option<String> =
+        sqlx::query_scalar("SELECT body FROM forum.threads WHERE id = $1")
+            .bind(thread_id)
+            .fetch_one(&pool)
+            .await
+            .expect("state-guarded body");
+    assert_eq!(stored_body.as_deref(), Some("original"));
 }
 
 #[tokio::test]

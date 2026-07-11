@@ -30,6 +30,26 @@ async fn create_comment_request(
         .expect("comment response")
 }
 
+async fn update_comment_request(
+    app: &axum::Router,
+    comment_id: i64,
+    token: &str,
+    body: serde_json::Value,
+) -> axum::response::Response {
+    app.clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::PATCH)
+                .uri(format!("/api/v2/forum/comments/{comment_id}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::from(body.to_string()))
+                .expect("build comment update request"),
+        )
+        .await
+        .expect("comment update response")
+}
+
 async fn admin_comment_action_request(
     app: &axum::Router,
     comment_id: i64,
@@ -446,9 +466,46 @@ async fn invalid_comment_body_is_rejected_before_insert() {
 #[tokio::test]
 async fn queued_comment_is_hidden_without_activity_credit() {
     let (pool, app) = create_test_app().await;
-    let (author_id, token) =
+    let (thread_author_id, _) = create_test_account(
+        &pool,
+        "queued-comment-thread-author@tongji.edu.cn",
+        "queued-comment-thread-author",
+    )
+    .await;
+    let (comment_author_id, token) =
         create_test_account(&pool, "queued-comment@tongji.edu.cn", "queued-comment").await;
-    let thread_id = seed_thread(&pool, author_id).await;
+    let (quoted_author_id, _) =
+        create_test_account(&pool, "queued-comment-quoted@tongji.edu.cn", "queued-comment-quoted")
+            .await;
+    let (mentioned_id, _) = create_test_account(
+        &pool,
+        "queued-comment-mentioned@tongji.edu.cn",
+        "queued-comment-mentioned",
+    )
+    .await;
+    let (watcher_id, _) = create_test_account(
+        &pool,
+        "queued-comment-watcher@tongji.edu.cn",
+        "queued-comment-watcher",
+    )
+    .await;
+    let thread_id = seed_thread(&pool, thread_author_id).await;
+    let quoted_comment_id =
+        seed_comment(&pool, thread_id, quoted_author_id, "quoted content", None).await;
+    sqlx::query("UPDATE forum.threads SET reply_count = 1 WHERE id = $1")
+        .bind(thread_id)
+        .execute(&pool)
+        .await
+        .expect("seed public reply count");
+    sqlx::query(
+        "INSERT INTO forum.subscriptions (account_id, target_type, target_id, level) \
+         VALUES ($1, 'thread', $2, 'watching')",
+    )
+    .bind(watcher_id)
+    .bind(thread_id)
+    .execute(&pool)
+    .await
+    .expect("seed watcher");
     let marker = "queued-comment-marker-7c1a";
     sqlx::query("INSERT INTO forum.watched_words (word, action) VALUES ($1, 'queue')")
         .bind(marker)
@@ -457,7 +514,16 @@ async fn queued_comment_is_hidden_without_activity_credit() {
         .expect("insert watched word");
     forum::watched_words::reload_watched_words(&pool).await.expect("reload watched words");
 
-    let response = create_comment_request(&app, thread_id, &token, json!({ "body": marker })).await;
+    let response = create_comment_request(
+        &app,
+        thread_id,
+        &token,
+        json!({
+            "body": format!("{marker} @queued-comment-mentioned"),
+            "quotedCommentId": quoted_comment_id.to_string()
+        }),
+    )
+    .await;
     assert_eq!(response.status(), StatusCode::CREATED);
     let response_body = read_json(response).await;
     let comment_id: i64 = response_body["id"].as_str().expect("comment id").parse().unwrap();
@@ -472,11 +538,49 @@ async fn queued_comment_is_hidden_without_activity_credit() {
         "SELECT COALESCE(SUM(comments_created), 0)::bigint \
          FROM activity.daily_counts WHERE account_id = $1",
     )
-    .bind(author_id)
+    .bind(comment_author_id)
     .fetch_one(&pool)
     .await
     .expect("comment activity");
     assert_eq!(activity_count, 0);
+    let reply_count: i32 =
+        sqlx::query_scalar("SELECT reply_count FROM forum.threads WHERE id = $1")
+            .bind(thread_id)
+            .fetch_one(&pool)
+            .await
+            .expect("reply count after queued comment");
+    assert_eq!(reply_count, 1);
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    let notification_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM forum.notifications WHERE account_id = ANY($1)")
+            .bind(vec![
+                thread_author_id,
+                comment_author_id,
+                quoted_author_id,
+                mentioned_id,
+                watcher_id,
+            ])
+            .fetch_one(&pool)
+            .await
+            .expect("queued comment notifications");
+    assert_eq!(notification_count, 0);
+    let public_stat_count: i32 = sqlx::query_scalar(
+        "SELECT COALESCE(MAX(comments_created), 0)::int FROM forum.user_stats WHERE account_id = $1",
+    )
+    .bind(comment_author_id)
+    .fetch_one(&pool)
+    .await
+    .expect("queued comment stats");
+    assert_eq!(public_stat_count, 0);
+    let auto_subscription_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM forum.subscriptions WHERE account_id = $1 AND target_id = $2",
+    )
+    .bind(comment_author_id)
+    .bind(thread_id)
+    .fetch_one(&pool)
+    .await
+    .expect("queued comment subscription");
+    assert_eq!(auto_subscription_count, 0);
 
     sqlx::query("DELETE FROM forum.watched_words WHERE word = $1")
         .bind(marker)
@@ -484,6 +588,243 @@ async fn queued_comment_is_hidden_without_activity_credit() {
         .await
         .expect("remove watched word");
     forum::watched_words::reload_watched_words(&pool).await.expect("reload watched words");
+}
+
+#[tokio::test]
+async fn comment_edits_share_create_policy_and_return_complete_canonical_row() {
+    let (pool, app) = create_test_app().await;
+    let (author_id, token) =
+        create_test_account(&pool, "comment-edit-policy@tongji.edu.cn", "comment-edit-policy")
+            .await;
+    let thread_id = seed_thread(&pool, author_id).await;
+    let blocked_marker = "comment-edit-blocked-872f";
+    let censored_marker = "comment-edit-censored-bd31";
+    sqlx::query(
+        "INSERT INTO forum.watched_words (word, action) VALUES ($1, 'block'), ($2, 'censor')",
+    )
+    .bind(blocked_marker)
+    .bind(censored_marker)
+    .execute(&pool)
+    .await
+    .expect("insert comment policy words");
+    forum::watched_words::reload_watched_words(&pool).await.expect("reload watched words");
+
+    let created = create_comment_request(
+        &app,
+        thread_id,
+        &token,
+        json!({ "body": format!("Created {censored_marker}") }),
+    )
+    .await;
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let created_body = read_json(created).await;
+    let comment_id: i64 =
+        created_body["id"].as_str().expect("comment id").parse().expect("numeric comment id");
+    assert!(!created_body["body"].as_str().expect("created body").contains(censored_marker));
+    let stored_created: String =
+        sqlx::query_scalar("SELECT body FROM forum.comments WHERE id = $1")
+            .bind(comment_id)
+            .fetch_one(&pool)
+            .await
+            .expect("stored created comment");
+    assert_eq!(created_body["body"].as_str(), Some(stored_created.as_str()));
+    sqlx::query(
+        "UPDATE forum.comments SET created_at = now() - interval '10 minutes' WHERE id = $1",
+    )
+    .bind(comment_id)
+    .execute(&pool)
+    .await
+    .expect("age comment");
+
+    for invalid_body in ["   ".to_string(), "x".repeat(16_001), blocked_marker.to_owned()] {
+        let response =
+            update_comment_request(&app, comment_id, &token, json!({ "body": invalid_body })).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    let updated = update_comment_request(
+        &app,
+        comment_id,
+        &token,
+        json!({ "body": format!("Updated {censored_marker}") }),
+    )
+    .await;
+    assert_eq!(updated.status(), StatusCode::OK);
+    let updated_body = read_json(updated).await;
+    let comment_id_string = comment_id.to_string();
+    let thread_id_string = thread_id.to_string();
+    let author_id_string = author_id.to_string();
+    assert_eq!(updated_body["id"].as_str(), Some(comment_id_string.as_str()));
+    assert_eq!(updated_body["threadId"].as_str(), Some(thread_id_string.as_str()));
+    assert_eq!(updated_body["authorId"].as_str(), Some(author_id_string.as_str()));
+    assert_eq!(updated_body["isDeleted"].as_bool(), Some(false));
+    assert_eq!(updated_body["isHidden"].as_bool(), Some(false));
+    assert!(updated_body["editedAt"].is_i64());
+    let stored_updated: String =
+        sqlx::query_scalar("SELECT body FROM forum.comments WHERE id = $1")
+            .bind(comment_id)
+            .fetch_one(&pool)
+            .await
+            .expect("stored updated comment");
+    assert_eq!(updated_body["body"].as_str(), Some(stored_updated.as_str()));
+    assert!(!stored_updated.contains(censored_marker));
+    let revisions: Vec<String> = sqlx::query_scalar(
+        "SELECT old_body FROM forum.post_revisions \
+         WHERE post_type = 'comment' AND post_id = $1 ORDER BY seq",
+    )
+    .bind(comment_id)
+    .fetch_all(&pool)
+    .await
+    .expect("comment revisions");
+    assert_eq!(revisions, vec![stored_created]);
+
+    sqlx::query("DELETE FROM forum.watched_words WHERE word = ANY($1)")
+        .bind(vec![blocked_marker.to_owned(), censored_marker.to_owned()])
+        .execute(&pool)
+        .await
+        .expect("remove comment policy words");
+    forum::watched_words::reload_watched_words(&pool).await.expect("reload watched words");
+}
+
+#[tokio::test]
+async fn queued_comment_edit_removes_public_reply_and_activity() {
+    let (pool, app) = create_test_app().await;
+    let (thread_author_id, _) = create_test_account(
+        &pool,
+        "comment-edit-queue-thread@tongji.edu.cn",
+        "comment-edit-queue-thread",
+    )
+    .await;
+    let (comment_author_id, token) = create_test_account(
+        &pool,
+        "comment-edit-queue-author@tongji.edu.cn",
+        "comment-edit-queue-author",
+    )
+    .await;
+    let thread_id = seed_thread(&pool, thread_author_id).await;
+    let created =
+        create_comment_request(&app, thread_id, &token, json!({ "body": "Initially visible" }))
+            .await;
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let comment_id: i64 = read_json(created).await["id"]
+        .as_str()
+        .expect("comment id")
+        .parse()
+        .expect("numeric comment id");
+    let marker = "comment-edit-queue-marker-e022";
+    sqlx::query("INSERT INTO forum.watched_words (word, action) VALUES ($1, 'queue')")
+        .bind(marker)
+        .execute(&pool)
+        .await
+        .expect("insert comment queue word");
+    forum::watched_words::reload_watched_words(&pool).await.expect("reload watched words");
+
+    let response =
+        update_comment_request(&app, comment_id, &token, json!({ "body": marker })).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(read_json(response).await["isHidden"].as_bool(), Some(true));
+    let reply_count: i32 =
+        sqlx::query_scalar("SELECT reply_count FROM forum.threads WHERE id = $1")
+            .bind(thread_id)
+            .fetch_one(&pool)
+            .await
+            .expect("reply count after queue edit");
+    assert_eq!(reply_count, 0);
+    let activity_count: i64 = sqlx::query_scalar(
+        "SELECT COALESCE(SUM(comments_created), 0)::bigint FROM activity.daily_counts WHERE account_id = $1",
+    )
+    .bind(comment_author_id)
+    .fetch_one(&pool)
+    .await
+    .expect("comment activity after queue edit");
+    assert_eq!(activity_count, 0);
+
+    sqlx::query("DELETE FROM forum.watched_words WHERE word = $1")
+        .bind(marker)
+        .execute(&pool)
+        .await
+        .expect("remove comment queue word");
+    forum::watched_words::reload_watched_words(&pool).await.expect("reload watched words");
+}
+
+#[tokio::test]
+async fn comment_quote_must_target_available_comment_in_same_thread() {
+    let (pool, app) = create_test_app().await;
+    let (author_id, token) =
+        create_test_account(&pool, "cross-thread-quote@tongji.edu.cn", "cross-thread-quote").await;
+    let first_thread_id = seed_thread(&pool, author_id).await;
+    let second_thread_id = seed_thread(&pool, author_id).await;
+    let foreign_comment_id =
+        seed_comment(&pool, second_thread_id, author_id, "foreign quote", None).await;
+
+    let response = create_comment_request(
+        &app,
+        first_thread_id,
+        &token,
+        json!({ "body": "Invalid quote", "quotedCommentId": foreign_comment_id.to_string() }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let inserted: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM forum.comments WHERE thread_id = $1")
+            .bind(first_thread_id)
+            .fetch_one(&pool)
+            .await
+            .expect("cross-thread insert count");
+    assert_eq!(inserted, 0);
+}
+
+#[tokio::test]
+async fn comment_edit_rejects_hidden_deleted_and_archived_targets() {
+    let (pool, app) = create_test_app().await;
+    let (author_id, token) =
+        create_test_account(&pool, "comment-edit-state@tongji.edu.cn", "comment-edit-state").await;
+    let thread_id = seed_thread(&pool, author_id).await;
+    let comment_id = seed_comment(&pool, thread_id, author_id, "original", None).await;
+
+    sqlx::query("UPDATE forum.comments SET hidden_at = now() WHERE id = $1")
+        .bind(comment_id)
+        .execute(&pool)
+        .await
+        .expect("hide comment");
+    let hidden =
+        update_comment_request(&app, comment_id, &token, json!({ "body": "hidden edit" })).await;
+    assert_eq!(hidden.status(), StatusCode::NOT_FOUND);
+
+    sqlx::query("UPDATE forum.comments SET hidden_at = NULL WHERE id = $1")
+        .bind(comment_id)
+        .execute(&pool)
+        .await
+        .expect("unhide comment");
+    sqlx::query("UPDATE forum.threads SET archived_at = now() WHERE id = $1")
+        .bind(thread_id)
+        .execute(&pool)
+        .await
+        .expect("archive parent thread");
+    let archived =
+        update_comment_request(&app, comment_id, &token, json!({ "body": "archived edit" })).await;
+    assert_eq!(archived.status(), StatusCode::CONFLICT);
+
+    sqlx::query("UPDATE forum.threads SET archived_at = NULL WHERE id = $1")
+        .bind(thread_id)
+        .execute(&pool)
+        .await
+        .expect("unarchive parent thread");
+    sqlx::query("UPDATE forum.comments SET deleted_at = now() WHERE id = $1")
+        .bind(comment_id)
+        .execute(&pool)
+        .await
+        .expect("delete comment");
+    let deleted =
+        update_comment_request(&app, comment_id, &token, json!({ "body": "deleted edit" })).await;
+    assert_eq!(deleted.status(), StatusCode::NOT_FOUND);
+
+    let stored_body: String = sqlx::query_scalar("SELECT body FROM forum.comments WHERE id = $1")
+        .bind(comment_id)
+        .fetch_one(&pool)
+        .await
+        .expect("state-guarded comment body");
+    assert_eq!(stored_body, "original");
 }
 
 #[tokio::test]

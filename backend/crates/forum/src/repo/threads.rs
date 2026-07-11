@@ -543,6 +543,10 @@ pub async fn create_thread(
 ) -> AppResult<ThreadRowJoinedFull> {
     let mut tx = pool.begin().await?;
     let board_ids = super::boards::lock_boards_for_thread_count(&mut tx, &[board_id]).await?;
+    let tag_ids = match input.tags.as_ref() {
+        Some(tag_slugs) => super::tags::resolve_tag_slugs_tx(&mut tx, tag_slugs).await?,
+        None => Vec::new(),
+    };
     let row = sqlx::query_as::<_, ThreadRowJoinedFull>(
         "WITH inserted AS ( \
             INSERT INTO forum.threads (board_id, author_id, title, body, hidden_at) \
@@ -568,6 +572,23 @@ pub async fn create_thread(
     .bind(is_hidden)
     .fetch_one(&mut *tx)
     .await?;
+
+    if input.tags.is_some() {
+        super::tags::set_thread_tags_tx(&mut tx, row.id, &tag_ids).await?;
+    }
+    if let Some(poll) = input.poll.as_ref() {
+        let closes_at =
+            poll.closes_at.and_then(|timestamp| chrono::DateTime::from_timestamp(timestamp, 0));
+        super::polls::create_poll_tx(
+            &mut tx,
+            row.id,
+            &poll.question,
+            poll.multi_select,
+            closes_at,
+            &poll.options,
+        )
+        .await?;
+    }
     if !is_hidden {
         activity::contributions::activate_contribution(
             &mut tx,
@@ -576,6 +597,26 @@ pub async fn create_thread(
             &format!("forum_thread:{}", row.id),
             row.created_at,
         )
+        .await?;
+        sqlx::query(
+            "INSERT INTO forum.user_stats (account_id, threads_created, last_posted_at) \
+             VALUES ($1, 1, now()) \
+             ON CONFLICT (account_id) DO UPDATE \
+             SET threads_created = forum.user_stats.threads_created + 1, \
+                 last_posted_at = now(), updated_at = now()",
+        )
+        .bind(author_id)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "INSERT INTO forum.subscriptions (account_id, target_type, target_id, level) \
+             VALUES ($1, 'thread', $2, 'tracking') \
+             ON CONFLICT (account_id, target_type, target_id) \
+             DO UPDATE SET level = EXCLUDED.level",
+        )
+        .bind(author_id)
+        .bind(row.id)
+        .execute(&mut *tx)
         .await?;
     }
     super::boards::refresh_board_thread_counts(&mut tx, &board_ids).await?;
@@ -587,16 +628,64 @@ pub async fn create_thread(
 pub async fn update_thread(
     pool: &PgPool,
     id: i64,
-    title: Option<&str>,
-    body: Option<&str>,
+    author_id: i64,
+    input: &crate::dto::ThreadUpdateInput,
+    is_queued: bool,
 ) -> AppResult<ThreadRowJoinedFull> {
+    let mut tx = pool.begin().await?;
+    let existing = sqlx::query_as::<_, ThreadRowJoinedFull>(
+        "SELECT t.id, t.board_id, t.author_id, t.title, t.body, \
+                t.reply_count, t.vote_count, t.hot_score, t.status, \
+                t.pinned_at, t.pinned_globally, t.featured_at, t.closed_at, t.archived_at, \
+                t.deleted_at, t.deleted_by, t.edited_at, t.hidden_at, t.solved_answer_id, \
+                t.created_at, t.last_activity_at, a.handle AS author_handle \
+         FROM forum.threads t \
+         JOIN identity.accounts a ON a.id = t.author_id \
+         WHERE t.id = $1 FOR UPDATE OF t",
+    )
+    .bind(id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or(shared::AppError::NotFound)?;
+    if existing.author_id != author_id {
+        return Err(shared::AppError::Forbidden);
+    }
+    if existing.deleted_at.is_some() || existing.hidden_at.is_some() {
+        return Err(shared::AppError::NotFound);
+    }
+    if existing.archived_at.is_some() {
+        return Err(shared::AppError::Conflict("thread is archived".into()));
+    }
+    let locked_board_ids =
+        super::boards::lock_boards_for_thread_count(&mut tx, &[existing.board_id]).await?;
+
+    let content_changed = input.title.as_ref().is_some_and(|title| title != &existing.title)
+        || input.body.as_ref().is_some_and(|body| Some(body.as_str()) != existing.body.as_deref());
+    let tag_ids = match input.tags.as_ref() {
+        Some(tag_slugs) => Some(super::tags::resolve_tag_slugs_tx(&mut tx, tag_slugs).await?),
+        None => None,
+    };
+    let within_grace = existing.created_at > chrono::Utc::now() - chrono::Duration::minutes(5);
+    if content_changed && !within_grace {
+        super::revisions::create_revision_tx(
+            &mut tx,
+            "thread",
+            id,
+            author_id,
+            Some(&existing.title),
+            existing.body.as_deref().unwrap_or(""),
+        )
+        .await?;
+    }
+
     let row = sqlx::query_as::<_, ThreadRowJoinedFull>(
         "WITH updated AS ( \
          UPDATE forum.threads SET \
          title = COALESCE($1, title), \
          body = COALESCE($2, body), \
-         edited_at = now() \
-         WHERE id = $3 \
+         edited_at = CASE WHEN $3 THEN now() ELSE edited_at END, \
+         hidden_at = CASE WHEN $4 THEN now() ELSE hidden_at END \
+         WHERE id = $5 \
          RETURNING id, board_id, author_id, title, body, reply_count, vote_count, \
                    hot_score, status, pinned_at, pinned_globally, featured_at, closed_at, archived_at, \
                    deleted_at, deleted_by, edited_at, hidden_at, solved_answer_id, created_at, last_activity_at \
@@ -611,10 +700,42 @@ pub async fn update_thread(
          FROM updated u \
          JOIN identity.accounts a ON a.id = u.author_id",
     )
-    .bind(title)
-    .bind(body)
+    .bind(input.title.as_deref())
+    .bind(input.body.as_deref())
+    .bind(content_changed)
+    .bind(is_queued)
     .bind(id)
-    .fetch_one(pool)
+    .fetch_one(&mut *tx)
     .await?;
+
+    if let Some(tag_ids) = tag_ids.as_ref() {
+        super::tags::set_thread_tags_tx(&mut tx, id, tag_ids).await?;
+    } else if is_queued {
+        let existing_tag_ids: Vec<i64> =
+            sqlx::query_scalar("SELECT tag_id FROM forum.thread_tags WHERE thread_id = $1")
+                .bind(id)
+                .fetch_all(&mut *tx)
+                .await?;
+        super::tags::set_thread_tags_tx(&mut tx, id, &existing_tag_ids).await?;
+    }
+
+    if is_queued {
+        activity::contributions::deactivate_contribution(
+            &mut tx,
+            &format!("forum_thread:{id}"),
+            chrono::Utc::now(),
+        )
+        .await?;
+        super::votes::deactivate_target_vote_contributions(
+            &mut tx,
+            "thread",
+            id,
+            chrono::Utc::now(),
+        )
+        .await?;
+        super::boards::refresh_board_thread_counts(&mut tx, &locked_board_ids).await?;
+    }
+
+    tx.commit().await?;
     Ok(row)
 }
