@@ -6,6 +6,8 @@ import { toast } from "sonner";
 
 import { PageHeader } from "@/components/common/page-header";
 import { EmptyState, ErrorState, LoadingState } from "@/components/common/states";
+import { DraftSyncNotice } from "@/components/forum/draft-sync-notice";
+import { useForumDraft } from "@/components/forum/use-forum-draft";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -17,7 +19,7 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { useAuth } from "@/context/auth-provider";
 import { api } from "@/lib/api/endpoints";
-import type { Board, ThreadFeed } from "@/lib/api/types";
+import type { Board, DraftPayload, ThreadFeed } from "@/lib/api/types";
 import { formatNumber, formatUnixTime } from "@/lib/format";
 
 const MarkdownEditor = React.lazy(() =>
@@ -75,6 +77,35 @@ function CreateThreadDialog({ boards }: { boards: Board[] }) {
   const [pollQuestion, setPollQuestion] = React.useState("");
   const [pollOptions, setPollOptions] = React.useState("");
   const selectedBoard = boards.find((board) => board.id === boardId);
+  const draftPayload = React.useMemo<Extract<DraftPayload, { kind: "thread" }>>(() => ({
+    kind: "thread",
+    boardId: boardId || null,
+    title,
+    body,
+    contentFormat: "markdown_v1",
+    tags: tags
+      .split(/[,\s，、]+/)
+      .map((tag) => tag.trim())
+      .filter(Boolean)
+      .slice(0, 3),
+    pollQuestion,
+    pollOptions: pollOptions.split(/\n+/).map((option) => option.trim()).filter(Boolean).slice(0, 20),
+  }), [boardId, body, pollOptions, pollQuestion, tags, title]);
+  const restoreDraft = React.useCallback((payload: Extract<DraftPayload, { kind: "thread" }>) => {
+    setBoardId(payload.boardId ?? "");
+    setTitle(payload.title);
+    setBody(payload.body);
+    setTags(payload.tags.join(" "));
+    setPollQuestion(payload.pollQuestion);
+    setPollOptions(payload.pollOptions.join("\n"));
+  }, []);
+  const draft = useForumDraft({
+    draftKey: "thread:new",
+    enabled: isAuthenticated && open,
+    isEmpty: !boardId && !title && !body && !tags && !pollQuestion && !pollOptions,
+    payload: draftPayload,
+    onRestore: restoreDraft,
+  });
   const mutation = useMutation({
     mutationFn: () =>
       api.createThread({
@@ -101,7 +132,9 @@ function CreateThreadDialog({ boards }: { boards: Board[] }) {
       }),
     onSuccess: async (thread) => {
       toast.success("帖子已发布");
+      await draft.clearDraft().catch(() => toast.warning("帖子已发布，但云端草稿清理失败"));
       setOpen(false);
+      setBoardId("");
       setTitle("");
       setBody("");
       setTags("");
@@ -115,8 +148,13 @@ function CreateThreadDialog({ boards }: { boards: Board[] }) {
     onError: (error) => toast.error(error instanceof Error ? error.message : "发帖失败"),
   });
 
+  const handleOpenChange = (nextOpen: boolean) => {
+    if (!nextOpen) draft.saveNow();
+    setOpen(nextOpen);
+  };
+
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogTrigger asChild>
         <Button disabled={!isAuthenticated}>
           <Plus className="h-4 w-4" />
@@ -131,6 +169,13 @@ function CreateThreadDialog({ boards }: { boards: Board[] }) {
           <p className="text-sm text-muted-foreground">请先登录再发帖。</p>
         ) : (
           <div className="space-y-3">
+            <DraftSyncNotice
+              status={draft.status}
+              savedAt={draft.savedAt}
+              onRestoreRemote={draft.restoreRemote}
+              onKeepLocal={draft.keepLocal}
+              onRetry={draft.retry}
+            />
             <div className="space-y-2">
               <Label>板块</Label>
               <Select value={boardId} onValueChange={setBoardId}>

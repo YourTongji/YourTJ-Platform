@@ -8,17 +8,19 @@ import { PageHeader } from "@/components/common/page-header";
 import { EmptyState, ErrorState, LoadingState } from "@/components/common/states";
 import { MarkdownContent } from "@/components/content/markdown-content";
 import { MarkdownEditor } from "@/components/content/markdown-editor";
+import { DraftSyncNotice } from "@/components/forum/draft-sync-notice";
 import {
   CommentModerationControls,
   ThreadModerationControls,
 } from "@/components/forum/moderation-controls";
+import { useForumDraft } from "@/components/forum/use-forum-draft";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useAuth } from "@/context/auth-provider";
 import { api } from "@/lib/api/endpoints";
-import type { Comment } from "@/lib/api/types";
+import type { Comment, DraftPayload } from "@/lib/api/types";
 import { formatUnixTime } from "@/lib/format";
 
 function CommentCard({ comment, threadId }: { comment: Comment; threadId: string }) {
@@ -169,10 +171,28 @@ function CommentForm({ threadId }: { threadId: string }) {
   const { isAuthenticated } = useAuth();
   const queryClient = useQueryClient();
   const [body, setBody] = React.useState("");
+  const payload = React.useMemo<Extract<DraftPayload, { kind: "comment" }>>(() => ({
+    kind: "comment",
+    threadId,
+    body,
+    contentFormat: "markdown_v1",
+    parentId: null,
+  }), [body, threadId]);
+  const restoreDraft = React.useCallback((draftPayload: Extract<DraftPayload, { kind: "comment" }>) => {
+    if (draftPayload.threadId === threadId) setBody(draftPayload.body);
+  }, [threadId]);
+  const draft = useForumDraft({
+    draftKey: `comment:${threadId}`,
+    enabled: isAuthenticated && Boolean(threadId),
+    isEmpty: !body,
+    payload,
+    onRestore: restoreDraft,
+  });
   const mutation = useMutation({
     mutationFn: () => api.addComment(threadId, body),
     onSuccess: async () => {
       toast.success("回复已发布");
+      await draft.clearDraft().catch(() => toast.warning("回复已发布，但云端草稿清理失败"));
       setBody("");
       await queryClient.invalidateQueries({ queryKey: ["thread-comments", threadId] });
       await queryClient.invalidateQueries({ queryKey: ["thread", threadId] });
@@ -190,6 +210,13 @@ function CommentForm({ threadId }: { threadId: string }) {
         <CardTitle>回复</CardTitle>
       </CardHeader>
       <CardContent className="space-y-3">
+        <DraftSyncNotice
+          status={draft.status}
+          savedAt={draft.savedAt}
+          onRestoreRemote={draft.restoreRemote}
+          onKeepLocal={draft.keepLocal}
+          onRetry={draft.retry}
+        />
         <MarkdownEditor
           value={body}
           onChange={setBody}

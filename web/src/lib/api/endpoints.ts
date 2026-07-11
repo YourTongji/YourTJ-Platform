@@ -38,6 +38,8 @@ import type {
   DmMessage,
   DmReportReason,
   DmReport,
+  Draft,
+  DraftSaveInput,
   EmailCodePurpose,
   Faculty,
   LatestUpdate,
@@ -194,6 +196,24 @@ export const api = {
 
   myActivity(from?: string, to?: string) {
     return apiRequest<ActivityCalendar>("/me/activity", { query: { from, to } });
+  },
+
+  drafts() {
+    return apiRequest<Page<Draft>>("/me/drafts");
+  },
+
+  draft(draftKey: string) {
+    return apiRequest<Draft>(`/me/drafts/${encodeURIComponent(draftKey)}`);
+  },
+
+  saveDraft(input: DraftSaveInput) {
+    return apiRequest<Draft>("/me/drafts", { method: "PUT", body: input });
+  },
+
+  deleteDraft(draftKey: string) {
+    return apiRequest<void>(`/me/drafts/${encodeURIComponent(draftKey)}`, {
+      method: "DELETE",
+    });
   },
 
   publicUser(handle: string) {

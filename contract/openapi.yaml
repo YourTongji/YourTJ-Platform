@@ -1168,19 +1168,64 @@ components:
       properties:
         ok: { type: boolean }
         myVotes: { type: array, items: { type: string } }
-    # ---- identity: drafts ----
+    # ---- forum: cross-device drafts ----
+    ThreadDraftPayload:
+      type: object
+      additionalProperties: false
+      required: [kind, boardId, title, body, contentFormat, tags, pollQuestion, pollOptions]
+      properties:
+        kind: { type: string, enum: [thread] }
+        boardId: { type: string, nullable: true }
+        title: { type: string, maxLength: 120 }
+        body: { type: string, maxLength: 50000 }
+        contentFormat: { $ref: "#/components/schemas/ContentFormat" }
+        tags:
+          type: array
+          maxItems: 3
+          items: { type: string, minLength: 1, maxLength: 32 }
+        pollQuestion: { type: string, maxLength: 300 }
+        pollOptions:
+          type: array
+          maxItems: 20
+          items: { type: string, maxLength: 200 }
+    CommentDraftPayload:
+      type: object
+      additionalProperties: false
+      required: [kind, threadId, body, contentFormat, parentId]
+      properties:
+        kind: { type: string, enum: [comment] }
+        threadId: { type: string }
+        body: { type: string, maxLength: 16000 }
+        contentFormat: { $ref: "#/components/schemas/ContentFormat" }
+        parentId: { type: string, nullable: true }
+    ForumDraftPayload:
+      oneOf:
+        - { $ref: "#/components/schemas/ThreadDraftPayload" }
+        - { $ref: "#/components/schemas/CommentDraftPayload" }
+      discriminator:
+        propertyName: kind
+        mapping:
+          thread: "#/components/schemas/ThreadDraftPayload"
+          comment: "#/components/schemas/CommentDraftPayload"
     DraftOutput:
       type: object
+      required: [draftKey, payload, version, updatedAt]
       properties:
         draftKey: { type: string }
-        payload: { type: object }
-        updatedAt: { type: integer }
-    DraftPayload:
+        payload: { $ref: "#/components/schemas/ForumDraftPayload" }
+        version: { type: integer, minimum: 1 }
+        updatedAt: { type: integer, format: int64 }
+    DraftSaveInput:
       type: object
-      required: [draftKey, payload]
+      additionalProperties: false
+      required: [draftKey, expectedVersion, payload]
       properties:
         draftKey: { type: string }
-        payload: { type: object }
+        expectedVersion:
+          type: integer
+          minimum: 0
+          description: Zero creates a new draft; a positive value compare-and-swaps that version.
+        payload: { $ref: "#/components/schemas/ForumDraftPayload" }
     # ---- social identity ----
     IgnoreUser:
       type: object
@@ -1663,26 +1708,36 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
   /me/drafts:
     get:
-      tags: [identity]
-      summary: List my drafts
-      parameters: [{ $ref: "#/components/parameters/Cursor" }, { $ref: "#/components/parameters/Limit" }]
-      responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/DraftPage" } } } } }
+      tags: [forum]
+      summary: List my cross-device forum drafts
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/DraftPage" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
     put:
-      tags: [identity]
-      summary: Save a draft
-      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/DraftPayload" } } } }
-      responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/DraftOutput" } } } } }
+      tags: [forum]
+      summary: Create or compare-and-swap a typed forum draft
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/DraftSaveInput" } } } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/DraftOutput" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409": { $ref: "#/components/responses/Conflict" }
   /me/drafts/{draft_key}:
     get:
-      tags: [identity]
-      summary: Get a draft by key
+      tags: [forum]
+      summary: Get one account-owned draft by key
       parameters: [{ name: draft_key, in: path, required: true, schema: { type: string } }]
-      responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/DraftOutput" } } } } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/DraftOutput" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
     delete:
-      tags: [identity]
-      summary: Delete a draft
+      tags: [forum]
+      summary: Idempotently delete one account-owned draft
       parameters: [{ name: draft_key, in: path, required: true, schema: { type: string } }]
-      responses: { "204": { description: deleted } }
+      responses:
+        "204": { description: deleted }
+        "401": { $ref: "#/components/responses/Unauthorized" }
   /me/ignores/{account_id}:
     put:
       tags: [identity]

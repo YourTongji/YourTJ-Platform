@@ -304,10 +304,45 @@ pub struct NotificationPrefsDto {
 
 /// PUT /api/v2/me/drafts — request body.
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DraftInput {
     pub draft_key: String,
-    pub payload: serde_json::Value,
+    #[serde(default)]
+    pub expected_version: i64,
+    pub payload: DraftPayload,
+}
+
+/// A bounded, typed forum draft payload.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum DraftPayload {
+    /// An unpublished forum thread.
+    Thread {
+        board_id: Option<String>,
+        title: String,
+        body: String,
+        #[serde(default)]
+        content_format: ContentFormat,
+        #[serde(default)]
+        tags: Vec<String>,
+        #[serde(default)]
+        poll_question: String,
+        #[serde(default)]
+        poll_options: Vec<String>,
+    },
+    /// An unpublished reply to one thread.
+    Comment {
+        thread_id: String,
+        body: String,
+        #[serde(default)]
+        content_format: ContentFormat,
+        parent_id: Option<String>,
+    },
 }
 
 /// Draft DTO for list responses.
@@ -315,15 +350,9 @@ pub struct DraftInput {
 #[serde(rename_all = "camelCase")]
 pub struct DraftDto {
     pub draft_key: String,
-    pub payload: serde_json::Value,
+    pub payload: DraftPayload,
+    pub version: i64,
     pub updated_at: i64,
-}
-
-/// Draft DTO for single-get responses.
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DraftPayloadDto {
-    pub payload: serde_json::Value,
 }
 
 /// PATCH /forum/threads/{id}

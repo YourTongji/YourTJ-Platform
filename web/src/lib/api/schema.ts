@@ -554,14 +554,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List my drafts */
+        /** List my cross-device forum drafts */
         get: {
             parameters: {
-                query?: {
-                    /** @description Opaque pagination cursor */
-                    cursor?: components["parameters"]["Cursor"];
-                    limit?: components["parameters"]["Limit"];
-                };
+                query?: never;
                 header?: never;
                 path?: never;
                 cookie?: never;
@@ -577,9 +573,10 @@ export interface paths {
                         "application/json": components["schemas"]["DraftPage"];
                     };
                 };
+                401: components["responses"]["Unauthorized"];
             };
         };
-        /** Save a draft */
+        /** Create or compare-and-swap a typed forum draft */
         put: {
             parameters: {
                 query?: never;
@@ -589,7 +586,7 @@ export interface paths {
             };
             requestBody: {
                 content: {
-                    "application/json": components["schemas"]["DraftPayload"];
+                    "application/json": components["schemas"]["DraftSaveInput"];
                 };
             };
             responses: {
@@ -602,6 +599,9 @@ export interface paths {
                         "application/json": components["schemas"]["DraftOutput"];
                     };
                 };
+                400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
+                409: components["responses"]["Conflict"];
             };
         };
         post?: never;
@@ -618,7 +618,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Get a draft by key */
+        /** Get one account-owned draft by key */
         get: {
             parameters: {
                 query?: never;
@@ -639,11 +639,13 @@ export interface paths {
                         "application/json": components["schemas"]["DraftOutput"];
                     };
                 };
+                401: components["responses"]["Unauthorized"];
+                404: components["responses"]["NotFound"];
             };
         };
         put?: never;
         post?: never;
-        /** Delete a draft */
+        /** Idempotently delete one account-owned draft */
         delete: {
             parameters: {
                 query?: never;
@@ -662,6 +664,7 @@ export interface paths {
                     };
                     content?: never;
                 };
+                401: components["responses"]["Unauthorized"];
             };
         };
         options?: never;
@@ -8530,14 +8533,44 @@ export interface components {
             ok: boolean;
             myVotes: string[];
         };
-        DraftOutput: {
-            draftKey?: string;
-            payload?: Record<string, never>;
-            updatedAt?: number;
+        ThreadDraftPayload: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "thread";
+            boardId: string | null;
+            title: string;
+            body: string;
+            contentFormat: components["schemas"]["ContentFormat"];
+            tags: string[];
+            pollQuestion: string;
+            pollOptions: string[];
         };
-        DraftPayload: {
+        CommentDraftPayload: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "comment";
+            threadId: string;
+            body: string;
+            contentFormat: components["schemas"]["ContentFormat"];
+            parentId: string | null;
+        };
+        ForumDraftPayload: components["schemas"]["ThreadDraftPayload"] | components["schemas"]["CommentDraftPayload"];
+        DraftOutput: {
             draftKey: string;
-            payload: Record<string, never>;
+            payload: components["schemas"]["ForumDraftPayload"];
+            version: number;
+            /** Format: int64 */
+            updatedAt: number;
+        };
+        DraftSaveInput: {
+            draftKey: string;
+            /** @description Zero creates a new draft; a positive value compare-and-swaps that version. */
+            expectedVersion: number;
+            payload: components["schemas"]["ForumDraftPayload"];
         };
         /** @deprecated */
         IgnoreUser: {

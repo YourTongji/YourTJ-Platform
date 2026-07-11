@@ -87,6 +87,9 @@ Fresh database 必须只通过 sqlx migration ledger 建立。普通启动、CI 
 - 内容携带 `contentFormat`；legacy `plain_v1` 不自动解释为 `markdown_v1`。
 - Forum 主题/评论的 canonical row 与 revision 同时保存 source format；create/update 省略格式的 legacy
   请求按 `plain_v1`，不能根据正文猜测。格式和正文只能一起修改。
+- Forum draft 使用 `thread`/`comment` discriminated payload 和稳定 account-owned key；服务端限制 key、
+  target 与内容大小。`version=1` 起步，保存以 `expectedVersion` compare-and-swap，账号行锁把 50 条上限
+  检查与创建串行化；409 由用户显式解决，不能用 last-write-wins 静默覆盖另一设备。
 - 服务端通过 pulldown-cmark event stream 验证 canonical source，限制结构/链接，拒绝 raw HTML、
   非安全 URL 和未绑定图片；mention/search/notification projection 从解析事件生成。客户端 preview
   不构成安全边界。

@@ -188,6 +188,23 @@ async fn run_migrations(pool: &PgPool) {
             .expect("migration 0039 failed");
     }
 
+    let has_draft_versions: bool = sqlx::query_scalar(
+        "SELECT EXISTS( \
+           SELECT 1 FROM information_schema.columns \
+           WHERE table_schema = 'forum' AND table_name = 'drafts' \
+             AND column_name = 'version' \
+         )",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or(false);
+    if !has_draft_versions {
+        sqlx::raw_sql(include_str!("../../../../migrations/0041_forum_draft_versions.sql"))
+            .execute(pool)
+            .await
+            .expect("migration 0041 failed");
+    }
+
     let has_governance_schema: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM information_schema.schemata WHERE schema_name = 'governance')",
     )

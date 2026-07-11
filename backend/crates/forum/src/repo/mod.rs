@@ -79,7 +79,7 @@ pub use comments::{
 };
 pub use drafts::{
     count_drafts, delete_draft, delete_drafts_for_account, draft_exists, get_draft, list_drafts,
-    upsert_draft,
+    lock_draft_owner, save_draft,
 };
 pub use hot_rank::refresh_hot_rank;
 pub use ignores::{
