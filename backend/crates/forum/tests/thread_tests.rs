@@ -842,20 +842,36 @@ async fn thread_mentions_apply_recipient_policy_without_rejecting_literal_text()
     let created = read_json(response).await;
     assert_eq!(created["body"], literal_body);
 
+    let mention_candidate_ids = vec![
+        everyone_id,
+        following_id,
+        not_following_id,
+        nobody_id,
+        blocked_id,
+        suspended_id,
+        inactive_id,
+        actor_id,
+    ];
+
     for _ in 0..50 {
-        let count: i64 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM forum.notifications WHERE type = 'mention'")
-                .fetch_one(&pool)
-                .await
-                .expect("poll mention notifications");
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM forum.notifications \
+             WHERE type = 'mention' AND account_id = ANY($1)",
+        )
+        .bind(&mention_candidate_ids)
+        .fetch_one(&pool)
+        .await
+        .expect("poll mention notifications");
         if count >= 2 {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
     let recipients: Vec<i64> = sqlx::query_scalar(
-        "SELECT account_id FROM forum.notifications WHERE type = 'mention' ORDER BY account_id",
+        "SELECT account_id FROM forum.notifications \
+         WHERE type = 'mention' AND account_id = ANY($1) ORDER BY account_id",
     )
+    .bind(&mention_candidate_ids)
     .fetch_all(&pool)
     .await
     .expect("mention recipients");

@@ -39,6 +39,22 @@ fn can_moderate(actor: &AuthAccount, author_id: i64, author_role: Option<&str>) 
         .is_some_and(|(actor_rank, author_rank)| actor_rank > author_rank)
 }
 
+/// Authorize revision disclosure without treating a staff role as a global history reader.
+pub(crate) async fn can_read_revisions(
+    pool: &PgPool,
+    actor: &AuthAccount,
+    author_id: i64,
+) -> AppResult<bool> {
+    if actor.id == author_id {
+        return Ok(true);
+    }
+    if !actor.has_capability(Capability::ModerateContent) {
+        return Ok(false);
+    }
+    let roles = moderation_roles(pool, Some(actor), &[author_id]).await?;
+    Ok(can_moderate(actor, author_id, roles.get(&author_id).map(String::as_str)))
+}
+
 pub(crate) async fn hydrate_thread_summaries(
     pool: &PgPool,
     actor: Option<&AuthAccount>,

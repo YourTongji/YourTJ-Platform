@@ -6,7 +6,7 @@ use serde_json::json;
 use shared::pagination::Page;
 use shared::{AppError, AppResult, AppState};
 
-use crate::dto::{CommentDto, CommentInput, CommentUpdateInput, RevisionDto};
+use crate::dto::{CommentDto, CommentInput, CommentUpdateInput, RevisionDto, RevisionListQuery};
 use crate::repo;
 
 use super::{comment_to_dto, default_limit};
@@ -538,7 +538,8 @@ pub async fn list_comment_revisions(
     State(state): State<AppState>,
     Path(id_str): Path<String>,
     headers: HeaderMap,
-) -> AppResult<Json<Vec<RevisionDto>>> {
+    Query(query): Query<RevisionListQuery>,
+) -> AppResult<Json<Page<RevisionDto>>> {
     let auth = identity::auth_middleware::authenticate(
         &headers,
         &state.db,
@@ -551,20 +552,25 @@ pub async fn list_comment_revisions(
     let id: i64 = id_str.parse().map_err(|_| AppError::NotFound)?;
     let comment = repo::find_comment(&state.db, id).await?.ok_or(AppError::NotFound)?;
 
-    if comment.author_id != auth.id && auth.role != "mod" && auth.role != "admin" {
+    if !crate::content_permissions::can_read_revisions(&state.db, &auth, comment.author_id).await? {
         return Err(AppError::Forbidden);
     }
 
-    let revs = repo::list_revisions(&state.db, "comment", id).await?;
+    let (revs, next_cursor) =
+        repo::list_revisions(&state.db, "comment", id, query.cursor.as_deref(), query.limit)
+            .await?;
+    let content_versions =
+        revs.iter().map(|revision| revision.old_content_version).collect::<Vec<_>>();
+    let mut projections = media::attachments::resolve_forum_attachments_at_versions(
+        &state.db,
+        media::attachments::ForumTargetType::Comment,
+        id,
+        &content_versions,
+    )
+    .await?;
     let mut dtos = Vec::with_capacity(revs.len());
     for revision in revs {
-        let projected = media::attachments::resolve_forum_attachments_at_version(
-            &state.db,
-            media::attachments::ForumTargetType::Comment,
-            id,
-            revision.old_content_version,
-        )
-        .await?;
+        let projected = projections.remove(&revision.old_content_version).unwrap_or_default();
         let references = crate::content_policy::image_references_for_stored_content(
             Some(&revision.old_body),
             crate::dto::ContentFormat::from_db(&revision.old_content_format),
@@ -594,7 +600,7 @@ pub async fn list_comment_revisions(
         });
     }
 
-    Ok(Json(dtos))
+    Ok(Json(Page::new(dtos, next_cursor)))
 }
 
 /// POST /api/v2/forum/comments/{id}/solve — auth required (thread author or mod)

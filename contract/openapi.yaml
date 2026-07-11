@@ -2984,7 +2984,19 @@ paths:
   /forum/threads/{id}/read:
     post: { tags: [forum], summary: Report read position, parameters: [{ name: id, in: path, required: true, schema: { type: string } }], requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/ReadTrackingInput" } } } }, responses: { "204": { description: ok } } }
   /forum/threads/{id}/revisions:
-    get: { tags: [forum], summary: Revision history, parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/RevisionPage" } } } } } }
+    get:
+      tags: [forum]
+      summary: Bounded thread revision history
+      description: The author may read their own history. Staff may read only another strictly lower-role author's history.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { $ref: "#/components/parameters/Cursor" }
+        - { $ref: "#/components/parameters/Limit" }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/RevisionPage" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /forum/threads/{id}/comments:
     get: { tags: [forum], security: [{}, { bearer: [] }], summary: Comments with optional viewer state, parameters: [{ name: id, in: path, required: true, schema: { type: string } }, { $ref: "#/components/parameters/Cursor" }, { $ref: "#/components/parameters/Limit" }], responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/CommentPage" } } } } } }
     post: { tags: [forum], summary: Add comment, parameters: [{ name: id, in: path, required: true, schema: { type: string } }], requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/CommentInput" } } } }, responses: { "201": { description: created, content: { application/json: { schema: { $ref: "#/components/schemas/Comment" } } } } } }
@@ -2992,7 +3004,19 @@ paths:
     patch: { tags: [forum], summary: Compare-and-swap edit comment, parameters: [{ name: id, in: path, required: true, schema: { type: string } }], requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/CommentUpdateInput" } } } }, responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Comment" } } } }, "409": { $ref: "#/components/responses/Conflict" } } }
     delete: { tags: [forum], summary: Soft-delete comment, parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { "200": { description: deleted, content: { application/json: { schema: { type: object, required: [ok], properties: { ok: { type: boolean } } } } } } } }
   /forum/comments/{id}/revisions:
-    get: { tags: [forum], summary: Comment revision history, parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/RevisionPage" } } } } } }
+    get:
+      tags: [forum]
+      summary: Bounded comment revision history
+      description: The author may read their own history. Staff may read only another strictly lower-role author's history.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { $ref: "#/components/parameters/Cursor" }
+        - { $ref: "#/components/parameters/Limit" }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/RevisionPage" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /forum/posts/{id}/vote:
     post: { tags: [forum], summary: Up/down vote, parameters: [{ name: id, in: path, required: true, schema: { type: string } }], requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/VoteInput" } } } }, responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/VoteResponse" } } } } } }
     delete:

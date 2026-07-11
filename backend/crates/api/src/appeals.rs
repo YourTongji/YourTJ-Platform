@@ -331,27 +331,15 @@ async fn list_admin_appeals(
     Query(query): Query<AppealListQuery>,
 ) -> AppResult<Json<Page<governance::appeals::AdminAppealDto>>> {
     let actor = authenticate_reviewer(&headers, &state).await?;
-    let mut page = governance::appeals::list_admin_appeals(
+    let page = governance::appeals::list_admin_appeals(
         &state.db,
+        actor.id,
+        &actor.role,
         query.status.as_deref(),
         parse_cursor(query.cursor.as_deref())?,
         query.limit,
     )
     .await?;
-    let account_ids = page
-        .items
-        .iter()
-        .filter_map(|item| item.appellant_account_id.parse().ok())
-        .collect::<Vec<_>>();
-    let roles =
-        identity::public_accounts::find_account_roles_by_ids(&state.db, &account_ids).await?;
-    page.items.retain(|item| {
-        item.appellant_account_id
-            .parse::<i64>()
-            .ok()
-            .and_then(|id| roles.get(&id).map(|role| (id, role)))
-            .is_some_and(|(id, role)| require_lower_role(&actor, id, role).is_ok())
-    });
     Ok(Json(page))
 }
 
@@ -619,9 +607,69 @@ mod tests {
         .expect("insert appeal test account")
     }
 
+    async fn insert_withdrawn_appeal(
+        pool: &sqlx::PgPool,
+        appellant_id: i64,
+        original_actor_id: i64,
+        suffix: &str,
+    ) -> i64 {
+        let mut transaction = pool.begin().await.expect("begin queue fixture transaction");
+        let event_id = governance::record_account_event_with_id_tx(
+            &mut transaction,
+            governance::AccountActor { account_id: original_actor_id, role: "admin" },
+            "identity.user.sanctioned",
+            "sanction",
+            suffix,
+            "queue fixture disposition",
+            Some(&json!({ "kind": "silence" })),
+        )
+        .await
+        .expect("insert queue fixture audit event");
+        let appeal_id: i64 = sqlx::query_scalar(
+            "INSERT INTO governance.appeals \
+             (original_event_id, appellant_account_id, original_actor_id, original_action, \
+              target_kind, target_id, disposition_kind, status, submission_reason, \
+              idempotency_key, request_hash, appealable_until, decision_reason, decided_at) \
+             VALUES ($1, $2, $3, 'identity.user.sanctioned', 'sanction', $4, 'silence', \
+                     'withdrawn', 'queue fixture appeal', $5, $6, now() + interval '30 days', \
+                     'queue fixture withdrawn', now()) RETURNING id",
+        )
+        .bind(event_id)
+        .bind(appellant_id)
+        .bind(original_actor_id)
+        .bind(suffix)
+        .bind(format!("queue-{suffix}"))
+        .bind("a".repeat(64))
+        .fetch_one(&mut *transaction)
+        .await
+        .expect("insert withdrawn queue appeal");
+        sqlx::query(
+            "INSERT INTO governance.appeal_events \
+             (appeal_id, actor_kind, actor_account_id, from_status, to_status, reason) \
+             VALUES ($1, 'account', $2, NULL, 'submitted', 'queue fixture submitted'), \
+                    ($1, 'account', $2, 'submitted', 'withdrawn', 'queue fixture withdrawn')",
+        )
+        .bind(appeal_id)
+        .bind(appellant_id)
+        .execute(&mut *transaction)
+        .await
+        .expect("insert queue appeal history");
+        transaction.commit().await.expect("commit queue appeal fixture");
+        appeal_id
+    }
+
     async fn response_json(response: axum::response::Response) -> Value {
         let bytes = to_bytes(response.into_body(), 1_000_000).await.expect("read response body");
         serde_json::from_slice(&bytes).expect("response json")
+    }
+
+    fn assert_append_only_rejection(result: Result<sqlx::postgres::PgQueryResult, sqlx::Error>) {
+        let error = result.expect_err("governance append-only statement must be rejected");
+        let message = error
+            .as_database_error()
+            .map(|database| database.message().to_owned())
+            .unwrap_or_default();
+        assert!(message.contains("append-only"), "unexpected database error: {message}");
     }
 
     fn json_request(method: &str, uri: &str, token: &str, body: Value) -> Request<Body> {
@@ -991,11 +1039,122 @@ mod tests {
         .expect("read review state and projection");
         assert_eq!(review_state, ("visible".into(), 1));
 
-        let audit_mutation =
+        let appeal_id = appeal_id.parse::<i64>().expect("numeric appeal id");
+        assert_append_only_rejection(
             sqlx::query("UPDATE governance.audit_events SET reason = 'rewritten' WHERE id = $1")
                 .bind(event_id)
                 .execute(&state.db)
-                .await;
-        assert!(audit_mutation.is_err(), "governance audit history must be append-only");
+                .await,
+        );
+        assert_append_only_rejection(
+            sqlx::query("DELETE FROM governance.audit_events WHERE id = $1")
+                .bind(event_id)
+                .execute(&state.db)
+                .await,
+        );
+        assert_append_only_rejection(
+            sqlx::query(
+                "UPDATE governance.appeal_events SET reason = 'rewritten' WHERE appeal_id = $1",
+            )
+            .bind(appeal_id)
+            .execute(&state.db)
+            .await,
+        );
+        assert_append_only_rejection(
+            sqlx::query("DELETE FROM governance.appeal_events WHERE appeal_id = $1")
+                .bind(appeal_id)
+                .execute(&state.db)
+                .await,
+        );
+        assert_append_only_rejection(
+            sqlx::query("TRUNCATE governance.audit_events CASCADE").execute(&state.db).await,
+        );
+        assert_append_only_rejection(
+            sqlx::query("TRUNCATE governance.appeal_events").execute(&state.db).await,
+        );
+
+        let mut append_transaction = state.db.begin().await.expect("begin post-rejection append");
+        governance::record_system_event_tx(
+            &mut append_transaction,
+            "governance.append_only.verified",
+            "appeal",
+            &appeal_id.to_string(),
+            "normal append remains available",
+            None,
+        )
+        .await
+        .expect("append after rejected mutations");
+        append_transaction.commit().await.expect("commit post-rejection append");
+    }
+
+    #[tokio::test]
+    async fn appeal_queue_applies_hierarchy_and_recusal_before_sql_pagination() {
+        let state = test_state().await;
+        let suffix = uuid::Uuid::new_v4().simple().to_string();
+        let moderator_id = insert_account(&state.db, "mod", &format!("queue-mod-{suffix}")).await;
+        let administrator_id =
+            insert_account(&state.db, "admin", &format!("queue-admin-{suffix}")).await;
+        let other_administrator_id =
+            insert_account(&state.db, "admin", &format!("queue-origin-{suffix}")).await;
+        let user_id = insert_account(&state.db, "user", &format!("queue-user-{suffix}")).await;
+        let other_user_id =
+            insert_account(&state.db, "user", &format!("queue-recused-{suffix}")).await;
+
+        let eligible_id = insert_withdrawn_appeal(
+            &state.db,
+            user_id,
+            other_administrator_id,
+            &format!("eligible-{suffix}"),
+        )
+        .await;
+        insert_withdrawn_appeal(
+            &state.db,
+            administrator_id,
+            other_administrator_id,
+            &format!("higher-role-{suffix}"),
+        )
+        .await;
+        let recused_id = insert_withdrawn_appeal(
+            &state.db,
+            other_user_id,
+            moderator_id,
+            &format!("recused-{suffix}"),
+        )
+        .await;
+
+        let moderator_page = governance::appeals::list_admin_appeals(
+            &state.db,
+            moderator_id,
+            "mod",
+            Some("withdrawn"),
+            Some(recused_id + 1),
+            1,
+        )
+        .await
+        .expect("list moderator appeal queue");
+        assert_eq!(moderator_page.items.len(), 1);
+        assert_eq!(moderator_page.items[0].appeal.id, eligible_id.to_string());
+
+        let moderator_appellant_id =
+            insert_account(&state.db, "mod", &format!("queue-appellant-mod-{suffix}")).await;
+        let moderator_appeal_id = insert_withdrawn_appeal(
+            &state.db,
+            moderator_appellant_id,
+            other_administrator_id,
+            &format!("admin-visible-{suffix}"),
+        )
+        .await;
+        let administrator_page = governance::appeals::list_admin_appeals(
+            &state.db,
+            administrator_id,
+            "admin",
+            Some("withdrawn"),
+            Some(moderator_appeal_id + 1),
+            1,
+        )
+        .await
+        .expect("list administrator appeal queue");
+        assert_eq!(administrator_page.items.len(), 1);
+        assert_eq!(administrator_page.items[0].appeal.id, moderator_appeal_id.to_string());
     }
 }

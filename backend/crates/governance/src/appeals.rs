@@ -355,7 +355,7 @@ pub async fn list_my_appeals(
     cursor: Option<i64>,
     limit: i64,
 ) -> AppResult<Page<AppealDto>> {
-    list_appeals(pool, Some(account_id), None, cursor, limit).await.map(|page| {
+    list_appeals(pool, Some(account_id), None, None, cursor, limit).await.map(|page| {
         Page::new(page.items.into_iter().map(|item| item.appeal).collect(), page.next_cursor)
     })
 }
@@ -394,10 +394,15 @@ pub async fn get_admin_appeal(pool: &PgPool, appeal_id: i64) -> AppResult<AdminA
 /// List staff appeal queue cases with bounded status/cursor filters.
 pub async fn list_admin_appeals(
     pool: &PgPool,
+    reviewer_account_id: i64,
+    reviewer_role: &str,
     status: Option<&str>,
     cursor: Option<i64>,
     limit: i64,
 ) -> AppResult<Page<AdminAppealDto>> {
+    if !matches!(reviewer_role, "mod" | "admin") {
+        return Err(AppError::Forbidden);
+    }
     if status.is_some_and(|value| {
         !matches!(
             value,
@@ -406,28 +411,51 @@ pub async fn list_admin_appeals(
     }) {
         return Err(AppError::BadRequest("invalid appeal status".into()));
     }
-    list_appeals(pool, None, status, cursor, limit).await
+    list_appeals(pool, None, status, Some((reviewer_account_id, reviewer_role)), cursor, limit)
+        .await
 }
 
 async fn list_appeals(
     pool: &PgPool,
     appellant_account_id: Option<i64>,
     status: Option<&str>,
+    reviewer: Option<(i64, &str)>,
     cursor: Option<i64>,
     limit: i64,
 ) -> AppResult<Page<AdminAppealDto>> {
     if !(1..=100).contains(&limit) {
         return Err(AppError::BadRequest("limit must be between 1 and 100".into()));
     }
+    let (reviewer_account_id, reviewer_role) = reviewer.unzip();
     let rows = sqlx::query_as::<_, AppealRecord>(&row_query(
         "WHERE ($1::bigint IS NULL OR appeal.appellant_account_id = $1) \
            AND ($2::text IS NULL OR appeal.status = $2) \
            AND ($3::bigint IS NULL OR appeal.id < $3) \
-         ORDER BY appeal.id DESC LIMIT $4",
+           AND ($4::bigint IS NULL OR ( \
+             appeal.appellant_account_id <> $4 \
+             AND appeal.original_actor_id IS DISTINCT FROM $4 \
+             AND ( \
+               ($5::text = 'mod' AND EXISTS ( \
+                 SELECT 1 FROM identity.accounts account \
+                 WHERE account.id = appeal.appellant_account_id \
+                   AND account.role = 'user'::identity.account_role \
+               )) \
+               OR ($5::text = 'admin' AND EXISTS ( \
+                 SELECT 1 FROM identity.accounts account \
+                 WHERE account.id = appeal.appellant_account_id \
+                   AND account.role IN ( \
+                     'user'::identity.account_role, 'mod'::identity.account_role \
+                   ) \
+               )) \
+             ) \
+           )) \
+         ORDER BY appeal.id DESC LIMIT $6",
     ))
     .bind(appellant_account_id)
     .bind(status)
     .bind(cursor)
+    .bind(reviewer_account_id)
+    .bind(reviewer_role)
     .bind(limit + 1)
     .fetch_all(pool)
     .await?;

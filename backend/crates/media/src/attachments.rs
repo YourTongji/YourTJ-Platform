@@ -82,6 +82,18 @@ struct AttachmentProjectionRow {
     image_height: Option<i32>,
 }
 
+#[derive(Debug, FromRow)]
+struct VersionedAttachmentProjectionRow {
+    content_version: i64,
+    target_id: i64,
+    asset_id: i64,
+    position: i16,
+    alt_text: String,
+    url: String,
+    image_width: Option<i32>,
+    image_height: Option<i32>,
+}
+
 fn validate_reference_shape(
     target_type: ForumTargetType,
     references: &[ForumAssetReference],
@@ -286,31 +298,53 @@ pub async fn resolve_forum_attachments_batch(
     Ok(attachments)
 }
 
-/// Resolve the clean binding snapshot applicable to one historical content version.
-pub async fn resolve_forum_attachments_at_version(
+/// Resolve clean binding snapshots for a bounded set of historical content versions in one query.
+pub async fn resolve_forum_attachments_at_versions(
     pool: &PgPool,
     target_type: ForumTargetType,
     target_id: i64,
-    content_version: i64,
-) -> AppResult<Vec<ForumAttachment>> {
-    let rows = sqlx::query_as::<_, AttachmentProjectionRow>(
-        "SELECT usage.target_id, usage.asset_id, usage.position, usage.alt_text, upload.url, \
+    content_versions: &[i64],
+) -> AppResult<HashMap<i64, Vec<ForumAttachment>>> {
+    if content_versions.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let content_versions = content_versions.iter().copied().collect::<HashSet<_>>();
+    let content_versions = content_versions.into_iter().collect::<Vec<_>>();
+    let rows = sqlx::query_as::<_, VersionedAttachmentProjectionRow>(
+        "SELECT version.content_version, usage.target_id, usage.asset_id, usage.position, \
+                usage.alt_text, upload.url, \
                 upload.image_width, upload.image_height \
-         FROM media.asset_usages usage \
+         FROM unnest($3::bigint[]) AS version(content_version) \
+         JOIN media.asset_usages usage \
+           ON usage.target_type = $1 AND usage.target_id = $2 \
          JOIN media.uploads upload ON upload.id = usage.asset_id \
-         WHERE usage.target_type = $1 AND usage.target_id = $2 \
-           AND usage.bound_content_version <= $3 \
+         WHERE usage.bound_content_version <= version.content_version \
            AND (usage.detached_at IS NULL OR (usage.detached_reason = 'content_edit' \
-                AND usage.detached_content_version > $3)) \
+                AND usage.detached_content_version > version.content_version)) \
            AND upload.kind = 'image' AND upload.status = 'clean' \
-         ORDER BY usage.position",
+         ORDER BY version.content_version, usage.position",
     )
     .bind(target_type.as_str())
     .bind(target_id)
-    .bind(content_version)
+    .bind(content_versions)
     .fetch_all(pool)
     .await?;
-    Ok(rows.into_iter().map(attachment_from_row).collect())
+    let mut attachments = HashMap::<i64, Vec<ForumAttachment>>::new();
+    for row in rows {
+        let content_version = row.content_version;
+        attachments.entry(content_version).or_default().push(attachment_from_row(
+            AttachmentProjectionRow {
+                target_id: row.target_id,
+                asset_id: row.asset_id,
+                position: row.position,
+                alt_text: row.alt_text,
+                url: row.url,
+                image_width: row.image_width,
+                image_height: row.image_height,
+            },
+        ));
+    }
+    Ok(attachments)
 }
 
 #[cfg(test)]

@@ -382,7 +382,14 @@ async fn run_migrations(pool: &PgPool) {
             .expect("migration 0026 failed");
     }
 
+    let database_name: String = sqlx::query_scalar("SELECT current_database()")
+        .fetch_one(pool)
+        .await
+        .expect("test db name");
+    assert!(database_name.ends_with("_test"), "refuse destructive cleanup outside a test database");
+
     // Clean test data from previous runs (always run, even if migrations were skipped).
+    sqlx::query("DELETE FROM forum.post_revisions").execute(pool).await.ok();
     sqlx::query("DELETE FROM forum.comments").execute(pool).await.ok();
     sqlx::query("DELETE FROM forum.threads").execute(pool).await.ok();
     sqlx::query("DELETE FROM forum.tags").execute(pool).await.ok();
@@ -392,10 +399,7 @@ async fn run_migrations(pool: &PgPool) {
     sqlx::query("DELETE FROM identity.sessions").execute(pool).await.ok();
     sqlx::query("DELETE FROM identity.email_codes").execute(pool).await.ok();
     sqlx::query("DELETE FROM identity.account_keys").execute(pool).await.ok();
-    // TRUNCATE ... CASCADE removes accounts and every row referencing them
-    // (forum.user_stats, forum.subscriptions, votes, etc.), so leftover FK
-    // references never block cleanup and leak accounts into other test suites.
-    sqlx::query("TRUNCATE identity.accounts CASCADE").execute(pool).await.ok();
+    retire_test_accounts(pool).await;
 
     // Seed a default board with a deterministic id. `forum.boards.id` is
     // GENERATED ALWAYS AS IDENTITY and the sequence is not reset by DELETE, so
@@ -409,6 +413,20 @@ async fn run_migrations(pool: &PgPool) {
         .execute(pool)
         .await
         .expect("seed board");
+}
+
+async fn retire_test_accounts(pool: &PgPool) {
+    sqlx::query(
+        "UPDATE identity.accounts SET \
+           status = 'deleted', \
+           email = ('retired-' || id || '@test.invalid')::citext, \
+           handle = ('retired-' || id)::citext, \
+           email_ciphertext = NULL, email_key_version = NULL, \
+           email_blind_index = NULL, password_email_blind = NULL",
+    )
+    .execute(pool)
+    .await
+    .expect("retire prior test accounts without truncating append-only governance history");
 }
 
 /// Read the JSON body from a response.

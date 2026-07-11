@@ -3602,10 +3602,17 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Revision history */
+        /**
+         * Bounded thread revision history
+         * @description The author may read their own history. Staff may read only another strictly lower-role author's history.
+         */
         get: {
             parameters: {
-                query?: never;
+                query?: {
+                    /** @description Opaque pagination cursor */
+                    cursor?: components["parameters"]["Cursor"];
+                    limit?: components["parameters"]["Limit"];
+                };
                 header?: never;
                 path: {
                     id: string;
@@ -3623,6 +3630,9 @@ export interface paths {
                         "application/json": components["schemas"]["RevisionPage"];
                     };
                 };
+                400: components["responses"]["BadRequest"];
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
             };
         };
         put?: never;
@@ -3775,10 +3785,17 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Comment revision history */
+        /**
+         * Bounded comment revision history
+         * @description The author may read their own history. Staff may read only another strictly lower-role author's history.
+         */
         get: {
             parameters: {
-                query?: never;
+                query?: {
+                    /** @description Opaque pagination cursor */
+                    cursor?: components["parameters"]["Cursor"];
+                    limit?: components["parameters"]["Limit"];
+                };
                 header?: never;
                 path: {
                     id: string;
@@ -3796,6 +3813,9 @@ export interface paths {
                         "application/json": components["schemas"]["RevisionPage"];
                     };
                 };
+                400: components["responses"]["BadRequest"];
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
             };
         };
         put?: never;

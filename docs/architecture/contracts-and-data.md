@@ -57,7 +57,9 @@ Fresh database 必须只通过 sqlx migration ledger 建立。普通启动、CI 
 - 并发转换使用 row/advisory lock、unique constraint 或 compare-and-set，不只依赖前端禁用按钮。
 - Appeal 以 `(appellant_account_id, governance_event_id)` 唯一约束原处置，以 idempotency key + request
   hash 区分安全重试和冲突 payload；review/decision 使用 version CAS。历史表由数据库 trigger 禁止
-  update/delete，终态 constraint 要求 reviewer/decision 字段与状态一致。
+  update/delete/truncate，终态 constraint 要求 reviewer/decision 字段与状态一致。管理队列把当前
+  appellant role、self 与 original-actor recusal 条件放在 SQL cursor/limit 之前，避免后过滤空页；
+  领取和决定仍在 transaction 内重新锁定并验证同一授权事实。
 
 ## Outbox 与后台任务
 
@@ -120,6 +122,10 @@ Fresh database 必须只通过 sqlx migration ledger 建立。普通启动、CI 
   source-column trigger 会为未显式写版本的旧 backend 单步递增，新 backend 显式 `+1` 时不重复递增，
   因而滚动窗口也不会绕过版本线。legacy 客户端省略 expectedVersion 只按 1 尝试，已修改内容会安全
   冲突而非静默覆盖。滚动发布先执行 additive migration，再部署读取新列的应用版本。
+- Thread/comment revision list 只向作者本人或有 `moderation.content` 且严格高于另一作者角色的 staff
+  开放，使用 1–100 的 cursor page，不返回无界数组。单页所有 historical content versions 以一次
+  Media owner batch projection 解析 attachment；每项仍与对应 canonical AST exact-match，损坏投影
+  fail closed，不能因分页引入 per-revision N+1 或泄漏 asset URL。
 - Public list/detail DTO 的 `canEdit/canDelete/canModerate` 是 viewer-specific read model。Forum 结合
   canonical 状态、作者关系和 Identity 的 role-only batch projection 计算；Web 只能用它改善可用性，
   mutation handler 仍独立执行 owner/capability/role hierarchy 授权。
@@ -213,6 +219,9 @@ Fresh database 必须只通过 sqlx migration ledger 建立。普通启动、CI 
 - Governance audit event 是申诉的不可变原始引用。提交时 gateway 让 action 的 owner domain 验证
   ownership/appealability；决定时治理状态转换与 identity/forum/reviews 精确 reversal 共用同一 connection/
   transaction。owner 发现后续 audit 或不兼容当前状态时 fail closed，commit 后才失效 cache/search。
+- Forum comment reversal 采用固定 thread→comment row-lock 顺序，并在取得 parent thread lock 后读取
+  parent visibility；随后才检查 later governance event 和恢复 comment/media。并发 parent
+  hide/delete 若先提交，comment 可恢复为 retained 状态但 activity/vote 不会错误重新激活。
 - Governance notice 与处置/appeal transition 同事务写入，使用稳定 dedupe key。notice 是当事人安全摘要
   而非 evidence 副本；通用通知 preference、SSE 或未来 outbox 均不能删除这项 durable 事实。
 - DM archive、mute 和 delete 是 `dm_participants` 上的 participant-local 状态；不能改写另一参与者的

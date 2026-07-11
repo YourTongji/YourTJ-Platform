@@ -46,9 +46,12 @@
 - 归档/隐藏不等于删除，仍保留 active usage 以支持长期恢复；作者、staff、举报 uphold 的软删除都会在
   同一事务 detach，staff restore 和申诉 overturn 都从 canonical Markdown 重新验证 clean owner asset
   后 rebind。恢复验证失败会整体回滚，不能出现正文已恢复但图片进入 GC 的半完成状态。
+- Comment 申诉 overturn 先锁 parent thread、再锁 comment，并在锁后读取 parent visibility。并发 parent
+  hide/delete 先提交时，comment/media 可恢复为 retained 状态，但 activity/vote 不会被旧 parent
+  snapshot 重新激活；该锁序与普通作者/管理 comment mutation 一致，避免 thread↔comment deadlock。
 - Admin queue 同样不返回 object key、hash 或持久 URL，并可按 pending/clean/quarantined/blocked 浏览。
   服务端在分页前执行严格层级过滤：mod 只能审核 user，admin 可审核 user/mod，任何人不能自审或审核同级。
-  持有 `moderation.content` 的合格审核员
+  持有 `moderation.content` 的合格独立审核员
   必须填写读取原因，先取得 60 秒、仅当前账号可用、一次性 token，再以 header 交给同源 preview
   endpoint；服务端重验 pending/image/MIME/声明字节数，在流出首个 byte 前解析 JPEG/PNG/GIF/WebP
   header（header scan 最多 1 MiB），限制单边 20,000 px、总像素 40 MP，并以 20 MiB hard limit 继续
@@ -130,7 +133,8 @@ visibility policy，refcount 只是可重建 cache。Private DM asset
 - Handler→DB test 覆盖 profile image 对 pending、他人 clean、本人 clean asset 的拒绝/接受与解绑。
 - Forum handler→DB test 覆盖 exact ordered set、duplicate/missing/extra id、无 alt、远程/data URL、
   cross-account、pending/blocked、stale edit、revision、作者/staff/举报 delete、archive、restore、申诉
-  overturn 与并发 restore；不调用真实 OSS。
+  overturn、parent hide/delete 并发锁序与并发 restore；不调用真实 OSS。Revision page 需要验证多版本
+  attachment 在一次 batch projection 后仍各自匹配正确 asset。
 - Admin preview integration test 使用 fake object store，覆盖 capability、严格 role hierarchy/independent
   reviewer、分页前过滤、一次性 token、
   MIME/byte/dimension-bound same-origin response、replay rejection、`no-store`/`nosniff`、dimension persistence

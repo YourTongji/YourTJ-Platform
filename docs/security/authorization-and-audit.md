@@ -6,7 +6,7 @@
 >
 > 负责人：Security owner、Identity/Governance maintainers
 >
-> 最近核验：2026-07-12，migrations `0047`、`0048` 与 governance/identity integration tests
+> 最近核验：2026-07-12，migrations `0047`、`0048`、`0055` 与 governance/identity integration tests
 
 后端授权每一个 staff 操作。Web 按 capability 隐藏导航只是可用性和数据最小化措施，绝不是
 安全边界。
@@ -22,8 +22,9 @@
 - Forum 主题/评论列表和详情返回服务端计算的 author/moderation viewer actions；`canModerate` 同时要求
   `moderation.content`、非自身目标和 lower-role author。Web 不再仅凭本地 capability 显示治理按钮，
   但这些字段仍不是写操作授权边界。
-- `governance.audit_events` 是数据库 trigger 保护的 append-only account/system/service actor 记录；
-  多数管理 mutation 在业务事务中写入，reported-DM evidence list 也会审计。
+- `governance.audit_events` 与 `governance.appeal_events` 是数据库 trigger 保护的 append-only 记录；
+  row-level `UPDATE/DELETE` 和 statement-level `TRUNCATE`（包括 cascade 到达）均拒绝。多数管理
+  mutation 在业务事务中写入，reported-DM evidence list 也会审计。
 - 人工认证使用独立 `verifications.manage`，拒绝 self/equal/higher-role target；类型创建、授予和撤销
   都要求 reason，并把业务状态与成功 audit 放在同一事务。
 - 成就运营使用独立 `badges.manage`；定义 mutation 使用版本并发控制，人工授予/撤销拒绝 self/equal/
@@ -31,7 +32,8 @@
 - 角色变更、suspend/解除 suspend 和管理员强制 session revoke 要求 10 分钟内的
   server-side session recent-auth；密码和 `recent_auth` purpose 邮箱 code 均可验证。
 - 申诉复核使用独立 `appeals.review` capability。moderator/admin 均可读取 lower-role 队列，但原处置
-  actor 不能领取，领取后只有同一 reviewer 可通过 optimistic version 提交决定。
+  actor 不能领取，领取后只有同一 reviewer 可通过 optimistic version 提交决定。当前角色层级、self
+  和 recusal 在 SQL cursor/limit 之前生效，不通过取页后的内存过滤隐藏空页。
 - Identity 可签发 `scope=appeal` 的短期 access JWT；普通 auth middleware 明确拒绝任何 scoped token，
   只有本人申诉/治理通知路由使用专门认证函数。受 suspension 影响的账号仍可申诉，deleted 账号拒绝。
 
@@ -103,6 +105,9 @@ capability，不能塞进过宽的 `community.manage`。
   target 是否存在、被 suspend 或选择了哪项 policy。
 - Author edit 以 canonical `contentVersion` 做 compare-and-swap；409 只返回当前版本，不回显新的正文
   或内部状态。revision 与 canonical mutation 原子，陈旧请求不能留下审计/历史半状态。
+- Revision history 是敏感内容面：任意角色的作者可读取本人历史；读取他人历史必须有
+  `moderation.content`、目标非本人且作者角色严格更低。普通他人、moderator→moderator/admin 和
+  admin→其他 admin 均拒绝；Web 是否展示按钮不改变该规则。
 - `verifications.manage` 只允许管理员处理 lower-role account。Definition 只接受受控 category/icon/style；
   grant 默认私密，公开开关不能绕过 definition policy，重复有效 grant 与重复/过期撤销返回 conflict。
 - `badges.manage` 只允许管理员处理 lower-role account。Definition 只接受受控 icon/plain text，stale
@@ -139,6 +144,16 @@ reference 或实际证据内容。
 - 有界的 rejected/failed privileged attempts 需要安全事件策略，避免既无审计又被攻击者刷爆。
 - Audit export 加 watermark、purpose、rate limit、expiry 和下载审计。
 
+## 数据库角色边界
+
+- Production migration/table owner 只用于受控 schema rollout，不作为应用连接账号；runtime login
+  不拥有 governance schema/table，也没有 `ALTER`、`DROP`、`TRUNCATE` 或 disable-trigger 权限。
+- Runtime 对 `audit_events`/`appeal_events` 只需要有界 `SELECT` 与 `INSERT`；`UPDATE`、`DELETE`、
+  `TRUNCATE` 必须显式撤销。Migration `0055` 撤销 `PUBLIC` 的相关 grant 并补 statement trigger，
+  但 table owner/superuser 仍可能人为 disable trigger，因此 role separation 是独立安全边界。
+- Live maintenance 不通过 `session_replication_role` 或 disable trigger 清理历史。恢复、legal hold 和
+  retention 由批准的 append/归档流程处理；确需灾备恢复时在隔离环境执行并记录 operator 审计。
+
 ## Staff safety
 
 - 管理页面展示 effect、scope、target、reason、duration 和 recovery path。
@@ -159,3 +174,5 @@ reference 或实际证据内容。
   MFA，WebAuthn/passkey、recovery 和 break-glass 仍为 `Partial`。
 - Appeal token 不能访问普通 authenticated surface；他人事件、同级/自身目标、原处置人复核、重复 key
   变更 payload 和 stale version 有 handler→PostgreSQL 负向测试。
+- Governance append-only 测试必须执行真实 `UPDATE`、`DELETE`、`TRUNCATE`，并验证失败来自
+  append-only trigger；只检查 trigger metadata 或 FK 拒绝不足以证明保护有效。

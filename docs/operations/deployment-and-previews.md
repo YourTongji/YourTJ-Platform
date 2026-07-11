@@ -82,6 +82,23 @@ GET /api/v2/health    -> backend health
 还需执行本次变更的关键 smoke journey。当前 workflow 缺完整 main health gate、自动 rollback 和
 release manifest；失败时不要仅依赖 summary 判断“已部署”。
 
+## PostgreSQL migration owner 与 runtime role
+
+正式环境必须使用两个不同角色：migration/table owner 只在受控 rollout 中执行 sqlx migration；应用
+runtime DSN 使用非 owner login。不要因为当前 shared test server 可能复用一个账号，就把该做法复制到
+PolarDB production。
+
+- Runtime 只获得数据库 `CONNECT`、所需 schema `USAGE`、业务表最小 DML 和 sequence 权限；不授予
+  schema/table ownership、`CREATE`、`ALTER`、`DROP`、`TRUNCATE`、replication-role 或 disable-trigger。
+- 对 `governance.audit_events`、`governance.appeal_events`，runtime 只需 `SELECT/INSERT`，必须显式
+  `REVOKE UPDATE, DELETE, TRUNCATE`。Migration `0055` 还从 `PUBLIC` 撤销这些权限，并用 statement
+  trigger 拒绝 direct/cascaded truncate。
+- Table owner/superuser 仍能人为 disable trigger，因此 trigger 与 least privilege 是两道独立边界。
+  普通部署、cleanup、retention 和测试不得用 owner 连接；灾备 restore 在隔离环境按批准 runbook 执行。
+- 上线前核对 runtime 不是表 owner，并用 `has_table_privilege` 验证上述 deny；以 runtime credential
+  执行 update/delete/truncate 负向 smoke，以 migration credential 只验证 migration ledger，不在 live
+  数据上试 destructive statement。
+
 新增或改变社区搜索文档后，部署完成还需要由具备 `operations.jobs` 的管理员以
 `{"reason":"deploy <revision> community search schema"}` 请求体触发
 `POST /api/v2/admin/forum/reindex`。该任务会重建 thread、public user、board 和 tag index；返回
@@ -98,6 +115,8 @@ queued 当成功。现阶段没有 durable job status/retry，因此多实例发
 ## 变更与回滚
 
 - Migration 必须 forward-compatible；preview 成功不代表 shared main data 可以安全回滚。
+- `0055` 只增加 append-only truncate trigger/privilege deny，无数据 backfill。回退应用时保留 trigger；
+  不通过 drop trigger 或清空 audit/appeal history 伪造 schema rollback。
 - Web/API breaking change 使用 additive contract、双读/双写或明确 cutover，避免前后端窗口不兼容。
 - 当前回滚依赖重新部署已知良好 revision；没有自动 release promotion/rollback。执行前确认 migration
   和外部副作用允许回退。

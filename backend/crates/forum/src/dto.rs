@@ -422,6 +422,19 @@ const fn legacy_content_version() -> i64 {
     1
 }
 
+fn default_revision_limit() -> i64 {
+    20
+}
+
+/// Bounded cursor page requested from a revision history endpoint.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RevisionListQuery {
+    pub cursor: Option<String>,
+    #[serde(default = "default_revision_limit")]
+    pub limit: i64,
+}
+
 /// Revision history entry.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]

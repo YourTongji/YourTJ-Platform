@@ -103,6 +103,9 @@ iOS 与 Flutter 在独立仓库，只消费 OpenAPI 生成的类型和平台 HTT
 - 治理处置/申诉 transition 与当事人 notice 同事务；申诉终态通过 owner crate public adapter 恢复精确
   identity/forum/reviews 状态，整条 composition 共用事务。commit 后的 cache/search 修复失败可重试，
   但任何无法安全判断的后续状态在决定前 fail closed。
+- Governance audit/appeal history 在 PostgreSQL 拒绝 row mutation 和 table truncate；comment reversal
+  统一 thread→comment lock 并在锁后读取 parent state。Production runtime role 不拥有这些表，也不能
+  disable trigger；migration owner 只用于受控 rollout。
 - 搜索、通知、媒体处理和重型 reconciliation 是异步副作用，目标使用 transactional outbox 与
   幂等 consumer；当前仍存在 fire-and-forget 路径，应标为 `Partial`。
 - 公开搜索必须在返回前应用数据库可见性/隐私 policy；索引不能扩大权限。
@@ -122,6 +125,7 @@ iOS 与 Flutter 在独立仓库，只消费 OpenAPI 生成的类型和平台 HTT
 - 积分无充值、提现、法币兑换或自由 transfer。
 - Media 业务只引用已授权 asset；第三方 URL 不是可信业务事实。
 - Staff 操作按 capability、target hierarchy、reason 和 audit 授权。
+- Revision history 只向作者本人或严格高于另一作者角色的内容审核 staff 返回，并使用有界 cursor page。
 - 公共 API 使用 `/api/v2`、camelCase DTO、稳定错误 envelope 和有界分页。
 
 详细工程规则见 `AGENTS.md` 和[契约、数据与派生投影](contracts-and-data.md)。

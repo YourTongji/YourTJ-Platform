@@ -6,7 +6,7 @@
 >
 > 负责人：Privacy owner、Security owner、Domain maintainers
 >
-> 最近核验：2026-07-12，migrations `0034`、`0037`、`0038`、`0040`、`0044`、`0047`、`0048`、`0049`、`0050`、`0051`、`0052`
+> 最近核验：2026-07-12，migrations `0034`、`0037`、`0038`、`0040`、`0044`、`0047`、`0048`、`0049`、`0050`、`0051`、`0052`、`0055`
 
 本规范将数据最小化、可见性、导出、删除和保留作为产品前置条件。它不是法律意见；涉及 PIPL、
 未成年人、广告或跨境处理的最终政策需要合格法律与隐私负责人确认。
@@ -55,6 +55,9 @@
 - Forum 主题/评论图片只接受本人 clean platform asset。公开内容 DTO 返回正文精确引用所需的 asset id、
   alt、position、可选尺寸和状态校验后的派生 URL；不返回 object key、hash、上传 owner 或原始回调信息。
   pending/blocked upload id 仅可留在 owner draft/status surface，不构成公开授权。
+- Forum revision body 与 historical attachment 不是公共 profile 数据：作者本人可读；staff 只可凭内容
+  审核能力读取另一位严格 lower-role 作者的有界 page。普通他人、self-targeted staff 权限以及同级/
+  higher-role target 不能扩大历史内容或旧 asset URL 的可见性。
 
 ### Partial
 
@@ -126,6 +129,9 @@
   公共 export 只包含 canonical `yourtj-asset` reference 和允许公开的派生 attachment metadata。软删除将
   active usage detach 并设置 30 天 GC grace，保留 revision/恢复所需事实；restore 重新验证 clean。实际
   object purge 仍须无 active usage、无 legal hold、过 grace 且由可审计 GC worker 执行。
+- Revision attachment projection 按单页 content version batch 读取，只披露仍为 clean 且当时有效的
+  binding；投影与历史 AST 不一致时返回空 attachment，而不是回退到 vendor URL。Cursor/limit 上限同时
+  约束历史正文与媒体 metadata 的单次披露量。
 - Moderation preview grant 只保存 token SHA-256、upload/moderator、reason、60 秒 expiry 与消费时间；签发时
   清理过期超过 1 天的 grant row。长期治理证据保留独立 audit（不含 token、URL/key），不把短期 grant
   当作永久访问日志。

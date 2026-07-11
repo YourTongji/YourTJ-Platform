@@ -384,10 +384,12 @@ async fn votes_reject_unavailable_targets_without_activity() {
         StatusCode::NOT_FOUND
     );
 
-    let vote_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM forum.votes")
-        .fetch_one(&pool)
-        .await
-        .expect("vote count");
+    let vote_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM forum.votes WHERE account_id = $1")
+            .bind(voter_id)
+            .fetch_one(&pool)
+            .await
+            .expect("vote count");
     assert_eq!(vote_count, 0);
     let activity_count: i64 = sqlx::query_scalar(
         "SELECT COALESCE(SUM(likes_given), 0)::bigint \

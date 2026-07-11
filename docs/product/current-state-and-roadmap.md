@@ -6,7 +6,7 @@
 >
 > 负责人：Product owner、Platform maintainers
 >
-> 最近核验：2026-07-12，`codex/x-governance-appeals` 与 owner-domain tests
+> 最近核验：2026-07-12，`codex/governance-integrity` 与 owner-domain tests
 
 本盘点以当前源码、OpenAPI、migration 和 Web 为基线。它说明已经存在什么、哪里只有骨架、
 哪些界面承诺与实际行为不一致。后续 PR 改变这些结论时，必须在同一 PR 同步更新本文件的
@@ -35,7 +35,7 @@
 | 社交图 | `Current` | 已有公开单向 follow、幂等接口、owner remove-follower、followers/following、relationship API 与 trigger 维护的准确计数；移除关注者不等于 block，第一阶段明确不做私密账号审批 |
 | block/mute | `Current` | mute 为单向私密 feed/通知过滤，block 为双向安全边界并原子移除双方 follow；profile、feed、通知、DM、回复与投票已接统一规则 |
 | 个人资料 | `Partial` | display name、bio、HTTPS website、clean OSS avatar/banner reference、owner 上传/状态恢复/绑定 UI、关系数和 profile/list/DM/discoverability/activity/mention 隐私已落地；Profile 提供 `canViewActivity` 私密状态，mention 按接收方 policy 批量授权；仍缺 handle history 和公开 media/likes tabs |
-| 内容正确性 | `Partial` | 主题/评论 canonical policy 和事务边界已完成；tags/exact filter、有效 subscription、poll/vote/bookmark viewer state、read tracking 与撤销互动已接齐并有 handler→DB 验证；draft 与已发布内容均使用 CAS version，revision/canonical 原子，DTO 返回服务端 author/moderation 权限；仍缺显式 pending 和 durable outbox |
+| 内容正确性 | `Partial` | 主题/评论 canonical policy 和事务边界已完成；tags/exact filter、有效 subscription、poll/vote/bookmark viewer state、read tracking 与撤销互动已接齐并有 handler→DB 验证；draft 与已发布内容均使用 CAS version，revision/canonical 原子，revision history 使用层级授权、有界 cursor 和 batch media projection，DTO 返回服务端 author/moderation 权限；仍缺显式 pending 和 durable outbox |
 | Trust/板块权限 | `Partial` | promotion 已检查 active-days，单次扫描至多升降一级；create-thread 在预检和写事务内执行 board lock/min-trust，`moderation.content` 只豁免这两个 gate；仍需确定 staff 被普通举报自动隐藏政策并把 trust policy 版本化 |
 | 创作体验 | `Partial` | 主题/评论已持久化显式 content format，Web 已接 CodeMirror 编辑/预览、安全 renderer、debounced 云端草稿和 clean OSS 图片插入；作者可编辑/软删除已发布内容，跨设备冲突保留本地输入并显式恢复；仍缺跨客户端 conformance |
 | Link preview/Onebox | `Partial` | 已实现 HTTPS、逐跳 allowlist/DNS/public-IP pin、流式 body 上限、HTML5 parser、安全 UTF-8、规范化 URL、无远程预览图、成功/失败 TTL cache 和最小化日志；仍缺完整的受控 HTTPS 网络 fixture，若未来展示预览图还需 media proxy |
@@ -47,7 +47,7 @@
 | 私信 | `Partial` | canonical 1:1、DM policy、单条陌生请求、incoming/sent 请求箱、accept/decline/withdraw/report、独立 unread/request 角标、幂等/限流/冷却、archive/delete/recover、搜索、mute 和最小举报证据已接通；仍缺附件、request expiry、typing/presence、多实例实时及 retention/legal-hold worker |
 | 推广位 | `Partial` | 左侧已由 API 返回明确标识的自营站内推广，具备 clean owned asset id、状态、排期、受众、位置、优先级、独立 capability、审计和后台 UI；两小时无身份展示票据、50%/500ms 曝光门槛、点击补曝光、幂等日聚合、48 小时 receipt 清理及后台汇总/趋势已完成，仍缺匿名素材图和 asset usage/GC |
 | 徽章与认证 | `Partial` | 成就徽章、人工身份/特殊认证和实时角色标识已经拆分；成就具备独立 capability、versioned 受控定义、自动幂等授予/mint、人工非 mint 授予、撤销/重新授予、append-only history、同事务审计、后台 UI 与公开投影。人工认证具备 typed definition、可到期/撤销 grant、私有 evidence reference、后台 UI 与安全公开投影；仍缺成就/认证通知、自动授予 durable outbox 和认证证据存储/复核政策 |
-| 治理 | `Partial` | 账号/论坛/课评处置已有当事人通知、30 天一次申诉、受限账号 purpose-bound access、append-only history、独立复核 capability、原处置人回避、层级检查与 owner-domain 原子撤销/缩短；角色/suspend/强制注销已有 session-bound recent-auth；仍缺 assignment/SLA、证据工作台、账号生命周期、保留 worker、Staff WebAuthn/MFA 和双人审批 |
+| 治理 | `Partial` | 账号/论坛/课评处置已有当事人通知、30 天一次申诉、受限账号 purpose-bound access、拒绝 update/delete/truncate 的 append-only history、SQL 分页前 hierarchy/recusal、独立复核 capability 与 owner-domain 原子撤销/缩短；comment overturn 使用 thread→comment lock 并保留 media rebind；角色/suspend/强制注销已有 session-bound recent-auth；仍缺 assignment/SLA、证据工作台、账号生命周期、保留 worker、Staff WebAuthn/MFA 和双人审批 |
 | 积分运营 | `Partial` | 用户侧 verify、内容打赏和 escrow 完整性已加固；持久化只读 reconcile、单并发/幂等执行、逐钱包漂移指标、独立 capability、审计和管理视图已接通；仍缺告警/SLO 与受审批 projection 重建，历史 constraint anomaly 需单独兼容策略 |
 | 运维 | `Partial` | 设置仍为 string key/value；任务只确认提交，无持久状态、进度、失败日志和重试；缺 SLO/恢复演练 |
 | 测试 | `Partial` | 后端 CI 有 lint/集成，Web 有 lint/type/build 与最小 Vitest/Testing Library/axe harness；仍无浏览器 E2E、完整前端覆盖，许多契约与 UI 行为差异无法被 CI 捕获 |

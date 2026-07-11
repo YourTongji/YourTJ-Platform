@@ -217,8 +217,9 @@ async fn reconciliation_persists_drift_without_changing_wallet_or_ledger() {
 
     let audit_actions: Vec<String> = sqlx::query_scalar(
         "SELECT action FROM governance.audit_events \
-         WHERE target_type = 'credit_reconciliation' ORDER BY id ASC",
+         WHERE target_type = 'credit_reconciliation' AND target_id = $1 ORDER BY id ASC",
     )
+    .bind(run_id)
     .fetch_all(&pool)
     .await
     .expect("reconciliation audit events");
@@ -309,8 +310,9 @@ async fn execution_failure_persists_only_a_bounded_error_code() {
     assert!(!run.to_string().contains("fixture-only database detail"));
     let failed_audit_metadata: serde_json::Value = sqlx::query_scalar(
         "SELECT metadata FROM governance.audit_events \
-         WHERE action = 'credit.reconciliation.failed' ORDER BY id DESC LIMIT 1",
+         WHERE action = 'credit.reconciliation.failed' AND target_id = $1",
     )
+    .bind(run["id"].as_str().expect("failed run id"))
     .fetch_one(&pool)
     .await
     .expect("failed reconciliation audit");
@@ -380,8 +382,9 @@ async fn advisory_lock_and_idempotency_prevent_concurrent_runs_and_allow_safe_re
     assert_eq!(run_count, 1);
     let resume_audits: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM governance.audit_events \
-         WHERE action = 'credit.reconciliation.resume_requested'",
+         WHERE action = 'credit.reconciliation.resume_requested' AND target_id = $1",
     )
+    .bind(run_id)
     .fetch_one(&pool)
     .await
     .expect("count resume audits");

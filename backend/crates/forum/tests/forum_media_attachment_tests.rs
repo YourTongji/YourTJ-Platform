@@ -253,18 +253,35 @@ async fn stale_edit_cannot_switch_binding_and_revision_keeps_the_old_clean_snaps
     .expect("active asset after stale write");
     assert_eq!(active_asset_id, second_id);
 
+    let second_update = request(
+        &app,
+        Method::PATCH,
+        &format!("/api/v2/forum/threads/{thread_id}"),
+        Some(&owner_token),
+        Some(json!({
+            "expectedVersion": 2,
+            "body": format!("![第一张恢复](yourtj-asset:{first_id})"),
+            "contentFormat": "markdown_v1",
+            "attachmentAssetIds": [first_id.to_string()]
+        })),
+    )
+    .await;
+    assert_eq!(second_update.status(), StatusCode::OK);
+
     let revisions = request(
         &app,
         Method::GET,
-        &format!("/api/v2/forum/threads/{thread_id}/revisions"),
+        &format!("/api/v2/forum/threads/{thread_id}/revisions?limit=2"),
         Some(&owner_token),
         None,
     )
     .await;
     assert_eq!(revisions.status(), StatusCode::OK);
     let revision_json = read_json(revisions).await;
-    assert_eq!(revision_json[0]["oldContentVersion"], 1);
-    assert_eq!(revision_json[0]["attachments"][0]["assetId"], first_id.to_string());
+    assert_eq!(revision_json["items"][0]["oldContentVersion"], 2);
+    assert_eq!(revision_json["items"][0]["attachments"][0]["assetId"], second_id.to_string());
+    assert_eq!(revision_json["items"][1]["oldContentVersion"], 1);
+    assert_eq!(revision_json["items"][1]["attachments"][0]["assetId"], first_id.to_string());
 }
 
 #[tokio::test]
@@ -514,6 +531,214 @@ async fn moderation_delete_and_appeal_restore_keep_media_bindings_reversible() {
     .await
     .expect("appeal restored binding");
     assert_eq!(restored_asset_id, image_id);
+}
+
+async fn assert_comment_appeal_serializes_with_parent_restriction(
+    restriction_column: &str,
+    restriction_action: &str,
+) {
+    let (pool, app) = create_test_app().await;
+    let suffix = format!("comment-appeal-{restriction_column}");
+    let (owner_id, owner_token) = create_test_account(
+        &pool,
+        &format!("forum-{suffix}-owner@tongji.edu.cn"),
+        &format!("forum-{suffix}-owner"),
+    )
+    .await;
+    let (moderator_id, moderator_token) = create_test_account(
+        &pool,
+        &format!("forum-{suffix}-mod@tongji.edu.cn"),
+        &format!("forum-{suffix}-mod"),
+    )
+    .await;
+    sqlx::query("UPDATE identity.accounts SET role = 'mod' WHERE id = $1")
+        .bind(moderator_id)
+        .execute(&pool)
+        .await
+        .expect("promote appeal moderator");
+    let thread = create_thread(
+        &app,
+        &owner_token,
+        json!({ "boardId": "1", "title": "申诉锁序父主题", "body": "正文" }),
+    )
+    .await;
+    let thread_id = read_json(thread).await["id"]
+        .as_str()
+        .expect("thread id")
+        .parse::<i64>()
+        .expect("numeric thread id");
+    let image_id = seed_upload(&pool, owner_id, "forum_comment", "clean").await;
+    let comment = request(
+        &app,
+        Method::POST,
+        &format!("/api/v2/forum/threads/{thread_id}/comments"),
+        Some(&owner_token),
+        Some(json!({
+            "body": format!("![评论证据](yourtj-asset:{image_id})"),
+            "contentFormat": "markdown_v1",
+            "attachmentAssetIds": [image_id.to_string()]
+        })),
+    )
+    .await;
+    assert_eq!(comment.status(), StatusCode::CREATED);
+    let comment_id = read_json(comment).await["id"]
+        .as_str()
+        .expect("comment id")
+        .parse::<i64>()
+        .expect("numeric comment id");
+    let deleted = request(
+        &app,
+        Method::POST,
+        &format!("/api/v2/admin/forum/comments/{comment_id}/delete"),
+        Some(&moderator_token),
+        Some(json!({ "reason": "需要独立复核的评论" })),
+    )
+    .await;
+    assert_eq!(deleted.status(), StatusCode::OK);
+    let (event_id, created_at, target_type, target_id): (
+        i64,
+        chrono::DateTime<chrono::Utc>,
+        String,
+        String,
+    ) = sqlx::query_as(
+        "SELECT id, created_at, target_type, target_id \
+         FROM governance.audit_events WHERE action = 'forum.comment.delete' \
+           AND target_id = $1 ORDER BY id DESC LIMIT 1",
+    )
+    .bind(comment_id.to_string())
+    .fetch_one(&pool)
+    .await
+    .expect("comment delete governance event");
+
+    let mut parent_transaction = pool.begin().await.expect("begin parent restriction");
+    sqlx::query("SELECT id FROM forum.threads WHERE id = $1 FOR UPDATE")
+        .bind(thread_id)
+        .execute(&mut *parent_transaction)
+        .await
+        .expect("lock parent thread");
+    sqlx::query("SET LOCAL lock_timeout = '2s'")
+        .execute(&mut *parent_transaction)
+        .await
+        .expect("bound parent lock wait");
+
+    let application_name = format!("appeal-lock-{}", uuid::Uuid::new_v4().simple());
+    let appeal_pool = pool.clone();
+    let appeal_application_name = application_name.clone();
+    let appeal_task = tokio::spawn(async move {
+        let mut transaction = appeal_pool.begin().await.map_err(|error| error.to_string())?;
+        sqlx::query("SELECT set_config('application_name', $1, true)")
+            .bind(appeal_application_name)
+            .execute(&mut *transaction)
+            .await
+            .map_err(|error| error.to_string())?;
+        forum::appeals::overturn_content_for_appeal_tx(
+            &mut transaction,
+            event_id,
+            created_at,
+            "forum.comment.delete",
+            &target_type,
+            &target_id,
+            None,
+            "forum_comment",
+            comment_id,
+            "delete",
+            owner_id,
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+        transaction.commit().await.map_err(|error| error.to_string())
+    });
+
+    let mut appeal_is_waiting = false;
+    for _ in 0..100 {
+        appeal_is_waiting = sqlx::query_scalar(
+            "SELECT EXISTS( \
+               SELECT 1 FROM pg_stat_activity \
+               WHERE application_name = $1 AND wait_event_type = 'Lock' \
+             )",
+        )
+        .bind(&application_name)
+        .fetch_one(&pool)
+        .await
+        .expect("observe appeal lock wait");
+        if appeal_is_waiting {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert!(appeal_is_waiting, "appeal did not reach the parent lock");
+
+    sqlx::query("SELECT id FROM forum.comments WHERE id = $1 FOR UPDATE")
+        .bind(comment_id)
+        .execute(&mut *parent_transaction)
+        .await
+        .expect("parent-first transaction must not deadlock while locking the comment");
+    sqlx::query(&format!("UPDATE forum.threads SET {restriction_column} = now() WHERE id = $1"))
+        .bind(thread_id)
+        .execute(&mut *parent_transaction)
+        .await
+        .expect("restrict parent thread");
+    governance::record_account_event_with_id_tx(
+        &mut parent_transaction,
+        governance::AccountActor { account_id: moderator_id, role: "mod" },
+        restriction_action,
+        "thread",
+        &thread_id.to_string(),
+        "parent restriction wins before comment appeal",
+        None,
+    )
+    .await
+    .expect("record parent restriction");
+    parent_transaction.commit().await.expect("commit parent restriction");
+
+    tokio::time::timeout(std::time::Duration::from_secs(3), appeal_task)
+        .await
+        .expect("comment appeal must complete without deadlock")
+        .expect("join comment appeal task")
+        .expect("comment appeal reversal");
+
+    let (comment_restored, thread_deleted, thread_hidden): (bool, bool, bool) = sqlx::query_as(
+        "SELECT comment.deleted_at IS NULL, thread.deleted_at IS NOT NULL, \
+                thread.hidden_at IS NOT NULL \
+         FROM forum.comments comment \
+         JOIN forum.threads thread ON thread.id = comment.thread_id \
+         WHERE comment.id = $1",
+    )
+    .bind(comment_id)
+    .fetch_one(&pool)
+    .await
+    .expect("read serialized appeal state");
+    assert!(comment_restored);
+    match restriction_column {
+        "deleted_at" => assert!(thread_deleted),
+        "hidden_at" => assert!(thread_hidden),
+        _ => panic!("unsupported parent restriction fixture"),
+    }
+    let activity_balance: i64 = sqlx::query_scalar(
+        "SELECT COALESCE(SUM(delta), 0)::bigint FROM activity.events WHERE source_key = $1",
+    )
+    .bind(format!("forum_comment:{comment_id}"))
+    .fetch_one(&pool)
+    .await
+    .expect("read comment activity balance");
+    assert_eq!(activity_balance, 0, "an unavailable parent must suppress comment reactivation");
+    let active_asset_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*)::bigint FROM media.asset_usages \
+         WHERE target_type = 'forum_comment' AND target_id = $1 AND detached_at IS NULL",
+    )
+    .bind(comment_id)
+    .fetch_one(&pool)
+    .await
+    .expect("read restored comment media binding");
+    assert_eq!(active_asset_count, 1, "appeal restoration must preserve media rebind");
+}
+
+#[tokio::test]
+async fn comment_appeal_locks_parent_first_and_does_not_reactivate_under_parent_restrictions() {
+    assert_comment_appeal_serializes_with_parent_restriction("hidden_at", "forum.thread.hide")
+        .await;
+    assert_comment_appeal_serializes_with_parent_restriction("deleted_at", "forum.thread.delete")
+        .await;
 }
 
 #[tokio::test]

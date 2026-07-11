@@ -62,6 +62,12 @@ REDIS_URL=redis://localhost:6379 \
 普通 `cargo test --all` 不带 DB/serial 参数不等价于 CI：部分 suite 会跳过或使用 fallback，多个
 helper 还会清共享表。
 
+Shared integration helper 不得使用 `TRUNCATE identity.accounts CASCADE`：它会级联到治理历史，
+在保护不足的 schema 上破坏证据，在完整 schema 上则应被 append-only truncate trigger 拒绝。当前
+helper 要求数据库名以 `_test` 结尾，通过退休旧账号的 identifier/status 释放测试 fixture，并只清理
+本 suite 所需的 mutable owner-domain rows，不修改 immutable audit/appeal events。新 suite 优先使用
+每测试 fixture 或 fresh disposable database，不继续扩大全局 cascade cleanup。
+
 ## Web 与 contract gates
 
 在 `web/`，Node 22 + pnpm 11.11.0：
@@ -118,6 +124,8 @@ delete/restore/GC grace；Web 运行 Markdown renderer/editor 与 Forum attachme
 - 只新增下一个编号 migration，不编辑 applied 文件。
 - 在 fresh dedicated database 运行 `sqlx migrate run --source migrations`。
 - 对有数据升级写 fixture，验证 backfill、constraint、index 与并发行为。
+- Append-only migration 既测试 row `UPDATE/DELETE`，也执行真实 direct/cascaded `TRUNCATE` 并确认
+  statement trigger 拒绝；随后验证正常 append 仍可用。
 - 确认应用旧/新版本滚动窗口是否兼容；记录 forward/rollback intent。
 - 不使用 production/shared database 跑测试或手工 destructive SQL。
 

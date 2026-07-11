@@ -78,6 +78,9 @@ async fn content_state(
     target_id: i64,
     lock: bool,
 ) -> AppResult<ForumContentState> {
+    if target_kind == "comment" && lock {
+        return locked_comment_state(connection, target_id).await;
+    }
     let lock_clause = if lock { " FOR UPDATE" } else { " FOR SHARE" };
     let query = match target_kind {
         "thread" => format!(
@@ -104,6 +107,36 @@ async fn content_state(
         .fetch_optional(connection)
         .await?
         .ok_or(AppError::NotFound)
+}
+
+async fn locked_comment_state(
+    connection: &mut PgConnection,
+    comment_id: i64,
+) -> AppResult<ForumContentState> {
+    let thread_id: i64 = sqlx::query_scalar("SELECT thread_id FROM forum.comments WHERE id = $1")
+        .bind(comment_id)
+        .fetch_optional(&mut *connection)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    sqlx::query("SELECT id FROM forum.threads WHERE id = $1 FOR UPDATE")
+        .bind(thread_id)
+        .execute(&mut *connection)
+        .await?;
+    sqlx::query_as(
+        "SELECT comment.author_id, comment.thread_id, thread.board_id, \
+                thread.status = 'visible' AND thread.deleted_at IS NULL \
+                  AND thread.hidden_at IS NULL AND thread.archived_at IS NULL AS parent_visible, \
+                comment.created_at, comment.deleted_at, comment.hidden_at, \
+                comment.body AS content_body, comment.content_format, comment.content_version \
+         FROM forum.comments comment \
+         JOIN forum.threads thread ON thread.id = comment.thread_id \
+         WHERE comment.id = $1 AND comment.thread_id = $2 FOR UPDATE OF comment",
+    )
+    .bind(comment_id)
+    .bind(thread_id)
+    .fetch_optional(connection)
+    .await?
+    .ok_or(AppError::NotFound)
 }
 
 async fn rebind_restored_attachments(
@@ -197,6 +230,7 @@ pub async fn overturn_content_for_appeal_tx(
 ) -> AppResult<ForumAppealMutation> {
     let canonical_kind = target_kind.strip_prefix("forum_").ok_or(AppError::NotFound)?;
     let alternate_target_id = format!("{canonical_kind}:{target_id}");
+    let state = content_state(connection, canonical_kind, target_id, true).await?;
     if governance::has_later_target_event_tx(
         connection,
         original_event_id,
@@ -220,7 +254,6 @@ pub async fn overturn_content_for_appeal_tx(
             "forum content changed after the appealed disposition".into(),
         ));
     }
-    let state = content_state(connection, canonical_kind, target_id, true).await?;
     if state.author_id != Some(appellant_account_id) {
         return Err(AppError::NotFound);
     }

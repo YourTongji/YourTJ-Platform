@@ -51,6 +51,9 @@
 - 已发布主题和评论从 `contentVersion=1` 开始；每次作者编辑携带 `expectedVersion`，canonical update、
   revision 和版本递增在同一事务完成。陈旧写入返回 `409 VERSION_CONFLICT` 及当前版本，Web 保留本地
   输入并让作者显式选择载入线上版本或基于最新版重试。
+- Revision history 使用有界 cursor page。作者不因本人恰好是 mod/admin 而失去读取能力；staff 读取
+  他人历史必须具备 `moderation.content`、目标非本人且作者角色严格更低，普通他人和同级/更高角色
+  target 均拒绝。单页 attachment history 由 Media 一次 batch 解析，再逐 revision 与 AST exact-match。
 - 主题列表/详情和评论 DTO 返回服务端计算的 `canEdit/canDelete/canModerate`。作者可用动作按当前
   内容/父主题状态计算，staff moderation 同时检查 capability、self target 和 `user < mod < admin`
   层级；Web 不再根据登录角色猜测内容按钮。
@@ -70,6 +73,9 @@
 - 归档/隐藏保留 binding；作者删除、staff 删除和举报 uphold 会随内容 mutation 原子 detach 并进入 30 天
   grace。普通 restore 与申诉 overturn 都重新解析 canonical source、验证 owner/clean/version 后原子 rebind，
   避免治理撤销恢复正文却永久丢失图片。
+- Comment 申诉恢复与所有 comment mutation 统一使用 thread→comment lock；parent visibility 只在 thread
+  lock 后读取。并发 parent hide/delete 先完成时，恢复的 comment 继续保留 media binding，但不会错误
+  恢复 activity/vote 投影或被旧 parent snapshot 当作公开内容。
 - Web CodeMirror 已接 direct-to-OSS 图片上传、持久状态恢复、pending/clean/quarantined/blocked 状态、引用插入和移除；
   pending 可保存在本人云端草稿，但发布按钮和服务端 binding 都要求 clean。
 - 课程/课评、论坛主题、用户与论坛 discovery object 各有最小化 Meilisearch 候选能力；独立
@@ -321,6 +327,8 @@ image asset、starts/ends at、priority、audience、status、created/updated by
   `following` 只在接收方关注作者时成立，解析与授权无逐 handle 跨域查询。
 - 两个设备以同一版本编辑时至多一个提交成功；失败请求不留下 revision、版本或 canonical 半状态，
   冲突恢复期间本地输入可访问且不会被 refetch 静默替换。
+- Revision endpoint 对 author/user/mod/admin 层级、self/peer/higher target、非法 cursor 和 0/101 limit
+  有 handler→PostgreSQL 负向测试；两页拼接不重复、不跳项，historical attachment batch 保持版本正确。
 - 旧纯文本显示不变；Markdown preview 与最终输出一致且通过 XSS/资源限制测试。
 - 所有 UGC 图片来自 clean asset，删除/替换/失败路径无永久孤儿或越权 URL。
 - viewer state 支撑所有互动的 active/cancel 行为，计数和缓存被正确校正。

@@ -6,7 +6,7 @@
 >
 > 负责人：Community operations、Security owner、Identity/Forum/Reviews/Media/Web maintainers
 >
-> 最近核验：2026-07-12，migrations `0047`、`0048` 与 governance/identity integration tests
+> 最近核验：2026-07-12，migrations `0047`、`0048`、`0055` 与 governance/identity integration tests
 
 管理后台是社区政策的执行界面，不是数据库编辑器。所有操作必须先有产品语义、capability、
 目标层级、理由、审计、恢复和通知，再决定按钮放在哪里。
@@ -24,12 +24,17 @@
 - board 后台可配置说明、排序、锁定、最低发帖信任等级和问答属性；公开 board DTO 返回当前用户
   是否可发帖及稳定 restriction code。
 - governance audit 记录多域 staff/system 事件；论坛自动隐藏与 staff 隐藏有不同 provenance。
+- 治理 audit 与申诉 transition history 在数据库层拒绝 `UPDATE`、`DELETE` 和直接或级联
+  `TRUNCATE`；正常 append 不受影响。Production 仍必须把应用 runtime 与 migration/table owner
+  分离，trigger 不是给 owner/superuser 绕过权限的替代品。
 - 账号制裁、论坛主题/评论处置和课评隐藏会在同一业务事务中创建当事人专属治理通知；通知只含
   有界摘要、目标和治理事件编号，不暴露举报人、审核人或私密证据。
 - 申诉中心支持受限制账号通过密码或申诉用途邮箱验证码获取一小时、无 refresh 的 purpose-bound
   凭据；该凭据只可访问本人的申诉和治理通知，不能访问资料、内容、私信或积分接口。
 - 申诉按原治理事件精确绑定，30 天内一次提交且要求 `Idempotency-Key`；状态历史 append-only，
   独立复核 capability、原处置人回避、lower-role 层级和 optimistic version 均由服务端执行。
+- 申诉队列在 SQL `LIMIT/cursor` 前按复核人当前角色、非本人和原处置人回避过滤；不可领取的
+  同级/更高角色案件不会先占满一页再被 gateway 丢弃。
 - 撤销决定在同一 PostgreSQL 事务调用 identity/forum/reviews owner adapter 恢复精确制裁或内容状态；
   若存在不兼容的后续治理动作或无法安全修复投影，整项决定 fail closed 并回滚。
 - 人工身份/特殊认证由 platform typed definition 与可过期/可撤销 grant 独立建模；后台使用专属
@@ -162,7 +167,8 @@ appeal 关联原治理事件，不覆盖原决定。当前约束如下：
 - 同一原事件和账号最多一项 appeal；提交窗口是原事件后 30 天，重复同一幂等请求返回既有结果，
   相同 key 携带不同请求返回 conflict。
 - `appeals.review` 独立于一般内容审核；复核人必须高于当事人、不能是原处置 actor，并通过 version CAS
-  领取案件，避免并发复核覆盖。
+  领取案件，避免并发复核覆盖。队列查询与领取 mutation 使用同一 hierarchy/recusal 语义，读取分页
+  不能产生“有可处理案件却返回空页”的后过滤假象。
 - `overturned` 恢复对应 sanction/content 并同步 counters、activity、vote/feed/search cache 等必要投影；
   owner 检测到后续状态变化时拒绝决定。`amended` 当前仅支持缩短账号制裁，不能扩大范围或延长期限。
 - 用户可在领取前撤回。每次 submitted/in-review/terminal transition 均追加不可变 history、中央 audit
@@ -254,6 +260,8 @@ draft/review/published/retired、effective time、owner/approver、diff、适用
 - Web capabilities 与后端授权独立生效，直接构造请求仍被拒绝。
 - 自操作、同级/更高角色、缺理由、过期 recent-auth 和利益冲突案件有负向测试。
 - 内容处置、恢复、处罚、申诉和策略变更在业务事务中追加审计。
+- audit/appeal history 的 row mutation 与 table truncate 均被真实 PostgreSQL 负向测试拒绝，拒绝后
+  正常 append 和申诉状态流仍可继续。
 - 受限制账号能使用 purpose-bound appeal token 查看/提交自己的申诉，但同一 token 访问普通 `/me`、
   内容、私信和积分接口均被拒绝；他人事件、原处置人复核、同级目标和 stale version 有负向测试。
 - overturned/amended 必须与精确 owner-domain reversal 在同一事务提交；任何不支持的 action、后续
