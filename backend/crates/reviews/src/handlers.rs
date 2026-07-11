@@ -46,6 +46,13 @@ pub async fn create_review(
     )
     .await
     .map_err(|_r| shared::AppError::Unauthorized)?;
+    shared::captcha::require_captcha(
+        state.captcha_verifier.as_deref(),
+        state.redis.as_ref(),
+        "review_create",
+        body.captcha_token.as_deref().unwrap_or_default(),
+    )
+    .await?;
 
     shared::ratelimit::check_token_bucket(
         state.redis.as_ref(),
@@ -200,6 +207,14 @@ pub async fn report_review(
     )
     .await
     .map_err(|_r| shared::AppError::Unauthorized)?;
+
+    shared::captcha::require_captcha(
+        state.captcha_verifier.as_deref(),
+        state.redis.as_ref(),
+        "review_report",
+        &body.captcha_token,
+    )
+    .await?;
 
     repo::report_review(&state.db, review_id, auth.id, &body.reason).await?;
 

@@ -148,23 +148,14 @@ pub async fn startup_verify_handler(
     Json(body): Json<serde_json::Value>,
 ) -> AppResult<Json<serde_json::Value>> {
     let token = body.get("token").and_then(|v| v.as_str()).unwrap_or("");
-    let verifier = match state.captcha_verifier.as_deref() {
-        Some(v) => v,
-        None => {
-            return Err(AppError::BadRequest("captcha not configured".into()));
-        }
-    };
-    let outcome =
-        shared::captcha::enforce_captcha(verifier, state.redis.as_ref(), "startup", token).await;
-    match outcome {
-        shared::captcha::CaptchaOutcome::Ok => Ok(Json(serde_json::json!({ "ok": true }))),
-        shared::captcha::CaptchaOutcome::Invalid => {
-            Err(AppError::BadRequest("captcha verification failed".into()))
-        }
-        shared::captcha::CaptchaOutcome::Unavailable => {
-            Err(AppError::BadRequest("captcha service unavailable".into()))
-        }
-    }
+    shared::captcha::require_captcha(
+        state.captcha_verifier.as_deref(),
+        state.redis.as_ref(),
+        "startup",
+        token,
+    )
+    .await?;
+    Ok(Json(serde_json::json!({ "ok": true })))
 }
 
 /// GET /api/v2/admin/settings — admin: list all settings
@@ -279,12 +270,13 @@ mod tests {
                 Request::builder()
                     .method(Method::POST)
                     .uri("/api/v2/startup/verify")
-                    .body(Body::empty())
+                    .header(axum::http::header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"token":"test-token"}"#))
                     .expect("request builds"),
             )
             .await
             .expect("request succeeds");
 
-        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 }

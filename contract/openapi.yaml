@@ -154,6 +154,13 @@ components:
         comment: { type: string }
         semester: { type: string }
         score: { type: string }
+    CreateReviewInput:
+      allOf:
+        - $ref: "#/components/schemas/ReviewInput"
+        - type: object
+          required: [captchaToken]
+          properties:
+            captchaToken: { type: string, minLength: 1 }
     AiSummary:
       type: object
       properties:
@@ -640,7 +647,7 @@ paths:
       summary: Send a verification code to a @tongji.edu.cn address
       requestBody:
         required: true
-        content: { application/json: { schema: { type: object, required: [email], properties: { email: { type: string, format: email } } } } }
+        content: { application/json: { schema: { type: object, required: [email, captchaToken], properties: { email: { type: string, format: email }, captchaToken: { type: string, minLength: 1 } } } } }
       responses:
         "204": { description: sent }
         "429": { $ref: "#/components/responses/RateLimited" }
@@ -824,7 +831,7 @@ paths:
       tags: [auth]
       security: []
       summary: Request a password-reset code
-      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [email], properties: { email: { type: string, format: email } } } } } }
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [email, captchaToken], properties: { email: { type: string, format: email }, captchaToken: { type: string, minLength: 1 } } } } } }
       responses:
         "204": { description: sent }
         "429": { $ref: "#/components/responses/RateLimited" }
@@ -1071,7 +1078,7 @@ paths:
       tags: [reviews]
       summary: Publish a review (captcha + idempotency)
       parameters: [{ name: id, in: path, required: true, schema: { type: string } }, { $ref: "#/components/parameters/IdempotencyKey" }]
-      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/ReviewInput" } } } }
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/CreateReviewInput" } } } }
       responses:
         "201": { description: created, content: { application/json: { schema: { $ref: "#/components/schemas/Review" } } } }
         "409": { $ref: "#/components/responses/Conflict" }
@@ -1092,8 +1099,8 @@ paths:
       tags: [reviews]
       summary: Report a review
       parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
-      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [reason], properties: { reason: { type: string } } } } } }
-      responses: { "202": { description: queued } }
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [reason, captchaToken], properties: { reason: { type: string }, captchaToken: { type: string, minLength: 1 } } } } } }
+      responses: { "204": { description: reported } }
 
   # ============ forum (F0 + F1) ============
   /forum/boards:

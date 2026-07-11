@@ -57,6 +57,15 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -71,12 +80,14 @@ jobs:
         run: sqlx migrate run --source migrations
         env:
           DATABASE_URL: postgres://yourtj:yourtj@localhost:5432/yourtj_test
+          REDIS_URL: redis://localhost:6379
       # --test-threads=1 serialises the integration tests: they share one
       # Postgres database and reset shared tables between cases.
       - name: run integration tests
         run: cargo test --all -- --nocapture --test-threads=1
         env:
           DATABASE_URL: postgres://yourtj:yourtj@localhost:5432/yourtj_test
+          REDIS_URL: redis://localhost:6379
 
   # ── Frontend: lint, typecheck, and build ──
   web:

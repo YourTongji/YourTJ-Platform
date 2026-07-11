@@ -71,8 +71,17 @@ pub async fn run() -> anyhow::Result<()> {
         &config.email_encryption_active_blind_hex,
         &[], // legacy pairs loaded from env in future rotations
     )?;
-    if config.email_encryption_strict && email_encryption.is_none() {
-        anyhow::bail!("EMAIL_ENCRYPTION_STRICT=true but no encryption keys are configured");
+    match email_encryption.as_ref() {
+        Some(encryption) => {
+            identity::backfill_email_encryption(&db, encryption).await?;
+            if config.email_encryption_strict && identity::has_unencrypted_email_rows(&db).await? {
+                anyhow::bail!("EMAIL_ENCRYPTION_STRICT=true but plaintext email rows remain");
+            }
+        }
+        None if config.email_encryption_strict => {
+            anyhow::bail!("EMAIL_ENCRYPTION_STRICT=true but no encryption keys are configured");
+        }
+        None => {}
     }
 
     // Captcha verifier (fail closed when not configured).
@@ -112,7 +121,8 @@ pub async fn run() -> anyhow::Result<()> {
                 } else {
                     tracing::info!("meilisearch course index ready");
                 }
-                if let Err(e) = courses::meili::setup_selection_index(&meili_url, &meili_key).await {
+                if let Err(e) = courses::meili::setup_selection_index(&meili_url, &meili_key).await
+                {
                     tracing::warn!(error = %e, "meilisearch selection index setup failed");
                 }
             });

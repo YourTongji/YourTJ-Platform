@@ -4,6 +4,7 @@ use axum::body::{to_bytes, Body};
 use axum::http::Response;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+use shared::email_crypto::EmailEncryption;
 use shared::AppState;
 use sqlx::PgPool;
 
@@ -20,6 +21,7 @@ pub async fn create_test_app() -> (PgPool, axum::Router) {
     run_migrations(&pool).await;
 
     let test_config = shared::Config::from_env().expect("test Config::from_env");
+    let redis = test_redis_pool();
 
     let state = AppState {
         db: pool.clone(),
@@ -29,10 +31,11 @@ pub async fn create_test_app() -> (PgPool, axum::Router) {
         refresh_ttl: 604800,
         meili_url: String::new(),
         meili_master_key: String::new(),
-        redis: None,
+        redis,
         system_private_key: vec![0u8; 32],
         system_public_key_b64: String::new(),
         email_encryption: None,
+        captcha_verifier: Some(std::sync::Arc::new(shared::captcha::FakeCaptcha)),
         sse_tx: None,
     };
 
@@ -41,7 +44,15 @@ pub async fn create_test_app() -> (PgPool, axum::Router) {
 }
 
 pub async fn create_test_app_with_pool(pool: PgPool) -> axum::Router {
+    create_test_app_with_pool_and_encryption(pool, None).await
+}
+
+pub async fn create_test_app_with_pool_and_encryption(
+    pool: PgPool,
+    email_encryption: Option<EmailEncryption>,
+) -> axum::Router {
     let test_config = shared::Config::from_env().expect("test Config::from_env");
+    let redis = test_redis_pool();
     let state = AppState {
         db: pool,
         config: test_config,
@@ -50,12 +61,19 @@ pub async fn create_test_app_with_pool(pool: PgPool) -> axum::Router {
         refresh_ttl: 604800,
         meili_url: String::new(),
         meili_master_key: String::new(),
-        redis: None,
+        redis,
         system_private_key: vec![0u8; 32],
-        email_encryption: None,
+        system_public_key_b64: String::new(),
+        email_encryption,
+        captcha_verifier: Some(std::sync::Arc::new(shared::captcha::FakeCaptcha)),
         sse_tx: None,
     };
     identity::routes(state)
+}
+
+fn test_redis_pool() -> Option<deadpool_redis::Pool> {
+    let url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://localhost:6379".into());
+    deadpool_redis::Config::from_url(url).create_pool(Some(deadpool_redis::Runtime::Tokio1)).ok()
 }
 
 /// Run the DDL from migrations to set up the test database.

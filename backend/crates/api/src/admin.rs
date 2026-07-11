@@ -52,9 +52,6 @@ pub async fn selection_sync_handler(
     ))
 }
 
-/// POST /api/v2/admin/reviews/reindex — stub (queued)
-// ---- reviews reindex ----
-
 /// POST /api/v2/admin/reviews/reindex — rebuild reviews in Meilisearch
 pub async fn reviews_reindex_handler(
     headers: HeaderMap,
@@ -78,11 +75,9 @@ pub async fn reviews_reindex_handler(
 
     tokio::spawn(async move {
         tracing::info!(%job_id, "review reindex started");
-        let rows: Vec<(i64,)> = match sqlx::query_as(
-            "SELECT id FROM reviews.reviews ORDER BY id",
-        )
-        .fetch_all(&pool)
-        .await
+        let rows: Vec<(i64,)> = match sqlx::query_as("SELECT id FROM reviews.reviews ORDER BY id")
+            .fetch_all(&pool)
+            .await
         {
             Ok(r) => r,
             Err(e) => {

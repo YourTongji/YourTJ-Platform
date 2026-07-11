@@ -31,6 +31,7 @@ pub struct ReviewInput {
     pub comment: Option<String>,
     pub semester: Option<String>,
     pub score: Option<String>,
+    pub captcha_token: Option<String>,
 }
 
 /// A review report returned in admin endpoints.
@@ -49,6 +50,7 @@ pub struct ReportDto {
 #[serde(rename_all = "camelCase")]
 pub struct ReportInput {
     pub reason: String,
+    pub captcha_token: String,
 }
 
 /// Query params for GET /courses/{id}/reviews.

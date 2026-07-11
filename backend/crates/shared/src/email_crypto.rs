@@ -47,6 +47,14 @@ impl EmailEncryption {
         active_blind_hex: &str,
         legacy_hex_pairs: &[(u8, String, String)],
     ) -> Result<Option<Self>, anyhow::Error> {
+        let active_aead_hex = active_aead_hex.trim();
+        let active_blind_hex = active_blind_hex.trim();
+        if active_aead_hex.is_empty() && active_blind_hex.is_empty() {
+            return Ok(None);
+        }
+        if active_aead_hex.is_empty() || active_blind_hex.is_empty() {
+            anyhow::bail!("email encryption keys are partially configured — refusing to start");
+        }
         let aead_bytes = hex_key(active_aead_hex, "active AEAD key")?;
         let blind_bytes = hex_key(active_blind_hex, "active blind-index key")?;
 
@@ -346,6 +354,12 @@ mod tests {
             &[],
         )
         .unwrap();
+        assert!(enc.is_none());
+    }
+
+    #[test]
+    fn blank_configuration_returns_none() {
+        let enc = EmailEncryption::from_keys(1, "", "", &[]).unwrap();
         assert!(enc.is_none());
     }
 

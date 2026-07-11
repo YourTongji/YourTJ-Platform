@@ -27,13 +27,21 @@ pub async fn create_test_app() -> (PgPool, axum::Router) {
         refresh_ttl: 604800,
         meili_url: String::new(),
         meili_master_key: String::new(),
-        redis: None,
+        redis: test_redis_pool(),
+        system_private_key: vec![0u8; 32],
+        system_public_key_b64: String::new(),
         email_encryption: None,
+        captcha_verifier: Some(std::sync::Arc::new(shared::captcha::FakeCaptcha)),
         sse_tx: None,
     };
 
     let router = reviews::routes(state);
     (pool, router)
+}
+
+fn test_redis_pool() -> Option<deadpool_redis::Pool> {
+    let url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://localhost:6379".into());
+    deadpool_redis::Config::from_url(url).create_pool(Some(deadpool_redis::Runtime::Tokio1)).ok()
 }
 
 /// Run the DDL from migrations and clean review-related tables.
@@ -143,8 +151,20 @@ pub fn create_access_token_for(account_id: i64) -> String {
 }
 
 /// Make an authenticated JSON request.
-pub fn auth_req(method: axum::http::Method, uri: &str, body: Value, token: &str) -> Request<Body> {
+pub fn auth_req(
+    method: axum::http::Method,
+    uri: &str,
+    mut body: Value,
+    token: &str,
+) -> Request<Body> {
     use axum::http::header;
+    if method == axum::http::Method::POST {
+        if let Some(object) = body.as_object_mut() {
+            object
+                .entry("captchaToken")
+                .or_insert_with(|| Value::String(format!("review-test-{}", uuid::Uuid::new_v4())));
+        }
+    }
     Request::builder()
         .method(method)
         .uri(uri)

@@ -115,7 +115,7 @@ pub async fn consume_once(
         Err(_) => return Err(CaptchaOutcome::Unavailable),
     };
     let key = format!("captcha:{}:{}", purpose, token_hash(token));
-    let set: Option<String> = redis::cmd("SET")
+    let set: Option<String> = match redis::cmd("SET")
         .arg(&key)
         .arg("1")
         .arg("NX")
@@ -123,7 +123,10 @@ pub async fn consume_once(
         .arg(ttl_seconds)
         .query_async(&mut conn)
         .await
-        .unwrap_or(None);
+    {
+        Ok(set) => set,
+        Err(_) => return Err(CaptchaOutcome::Unavailable),
+    };
     match set {
         Some(_) => Ok(CaptchaOutcome::Ok),
         None => Ok(CaptchaOutcome::Invalid),
@@ -173,6 +176,26 @@ pub async fn enforce_captcha(
         return CaptchaOutcome::Invalid;
     }
     verify_and_consume(verifier, redis, purpose, trimmed, 600).await
+}
+
+/// Require a configured, valid, single-use captcha token for a protected write.
+pub async fn require_captcha(
+    verifier: Option<&dyn CaptchaVerifier>,
+    redis: Option<&deadpool_redis::Pool>,
+    purpose: &str,
+    token: &str,
+) -> crate::AppResult<()> {
+    let verifier =
+        verifier.ok_or_else(|| crate::AppError::BadRequest("captcha is not configured".into()))?;
+    match enforce_captcha(verifier, redis, purpose, token).await {
+        CaptchaOutcome::Ok => Ok(()),
+        CaptchaOutcome::Invalid => {
+            Err(crate::AppError::BadRequest("captcha verification failed".into()))
+        }
+        CaptchaOutcome::Unavailable => {
+            Err(crate::AppError::BadRequest("captcha service unavailable".into()))
+        }
+    }
 }
 
 // ── Tests ───────────────────────────────────────────────────────────────────

@@ -26,6 +26,7 @@ export interface paths {
                     "application/json": {
                         /** Format: email */
                         email: string;
+                        captchaToken: string;
                     };
                 };
             };
@@ -898,7 +899,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/credit/bounty": {
+    "/auth/password/login": {
         parameters: {
             query?: never;
             header?: never;
@@ -907,41 +908,36 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Post a bounty (escrow_hold) */
+        /** Campus email + password login */
         post: {
             parameters: {
                 query?: never;
-                header: {
-                    /** @description Base64 Ed25519 signature over the intent's exact signingBytes */
-                    "X-Wallet-Sig": components["parameters"]["WalletSig"];
-                };
+                header?: never;
                 path?: never;
                 cookie?: never;
             };
             requestBody: {
                 content: {
-                    "application/json": components["schemas"]["TaskInput"];
+                    "application/json": {
+                        /** Format: email */
+                        email: string;
+                        /** Format: password */
+                        password: string;
+                    };
                 };
             };
             responses: {
-                /** @description created */
-                201: {
+                /** @description ok */
+                200: {
                     headers: {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": components["schemas"]["Task"];
+                        "application/json": components["schemas"]["AuthTokens"];
                     };
                 };
-                /** @description insufficient balance */
-                402: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": components["schemas"]["Error"];
-                    };
-                };
+                400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
             };
         };
         delete?: never;
@@ -950,7 +946,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/credit/bounty/{id}/confirm": {
+    "/auth/password/forgot": {
         parameters: {
             query?: never;
             header?: never;
@@ -959,28 +955,119 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Confirm completion and release (escrow_release) */
+        /** Request a password-reset code */
         post: {
             parameters: {
                 query?: never;
-                header: {
-                    /** @description Base64 Ed25519 signature over the intent's exact signingBytes */
-                    "X-Wallet-Sig": components["parameters"]["WalletSig"];
-                };
-                path: {
-                    id: string;
-                };
+                header?: never;
+                path?: never;
                 cookie?: never;
             };
-            requestBody?: never;
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** Format: email */
+                        email: string;
+                        captchaToken: string;
+                    };
+                };
+            };
             responses: {
-                /** @description released */
-                200: {
+                /** @description sent */
+                204: {
                     headers: {
                         [name: string]: unknown;
                     };
                     content?: never;
                 };
+                429: components["responses"]["RateLimited"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/password/reset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reset password with code */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** Format: email */
+                        email: string;
+                        code: string;
+                        newPassword: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description ok */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                400: components["responses"]["BadRequest"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/password/change": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Change the authenticated account's password */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        currentPassword: string;
+                        newPassword: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description ok */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
             };
         };
         delete?: never;
@@ -2130,7 +2217,7 @@ export interface paths {
             };
             requestBody: {
                 content: {
-                    "application/json": components["schemas"]["ReviewInput"];
+                    "application/json": components["schemas"]["CreateReviewInput"];
                 };
             };
             responses: {
@@ -2274,12 +2361,13 @@ export interface paths {
                 content: {
                     "application/json": {
                         reason: string;
+                        captchaToken: string;
                     };
                 };
             };
             responses: {
-                /** @description queued */
-                202: {
+                /** @description reported */
+                204: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -5294,6 +5382,7 @@ export interface components {
             avatarUrl?: string | null;
             /** @enum {string} */
             role?: "user" | "mod" | "admin";
+            trustLevel?: number;
             createdAt?: number;
         };
         AuthTokens: {
@@ -5344,6 +5433,9 @@ export interface components {
             comment?: string;
             semester?: string;
             score?: string;
+        };
+        CreateReviewInput: components["schemas"]["ReviewInput"] & {
+            captchaToken: string;
         };
         AiSummary: {
             courseId?: string;
