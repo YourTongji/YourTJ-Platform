@@ -33,6 +33,11 @@
   --chart-3: #4f87a0;
   --chart-4: #7ca86e;
   --chart-5: #b85c38;
+  --motion-duration-fast: 120ms;
+  --motion-duration-normal: 200ms;
+  --motion-duration-slow: 320ms;
+  --motion-ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --motion-ease-emphasized: cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
 .dark {
@@ -139,5 +144,63 @@
 
   .scrollbar-none::-webkit-scrollbar {
     display: none;
+  }
+
+  .motion-interactive {
+    transition-duration: var(--motion-duration-fast);
+    transition-property: color, background-color, border-color, box-shadow, opacity, transform;
+    transition-timing-function: var(--motion-ease-standard);
+  }
+
+  .motion-interactive:active:not(:disabled) {
+    transform: scale(0.98);
+  }
+
+  .motion-page {
+    animation: page-enter var(--motion-duration-normal) var(--motion-ease-emphasized) both;
+    transform-origin: top center;
+  }
+
+  .motion-pop {
+    animation: soft-pop var(--motion-duration-normal) var(--motion-ease-emphasized) both;
+  }
+}
+
+@keyframes page-enter {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes soft-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.82) rotate(-8deg);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1) rotate(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+
+  .motion-interactive:active:not(:disabled) {
+    transform: none;
   }
 }

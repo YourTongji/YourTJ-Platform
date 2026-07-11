@@ -75,7 +75,7 @@ function NavigationGroup({
           onClick={onNavigate}
           className={({ isActive }) =>
             cn(
-              "flex h-10 items-center gap-3 rounded-lg px-3 text-base font-medium transition-colors",
+              "motion-interactive flex h-10 items-center gap-3 rounded-lg px-3 text-base font-medium",
               isActive
                 ? "bg-muted text-primary dark:bg-secondary"
                 : "text-[#3d4947] hover:bg-muted hover:text-foreground dark:text-muted-foreground dark:hover:bg-accent",

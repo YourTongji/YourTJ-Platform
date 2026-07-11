@@ -4,6 +4,8 @@ import { Link, Outlet, useLocation, useNavigate } from "react-router";
 
 import { SearchDialog } from "@/components/layout/search-dialog";
 import { Brand, SiteSidebar } from "@/components/layout/site-navigation";
+import { PageTransition } from "@/components/common/page-transition";
+import { RouteLoadingState } from "@/components/common/route-loading-state";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import {
@@ -34,7 +36,11 @@ function ThemeToggle() {
       }}
       aria-label="切换主题"
     >
-      {isDark ? <Sun className="size-[18px]" /> : <Moon className="size-[18px]" />}
+      {isDark ? (
+        <Sun key="sun" className="motion-pop size-[18px]" />
+      ) : (
+        <Moon key="moon" className="motion-pop size-[18px]" />
+      )}
     </Button>
   );
 }
@@ -77,7 +83,7 @@ export function AppLayout() {
               <button
                 type="button"
                 onClick={() => setSearchOpen(true)}
-                className="flex h-[34px] w-full items-center rounded-full border border-input bg-card px-3 text-left text-sm text-muted-foreground transition-colors hover:border-primary/40 hover:bg-muted dark:bg-background dark:hover:bg-accent"
+                className="motion-interactive flex h-[34px] w-full items-center rounded-full border border-input bg-card px-3 text-left text-sm text-muted-foreground hover:border-primary/40 hover:bg-muted dark:bg-background dark:hover:bg-accent"
               >
                 <Search className="mr-2 size-[18px] shrink-0" />
                 <span className="truncate">搜索帖子、课程、资料、WIKI...</span>
@@ -110,7 +116,7 @@ export function AppLayout() {
               {isAuthenticated ? (
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
-                    <button className="rounded-full border bg-card p-1 focus-visible:ring-[3px] focus-visible:ring-ring/50">
+                    <button className="motion-interactive rounded-full border bg-card p-1 focus-visible:ring-[3px] focus-visible:ring-ring/50">
                       <Avatar className="size-8">
                         <AvatarImage src={account?.avatarUrl ?? undefined} />
                         <AvatarFallback>{account?.handle?.slice(0, 1).toUpperCase() ?? "我"}</AvatarFallback>
@@ -153,7 +159,11 @@ export function AppLayout() {
               <SiteSidebar />
             </aside>
             <main className={cn("min-w-0", !isHome && "px-1 py-6 sm:px-4 lg:px-8")}>
-              <Outlet />
+              <React.Suspense fallback={<RouteLoadingState />}>
+                <PageTransition>
+                  <Outlet />
+                </PageTransition>
+              </React.Suspense>
             </main>
           </div>
         </div>

@@ -7,22 +7,51 @@ import { Toaster } from "sonner";
 import { AppLayout } from "@/components/layout/app-layout";
 import { AuthProvider } from "@/context/auth-provider";
 import { queryClient } from "@/lib/query";
-import { AdminPage } from "@/pages/admin-page";
-import { BookmarksPage } from "@/pages/bookmarks-page";
-import { CourseDetailPage } from "@/pages/course-detail-page";
-import { CoursesPage } from "@/pages/courses-page";
-import { ForumPage } from "@/pages/forum-page";
-import { HomePage } from "@/pages/home-page";
-import { LoginPage } from "@/pages/login-page";
-import { MessagesPage } from "@/pages/messages-page";
 import { NotFoundPage } from "@/pages/not-found-page";
-import { NotificationsPage } from "@/pages/notifications-page";
-import { ProfilePage } from "@/pages/profile-page";
-import { SchedulePage } from "@/pages/schedule-page";
-import { SettingsPage } from "@/pages/settings-page";
-import { ThreadDetailPage } from "@/pages/thread-detail-page";
-import { WalletPage } from "@/pages/wallet-page";
 import "@/styles/index.css";
+
+const AdminPage = React.lazy(async () => ({
+  default: (await import("@/pages/admin-page")).AdminPage,
+}));
+const BookmarksPage = React.lazy(async () => ({
+  default: (await import("@/pages/bookmarks-page")).BookmarksPage,
+}));
+const CourseDetailPage = React.lazy(async () => ({
+  default: (await import("@/pages/course-detail-page")).CourseDetailPage,
+}));
+const CoursesPage = React.lazy(async () => ({
+  default: (await import("@/pages/courses-page")).CoursesPage,
+}));
+const ForumPage = React.lazy(async () => ({
+  default: (await import("@/pages/forum-page")).ForumPage,
+}));
+const HomePage = React.lazy(async () => ({
+  default: (await import("@/pages/home-page")).HomePage,
+}));
+const LoginPage = React.lazy(async () => ({
+  default: (await import("@/pages/login-page")).LoginPage,
+}));
+const MessagesPage = React.lazy(async () => ({
+  default: (await import("@/pages/messages-page")).MessagesPage,
+}));
+const NotificationsPage = React.lazy(async () => ({
+  default: (await import("@/pages/notifications-page")).NotificationsPage,
+}));
+const ProfilePage = React.lazy(async () => ({
+  default: (await import("@/pages/profile-page")).ProfilePage,
+}));
+const SchedulePage = React.lazy(async () => ({
+  default: (await import("@/pages/schedule-page")).SchedulePage,
+}));
+const SettingsPage = React.lazy(async () => ({
+  default: (await import("@/pages/settings-page")).SettingsPage,
+}));
+const ThreadDetailPage = React.lazy(async () => ({
+  default: (await import("@/pages/thread-detail-page")).ThreadDetailPage,
+}));
+const WalletPage = React.lazy(async () => ({
+  default: (await import("@/pages/wallet-page")).WalletPage,
+}));
 
 const storedTheme = localStorage.getItem("yourtj.theme");
 if (storedTheme === "dark") {

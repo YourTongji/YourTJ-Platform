@@ -6,7 +6,7 @@
 >
 > 负责人：Product owner、Platform maintainers
 >
-> 最近核验：2026-07-11，`origin/main@33584db`
+> 最近核验：2026-07-11，`origin/main@ed8a06c`
 
 本盘点以当前源码、OpenAPI、migration 和 Web 为基线。它说明已经存在什么、哪里只有骨架、
 哪些界面承诺与实际行为不一致。后续 PR 改变这些结论时，必须在同一 PR 同步更新本文件的
@@ -47,7 +47,10 @@
 | 徽章与认证 | `Partial` | 成就徽章后端存在，缺授予/撤销 UI；身份认证、特殊认证和角色标识尚未拆分 |
 | 治理 | `Partial` | 审核和制裁基础较强；缺当事人通知、申诉、冲突回避、账号生命周期、保留 worker 和高风险 recent-auth |
 | 运维 | `Partial` | 设置仍为 string key/value；任务只确认提交，无持久状态、进度、失败日志和重试；缺 SLO/恢复演练 |
-| 测试 | `Partial` | 后端 CI 有 lint/集成，Web 有 lint/type/build；无前端单元/浏览器 E2E/axe，许多契约与 UI 行为差异无法被 CI 捕获 |
+| 测试 | `Partial` | 后端 CI 有 lint/集成，Web 有 lint/type/build 与最小 Vitest/Testing Library/axe harness；仍无浏览器 E2E、完整前端覆盖，许多契约与 UI 行为差异无法被 CI 捕获 |
+
+Web shell 已采用路由级 lazy loading、可朗读 loading state、受控页面/操作反馈动画和
+`prefers-reduced-motion` 降级；这只建立了体验基础，不代表各业务页面已完成视觉与旅程验收。
 
 ## P0：先恢复正确性、安全与产品真实性
 
