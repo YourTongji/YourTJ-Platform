@@ -170,25 +170,41 @@ jobs:
           ssh preview /opt/yourtj-preview/deploy-pr.sh "$PR" "$FE_DIR"
 
       - name: verify public preview routes
+        env:
+          BACKEND_CHANGED: ${{ needs.changes.outputs.backend }}
+          FRONTEND_CHANGED: ${{ needs.changes.outputs.frontend }}
         run: |
           PR="${{ github.event.pull_request.number || github.event.inputs.pr_number }}"
-          ssh preview bash -s -- "$PR" <<'EOF'
+          ssh preview bash -s -- "$PR" "$FRONTEND_CHANGED" "$BACKEND_CHANGED" <<'EOF'
             PR="$1"
-            curl --fail --silent --show-error --retry 10 --retry-delay 1 --retry-connrefused \
-              http://127.0.0.1:8080/pr-${PR}/ >/dev/null
-            curl --fail --silent --show-error --retry 10 --retry-delay 1 --retry-connrefused \
-              http://127.0.0.1:8080/pr-${PR}/api/v2/health >/dev/null
+            FRONTEND_CHANGED="$2"
+            BACKEND_CHANGED="$3"
+            if [ "$FRONTEND_CHANGED" = "true" ]; then
+              curl --fail --silent --show-error --retry 60 --retry-delay 1 --retry-connrefused \
+                http://127.0.0.1:8080/pr-${PR}/ >/dev/null
+            fi
+            if [ "$BACKEND_CHANGED" = "true" ]; then
+              curl --fail --silent --show-error --retry 60 --retry-delay 1 --retry-connrefused \
+                http://127.0.0.1:8080/pr-${PR}/api/v2/health >/dev/null
+            fi
           EOF
 
       - name: summary
         if: always()
+        env:
+          BACKEND_CHANGED: ${{ needs.changes.outputs.backend }}
+          FRONTEND_CHANGED: ${{ needs.changes.outputs.frontend }}
         run: |
           PR="${{ github.event.pull_request.number || github.event.inputs.pr_number }}"
           echo "### :rocket: PR Preview Deployed" >> $GITHUB_STEP_SUMMARY
           echo "| | URL |" >> $GITHUB_STEP_SUMMARY
           echo "|---|---|" >> $GITHUB_STEP_SUMMARY
-          echo "| Frontend | http://${{ secrets.PREVIEW_HOST }}:8080/pr-${PR}/ |" >> $GITHUB_STEP_SUMMARY
-          echo "| Backend  | http://${{ secrets.PREVIEW_HOST }}:8080/pr-${PR}/api/v2/health |" >> $GITHUB_STEP_SUMMARY
+          if [ "$FRONTEND_CHANGED" = "true" ]; then
+            echo "| Frontend | http://${{ secrets.PREVIEW_HOST }}:8080/pr-${PR}/ |" >> $GITHUB_STEP_SUMMARY
+          fi
+          if [ "$BACKEND_CHANGED" = "true" ]; then
+            echo "| Backend  | http://${{ secrets.PREVIEW_HOST }}:8080/pr-${PR}/api/v2/health |" >> $GITHUB_STEP_SUMMARY
+          fi
           echo "" >> $GITHUB_STEP_SUMMARY
           echo ":warning: Preview auto-expires after 24 hours. Re-run this workflow to redeploy." >> $GITHUB_STEP_SUMMARY
 
