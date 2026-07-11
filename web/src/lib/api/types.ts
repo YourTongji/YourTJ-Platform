@@ -75,6 +75,8 @@ export type UserProfile = Schema["UserProfile"] & { id: string };
 export type UserThread = Schema["UserThread"];
 export type UserComment = Schema["UserComment"];
 export type Upload = Schema["Upload"];
+export type UploadCredentials = Schema["UploadCredentials"];
+export type UploadUrl = Schema["UploadUrl"];
 export type WatchedWord = Schema["WatchedWord"];
 export interface WatchedWordInput {
   word: string;

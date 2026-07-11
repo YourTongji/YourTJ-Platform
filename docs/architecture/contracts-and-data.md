@@ -85,6 +85,8 @@ Fresh database 必须只通过 sqlx migration ledger 建立。普通启动、CI 
 - 内容携带 `contentFormat`；legacy `plain_v1` 不自动解释为 `markdown_v1`。
 - 服务端验证 canonical source，客户端 preview 不构成安全边界。
 - Media credential 只允许 account-bound exact object key；callback 原子消费 intent。
+- Web 只把服务端返回的短期 STS 凭证交给官方 OSS Browser SDK，不自行扩展 prefix/object key；客户端
+  SHA-256 作为 callback custom value，业务后续只保存 signed callback 返回的 upload id。
 - 业务保存 asset/reference，不保存任意 URL；访问 URL 是带权限和到期的派生值。
 - asset status、binding、owner、target、alt、variants 与 retention 由 media/domain API 协作维护。
 

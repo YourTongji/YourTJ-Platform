@@ -24,6 +24,8 @@
 - 课评有发布、编辑、点赞/取消、举报和审核基础。
 - Media 后端已有 account-bound upload intent、短期 OSS STS、回调验签、MIME/大小限制和
   `pending/clean/blocked` 审核状态。
+- Web 已使用 Alibaba 官方 Browser SDK 实现 direct-to-OSS 基础链路：先取 exact-key STS intent，
+  本地计算 SHA-256，再由 OSS signed callback 取得 canonical upload id；SDK 动态加载，不进入首屏包。
 - 课程/课评与论坛各有 Meilisearch 候选能力；独立 `search` domain 返回 typed
   courses/reviews/threads，每类都由 owner domain 回 PostgreSQL 重建，Web 可到达对应 canonical route。
 - 课程管理 mutation 会在事务提交后 reconcile 单个 course document；后台提供 course/review/forum
@@ -36,7 +38,8 @@
   `contentVersion/expectedVersion` 乐观冲突检测，搜索/通知等事务外副作用也没有 durable outbox。
 - tags、tag filter、subscription、poll/vote viewer state、read tracking 和 drafts 契约未接齐。
 - 首页使用固定摘要、按 index 伪造徽章，部分收藏/分享/筛选只有视觉没有行为。
-- Web 没有用户媒体上传链路；头像仍接受外部 URL，上传记录没有绑定到具体内容。
+- 上传组件尚未绑定到头像/主题/评论等最终用户旅程；头像仍接受外部 URL，上传记录也没有绑定到
+  具体内容，因此“基础上传成功”不等于媒体产品闭环。
 - 聚合搜索已有稳定三类结果、有效 type filter 和独立 Web 综合结果页；仍缺每类 cursor、用户/板块/tag
   结果、highlight/纠错、局部失败，以及 transactional outbox 驱动的索引可靠更新。
 - 左侧社区推广位硬编码，没有管理模型。

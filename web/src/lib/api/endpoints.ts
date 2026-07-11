@@ -57,6 +57,8 @@ import type {
   ThreadFeed,
   TimeSlot,
   Upload,
+  UploadCredentials,
+  UploadUrl,
   IgnoreUser,
   UserComment,
   UserProfile,
@@ -187,6 +189,17 @@ export const api = {
 
   settings() {
     return apiRequest<Setting[]>("/settings", { auth: false });
+  },
+
+  mediaUploadCredentials(kind: "image" | "file", contentType: string) {
+    return apiRequest<UploadCredentials>("/media/upload-credentials", {
+      method: "POST",
+      body: { kind, contentType },
+    });
+  },
+
+  mediaUrl(id: string) {
+    return apiRequest<UploadUrl>(`/media/${encodeURIComponent(id)}/url`);
   },
 
   departments() {
