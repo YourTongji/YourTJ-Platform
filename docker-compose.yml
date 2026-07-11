@@ -20,7 +20,8 @@ services:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
-      - ./backend/migrations:/docker-entrypoint-initdb.d
+    # The API/sqlx migrator owns schema setup. Mounting migrations into initdb
+    # would apply them without populating _sqlx_migrations, then replay them at startup.
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U yourtj"]
       interval: 3s

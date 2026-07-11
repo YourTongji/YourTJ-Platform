@@ -13,6 +13,23 @@ env:
   PNPM_VERSION: "11.11.0"
 
 jobs:
+  docs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: validate documentation
+        run: python3 scripts/check_docs.py
+      - name: validate PR documentation impact
+        if: github.event_name == 'pull_request'
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python3 scripts/check_pr_docs.py
+
   # ── Backend: quick checks — fmt, clippy, and unit tests (no DB needed) ──
   lint:
     runs-on: ubuntu-latest

@@ -143,8 +143,7 @@ async fn test_vote_thread_down() {
         .fetch_one(&pool)
         .await
         .unwrap();
-    // One-vote-per-user with no stacking: switching up → down yields -1
-    // (see docs/ARCH_REVIEW_AND_E2E_PLAN.md §vote).
+    // One-vote-per-user with no stacking: switching up → down yields -1.
     assert_eq!(vote_count, -1);
     let activity_count: i64 = sqlx::query_scalar(
         "SELECT COALESCE(SUM(likes_given), 0)::bigint \

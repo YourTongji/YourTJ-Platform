@@ -1,77 +1,60 @@
-# Outbound email delivery
+# 邮件发送
 
-> **Status:** DELIVERED IN THIS PR — Cloudflare transport, verification delivery semantics, and
-> production secret isolation
+> 文档类型：运维 runbook
 >
-> **Owner:** Platform maintainers
+> 状态：Active
 >
-> **Last verified:** 2026-07-11 against `contract/openapi.yaml`, shared/identity source, and the main
-> deployment configuration
+> 负责人：Platform maintainers、Identity maintainers
 >
-> **Authoritative sources:** `AGENTS.md`, `contract/openapi.yaml`, `backend/crates/shared/src/email.rs`,
-> `backend/crates/shared/src/config.rs`, `backend/crates/identity/src/handlers.rs`
+> 最近核验：2026-07-11，`origin/main@33584db`
 
-## Provider model
+Production 目标 provider 为 Cloudflare Email Sending。SMTP 仅作显式 fallback；local/test/PR preview
+使用 redacted `log` provider，不发送真实邮件。
 
-Production uses Cloudflare Email Sending's account-scoped REST endpoint. The shared email transport
-also retains SMTP as an explicit fallback. Local development and tests default to the `log` provider,
-which records only redacted delivery metadata and never sends a message.
+## Provider
 
-| Provider | Required configuration | Intended environment |
+| Provider | 必要配置 | 环境 |
 |---|---|---|
-| `cloudflare` | `EMAIL_FROM`, `CLOUDFLARE_EMAIL_ACCOUNT_ID`, `CLOUDFLARE_EMAIL_API_TOKEN` | Production |
-| `smtp` | `EMAIL_FROM`, `SMTP_HOST`; optional username/password pair | Controlled fallback |
-| `log` | None | Local development and tests only |
+| `cloudflare` | `EMAIL_FROM`、account id、API token | Main/production secret store |
+| `smtp` | `EMAIL_FROM`、host；可选 username/password | 受控 fallback |
+| `log` | 无 | Local、test、PR preview |
 
-`CLOUDFLARE_EMAIL_API_BASE_URL` normally remains the official API base URL. A non-HTTPS override is
-accepted only for loopback integration tests. `SMTP_FROM` remains a compatibility alias for
-`EMAIL_FROM`.
+Cloudflare endpoint 与响应 envelope 以官方
+[Email Sending API](https://developers.cloudflare.com/api/resources/email_sending/methods/send/) 为准。
+应用只在 provider 表示成功、无 API error/permanent bounce 且返回非空 message id 时视为 accepted。
 
-Cloudflare's request and response contract is documented in the official
-[Email Sending API reference](https://developers.cloudflare.com/api/resources/email_sending/methods/send/).
-The application treats a response as accepted only when the envelope is successful, has no API
-errors or permanent bounces, and includes a non-empty message identifier. Delivered and queued counts
-are retained as redacted operational metadata; the live API can accept a message before either list is
-populated.
+## 业务语义
 
-## Delivery semantics
+- 登录和密码重置 code：provider 接受邮件后 API 才返回成功；失败时使新 code 无效并返回可重试
+  `SERVICE_UNAVAILABLE`，不能告诉用户“已发送”。
+- 邀请与 digest：主业务 mutation 不因外部邮件失败回滚；写 retry/outbox 并发出不含收件人的告警。
+- 治理/安全邮件即使用户关闭互动邮件也不能被错误抑制；仍需保留站内事实通知。
+- Provider accepted 不等于最终 delivered；bounce、complaint 和 retry 状态需要后续 operational model。
 
-Login and password-reset endpoints return success only after the provider accepts the message. When
-the provider is unavailable or rejects the request, the newly generated code is invalidated and the
-endpoint returns `503` with error code `SERVICE_UNAVAILABLE`. The client may retry; it must not tell
-the user that a code was sent after this response.
+## Secret 边界
 
-Invitation and scheduled digest email is best-effort. Their primary operation continues if email
-delivery fails, and the failure is logged without recipient addresses, message content, credentials,
-or raw upstream responses.
+- Token 只存 deployment secret store/权限受限环境文件，不进入 `.env.example`、GitHub workflow、
+  PR、Issue、截图、日志或 generated client。
+- 只赋予目标 account 的最小 email-sending permission，并限制 verified sender。
+- Main backend 才能读取生产 token；PR preview 必须没有该 secret。
+- 日志不记录邮箱、验证码、正文、token 或 raw upstream response，只记录 provider、purpose、结果类别、
+  latency 和 opaque request/message id。
 
-## Secret boundary
+## 配置与验证
 
-- Store the API token in a root-owned or deployment-user-owned environment file with mode `0600`.
-- Inject that file into the main backend container only. PR preview code must never receive production
-  email credentials.
-- Never put account credentials in `.env.example`, workflow variables committed to Git, issue text,
-  PR descriptions, screenshots, logs, or generated client code.
-- Limit the token to the minimum Cloudflare email-sending permission and the intended account.
-- Rotate the token after suspected disclosure. Update the server secret, verify one delivery, then
-  revoke the old token.
+1. 在 main secret store 配置 `EMAIL_PROVIDER=cloudflare`、verified `EMAIL_FROM`、account id 和 token。
+2. 保持官方 HTTPS API base；非 HTTPS override 只允许 loopback integration test。
+3. 用受控测试邮箱验证 accepted envelope；不要在命令历史/日志打印 token 或 code。
+4. 通过平台 API 请求一次 login code 并确认收到。
+5. 注入 provider failure，确认 API 返回 503、新 code 不可使用且日志无 PII。
+6. 确认 preview 仍为 `log` provider，且无法使用生产 token。
 
-## Deployment and verification
+## 故障处理
 
-1. Configure `EMAIL_PROVIDER=cloudflare`, the verified sender in `EMAIL_FROM`, the account identifier,
-   API token, and the default API base URL in the main-only secret file.
-2. Validate the deployment script with `bash -n` and confirm the preview deployment path does not load
-   the secret file.
-3. Send one controlled test message and verify a successful envelope with a non-empty message
-   identifier and no permanent bounce.
-4. Redeploy the main backend and request a login code through the public API.
-5. Confirm success without logging the recipient or code. During an induced provider failure, confirm
-   the API returns `503` and the generated code cannot be consumed.
+1. 查看 provider status、应用 accepted/error rate 与 latency，不打印 credential。
+2. 检查 sender verification、token scope/expiry 和 account id。
+3. 判断是身份 code（fail closed）还是 best-effort notification（queue/retry）。
+4. 若切换 SMTP，按 deployment change 评审 secret、TLS、sender 和回滚。
+5. 疑似泄露时先创建新 token、更新 secret、验证发送，再撤销旧 token并审计影响。
 
-## Incident response
-
-For elevated `SERVICE_UNAVAILABLE` rates, first check Cloudflare status and the application warning
-count. Verify sender authorization and token scope without printing the token. If fallback SMTP is
-enabled, changing providers is a deployment configuration change and must follow the same secret and
-verification controls. Do not switch production to `log`: that would report successful requests
-without delivering mail.
+禁止把 production 切到 `log` provider；那会产生 API 成功但用户永远收不到 code 的假健康状态。

@@ -1,0 +1,4 @@
+interface:
+  display_name: "YourTJ Development"
+  short_description: "Develop, test, document, and publish YourTJ changes"
+  default_prompt: "Use $yourtj-development to implement and verify a YourTJ repository change with the required documentation and pull request workflow."

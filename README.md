@@ -13,67 +13,91 @@
 
 # YourTJ Platform
 
-同济大学校园社区平台——论坛、选课、评课、积分，统一后端 monorepo。
+同济大学校园社区平台：论坛为核心，选课、评课与闭环积分共享身份、数据和治理能力。
 
-> **YourTJ 产品矩阵** &nbsp; [iOS 客户端](https://github.com/YourTongji/YourTJCourse-iOS) · [Flutter](https://github.com/YourTongji/YourTJCourse-Flutter) · [Serverless（旧版）](https://github.com/YourTongji/YourTJCourse-Serverless) · [HomePage](https://github.com/YourTongji/YourTJ-HomePage)
+> **YourTJ 产品矩阵**： [iOS](https://github.com/YourTongji/YourTJCourse-iOS) ·
+> [Flutter](https://github.com/YourTongji/YourTJCourse-Flutter) ·
+> [旧版 Serverless](https://github.com/YourTongji/YourTJCourse-Serverless) ·
+> [HomePage](https://github.com/YourTongji/YourTJ-HomePage)
 
-## 项目结构
+## 仓库结构
 
-```
-yourtj-platform/
-├── backend/
-│   ├── crates/
-│   │   ├── api/              # Axum 网关（路由组合 · 管理端点 · 后台任务）
-│   │   ├── identity/         # 账户 · 邮箱认证 · JWT · Ed25519
-│   │   ├── courses/          # 课程目录 · 选课镜像 · Meilisearch
-│   │   ├── reviews/          # 评课 CRUD · 点赞 · 举报 · 审核
-│   │   ├── credit/           # 积分账本（哈希链）· 托管市场
-│   │   ├── media/            # OSS 上传 · 审核 · 回调
-│   │   ├── forum/            # 论坛（板块·主题·楼中楼·投票·DM）
-│   │   │   ├── handlers/     # 路由处理器
-│   │   │   ├── repo/         # 数据访问层
-│   │   │   └── admin/        # 管理路由
-│   │   └── shared/           # 配置 · 错误 · 分页 · 缓存 · 限流
-│   ├── migrations/           # PolarDB DDL（append-only）
-│   ├── ops/                  # 运维脚本（选课物化等）
-│   └── Dockerfile
-├── contract/openapi.yaml     # API 契约 → 生成客户端类型
-├── docs/                     # 当前业务规范 · 架构 · 运维手册 · 历史方案
-├── tools/d1/                 # D1 旧版数据导入工具链
-├── docker-compose.yml
-└── AGENTS.md                 # 编码规范
+```text
+backend/
+  crates/
+    api/          Axum gateway、startup 与 router composition
+    identity/     账号、邮箱/密码认证、session、keys
+    courses/      课程目录、选课镜像与课程搜索
+    reviews/      课评、互动、举报与审核
+    credit/       闭环积分 ledger 与受控 escrow flows
+    forum/        板块、主题、评论、互动、通知与私信
+    media/        OSS upload intent、callback 与 quarantine
+    activity/     每日贡献 projection 与计分策略
+    governance/   跨域 staff/system audit
+    shared/       配置、错误、auth primitive、分页、缓存与限流
+    e2e/          旅程测试 harness
+  migrations/    Append-only PostgreSQL migrations
+  ops/           可重放物化脚本
+web/              React + TypeScript Web
+contract/         OpenAPI wire contract
+docs/             产品、架构、开发、运维与安全规范
+tools/d1/         Cloudflare D1 选课快照导入工具
+.agents/skills/   仓库级 Codex 工作流
 ```
 
 ## 文档
 
-从 [`docs/README.md`](docs/README.md) 开始阅读。该索引说明文档权威顺序，并区分
-当前规范、当前 PR 提案、后续工作和历史方案。社区治理相关的当前规范包括：
+- [文档中心](docs/README.md)
+- [成熟社区能力模型](docs/product/community-capability-model.md)
+- [当前缺口与路线图](docs/product/current-state-and-roadmap.md)
+- [开发入口](docs/development/README.md)
+- [测试命令](docs/development/testing.md)
+- [Pull Request 流程](docs/development/pull-requests.md)
 
-- [`docs/product/community-governance.md`](docs/product/community-governance.md)
-- [`docs/product/activity-scoring.md`](docs/product/activity-scoring.md)
-- [`docs/product/profile-and-messaging.md`](docs/product/profile-and-messaging.md)
-- [`docs/security/rbac-and-audit.md`](docs/security/rbac-and-audit.md)
-- [`docs/operations/admin-console.md`](docs/operations/admin-console.md)
+开发前还必须阅读 [AGENTS.md](AGENTS.md) 和需求对应的产品/安全规范。
 
-## 本地开发
+## Local quick start
 
 ```bash
-# 启动依赖服务
 docker compose up -d
 
-# 后端
 cd backend
 cp .env.example .env
-cargo run --bin api           # http://localhost:8080/health
+set -a
+source .env
+set +a
+cargo run --bin api
 ```
 
-### 提交前检查
+另一个 terminal：
 
 ```bash
-cargo fmt --all
-cargo clippy --all-targets --all-features -- -D warnings
-cargo test --all
+cd web
+pnpm install --frozen-lockfile
+pnpm run generate:api
+pnpm run dev
 ```
+
+详细前置工具、测试数据库和 provider 行为见[本地环境](docs/development/local-development.md)。
+
+## 提交前
+
+```bash
+python3 scripts/check_docs.py
+
+cd backend
+cargo fmt --all --check
+cargo clippy --all-targets --all-features -- --deny warnings
+cargo test --lib
+
+cd ../web
+pnpm run generate:api
+pnpm run lint
+pnpm run typecheck
+pnpm run build
+```
+
+Database integration tests 需要专用测试库并串行运行，完整 CI-parity 命令见测试文档。
 
 ---
 

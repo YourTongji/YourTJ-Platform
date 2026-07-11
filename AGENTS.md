@@ -1,7 +1,11 @@
 # AGENTS.md — YourTJ Platform
 
-Operating guide for anyone (human or AI agent) writing code in this repository.
-Read this **and** [`docs/REWRITE_V2_DESIGN.md`](docs/REWRITE_V2_DESIGN.md) before making changes.
+Operating guide for anyone (human or AI agent) changing this repository.
+
+Before changing anything, read this file, [`docs/README.md`](docs/README.md),
+[`docs/development/README.md`](docs/development/README.md), and the product/security/operations
+documents directly affected by the request. Use the repository `$yourtj-development` skill for
+implementation, testing, review, CI, or PR work.
 
 ---
 
@@ -15,8 +19,9 @@ identity, one database, and one deployment.
 - Backend: **Rust** — Axum + Tokio, a Cargo workspace split by domain.
 - Database: **PolarDB** (PostgreSQL-compatible), one schema per domain.
 - Search: **Meilisearch**. Cache/counters/rate-limit/hot-rank: **Redis**. Media: **OSS + CDN**.
-- Deploy: **Aliyun 华东** (ICP-filed) on **SAE** serverless containers; same image
-  runs on SLB + ECS later.
+- Current deploy: GitHub Actions deploy PR previews and main staging to the shared test server.
+  Target production is **Aliyun 华东** with stateless containers, PolarDB, Redis, Meilisearch,
+  and OSS/CDN; do not describe that target as already deployed.
 - Identity: campus-email code login + JWT; each account binds an **Ed25519** key,
   used only to sign money operations.
 - Points: **Web2.5 closed-loop** — central ledger + Ed25519 signatures + hash chain.
@@ -35,8 +40,12 @@ backend/crates/
   courses/    catalogue, 选课 mirror tables, search surface.
   reviews/    reviews, likes, reports, moderation queue.
   credit/     Web2.5 points ledger.
-  forum/      boards, threads, comments, votes, notifications (Phase B).
+  forum/      boards, threads, comments, votes, notifications, direct messages.
+  media/      OSS upload intents, callbacks, quarantine, and asset status.
+  activity/   contribution events, daily projections, and scoring policy.
+  governance/ append-only cross-domain staff/system audit events.
   shared/     config, the AppError type, pagination. Dependency-light; compiled by everyone.
+  e2e/        executable cross-domain journey-test harness; never production business logic.
 ```
 
 **Boundary rules**
@@ -45,29 +54,28 @@ backend/crates/
 - `shared` must not depend on any domain crate (no cycles). Domain crates may depend
   on `shared`. `api` depends on everything and wires it together.
 - Put new HTTP routes in the owning domain crate's `routes()`; `api` only `.merge()`s them.
+- Existing platform/admin SQL in `api` is architecture debt, not a pattern to extend. New
+  announcements, promotions, badges, settings, or durable jobs need a clear owning domain/read model.
 
 ---
 
 ## 3. Local development
 
-```bash
-cd backend
-cp .env.example .env
-cargo run --bin api      # http://localhost:8080/health
-cargo fmt --all
-cargo clippy --all-targets --all-features -- -D warnings
-cargo test --all
-```
+Follow [`docs/development/local-development.md`](docs/development/local-development.md). PostgreSQL,
+Redis, and Meilisearch run through the checked-in Compose file; the backend sqlx migrator is the
+only normal schema runner.
 
-Postgres / Redis / Meilisearch run as local containers (compose file added later).
+### Definition of done
 
-### Definition of done — run these before you call a change finished
-1. `cargo fmt --all` — no diffs.
-2. `cargo clippy --all-targets --all-features -- -D warnings` — clean.
-3. `cargo test --all` — green.
-4. If you changed the HTTP surface, update `contract/openapi.yaml` in the same change.
-5. If you changed the schema, add a **new** migration (never edit an applied one).
-6. Public items have rustdoc; new invariants are noted in the design doc.
+1. Run `python3 scripts/check_docs.py` and `git diff --check` for every change.
+2. Run the scope-appropriate CI-parity commands in
+   [`docs/development/testing.md`](docs/development/testing.md); docs-only work does not need cargo/npm.
+3. HTTP changes update OpenAPI first, regenerate Web types, update consumers, and add contract/handler tests.
+4. Schema changes add a **new** migration, pass a fresh-database up-path, and document rollout/backfill.
+5. User behavior, security/privacy, config, deployment, or developer workflow changes update their
+   canonical documents in the same PR.
+6. Public APIs have useful rustdoc; new invariants live in the applicable product/architecture/security
+   document, not a historical design snapshot.
 
 ---
 
@@ -77,7 +85,8 @@ These are enforced in CI (`fmt` + `clippy -D warnings`). Match the style already
 `crates/shared` and `crates/api`.
 
 ### 4.1 Toolchain & formatting
-- Pinned by `rust-toolchain.toml` (stable). Edition **2021**.
+- `rust-toolchain.toml` selects the moving stable channel; the workspace MSRV is **1.80** and edition
+  **2021**. Do not claim an exact toolchain pin unless the channel is changed to an exact version.
 - `rustfmt` is authoritative — never hand-format. Config in `backend/rustfmt.toml`
   (`max_width = 100`). Order imports std → external → crate as a convention.
 - No `#[rustfmt::skip]` without a one-line reason comment.
@@ -214,8 +223,9 @@ let account = repo.find(id).await.unwrap().unwrap();
 - **Unit tests** for pure logic go in the same file (`#[cfg(test)] mod tests`).
   **Integration tests** go under `crates/<crate>/tests/`. Prefer integration tests
   over inline modules when DB or multiple crate boundaries are involved.
-- Integration tests use ephemeral containers (testcontainers) — never a shared/real
-  database.
+- CI integration tests use a dedicated ephemeral PostgreSQL service and Redis, then run serially because
+  existing helpers reset shared tables. Local integration tests must use a dedicated disposable test
+  database; never a developer, staging, or production database.
 - Test tools (helpers, builders, fixtures) live in the test directory (`tests/helpers/`),
   not in `src/`. Production code must not carry test-only utilities.
 - Never test mock infrastructure (helpers, builders, replay policies). Tests must exercise
@@ -228,8 +238,8 @@ let account = repo.find(id).await.unwrap().unwrap();
 - Prefer edge cases over CRUD enumeration. One test for "remove and verify count" is
   enough — don't write three variations.
 - Every `#[should_panic]` test must verify the panic message (`expected = "..."`).
-- Tests must be fast. No test may depend on external services (LLM APIs) or long
-  timeouts. DB integration tests use local ephemeral containers.
+- Tests must be fast. No test may depend on external provider services or long timeouts. Use local fake
+  servers for Meilisearch/email/OSS behavior when necessary.
 - Tests must be process-safe. Do not assume shared static state, global counters, or
   filesystem paths that are unique within-process but collide across processes.
   Use random prefixes for temp paths when needed.
@@ -249,18 +259,14 @@ let account = repo.find(id).await.unwrap().unwrap();
 - Internal path dependencies (`foo = { path = "crates/foo" }`) must also include a
   version (`foo = { version = "0.1.0", path = "crates/foo" }`) so dependency policy
   tools do not treat them as wildcard requirements.
-- Use `cargo machete --with-metadata` to check for unused dependencies. Do not remove
-  a dependency solely because `cargo machete` flagged it — verify with source search
-  and `cargo tree` first. Confirmed false positives must be documented in the crate's
-  `[package.metadata.cargo-machete] ignored = [...]` table.
-- Use `cargo deny check` to enforce dependency policy: advisories, yanked crates,
-  license allowlists/exceptions, duplicate-version warnings, and source restrictions.
-  Do not silence a deny finding without documenting why the dependency is required
-  and why the policy exception is safe.
+- For dependency-changing PRs, inspect `cargo tree` and explain new transitive/security/license impact.
+  `cargo machete`/`cargo deny` are not currently configured CI gates; do not claim they passed unless
+  the repository adds and runs their policy configuration.
 
 ### 4.15 Performance & caching
-- Honor the cache model in the design doc (§4): L1 client debounce → L2 edge SWR → L3
-  Redis; **version-bump invalidation**, not blind deletes.
+- Honor [`docs/architecture/contracts-and-data.md`](docs/architecture/contracts-and-data.md): PostgreSQL
+  is authoritative; search/cache/counters are rebuildable projections with version-bump invalidation,
+  bounded TTLs, and reconciliation.
 - Never recompute aggregates on the read path. `review_count` / `review_avg` and similar
   are maintained incrementally on write.
 - Realtime search is **Meilisearch only** — no `LIKE %q%` over the DB on the hot path.
@@ -272,6 +278,14 @@ let account = repo.find(id).await.unwrap().unwrap();
   Skip the doc when the name and signature already make the purpose obvious.
 - Module-level `//!` docs state the domain's responsibility and its hard rules (see the
   existing crate headers).
+- Current documents live only in `docs/product`, `docs/architecture`, `docs/development`,
+  `docs/operations`, or `docs/security`; colocated READMEs are short tool entry points.
+- Every canonical file under `docs/` has type/status/owner/last-verified metadata and uses only `Current`, `Partial`,
+  `Planned`, or `Decision needed` for implementation state. Never use PR-relative permanent labels.
+- Do not duplicate OpenAPI or DDL in prose. Git history is the archive; absorb useful rules and delete
+  stale plans instead of keeping a second source of truth.
+- Follow [`docs/development/documentation.md`](docs/development/documentation.md). Every PR updates
+  affected docs or states `Docs impact: none` with a concrete reason.
 
 ---
 
@@ -301,8 +315,9 @@ If a feature request seems to require crossing this line, stop and escalate — 
 legal boundary, not a preference.
 
 ### Privacy / PIPL
-- Store the minimum PII; encrypt the email at rest; support account deletion. Don't add
-  new PII columns without a reason and a retention/deletion answer.
+- Store the minimum PII and encrypt email at rest. Account export/deletion orchestration is a documented
+  product gap; every new data type must define how it participates. Do not add PII columns without a
+  purpose, visibility, retention, export, and deletion answer.
 
 ---
 
@@ -310,13 +325,23 @@ legal boundary, not a preference.
 
 ### API contract
 The HTTP surface is owned by `contract/openapi.yaml`. Change the contract first, then
-implement; client type bindings are generated from it. A route that isn't in the
-contract isn't done.
+implement, regenerate Web types, update consumers, and test. A route that isn't in the
+contract is not done.
 
 ### Migrations
 Add `backend/migrations/NNNN_descriptive_name.sql` (next number). Append-only. Test the
-up-path against a fresh database. Update the design doc's DDL section if the change is
-structural.
+up-path against a fresh database. Update the applicable product/architecture/security document;
+never maintain a duplicate DDL snapshot in prose.
+
+### Documentation impact
+
+- Business/UI behavior: update the owning product document and current-state inventory.
+- HTTP: OpenAPI + generated types + owning product semantics.
+- Schema: migration + data ownership/rollout documentation.
+- Auth, PII, governance, or credit: update security/product invariants and negative-test matrix.
+- Config/provider/deploy: update `.env.example` and the operations runbook.
+- Pure internal refactor: PR may say `Docs impact: none`, but must explain why no behavior, contract,
+  schema, security, operations, or developer workflow changed.
 
 ### Git & PRs
 - All development happens on feature/personal branches. **Never commit directly to
@@ -329,29 +354,33 @@ structural.
   work first. Do not `git reset --hard` or `git checkout -f` for changes that still
   need to land.
 - Conventional commits: `feat(credit): ...`, `fix(reviews): ...`, `chore(ci): ...`.
-- Small, focused PRs. CI (fmt + clippy + test + build) must be green. No secrets, no
-  generated artifacts, no `target/`.
+- Small, focused PRs. Use `.github/PULL_REQUEST_TEMPLATE.md`, record actual test results and docs impact,
+  and verify both CI and preview when applicable. No secrets, unrequested generated artifacts, dumps,
+  `target/`, or `web/dist/`.
 - Only commit changes you authored. Do not include, revert, or modify other people's
   work (e.g. `Cargo.lock` updates, dependency bumps, files created by other agents or
   users) unless explicitly instructed.
+- Full branch/commit/PR/preview rules live in
+  [`docs/development/pull-requests.md`](docs/development/pull-requests.md).
 
 ---
 
 ## 7. Agent working agreement (for AI agents)
 
-- Read this file and the design doc before editing. Stay inside the relevant domain crate;
-  don't refactor unrelated code in the same change.
-- **Do not autonomously modify code unless the user explicitly asks.** When the user
-  asks for a change, wait for their confirmation before starting — do not pre-emptively
-  implement.
+- Read this file, the documentation index/development entry, and only the directly relevant domain
+  documents before editing. Use `$yourtj-development`. Stay inside the owner domain and do not refactor
+  unrelated code in the same change.
+- Do not modify code when the user asks only for analysis, review, diagnosis, or status. An explicit
+  request to change/fix/build is authorization for in-scope implementation; it is not authorization to
+  commit, push, open a PR, deploy, or mutate unrelated external systems.
 - Keep changes scoped and reviewable. Match surrounding style. Don't introduce a new
   pattern when an existing one fits.
-- Commit each logical change atomically before moving to an unrelated topic. Do not
-  squash unrelated refactors together.
+- If commit was explicitly requested, commit each logical change atomically. Do not squash unrelated
+  refactors together.
 - Before declaring done, run the Definition-of-Done checklist (§3). Report honestly if a
   step failed — never claim green tests you didn't run.
-- Don't add dependencies, change the public API, or touch migrations casually — those have
-  review weight. Call them out.
+- Dependencies, public API, migrations, PII, deployment, and credit changes have extra review weight;
+  surface them in the impact matrix and PR.
 - If a request conflicts with a §5 invariant (especially the credit compliance line),
   stop and flag it instead of implementing it.
 - Don't commit or push unless the task explicitly says to.
