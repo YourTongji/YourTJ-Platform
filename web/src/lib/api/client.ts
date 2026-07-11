@@ -31,6 +31,7 @@ interface RequestOptions {
   auth?: boolean | "optional";
   signal?: AbortSignal;
   keepalive?: boolean;
+  authToken?: string;
 }
 
 let refreshPromise: Promise<boolean> | null = null;
@@ -94,7 +95,7 @@ async function refreshTokens() {
 
 async function fetchOnce<T>(path: string, options: RequestOptions) {
   const headers = new Headers(options.headers);
-  const token = options.auth === false ? null : readAccessToken();
+  const token = options.authToken ?? (options.auth === false ? null : readAccessToken());
   if (token) {
     headers.set("Authorization", `Bearer ${token}`);
   }
@@ -127,7 +128,12 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}) 
   try {
     return await fetchOnce<T>(path, options);
   } catch (error) {
-    if (error instanceof ApiError && error.status === 401 && options.auth !== false) {
+    if (
+      error instanceof ApiError
+      && error.status === 401
+      && options.auth !== false
+      && !options.authToken
+    ) {
       const refreshed = await refreshTokens();
       if (refreshed) {
         return fetchOnce<T>(path, options);

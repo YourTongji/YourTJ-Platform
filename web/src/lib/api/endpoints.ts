@@ -28,6 +28,10 @@ import type {
   AnnouncementReceiptInput,
   AnnouncementRevision,
   AnnouncementUpdateInput,
+  Appeal,
+  AppealAccessToken,
+  AppealStatus,
+  AdminAppeal,
   AuthTokens,
   Board,
   Bookmark,
@@ -52,6 +56,7 @@ import type {
   DraftSaveInput,
   EmailCodePurpose,
   Faculty,
+  GovernanceNotice,
   LatestUpdate,
   LedgerEntry,
   LedgerVerify,
@@ -143,6 +148,22 @@ export const api = {
 
   passwordLogin(input: { email: string; password: string }) {
     return apiRequest<AuthTokens>("/auth/password/login", {
+      method: "POST",
+      body: input,
+      auth: false,
+    });
+  },
+
+  appealPasswordLogin(input: { email: string; password: string }) {
+    return apiRequest<AppealAccessToken>("/auth/appeal/password", {
+      method: "POST",
+      body: input,
+      auth: false,
+    });
+  },
+
+  appealEmailVerify(input: { email: string; code: string }) {
+    return apiRequest<AppealAccessToken>("/auth/appeal/email/verify", {
       method: "POST",
       body: input,
       auth: false,
@@ -864,6 +885,53 @@ export const api = {
     });
   },
 
+  myAppeals(cursor?: string | null, authToken?: string) {
+    return apiRequest<Page<Appeal>>("/me/appeals", {
+      query: { cursor, limit: 30 },
+      authToken,
+    });
+  },
+
+  submitAppeal(
+    body: { governanceEventId: string; reason: string },
+    idempotencyKey: string,
+    authToken?: string,
+  ) {
+    return apiRequest<Appeal>("/me/appeals", {
+      method: "POST",
+      body,
+      headers: { "Idempotency-Key": idempotencyKey },
+      authToken,
+    });
+  },
+
+  withdrawAppeal(id: string, expectedVersion: number, reason: string, authToken?: string) {
+    return apiRequest<Appeal>(`/me/appeals/${encodeURIComponent(id)}/withdraw`, {
+      method: "POST",
+      body: { expectedVersion, reason },
+      authToken,
+    });
+  },
+
+  governanceNotices(unread?: boolean, cursor?: string | null, authToken?: string) {
+    return apiRequest<Page<GovernanceNotice>>("/me/governance-notices", {
+      query: { unread, cursor, limit: 30 },
+      authToken,
+    });
+  },
+
+  governanceNoticeUnreadCount(authToken?: string) {
+    return apiRequest<{ count: number }>("/me/governance-notices/unread-count", { authToken });
+  },
+
+  markGovernanceNoticesRead(ids?: string[], authToken?: string) {
+    return apiRequest<void>("/me/governance-notices/read", {
+      method: "POST",
+      body: ids ? { ids } : { all: true },
+      authToken,
+    });
+  },
+
   wallet() {
     return apiRequest<Wallet>("/wallet");
   },
@@ -1036,6 +1104,34 @@ export const api = {
   }) {
     return apiRequest<Page<AdminAuditEvent>>("/admin/audit-events", {
       query: { ...query, limit: 30 },
+    });
+  },
+
+  adminAppeals(status?: AppealStatus, cursor?: string | null) {
+    return apiRequest<Page<AdminAppeal>>("/admin/appeals", {
+      query: { status, cursor, limit: 30 },
+    });
+  },
+
+  startAdminAppealReview(id: string, expectedVersion: number, reason: string) {
+    return apiRequest<AdminAppeal>(`/admin/appeals/${encodeURIComponent(id)}/review`, {
+      method: "POST",
+      body: { expectedVersion, reason },
+    });
+  },
+
+  decideAdminAppeal(
+    id: string,
+    body: {
+      expectedVersion: number;
+      outcome: "upheld" | "overturned" | "amended";
+      reason: string;
+      amendedEndsAt?: number;
+    },
+  ) {
+    return apiRequest<AdminAppeal>(`/admin/appeals/${encodeURIComponent(id)}/decision`, {
+      method: "POST",
+      body,
     });
   },
 

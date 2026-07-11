@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { Bell, LogOut, Menu, MessageCircle, Moon, Plus, Search, Settings, Sun, User } from "lucide-react";
+import { Bell, LogOut, Menu, MessageCircle, Moon, Plus, Scale, Search, Settings, Sun, User } from "lucide-react";
 import * as React from "react";
 import { Link, Outlet, useLocation, useNavigate } from "react-router";
 
@@ -64,6 +64,14 @@ export function AppLayout() {
     refetchInterval: 60_000,
   });
   const unreadCount = notificationCount.data?.count ?? 0;
+  const governanceNotificationCount = useQuery({
+    queryKey: ["governance-notice-count"],
+    queryFn: () => api.governanceNoticeUnreadCount(),
+    enabled: isAuthenticated,
+    staleTime: 30_000,
+    refetchInterval: 60_000,
+  });
+  const combinedUnreadCount = unreadCount + (governanceNotificationCount.data?.count ?? 0);
   const dmCount = useQuery({
     queryKey: ["dm-unread-count"],
     queryFn: api.dmUnreadCount,
@@ -134,12 +142,12 @@ export function AppLayout() {
                 <Link
                   to="/notifications"
                   className="relative"
-                  aria-label={unreadCount > 0 ? `通知，${unreadCount} 条未读` : "通知"}
+                  aria-label={combinedUnreadCount > 0 ? `通知，${combinedUnreadCount} 条未读` : "通知"}
                 >
                   <Bell className="size-[18px]" />
-                  {unreadCount > 0 ? (
+                  {combinedUnreadCount > 0 ? (
                     <span className="absolute -right-1 -top-1 min-w-4 rounded-full bg-primary px-1 text-center text-[10px] font-semibold leading-4 text-primary-foreground">
-                      {unreadCount > 99 ? "99+" : unreadCount}
+                      {combinedUnreadCount > 99 ? "99+" : combinedUnreadCount}
                     </span>
                   ) : null}
                 </Link>
@@ -186,6 +194,10 @@ export function AppLayout() {
                     <DropdownMenuItem onSelect={() => navigate("/settings")}>
                       <Settings className="size-4" />
                       设置
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onSelect={() => navigate("/appeals")}>
+                      <Scale className="size-4" />
+                      申诉中心
                     </DropdownMenuItem>
                     <DropdownMenuSeparator />
                     <DropdownMenuItem variant="destructive" onSelect={() => void logout()}>

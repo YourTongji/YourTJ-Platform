@@ -18,6 +18,14 @@ pub(crate) fn recent_auth_code(code: &str) -> EmailContent {
     code_email("YourTJ 安全验证", "使用以下验证码确认当前设备上的高风险操作。", code)
 }
 
+pub(crate) fn appeal_code(code: &str) -> EmailContent {
+    code_email(
+        "YourTJ 申诉验证",
+        "使用以下验证码进入申诉中心。该验证码不会登录其他 YourTJ 功能。",
+        code,
+    )
+}
+
 pub(crate) fn community_invitation() -> EmailContent {
     EmailContent {
         subject: "YourTJ 社区邀请",

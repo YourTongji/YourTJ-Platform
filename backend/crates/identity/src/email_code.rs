@@ -14,6 +14,7 @@ pub enum CodePurpose {
     Registration,
     PasswordReset,
     RecentAuth,
+    Appeal,
 }
 
 impl CodePurpose {
@@ -23,6 +24,7 @@ impl CodePurpose {
             Self::Registration => "registration",
             Self::PasswordReset => "password_reset",
             Self::RecentAuth => "recent_auth",
+            Self::Appeal => "appeal",
         }
     }
 
@@ -32,6 +34,7 @@ impl CodePurpose {
             "registration" => Some(Self::Registration),
             "password_reset" => Some(Self::PasswordReset),
             "recent_auth" => Some(Self::RecentAuth),
+            "appeal" => Some(Self::Appeal),
             _ => None,
         }
     }

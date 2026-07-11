@@ -16,6 +16,9 @@ const AdminPage = React.lazy(async () => ({
 const AnnouncementsPage = React.lazy(async () => ({
   default: (await import("@/pages/announcements-page")).AnnouncementsPage,
 }));
+const AppealsPage = React.lazy(async () => ({
+  default: (await import("@/pages/appeals-page")).AppealsPage,
+}));
 const BookmarksPage = React.lazy(async () => ({
   default: (await import("@/pages/bookmarks-page")).BookmarksPage,
 }));
@@ -81,6 +84,7 @@ const router = createBrowserRouter(
         { path: "search", element: <SearchPage /> },
         { path: "wallet", element: <WalletPage /> },
         { path: "announcements", element: <AnnouncementsPage /> },
+        { path: "appeals", element: <AppealsPage /> },
         { path: "notifications", element: <NotificationsPage /> },
         { path: "messages", element: <MessagesPage /> },
         { path: "bookmarks", element: <BookmarksPage /> },

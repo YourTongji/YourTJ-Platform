@@ -20,6 +20,8 @@ pub struct JwtClaims {
     pub sid: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ver: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>,
 }
 
 /// An authenticated account, resolved from the bearer token in a header map.
@@ -50,6 +52,7 @@ pub enum Capability {
     ManageVerifications,
     RunOperations,
     ManageCreditIntegrity,
+    ReviewAppeals,
 }
 
 impl Capability {
@@ -72,6 +75,7 @@ impl Capability {
             Self::ManageVerifications => "verifications.manage",
             Self::RunOperations => "operations.jobs",
             Self::ManageCreditIntegrity => "credit.integrity",
+            Self::ReviewAppeals => "appeals.review",
         }
     }
 }
@@ -81,6 +85,7 @@ const MOD_CAPABILITIES: &[Capability] = &[
     Capability::SearchUsers,
     Capability::SilenceUsers,
     Capability::ReadAudit,
+    Capability::ReviewAppeals,
 ];
 
 const ADMIN_CAPABILITIES: &[Capability] = &[
@@ -101,6 +106,7 @@ const ADMIN_CAPABILITIES: &[Capability] = &[
     Capability::ManageVerifications,
     Capability::RunOperations,
     Capability::ManageCreditIntegrity,
+    Capability::ReviewAppeals,
 ];
 
 pub fn capabilities_for_role(role: &str) -> &'static [Capability] {
@@ -188,6 +194,7 @@ mod tests {
         let moderator = AuthAccount { id: 1, role: "mod".into(), status: "active".into() };
         assert!(moderator.has_capability(Capability::ModerateContent));
         assert!(moderator.has_capability(Capability::SilenceUsers));
+        assert!(moderator.has_capability(Capability::ReviewAppeals));
         assert!(!moderator.has_capability(Capability::ManageActivity));
         assert!(!moderator.has_capability(Capability::ManagePromotions));
         assert!(!moderator.has_capability(Capability::ManageBadges));
@@ -204,6 +211,7 @@ mod tests {
         assert!(administrator.has_capability(Capability::ManageBadges));
         assert!(administrator.has_capability(Capability::ManageVerifications));
         assert!(administrator.has_capability(Capability::ManageCreditIntegrity));
+        assert!(administrator.has_capability(Capability::ReviewAppeals));
     }
 
     #[test]

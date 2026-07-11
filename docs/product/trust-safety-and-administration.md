@@ -6,7 +6,7 @@
 >
 > 负责人：Community operations、Security owner、Identity/Forum/Reviews/Media/Web maintainers
 >
-> 最近核验：2026-07-12，migration `0048` 与 identity recent-auth tests
+> 最近核验：2026-07-12，migrations `0047`、`0048` 与 governance/identity integration tests
 
 管理后台是社区政策的执行界面，不是数据库编辑器。所有操作必须先有产品语义、capability、
 目标层级、理由、审计、恢复和通知，再决定按钮放在哪里。
@@ -24,6 +24,14 @@
 - board 后台可配置说明、排序、锁定、最低发帖信任等级和问答属性；公开 board DTO 返回当前用户
   是否可发帖及稳定 restriction code。
 - governance audit 记录多域 staff/system 事件；论坛自动隐藏与 staff 隐藏有不同 provenance。
+- 账号制裁、论坛主题/评论处置和课评隐藏会在同一业务事务中创建当事人专属治理通知；通知只含
+  有界摘要、目标和治理事件编号，不暴露举报人、审核人或私密证据。
+- 申诉中心支持受限制账号通过密码或申诉用途邮箱验证码获取一小时、无 refresh 的 purpose-bound
+  凭据；该凭据只可访问本人的申诉和治理通知，不能访问资料、内容、私信或积分接口。
+- 申诉按原治理事件精确绑定，30 天内一次提交且要求 `Idempotency-Key`；状态历史 append-only，
+  独立复核 capability、原处置人回避、lower-role 层级和 optimistic version 均由服务端执行。
+- 撤销决定在同一 PostgreSQL 事务调用 identity/forum/reviews owner adapter 恢复精确制裁或内容状态；
+  若存在不兼容的后续治理动作或无法安全修复投影，整项决定 fail closed 并回滚。
 - 人工身份/特殊认证由 platform typed definition 与可过期/可撤销 grant 独立建模；后台使用专属
   `verifications.manage` 创建、授予、查看历史和撤销，reason/audit 与 mutation 同事务。
 - 积分完整性区使用独立 `credit.integrity` capability，持久展示只读 ledger verification、逐钱包
@@ -34,7 +42,8 @@
 ### Partial
 
 - “手动注册”只有安全的邀请流程，没有管理员设置明文密码或跳过邮箱验证；这是有意边界。
-- 缺账号停用/删除/恢复/purge、当事人通知、申诉和独立复核。
+- 缺账号停用/删除/恢复/purge；申诉仍缺自动 assignment/reassignment、SLA escalation、证据访问工作台
+  和最终 retention worker。
 - generic settings 只有 string key/value；job trigger 无 durable 状态、进度、失败日志或重试。
 - 成就徽章使用独立 `badges.manage` capability，具备 versioned 定义、人工授予/撤销/重新授予、事件历史、
   运营 UI 与同事务审计；它不复用身份/特殊认证权限。自动贡献授予仍需从 request-local task 迁移到
@@ -137,15 +146,25 @@ key 是最终不变量，不能依赖可能过期的 visible-review counter。
 - 自动阈值隐藏与人工决定分离；reject/ignore 只撤销对应自动 transition。
 - 处罚分 silence 与 suspend；期限、范围和撤销作为追加事件记录。
 
-目标申诉状态：
+当前申诉状态：
 
 ```text
 submitted -> in_review -> upheld | overturned | amended
           \-> withdrawn
 ```
 
-appeal 关联原治理事件，不覆盖原决定；复核人不能是原处置人，证据访问最小化。overturned 时
-恢复合法内容/账号状态并触发相关投影修复；amended 记录新的范围或期限。
+appeal 关联原治理事件，不覆盖原决定。当前约束如下：
+
+- 用户只能对属于自己的、owner domain 明确认可的账号制裁、主题/评论隐藏或删除、课评隐藏发起
+  申诉；不支持的 action/target 统一按 not found 处理，避免泄露治理事件。
+- 同一原事件和账号最多一项 appeal；提交窗口是原事件后 30 天，重复同一幂等请求返回既有结果，
+  相同 key 携带不同请求返回 conflict。
+- `appeals.review` 独立于一般内容审核；复核人必须高于当事人、不能是原处置 actor，并通过 version CAS
+  领取案件，避免并发复核覆盖。
+- `overturned` 恢复对应 sanction/content 并同步 counters、activity、vote/feed/search cache 等必要投影；
+  owner 检测到后续状态变化时拒绝决定。`amended` 当前仅支持缩短账号制裁，不能扩大范围或延长期限。
+- 用户可在领取前撤回。每次 submitted/in-review/terminal transition 均追加不可变 history、中央 audit
+  和 purpose-limited notice；用户可看公开理由，不可看 staff id、举报人或内部 evidence。
 
 ## 反滥用与 Captcha
 
@@ -171,6 +190,7 @@ sanction、trust-level rate limit 和 watched words，尚未接入同一 captcha
 | Overview | 队列、任务失败、安全/可靠性指标 | 按卡片能力组合 |
 | Users | 邀请、搜索、角色、制裁、会话、生命周期 | `users.*` |
 | Moderation | forum/review/DM reports、内容恢复 | `moderation.content` |
+| Appeals | 独立领取、维持/撤销/缩短、状态历史 | `appeals.review` |
 | Media | scan/flag queue、approve/block、asset lookup | `moderation.content` |
 | Community | boards、tags、watched words | `community.manage` |
 | Promotions | placement、clean asset、站内目标、排期、受众、状态 | `promotions.manage` |
@@ -224,13 +244,18 @@ draft/review/published/retired、effective time、owner/approver、diff、适用
 - 推广位是否允许商业内容，以及后续广告合规/计费边界。
 - 各具体认证类型的证据标准、默认有效期、复核周期和证据存储/保留政策；通用 typed grant 与默认私密
   展示边界已经确定，不再通过 string setting 临时配置。
-- appeal reviewer 分配、SLA、举报证据和治理审计保留期。
+- appeal reviewer 自动分配/改派、SLA escalation、举报证据和治理审计保留期；独立复核、冲突回避与
+  owner-domain 原子恢复已经是实现基线。
 
 ## 验收基线
 
 - Web capabilities 与后端授权独立生效，直接构造请求仍被拒绝。
 - 自操作、同级/更高角色、缺理由、过期 recent-auth 和利益冲突案件有负向测试。
 - 内容处置、恢复、处罚、申诉和策略变更在业务事务中追加审计。
+- 受限制账号能使用 purpose-bound appeal token 查看/提交自己的申诉，但同一 token 访问普通 `/me`、
+  内容、私信和积分接口均被拒绝；他人事件、原处置人复核、同级目标和 stale version 有负向测试。
+- overturned/amended 必须与精确 owner-domain reversal 在同一事务提交；任何不支持的 action、后续
+  冲突状态或投影修复失败都不能留下半完成的终态历史。
 - Staff 无任意 DM/PII 浏览能力，敏感 evidence read 本身被审计。
 - 管理 UI 不伪造任务完成、媒体状态、公告确认或 credit 完整性。
 - 用户、内容、媒体、推广、公告、徽章和任务的核心状态机都有可恢复路径和验收旅程。

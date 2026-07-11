@@ -6,7 +6,7 @@
 >
 > 负责人：Privacy owner、Security owner、Domain maintainers
 >
-> 最近核验：2026-07-12，migrations `0034`、`0037`、`0038`、`0040`、`0044`、`0048`、`0049`、`0051`
+> 最近核验：2026-07-12，migrations `0034`、`0037`、`0038`、`0040`、`0044`、`0047`、`0048`、`0049`、`0051`
 
 本规范将数据最小化、可见性、导出、删除和保留作为产品前置条件。它不是法律意见；涉及 PIPL、
 未成年人、广告或跨境处理的最终政策需要合格法律与隐私负责人确认。
@@ -36,6 +36,11 @@
 - 账号搜索只索引已验证、discoverable 且非 `only_me` 账号的 id、handle 和可选 display name；响应
   回表重验 active/suspension、profile visibility、block/mute 与 clean avatar，不索引或返回邮箱、bio、
   relationship 私密名单和内部治理字段。
+- 治理通知是 account-private 最小投影，只保存有界摘要、opaque subject/event/appeal id 与已读时间；
+  不复制举报人、staff identity、evidence 或完整内容。申诉记录保存原事件引用、本人理由、公开决定理由
+  和 append-only transition history，内部 reviewer id 只在 capability-gated admin DTO 出现。
+- Appeal access JWT 只有一小时有效期、无 refresh/session 持久化，浏览器仅放 sessionStorage；普通 API
+  拒绝该 scope，减少受限账号为申诉而重新开放其他个人数据的风险。
 
 ### Partial
 
@@ -56,7 +61,8 @@
 | 公共内容 | thread、comment、review、reaction | 按 board/content policy | revision、治理、导出/删除规则 |
 | 社交关系 | follow、block、mute、subscription | 本人及 policy 允许对象 | block/mute 默认私密、最小暴露 |
 | 私密通信 | DM body、单条 request 附言、private attachment | participants | staff 仅举报证据；未举报 declined request 正文立即删除，其他内容独立 retention |
-| 治理证据 | reports、sanctions、appeals、audit | capability + purpose | 防篡改、访问审计、期限/hold |
+| 治理证据 | reports、sanctions、appeals、appeal history、audit | 本人最小披露；staff capability + purpose | 防篡改、访问审计、期限/hold；不向本人泄露 reporter/staff/evidence |
+| 治理通知 | 处置/申诉安全摘要、subject/event/appeal id、read time | 仅受影响账号 | 不受互动偏好关闭、无 evidence/PII、随治理 retention 协调 |
 | 认证凭证 | type/grant、签发/撤销原因、opaque evidence reference | `verifications.manage`；允许时为最小公开投影 | 默认私密、可到期/撤销、公开不含证据/操作者 |
 | 运营数据 | job log、metrics、aggregated promo events | operators | 聚合、去标识、有限保留 |
 | 外链预览缓存 | 无 query 的规范化 allowlisted HTTPS URL、公开 metadata、失败类别 | 服务端与页面请求者 | ready 最长 7 天、error 2 分钟；query URL/远程图片不持久化，日志只记 hash |
@@ -118,6 +124,8 @@ Profile 字段与社交关系不进入普通请求日志、metrics label 或 gov
 ## 数据导出
 
 - 用户可导出自己的 profile、内容、关系、偏好、通知、允许的 DM 和积分记录。
+- 治理通知与本人申诉的提交/状态/公开理由可进入本人导出；reviewer identity、举报人、内部 metadata 和
+  evidence 不默认导出，额外披露需目的限定政策与访问审计。
 - 账号导出应包含本人认证的类型、当前状态、签发/到期/撤销时间；staff reason、issuer 与 evidence
   reference 属于治理记录，不默认进入用户导出，具体申诉披露按政策处理。
 - 导出生成需要 recent-auth、短期下载 URL、过期和下载审计。
@@ -133,6 +141,8 @@ Profile 字段与社交关系不进入普通请求日志、metrics label 或 gov
 - unreported DM、reported evidence、private attachments；
 - DM request pair/cooldown metadata、request idempotency、outbox/job records；
 - sanctions、appeals、audit 与 access logs；
+- account-private governance notices 与 appeal idempotency records；notice 清理不能先于其申诉窗口，
+  appeal/audit 清理不能破坏仍有效的 legal hold 或原决定可解释性；
 - verification grant history、签发/撤销 reason 与证据对象/reference；
 - search query logs、promotion aggregates、activity fine-grained events；
 - backups、OSS versions 和 CDN cache。
@@ -175,3 +185,5 @@ Legal hold 有合法目的、授权者、范围、到期和审计，不得成为
 - 搜索、cache、OSS/CDN 和 backup 的 deletion/expiry 有 reconciliation 或演练证据。
 - Credit ledger 在删除后仍可验证，但 tombstone 不能反查邮箱或公开身份。
 - PR preview、日志、audit 和 metrics 不包含生产 secret 或不必要 PII。
+- Governance notice/User appeal DTO 只返回 owner 可见字段；普通 token、appeal token、staff capability
+  和他人账号之间有矩阵化授权测试，通知/申诉 retention 在 worker 上线前仍明确标为待决。

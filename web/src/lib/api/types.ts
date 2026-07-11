@@ -4,6 +4,11 @@ export type Schema = components["schemas"];
 
 export type Account = Schema["Account"] & { trustLevel?: number };
 export type AuthTokens = Schema["AuthTokens"];
+export type AppealAccessToken = Schema["AppealAccessToken"];
+export type Appeal = Schema["Appeal"];
+export type AdminAppeal = Schema["AdminAppeal"];
+export type AppealStatus = Schema["AppealStatus"];
+export type GovernanceNotice = Schema["GovernanceNotice"];
 export type DeviceSession = Schema["Session"];
 export type DeviceSessionPage = Schema["SessionPage"];
 export type EmailCodePurpose = Schema["EmailCodePurpose"];

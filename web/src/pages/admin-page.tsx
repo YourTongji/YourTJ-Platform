@@ -3,6 +3,7 @@ import {
   Award,
   BadgeCheck,
   FileClock,
+  Gavel,
   LayoutDashboard,
   Megaphone,
   RectangleHorizontal,
@@ -19,6 +20,7 @@ import { ActivityPolicyPanel } from "@/components/admin/activity-policy-panel";
 import { AchievementsPanel } from "@/components/admin/achievements-panel";
 import { AdminShell, type AdminNavigationItem } from "@/components/admin/admin-shell";
 import { AnnouncementsPanel } from "@/components/admin/announcements-panel";
+import { AppealsPanel } from "@/components/admin/appeals-panel";
 import { AuditPanel } from "@/components/admin/audit-panel";
 import { CreditIntegrityPanel } from "@/components/admin/credit-integrity-panel";
 import {
@@ -38,10 +40,10 @@ import { EmptyState, LoadingState } from "@/components/common/states";
 import { Badge } from "@/components/ui/badge";
 import { useAuth } from "@/context/auth-provider";
 
-type AdminSection = "overview" | "users" | "moderation" | "resources" | "activity" | "announcements" | "promotions" | "achievements" | "verifications" | "credit-integrity" | "audit" | "system";
+type AdminSection = "overview" | "users" | "moderation" | "appeals" | "resources" | "activity" | "announcements" | "promotions" | "achievements" | "verifications" | "credit-integrity" | "audit" | "system";
 
 function isAdminSection(value: string | null): value is AdminSection {
-  return ["overview", "users", "moderation", "resources", "activity", "announcements", "promotions", "achievements", "verifications", "credit-integrity", "audit", "system"].includes(value ?? "");
+  return ["overview", "users", "moderation", "appeals", "resources", "activity", "announcements", "promotions", "achievements", "verifications", "credit-integrity", "audit", "system"].includes(value ?? "");
 }
 
 export function AdminPage() {
@@ -59,6 +61,7 @@ export function AdminPage() {
     || hasCapability(capabilities, ADMIN_CAPABILITIES.silenceUsers)
     || hasCapability(capabilities, ADMIN_CAPABILITIES.suspendUsers);
   const canModerate = hasCapability(capabilities, ADMIN_CAPABILITIES.moderateContent);
+  const canReviewAppeals = hasCapability(capabilities, ADMIN_CAPABILITIES.reviewAppeals);
   const canManageActivity = hasCapability(capabilities, ADMIN_CAPABILITIES.manageActivity);
   const canManageAnnouncements = hasCapability(capabilities, ADMIN_CAPABILITIES.manageAnnouncements);
   const canManagePromotions = hasCapability(capabilities, ADMIN_CAPABILITIES.managePromotions);
@@ -77,6 +80,7 @@ export function AdminPage() {
     if (canSearchUsers) next.push({ id: "overview", label: "概览", description: "队列与社区状态", icon: LayoutDashboard });
     if (canManageUsers) next.push({ id: "users", label: "用户", description: "邀请、角色与制裁", icon: Users });
     if (canModerate) next.push({ id: "moderation", label: "审核", description: "论坛、点评与私信举报", icon: ShieldAlert });
+    if (canReviewAppeals) next.push({ id: "appeals", label: "申诉", description: "独立复核与恢复", icon: Gavel });
     if (canManageResources) next.push({ id: "resources", label: "内容资源", description: "媒体、课程与社区结构", icon: Tags });
     if (canManageActivity) next.push({ id: "activity", label: "活跃度", description: "权重策略与版本", icon: Activity });
     if (canManageAnnouncements) next.push({ id: "announcements", label: "公告", description: "发布与修订", icon: Megaphone });
@@ -87,7 +91,7 @@ export function AdminPage() {
     if (canReadAudit) next.push({ id: "audit", label: "审计", description: "不可变治理事件", icon: FileClock });
     if (canManageSettings || canRunJobs) next.push({ id: "system", label: "平台", description: "设置与运维任务", icon: Settings2 });
     return next;
-  }, [canManageActivity, canManageAnnouncements, canManageBadges, canManageCreditIntegrity, canManagePromotions, canManageResources, canManageSettings, canManageUsers, canManageVerifications, canModerate, canReadAudit, canRunJobs, canSearchUsers]);
+  }, [canManageActivity, canManageAnnouncements, canManageBadges, canManageCreditIntegrity, canManagePromotions, canManageResources, canManageSettings, canManageUsers, canManageVerifications, canModerate, canReadAudit, canReviewAppeals, canRunJobs, canSearchUsers]);
 
   React.useEffect(() => {
     const requested = searchParams.get("section");
@@ -124,6 +128,9 @@ export function AdminPage() {
       break;
     case "moderation":
       panel = <ModerationPanel />;
+      break;
+    case "appeals":
+      panel = <AppealsPanel />;
       break;
     case "activity":
       panel = <ActivityPolicyPanel />;

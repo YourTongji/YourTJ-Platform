@@ -41,6 +41,9 @@
 - SQL 全部使用 bound parameters；输入先做长度、范围、枚举和 ownership 校验。
 - 新 nullable/默认值必须说明 backfill、读旧写新和最终收紧策略。
 - 删除语义区分软删除、匿名化、retention purge 与法律保留。
+- `governance` 拥有跨域 audit、appeal、append-only appeal transition 和 account-private governance
+  notice；identity/forum/reviews 继续拥有原处置状态及 reversal 规则。API composition 只能调用这些
+  owner public functions，不能把制裁/内容恢复 SQL 搬进 gateway。
 
 Fresh database 必须只通过 sqlx migration ledger 建立。普通启动、CI 和运维不能同时用裸 psql
 重复执行同一组文件；开发流程见[本地环境](../development/local-development.md)。
@@ -52,6 +55,9 @@ Fresh database 必须只通过 sqlx migration ledger 建立。普通启动、CI 
 - “已经是目标状态”是幂等成功还是冲突，由产品规范明确，不交给每个 handler 自由决定。
 - 反向动作追加 reversal/history，不覆盖需要审计的原事件。
 - 并发转换使用 row/advisory lock、unique constraint 或 compare-and-set，不只依赖前端禁用按钮。
+- Appeal 以 `(appellant_account_id, governance_event_id)` 唯一约束原处置，以 idempotency key + request
+  hash 区分安全重试和冲突 payload；review/decision 使用 version CAS。历史表由数据库 trigger 禁止
+  update/delete，终态 constraint 要求 reviewer/decision 字段与状态一致。
 
 ## Outbox 与后台任务
 
@@ -146,6 +152,9 @@ Fresh database 必须只通过 sqlx migration ledger 建立。普通启动、CI 
   nullable 默认；滚动发布先跑 migration，再部署读取新列的应用。不带 session id 的 legacy JWT
   status 明确返回 unbound，高风险 mutation 一律 428 fail closed。紧急回退应保留 schema 并在边缘
   关闭高风险 route 后回退应用，不能以恢复无 step-up 的 mutation 作为“可用性降级”。
+- Appeal-only JWT 使用显式 `scope=appeal`、短 TTL、无 refresh/session。普通 identity/forum/reviews/
+  credit middleware 必须拒绝 scoped token；只有治理申诉/通知 composition 调用 restricted authenticator，
+  且 deleted 账号仍不可访问。
 - Identity 的 public account API 只返回 active、未 suspended 且无邮箱的 profile/privacy projection；
   新增 profile/list/new-DM target 解析通过该 API 与 Forum 的 follow/mute/block policy 组合。旧 Forum
   projection 中仍有直接 identity join，需按 owner public API 逐步迁移，不能作为新代码模式复制。
@@ -161,6 +170,11 @@ Fresh database 必须只通过 sqlx migration ledger 建立。普通启动、CI 
   `(account_id, badge_id)` 和稳定 mint idempotency key 去重，人工授予不进入 mint queue，撤销不改 ledger。
 - Secrets、code、token、signature-as-credential、raw email、完整请求 body 和任意 DM 不进入日志/审计。
 - Evidence read 本身是敏感动作，需要 capability、purpose 和 audit。
+- Governance audit event 是申诉的不可变原始引用。提交时 gateway 让 action 的 owner domain 验证
+  ownership/appealability；决定时治理状态转换与 identity/forum/reviews 精确 reversal 共用同一 connection/
+  transaction。owner 发现后续 audit 或不兼容当前状态时 fail closed，commit 后才失效 cache/search。
+- Governance notice 与处置/appeal transition 同事务写入，使用稳定 dedupe key。notice 是当事人安全摘要
+  而非 evidence 副本；通用通知 preference、SSE 或未来 outbox 均不能删除这项 durable 事实。
 - DM archive、mute 和 delete 是 `dm_participants` 上的 participant-local 状态；不能改写另一参与者的
   副本。新消息可恢复双方 inbox 可见性，但 mute 保持独立，并且只影响通知投影，不影响未读计数。
 - DM request 是 canonical pair conversation 上的显式 `pending -> accepted | declined` 状态，不复用

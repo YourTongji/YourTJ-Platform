@@ -19,6 +19,7 @@ pub struct FlagResolutionOutcome {
     pub flag: FlagRow,
     pub thread_id: i64,
     pub board_id: i64,
+    pub content_changed: bool,
 }
 
 #[derive(Debug, FromRow)]
@@ -166,6 +167,29 @@ pub async fn insert_flag(
         )
         .await?;
         super::boards::refresh_board_thread_counts(connection, &affected_board_ids).await?;
+        if let Some(author_id) = target.author_id {
+            let governance_event_id = governance::record_system_event_with_id_tx(
+                connection,
+                "forum.content.auto_hidden",
+                "forum_content",
+                &format!("{target_type}:{target_id}"),
+                "community report threshold reached",
+                Some(&serde_json::json!({ "threshold": 3.0 })),
+            )
+            .await?;
+            governance::notices::create_notice_tx(
+                connection,
+                author_id,
+                "content_restricted",
+                &format!("audit:{governance_event_id}:forum-auto-hide"),
+                Some(governance_event_id),
+                None,
+                if target_type == "thread" { "forum_thread" } else { "forum_comment" },
+                &target_id.to_string(),
+                "你的社区内容因举报阈值被自动隐藏，可在申诉中心查看并申请复核。",
+            )
+            .await?;
+        }
         return Ok(FlagInsertOutcome {
             auto_hidden: true,
             author_id: target.author_id,
@@ -272,6 +296,7 @@ pub async fn resolve_flag(
     .bind(flag.target_id)
     .fetch_one(&mut *connection)
     .await?;
+    let mut content_changed = false;
 
     if action == "uphold" {
         let statement = match flag.target_type.as_str() {
@@ -290,6 +315,7 @@ pub async fn resolve_flag(
             .bind(flag.target_id)
             .fetch_optional(&mut *connection)
             .await?;
+        content_changed = newly_deleted.is_some();
         activity::contributions::deactivate_contribution(
             connection,
             &format!("forum_{}:{}", flag.target_type, flag.target_id),
@@ -408,5 +434,6 @@ pub async fn resolve_flag(
         flag: resolved_flag,
         thread_id: target.thread_id,
         board_id: target.board_id,
+        content_changed,
     })
 }

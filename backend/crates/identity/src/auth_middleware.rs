@@ -89,6 +89,9 @@ pub async fn authenticate_context(
     let token = header.strip_prefix("Bearer ").ok_or_else(shared::auth::unauthorized)?;
 
     let claims = shared::auth::verify_jwt(token, jwt_secret)?;
+    if claims.scope.is_some() {
+        return Err(shared::auth::forbidden());
+    }
     let account_id: i64 = claims.sub.parse().map_err(|_| shared::auth::unauthorized())?;
 
     let account = sqlx::query_as::<_, AccountAuthRow>(
@@ -223,4 +226,40 @@ pub async fn require_recent_auth_tx(
     } else {
         Err(shared::AppError::RecentAuthRequired)
     }
+}
+
+/// Authenticate a normal account session or a short-lived appeal-only token.
+///
+/// Appeal-only tokens deliberately bypass an active suspension but cannot pass the regular
+/// authentication middleware, so they cannot read profile, content, credit, or staff routes.
+pub async fn authenticate_appeal_subject(
+    headers: &HeaderMap,
+    db: &PgPool,
+    jwt_secret: &str,
+    redis: Option<&deadpool_redis::Pool>,
+) -> Result<AuthAccount, axum::response::Response> {
+    let header = headers
+        .get(AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .ok_or_else(shared::auth::unauthorized)?;
+    let token = header.strip_prefix("Bearer ").ok_or_else(shared::auth::unauthorized)?;
+    let claims = shared::auth::verify_jwt(token, jwt_secret)?;
+    if claims.scope.as_deref() != Some("appeal") {
+        return authenticate(headers, db, jwt_secret, redis).await;
+    }
+    if claims.sid.is_some() || claims.ver.is_some() {
+        return Err(shared::auth::unauthorized());
+    }
+    let account_id: i64 = claims.sub.parse().map_err(|_| shared::auth::unauthorized())?;
+    let account: Option<(String, String)> =
+        sqlx::query_as("SELECT role::text, status::text FROM identity.accounts WHERE id = $1")
+            .bind(account_id)
+            .fetch_optional(db)
+            .await
+            .map_err(|_| shared::auth::internal_error())?;
+    let (role, status) = account.ok_or_else(shared::auth::unauthorized)?;
+    if status == "deleted" {
+        return Err(shared::auth::forbidden());
+    }
+    Ok(AuthAccount { id: account_id, role, status })
 }

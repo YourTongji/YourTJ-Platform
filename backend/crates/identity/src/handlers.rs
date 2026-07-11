@@ -13,13 +13,15 @@ use axum::Json;
 use chrono::Utc;
 use shared::{AppResult, AppState, Page};
 
-use crate::auth::{create_session_access_token, generate_refresh_token};
+use crate::auth::{
+    create_appeal_access_token, create_session_access_token, generate_refresh_token,
+};
 use crate::dto::{
-    AccountDto, AuthTokensOutput, BindKeyInput, ClaimChallengeOutput, ClaimInput, MyProfileDto,
-    PasswordChangeInput, PasswordForgotInput, PasswordLoginInput, PasswordResetInput,
-    ProfilePrivacyDto, ProfileUpdateInput, RecentAuthMethod, RecentAuthStatusDto,
-    RecentAuthVerifyInput, RefreshInput, RequestCodeInput, SessionDto, UpdateMeInput,
-    VerifyEmailInput, WalletDto,
+    AccountDto, AppealAccessTokenOutput, AppealEmailVerificationInput, AuthTokensOutput,
+    BindKeyInput, ClaimChallengeOutput, ClaimInput, MyProfileDto, PasswordChangeInput,
+    PasswordForgotInput, PasswordLoginInput, PasswordResetInput, ProfilePrivacyDto,
+    ProfileUpdateInput, RecentAuthMethod, RecentAuthStatusDto, RecentAuthVerifyInput, RefreshInput,
+    RequestCodeInput, SessionDto, UpdateMeInput, VerifyEmailInput, WalletDto,
 };
 use crate::email_code::{generate_code, hash_code, CodePurpose};
 use crate::error::IdentityError;
@@ -240,6 +242,19 @@ async fn issue_tokens(
     })
 }
 
+fn issue_appeal_access(
+    state: &AppState,
+    account: &crate::models::AccountRow,
+) -> AppResult<AppealAccessTokenOutput> {
+    if account.status == "deleted" {
+        return Err(shared::AppError::Forbidden);
+    }
+    let ttl = 60 * 60;
+    let access_token = create_appeal_access_token(account.id, &state.jwt_secret, ttl)
+        .map_err(|error| shared::AppError::Internal(anyhow::anyhow!(error)))?;
+    Ok(AppealAccessTokenOutput { access_token, expires_at: Utc::now().timestamp() + ttl as i64 })
+}
+
 // ---------------------------------------------------------------------------
 // Handlers
 // ---------------------------------------------------------------------------
@@ -297,7 +312,13 @@ pub async fn request_code(
     )
     .await?;
 
-    let email_content = crate::email_templates::login_code(&code);
+    let email_content = match purpose {
+        CodePurpose::Appeal => crate::email_templates::appeal_code(&code),
+        CodePurpose::Login | CodePurpose::Registration => crate::email_templates::login_code(&code),
+        CodePurpose::PasswordReset | CodePurpose::RecentAuth => {
+            return Err(shared::AppError::BadRequest("invalid code purpose".into()))
+        }
+    };
     deliver_email_code(&state, &email, request_id, &email_content).await?;
 
     Ok(StatusCode::NO_CONTENT)
@@ -360,7 +381,9 @@ pub async fn verify_email(
             }
             account
         }
-        (CodePurpose::PasswordReset, _) => return Err(IdentityError::InvalidCode.into()),
+        (CodePurpose::PasswordReset | CodePurpose::Appeal, _) => {
+            return Err(IdentityError::InvalidCode.into())
+        }
         _ => {
             return Err(shared::AppError::Conflict(
                 "account state changed; request a new code".into(),
@@ -1170,6 +1193,56 @@ pub async fn password_login(
     ensure_login_allowed(&state, &account).await?;
 
     Ok(Json(issue_tokens(&state, &account, device_label(&headers).as_deref()).await?))
+}
+
+/// POST /auth/appeal/password — issue a short-lived credential usable only for appeals.
+#[tracing::instrument(skip_all)]
+pub async fn appeal_password_login(
+    State(state): State<AppState>,
+    Json(body): Json<PasswordLoginInput>,
+) -> AppResult<Json<AppealAccessTokenOutput>> {
+    let email = normalize_campus_email(&body.email)?;
+    shared::ratelimit::check_token_bucket(
+        state.redis.as_ref(),
+        "appeal_password_login",
+        &email,
+        5,
+        300,
+    )
+    .await?;
+    let account =
+        repo::find_account_by_email(&state.db, state.email_encryption.as_ref(), &email).await?;
+    let password_hash = account.as_ref().and_then(|account| account.password_hash.as_deref());
+    let valid_length = (1..=128).contains(&body.password.len());
+    let candidate = if valid_length { body.password.as_str() } else { "invalid-password-input" };
+    let matches = password::verify_or_dummy(candidate, password_hash).await?;
+    if !valid_length || !matches || password_hash.is_none() || account.is_none() {
+        return Err(IdentityError::WrongPassword.into());
+    }
+    let account = account.ok_or(shared::AppError::Unauthorized)?;
+    Ok(Json(issue_appeal_access(&state, &account)?))
+}
+
+/// POST /auth/appeal/email/verify — consume an appeal-purpose code without opening a full session.
+#[tracing::instrument(skip_all)]
+pub async fn appeal_email_verify(
+    State(state): State<AppState>,
+    Json(body): Json<AppealEmailVerificationInput>,
+) -> AppResult<Json<AppealAccessTokenOutput>> {
+    let email = normalize_campus_email(&body.email)?;
+    validate_email_code(&body.code)?;
+    repo::consume_email_code(
+        &state.db,
+        state.email_encryption.as_ref(),
+        &email,
+        Some(CodePurpose::Appeal),
+        &body.code,
+    )
+    .await?;
+    let account = repo::find_account_by_email(&state.db, state.email_encryption.as_ref(), &email)
+        .await?
+        .ok_or(IdentityError::InvalidCode)?;
+    Ok(Json(issue_appeal_access(&state, &account)?))
 }
 
 /// POST /auth/password/forgot

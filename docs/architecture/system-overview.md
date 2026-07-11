@@ -6,7 +6,7 @@
 >
 > 负责人：Platform maintainers
 >
-> 最近核验：2026-07-11，`origin/main@ed8a06c`
+> 最近核验：2026-07-12，`codex/x-governance-appeals`
 
 YourTJ 是 Rust/Axum 后端与 React Web 的 monorepo。论坛、课程、评课、选课、积分共享身份和
 PostgreSQL，但每个 domain 仍拥有自己的表、业务规则和 HTTP routes。
@@ -61,7 +61,7 @@ PostgreSQL 是业务事实源。Redis 用于限流、缓存和热计数；Meilis
 | `forum` | boards、threads、comments、votes、subscriptions、notifications、DM | 校园邮箱与密码 |
 | `media` | upload intent、OSS callback、asset quarantine/status | 任意业务内容本身 |
 | `activity` | contribution events、daily projection、score policy | 从源表在读路径临时聚合 |
-| `governance` | 跨域 append-only staff/system audit | 代替各域业务状态 |
+| `governance` | 跨域 append-only audit、申诉状态/历史、当事人治理通知 | 代替各域原处置状态或自行恢复内容/制裁 |
 | `platform` | 公告、用户 receipt、首页推广、人工认证 definition/grant 与 runtime settings | 业务域外的任意 gateway SQL |
 | `search` | 聚合 course/review/thread typed results、查询边界与限流 | 自有业务表、原始索引文档或跨 schema SQL |
 | `shared` | config、errors、auth primitives、pagination、cache/rate-limit helpers | domain SQL 或反向依赖 |
@@ -100,6 +100,9 @@ iOS 与 Flutter 在独立仓库，只消费 OpenAPI 生成的类型和平台 HTT
 ## 同步与一致性边界
 
 - 业务 mutation 与自身表、必要 counter、activity event、governance audit 尽可能在一个事务提交。
+- 治理处置/申诉 transition 与当事人 notice 同事务；申诉终态通过 owner crate public adapter 恢复精确
+  identity/forum/reviews 状态，整条 composition 共用事务。commit 后的 cache/search 修复失败可重试，
+  但任何无法安全判断的后续状态在决定前 fail closed。
 - 搜索、通知、媒体处理和重型 reconciliation 是异步副作用，目标使用 transactional outbox 与
   幂等 consumer；当前仍存在 fire-and-forget 路径，应标为 `Partial`。
 - 公开搜索必须在返回前应用数据库可见性/隐私 policy；索引不能扩大权限。

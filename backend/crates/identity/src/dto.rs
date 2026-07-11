@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 pub enum EmailCodePurpose {
     Login,
     Registration,
+    Appeal,
 }
 
 impl From<EmailCodePurpose> for crate::email_code::CodePurpose {
@@ -18,6 +19,7 @@ impl From<EmailCodePurpose> for crate::email_code::CodePurpose {
         match value {
             EmailCodePurpose::Login => Self::Login,
             EmailCodePurpose::Registration => Self::Registration,
+            EmailCodePurpose::Appeal => Self::Appeal,
         }
     }
 }
@@ -48,6 +50,22 @@ pub struct VerifyEmailInput {
 pub struct PasswordLoginInput {
     pub email: String,
     pub password: String,
+}
+
+/// POST /auth/appeal/email/verify
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppealEmailVerificationInput {
+    pub email: String,
+    pub code: String,
+}
+
+/// A short-lived credential accepted only by the appeal-center routes.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppealAccessTokenOutput {
+    pub access_token: String,
+    pub expires_at: i64,
 }
 
 /// POST /auth/password/forgot

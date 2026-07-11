@@ -6,6 +6,7 @@
 //!   never recomputed with `AVG()` on the read path.
 
 mod admin_handlers;
+pub mod appeals;
 pub(crate) mod dto;
 pub(crate) mod error;
 mod handlers;

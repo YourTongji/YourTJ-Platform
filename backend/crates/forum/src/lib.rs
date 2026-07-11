@@ -4,8 +4,9 @@
 //! At current scale, timelines are read-aggregated and cached — do NOT build
 //! fan-out-on-write. Hot ranking is a periodic job writing a Redis ZSET.
 mod admin;
+pub mod appeals;
 pub mod badges;
-mod cache;
+pub mod cache;
 mod content_permissions;
 mod content_policy;
 pub mod digest;

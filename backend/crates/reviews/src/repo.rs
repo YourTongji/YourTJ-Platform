@@ -55,7 +55,7 @@ async fn require_can_moderate_author(
     Ok(())
 }
 
-async fn set_review_status_tx(
+pub(crate) async fn set_review_status_tx(
     tx: &mut PgConnection,
     review: &ReviewRow,
     new_status: &str,
@@ -786,9 +786,12 @@ pub async fn admin_soft_delete_review(
     .ok_or(ReviewsError::ReviewNotFound)?;
 
     require_can_moderate_author(&mut tx, actor_role, existing.account_id).await?;
+    if existing.status == "hidden" {
+        return Err(shared::AppError::Conflict("review is already hidden".into()));
+    }
     set_review_status_tx(&mut tx, &existing, "hidden").await?;
     let metadata = serde_json::json!({ "oldStatus": existing.status, "newStatus": "hidden" });
-    governance::record_account_event_tx(
+    let governance_event_id = governance::record_account_event_with_id_tx(
         &mut tx,
         governance::AccountActor { account_id: actor_id, role: actor_role },
         "reviews.review.hidden",
@@ -798,6 +801,20 @@ pub async fn admin_soft_delete_review(
         Some(&metadata),
     )
     .await?;
+    if let Some(account_id) = existing.account_id {
+        governance::notices::create_notice_tx(
+            &mut tx,
+            account_id,
+            "content_restricted",
+            &format!("audit:{governance_event_id}:review"),
+            Some(governance_event_id),
+            None,
+            "review",
+            &review_id.to_string(),
+            "你的课评已被隐藏，可在申诉中心查看并申请复核。",
+        )
+        .await?;
+    }
 
     tx.commit().await?;
     Ok(())
@@ -829,7 +846,7 @@ pub async fn admin_toggle_review_visibility(
 
     set_review_status_tx(&mut tx, &existing, new_status).await?;
     let metadata = serde_json::json!({ "oldStatus": existing.status, "newStatus": new_status });
-    governance::record_account_event_tx(
+    let governance_event_id = governance::record_account_event_with_id_tx(
         &mut tx,
         governance::AccountActor { account_id: actor_id, role: actor_role },
         if new_status == "visible" { "reviews.review.restored" } else { "reviews.review.hidden" },
@@ -839,6 +856,22 @@ pub async fn admin_toggle_review_visibility(
         Some(&metadata),
     )
     .await?;
+    if new_status == "hidden" {
+        if let Some(account_id) = existing.account_id {
+            governance::notices::create_notice_tx(
+                &mut tx,
+                account_id,
+                "content_restricted",
+                &format!("audit:{governance_event_id}:review"),
+                Some(governance_event_id),
+                None,
+                "review",
+                &review_id.to_string(),
+                "你的课评已被隐藏，可在申诉中心查看并申请复核。",
+            )
+            .await?;
+        }
+    }
 
     tx.commit().await?;
     Ok(())
@@ -925,6 +958,7 @@ pub async fn resolve_report(
     .await?
     .ok_or(ReviewsError::ReviewNotFound)?;
     require_can_moderate_author(&mut tx, actor_role, review.account_id).await?;
+    let content_changed = decision == "upheld" && review.status != "hidden";
     if decision == "upheld" {
         set_review_status_tx(&mut tx, &review, "hidden").await?;
     }
@@ -938,8 +972,15 @@ pub async fn resolve_report(
     .bind(report_id)
     .execute(&mut *tx)
     .await?;
-    let metadata = serde_json::json!({ "decision": decision, "reviewId": report.review_id });
-    governance::record_account_event_tx(
+    let old_status = review.status.as_str();
+    let metadata = serde_json::json!({
+        "decision": decision,
+        "reviewId": report.review_id,
+        "oldStatus": old_status,
+        "newStatus": if decision == "upheld" { "hidden" } else { old_status },
+        "contentChanged": content_changed,
+    });
+    let governance_event_id = governance::record_account_event_with_id_tx(
         &mut tx,
         governance::AccountActor { account_id: actor_id, role: actor_role },
         "reviews.report.decided",
@@ -949,6 +990,22 @@ pub async fn resolve_report(
         Some(&metadata),
     )
     .await?;
+    if decision == "upheld" && content_changed {
+        if let Some(account_id) = review.account_id {
+            governance::notices::create_notice_tx(
+                &mut tx,
+                account_id,
+                "content_restricted",
+                &format!("audit:{governance_event_id}:review-report"),
+                Some(governance_event_id),
+                None,
+                "review",
+                &review.id.to_string(),
+                "你的课评在举报复核后被隐藏，可在申诉中心查看并申请复核。",
+            )
+            .await?;
+        }
+    }
     let updated = sqlx::query_as::<_, ReviewReportRow>(
         "SELECT report.id, report.review_id, report.reporter_account_id, report.reason, \
                 report.status, report.admin_note, report.created_at, \

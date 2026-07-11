@@ -120,6 +120,9 @@ pub async fn admin_comment_action(
 
     match action.as_str() {
         "delete" => {
+            if comment.deleted_at.is_some() {
+                return Err(AppError::Conflict("comment is already deleted".into()));
+            }
             sqlx::query(
                 "UPDATE forum.comments SET deleted_at = now(), deleted_by = $1 WHERE id = $2",
             )
@@ -152,6 +155,11 @@ pub async fn admin_comment_action(
             }
         }
         "hide" => {
+            if comment.hidden_at.is_some() || comment.deleted_at.is_some() {
+                return Err(AppError::Conflict(
+                    "comment cannot be hidden from its current state".into(),
+                ));
+            }
             sqlx::query("UPDATE forum.comments SET hidden_at = now() WHERE id = $1")
                 .bind(id)
                 .execute(&mut *tx)
@@ -203,7 +211,7 @@ pub async fn admin_comment_action(
     }
     crate::repo::insert_mod_action(&mut *tx, auth.id, &action, "comment", id, Some(reason), None)
         .await?;
-    governance::record_account_event_tx(
+    let governance_event_id = governance::record_account_event_with_id_tx(
         &mut tx,
         governance::AccountActor { account_id: auth.id, role: &auth.role },
         &format!("forum.comment.{action}"),
@@ -213,6 +221,25 @@ pub async fn admin_comment_action(
         None,
     )
     .await?;
+    if matches!(action.as_str(), "hide" | "delete") {
+        if let Some(author_id) = comment.author_id {
+            governance::notices::create_notice_tx(
+                &mut tx,
+                author_id,
+                "content_restricted",
+                &format!("audit:{governance_event_id}:forum-comment"),
+                Some(governance_event_id),
+                None,
+                "forum_comment",
+                &id.to_string(),
+                &format!(
+                    "你的评论已被{}，可在申诉中心查看并申请复核。",
+                    if action == "hide" { "隐藏" } else { "软移除" }
+                ),
+            )
+            .await?;
+        }
+    }
     tx.commit().await?;
 
     crate::cache::invalidate_thread_surfaces(

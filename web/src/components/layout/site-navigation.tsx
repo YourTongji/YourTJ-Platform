@@ -9,6 +9,7 @@ import {
   MessageSquare,
   Settings,
   Shield,
+  Scale,
   Sparkles,
   WalletCards,
 } from "lucide-react";
@@ -35,6 +36,7 @@ const communityNavigation = [
   { to: "/notifications", label: "通知", icon: Bell },
   { to: "/messages", label: "私信", icon: MessageSquare },
   { to: "/bookmarks", label: "收藏", icon: Bookmark },
+  { to: "/appeals", label: "申诉中心", icon: Scale },
 ];
 
 const adminNavigation = { to: "/admin", label: "社区管理", icon: Shield };

@@ -77,6 +77,12 @@ components:
       in: header
       required: true
       schema: { type: string, minLength: 8, maxLength: 128, pattern: '^[!-~]+$' }
+    AppealIdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema: { type: string, minLength: 8, maxLength: 128, pattern: '^[A-Za-z0-9._:-]+$' }
+      description: Account-scoped key. Reuse with a different event or reason returns conflict.
 
   responses:
     BadRequest:   { description: Bad request, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
@@ -182,7 +188,7 @@ components:
         account: { $ref: "#/components/schemas/Account" }
     EmailCodePurpose:
       type: string
-      enum: [login, registration]
+      enum: [login, registration, appeal]
     EmailCodeRequest:
       type: object
       required: [email, captchaToken]
@@ -191,7 +197,7 @@ components:
         captchaToken: { type: string, minLength: 1 }
         purpose:
           allOf: [{ $ref: "#/components/schemas/EmailCodePurpose" }]
-          description: Optional only for rolling compatibility. New clients must send it; omission binds a concrete login or registration purpose when the code is issued.
+          description: Optional only for rolling compatibility. Appeal codes are consumed only by /auth/appeal/email/verify.
     EmailCodeVerification:
       type: object
       required: [email, code]
@@ -200,7 +206,7 @@ components:
         code: { type: string, pattern: '^[0-9]{6}$' }
         purpose:
           allOf: [{ $ref: "#/components/schemas/EmailCodePurpose" }]
-          description: Optional only for rolling compatibility. When present it must match the issued code; omission can consume only login or registration codes, never password-reset codes.
+          description: Optional only for rolling compatibility. This full-login endpoint rejects appeal-purpose codes.
         handle: { type: string, minLength: 3, maxLength: 30 }
         password: { type: string, format: password, minLength: 8, maxLength: 128 }
     RefreshInput:
@@ -253,6 +259,118 @@ components:
         password: { type: string, format: password, minLength: 1, maxLength: 128 }
         code: { type: string, pattern: '^[0-9]{6}$' }
       description: Exactly the credential matching method must be supplied; the server binds success to the current revocable session.
+    AppealAccessToken:
+      type: object
+      required: [accessToken, expiresAt]
+      properties:
+        accessToken:
+          type: string
+          description: Short-lived bearer accepted only by /me/appeals and /me/governance-notices.
+        expiresAt: { type: integer }
+    AppealEmailVerification:
+      type: object
+      additionalProperties: false
+      required: [email, code]
+      properties:
+        email: { type: string, format: email }
+        code: { type: string, pattern: '^[0-9]{6}$' }
+    AppealStatus:
+      type: string
+      enum: [submitted, in_review, upheld, overturned, amended, withdrawn]
+    AppealHistory:
+      type: object
+      required: [id, toStatus, reason, createdAt]
+      properties:
+        id: { type: string }
+        fromStatus: { allOf: [{ $ref: "#/components/schemas/AppealStatus" }], nullable: true }
+        toStatus: { $ref: "#/components/schemas/AppealStatus" }
+        reason: { type: string, minLength: 3, maxLength: 1000 }
+        metadata:
+          type: object
+          nullable: true
+          description: Bounded public decision metadata; currently only a shortened sanction endsAt.
+        createdAt: { type: integer }
+    Appeal:
+      type: object
+      required: [id, governanceEventId, originalAction, targetKind, targetId, dispositionKind, status, submissionReason, submittedAt, appealableUntil, version, history]
+      properties:
+        id: { type: string }
+        governanceEventId: { type: string }
+        originalAction: { type: string }
+        originalReason:
+          type: string
+          nullable: true
+          maxLength: 1000
+          description: Safe disposition summary for the owner; authorized staff may receive the internal reason.
+        targetKind: { type: string, enum: [sanction, forum_thread, forum_comment, review] }
+        targetId: { type: string }
+        dispositionKind: { type: string, enum: [silence, suspend, hide, delete] }
+        status: { $ref: "#/components/schemas/AppealStatus" }
+        submissionReason: { type: string, minLength: 3, maxLength: 1000 }
+        submittedAt: { type: integer }
+        appealableUntil: { type: integer }
+        reviewStartedAt: { type: integer, nullable: true }
+        decisionReason: { type: string, nullable: true, minLength: 3, maxLength: 1000 }
+        amendment: { type: object, nullable: true }
+        decidedAt: { type: integer, nullable: true }
+        version: { type: integer, minimum: 1 }
+        history: { type: array, items: { $ref: "#/components/schemas/AppealHistory" } }
+    AdminAppeal:
+      allOf:
+        - $ref: "#/components/schemas/Appeal"
+        - type: object
+          required: [appellantAccountId]
+          properties:
+            appellantAccountId: { type: string }
+            reviewerAccountId: { type: string, nullable: true }
+    SubmitAppealInput:
+      type: object
+      additionalProperties: false
+      required: [governanceEventId, reason]
+      properties:
+        governanceEventId: { type: string }
+        reason: { type: string, minLength: 3, maxLength: 1000 }
+    AppealTransitionInput:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, reason]
+      properties:
+        expectedVersion: { type: integer, minimum: 1 }
+        reason: { type: string, minLength: 3, maxLength: 1000 }
+    AppealDecisionInput:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, outcome, reason]
+      properties:
+        expectedVersion: { type: integer, minimum: 1 }
+        outcome: { type: string, enum: [upheld, overturned, amended] }
+        reason: { type: string, minLength: 3, maxLength: 1000 }
+        amendedEndsAt:
+          type: integer
+          nullable: true
+          description: Only for amended sanctions; must shorten the active sanction.
+    GovernanceNotice:
+      type: object
+      required: [id, noticeType, subjectKind, subjectId, summary, targetUrl, read, createdAt]
+      properties:
+        id: { type: string }
+        noticeType:
+          type: string
+          enum: [sanction_applied, content_restricted, appeal_submitted, appeal_in_review, appeal_upheld, appeal_overturned, appeal_amended, appeal_withdrawn]
+        subjectKind: { type: string, enum: [sanction, forum_thread, forum_comment, review, appeal] }
+        subjectId: { type: string }
+        summary: { type: string, minLength: 1, maxLength: 500 }
+        appealId: { type: string, nullable: true }
+        targetUrl: { type: string, pattern: '^/' }
+        read: { type: boolean }
+        readAt: { type: integer, nullable: true }
+        createdAt: { type: integer }
+    GovernanceNoticeReadInput:
+      type: object
+      additionalProperties: false
+      properties:
+        ids: { type: array, minItems: 1, maxItems: 100, items: { type: string } }
+        all: { type: boolean }
 
     # ---- courses / reviews ----
     Department: { type: object, properties: { id: { type: string }, name: { type: string } } }
@@ -1218,6 +1336,18 @@ components:
       allOf:
         - $ref: "#/components/schemas/Page"
         - { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/Notification" } } } }
+    AppealPage:
+      allOf:
+        - $ref: "#/components/schemas/Page"
+        - { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/Appeal" } } } }
+    AdminAppealPage:
+      allOf:
+        - $ref: "#/components/schemas/Page"
+        - { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/AdminAppeal" } } } }
+    GovernanceNoticePage:
+      allOf:
+        - $ref: "#/components/schemas/Page"
+        - { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/GovernanceNotice" } } } }
     TaskPage:
       allOf:
         - $ref: "#/components/schemas/Page"
@@ -2033,6 +2163,38 @@ paths:
         "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/AuthTokens" } } } }
         "400": { $ref: "#/components/responses/BadRequest" }
         "409": { $ref: "#/components/responses/Conflict" }
+  /auth/appeal/email/verify:
+    post:
+      tags: [auth]
+      security: []
+      summary: Exchange an appeal-purpose email code for an appeal-only credential
+      description: Suspended accounts may use this credential only for their own appeal cases and governance notices.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/AppealEmailVerification" } } } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/AppealAccessToken" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /auth/appeal/password:
+    post:
+      tags: [auth]
+      security: []
+      summary: Verify campus email and password for appeal-only access
+      description: Returns no refresh token and does not authorize any non-appeal route.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string, format: password, minLength: 1, maxLength: 128 }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/AppealAccessToken" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
   /auth/refresh:
     post:
       tags: [auth]
@@ -2986,6 +3148,70 @@ paths:
       summary: Remove the current account's profile banner binding
       responses: { "204": { description: removed }, "401": { $ref: "#/components/responses/Unauthorized" } }
 
+  # ============ governance appeals and notices ============
+  /me/appeals:
+    get:
+      tags: [identity, admin]
+      summary: List my appeal cases and immutable status history
+      description: Accepts either a normal account bearer or a short-lived appeal-only bearer.
+      parameters: [{ $ref: "#/components/parameters/Cursor" }, { $ref: "#/components/parameters/Limit" }]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/AppealPage" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      tags: [identity, admin]
+      summary: Submit an appeal for my own active governance disposition
+      description: One case per original event. The original action must be within 30 days and still active.
+      parameters: [{ $ref: "#/components/parameters/AppealIdempotencyKey" }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/SubmitAppealInput" } } } }
+      responses:
+        "201": { description: created, content: { application/json: { schema: { $ref: "#/components/schemas/Appeal" } } } }
+        "200": { description: idempotent replay, content: { application/json: { schema: { $ref: "#/components/schemas/Appeal" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /me/appeals/{id}/withdraw:
+    post:
+      tags: [identity, admin]
+      summary: Withdraw my unclaimed appeal without erasing history
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/AppealTransitionInput" } } } }
+      responses:
+        "200": { description: withdrawn, content: { application/json: { schema: { $ref: "#/components/schemas/Appeal" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /me/governance-notices:
+    get:
+      tags: [notifications]
+      summary: List mandatory account-private governance notices
+      description: Notices contain no staff identity, reporter identity, or private evidence.
+      parameters:
+        - { name: unread, in: query, schema: { type: boolean, default: false } }
+        - { $ref: "#/components/parameters/Cursor" }
+        - { $ref: "#/components/parameters/Limit" }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/GovernanceNoticePage" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /me/governance-notices/unread-count:
+    get:
+      tags: [notifications]
+      summary: Count unread mandatory governance notices
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: object, required: [count], properties: { count: { type: integer, minimum: 0 } } } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /me/governance-notices/read:
+    post:
+      tags: [notifications]
+      summary: Mark selected or all governance notices read
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/GovernanceNoticeReadInput" } } } }
+      responses:
+        "204": { description: marked }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
   # ============ notifications ============
   /notifications:
     get:
@@ -3123,6 +3349,43 @@ paths:
         - { $ref: "#/components/parameters/Cursor" }
         - { $ref: "#/components/parameters/Limit" }
       responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/AdminAuditEventPage" } } } }, "403": { $ref: "#/components/responses/Forbidden" } }
+  /admin/appeals:
+    get:
+      tags: [admin]
+      summary: List lower-role appeal cases visible to an independent reviewer
+      parameters:
+        - { name: status, in: query, schema: { $ref: "#/components/schemas/AppealStatus" } }
+        - { $ref: "#/components/parameters/Cursor" }
+        - { $ref: "#/components/parameters/Limit" }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/AdminAppealPage" } } } }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /admin/appeals/{id}/review:
+    post:
+      tags: [admin]
+      summary: Claim a submitted appeal for independent review
+      description: The reviewer must outrank the appellant and cannot be the original disposition actor.
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/AppealTransitionInput" } } } }
+      responses:
+        "200": { description: in review, content: { application/json: { schema: { $ref: "#/components/schemas/AdminAppeal" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /admin/appeals/{id}/decision:
+    post:
+      tags: [admin]
+      summary: Decide an assigned appeal and atomically apply any owner-domain reversal
+      description: Content targets support upheld/overturned. Sanctions additionally support a shortening amendment; unsupported adjustments fail closed.
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/AppealDecisionInput" } } } }
+      responses:
+        "200": { description: decided, content: { application/json: { schema: { $ref: "#/components/schemas/AdminAppeal" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
   /admin/credit/reconciliations:
     get:
       tags: [admin, credit]

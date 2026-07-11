@@ -6,7 +6,7 @@
 >
 > 负责人：Platform maintainers、Domain maintainers
 >
-> 最近核验：2026-07-11，`origin/main@ed8a06c`
+> 最近核验：2026-07-12，`codex/x-governance-appeals`
 
 先跑最小 focused test 获得快速反馈，再按 changed scope 跑与 CI 一致的完整 gate。没有运行的检查
 不能在 PR 或交付中写成通过。
@@ -143,14 +143,15 @@ security 和 operations 都不受影响。
 | S2 Identity | 注册、密码/验证码登录、purpose/replay、找回、refresh rotation、session revoke、sanction |
 | S3 Selection data | fresh migration、Raw→catalogue/selection 物化不变量、重复运行、关键 API/search |
 | S4 Reviews | publish idempotency、edit/like/unlike/report/decision、visibility、course-delete restriction |
-| S5 Community | board policy、thread/comment create/edit/delete/restore、interaction、activity、follow/privacy、notification、DM |
-| S6 Credit | signing intent、tamper/replay、ledger chain、balance reconciliation、escrow edge states |
-| S7 Search/media | typed federated results、visibility/stale index、reindex；upload intent/callback/scan/binding/delete/GC |
-| S8 Final reconciliation | counters、activity、search、unread、jobs、audit 与 source-of-truth 终态一致 |
+| S5 Community | board policy、thread/comment create/edit/delete/restore、interaction、activity、follow/privacy、notification、DM；处置通知与 owner-domain appeal reversal |
+| S6 Governance | suspended appeal-only access、普通 route scope isolation、仅本人原事件、idempotency conflict、30 天窗口、独立 reviewer/hierarchy、stale claim、原子 overturn/amend/history/notice |
+| S7 Credit | signing intent、tamper/replay、ledger chain、balance reconciliation、escrow edge states |
+| S8 Search/media | typed federated results、visibility/stale index、reindex；upload intent/callback/scan/binding/delete/GC |
+| S9 Final reconciliation | counters、activity、search、unread、jobs、audit 与 source-of-truth 终态一致 |
 
 当前 `crates/e2e` 没有覆盖这张完整矩阵，也未进入 CI；Web 只有最小 component/axe harness，仍没有
 浏览器 suite。不要在文档或 PR
-声称“E2E 完整”。每个功能 PR 先补受影响旅程，平台后续再把 S1–S8 编排成可重复的隔离环境 gate。
+声称“E2E 完整”。每个功能 PR 先补受影响旅程，平台后续再把 S1–S9 编排成可重复的隔离环境 gate。
 
 ## PR 记录
 

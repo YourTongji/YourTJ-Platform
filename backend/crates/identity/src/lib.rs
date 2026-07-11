@@ -37,6 +37,8 @@ pub fn routes(state: AppState) -> Router {
         .route("/api/v2/auth/logout", post(handlers::logout))
         .route("/api/v2/auth/logout-all", post(handlers::logout_all))
         .route("/api/v2/auth/password/login", post(handlers::password_login))
+        .route("/api/v2/auth/appeal/password", post(handlers::appeal_password_login))
+        .route("/api/v2/auth/appeal/email/verify", post(handlers::appeal_email_verify))
         .route("/api/v2/auth/password/forgot", post(handlers::password_forgot))
         .route("/api/v2/auth/password/reset", post(handlers::password_reset))
         .route("/api/v2/auth/password/change", post(handlers::password_change))

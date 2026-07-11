@@ -6,7 +6,7 @@
 >
 > 负责人：Security owner、Identity/Governance maintainers
 >
-> 最近核验：2026-07-12，migration `0048` 与 identity recent-auth tests
+> 最近核验：2026-07-12，migrations `0047`、`0048` 与 governance/identity integration tests
 
 后端授权每一个 staff 操作。Web 按 capability 隐藏导航只是可用性和数据最小化措施，绝不是
 安全边界。
@@ -22,20 +22,25 @@
 - Forum 主题/评论列表和详情返回服务端计算的 author/moderation viewer actions；`canModerate` 同时要求
   `moderation.content`、非自身目标和 lower-role author。Web 不再仅凭本地 capability 显示治理按钮，
   但这些字段仍不是写操作授权边界。
-- `governance.audit_events` 是 append-only account/system/service actor 记录；多数管理 mutation
-  在业务事务中写入，reported-DM evidence list 也会审计。
+- `governance.audit_events` 是数据库 trigger 保护的 append-only account/system/service actor 记录；
+  多数管理 mutation 在业务事务中写入，reported-DM evidence list 也会审计。
 - 人工认证使用独立 `verifications.manage`，拒绝 self/equal/higher-role target；类型创建、授予和撤销
   都要求 reason，并把业务状态与成功 audit 放在同一事务。
 - 成就运营使用独立 `badges.manage`；定义 mutation 使用版本并发控制，人工授予/撤销拒绝 self/equal/
   higher-role target、要求 reason，并把状态与成功 audit 放在同一事务。
 - 角色变更、suspend/解除 suspend 和管理员强制 session revoke 要求 10 分钟内的
   server-side session recent-auth；密码和 `recent_auth` purpose 邮箱 code 均可验证。
+- 申诉复核使用独立 `appeals.review` capability。moderator/admin 均可读取 lower-role 队列，但原处置
+  actor 不能领取，领取后只有同一 reviewer 可通过 optimistic version 提交决定。
+- Identity 可签发 `scope=appeal` 的短期 access JWT；普通 auth middleware 明确拒绝任何 scoped token，
+  只有本人申诉/治理通知路由使用专门认证函数。受 suspension 影响的账号仍可申诉，deleted 账号拒绝。
 
 ### Partial
 
 - capability 仍按角色静态映射，没有 per-account delegation。
 - 缺标准 request id/source/result、失败/拒绝 attempt audit 和受控 export。
-- 缺双人审批、利益冲突 assignment/recusal、appeal independent review 和明确 retention。
+- 缺双人审批、自动 assignment/recusal workflow、SLA escalation 和明确 retention；申诉的原处置人
+  回避、reviewer 绑定与 lower-role 检查已经在服务端生效。
 - 仍有 admin/platform 业务 SQL 位于 api crate，owner/audit 一致性需要持续收敛。
 
 ## 当前 capability 基线
@@ -46,6 +51,7 @@
 | `users.search` | yes | yes | 隐私安全的用户目录与制裁历史 |
 | `users.silence` | yes | yes | 对 lower-role 限时禁言与撤销 |
 | `audit.read` | yes | yes | 中央审计查询 |
+| `appeals.review` | yes | yes | lower-role 申诉的独立领取与决定 |
 | `users.invite` | — | yes | 到期校园邀请 |
 | `users.roles` | — | yes | lower-role 的 user/mod 变更 |
 | `users.suspend` | — | yes | suspension、撤销和会话撤销 |
@@ -97,6 +103,10 @@ capability，不能塞进过宽的 `community.manage`。
   grant 默认私密，公开开关不能绕过 definition policy，重复有效 grant 与重复/过期撤销返回 conflict。
 - `badges.manage` 只允许管理员处理 lower-role account。Definition 只接受受控 icon/plain text，stale
   version 返回 conflict；人工授予不能触发 mint，撤销不能反转历史积分，事件与中央审计都只追加。
+- 申诉提交先通过 owner domain 验证原事件可申诉且属于当前账号；失败统一不泄露事件是否存在。复核人
+  必须有 `appeals.review`、高于 appellant 且不同于原处置 actor，不能借 Web 隐藏按钮绕过。
+- Appeal token 只接受 purpose-bound 密码/邮箱证明，不创建 session/refresh；普通 `authenticate` 对其
+  返回 forbidden。该 scope 不得被扩展为“受限通用登录”，新增可访问 route 需要单独 threat review。
 
 ## Audit event
 
@@ -119,6 +129,8 @@ reference 或实际证据内容。
 
 - 业务状态和成功 audit 在同一 transaction 提交；audit 失败则敏感 mutation 不提交。
 - 撤销/修正追加新事件，不更新或删除旧 audit。
+- 申诉终态和 owner-domain reversal 位于同一 PostgreSQL transaction；论坛/课评只恢复被原事件精确
+  改变的状态，账号 amendment 只允许缩短制裁。后续治理事件冲突、投影修复或 audit/notice 失败时回滚。
 - Durable job 的 requested/started/succeeded/failed 使用同一 correlation id，不能只审计“按钮被点”。
 - 有界的 rejected/failed privileged attempts 需要安全事件策略，避免既无审计又被攻击者刷爆。
 - Audit export 加 watermark、purpose、rate limit、expiry 和下载审计。
@@ -141,3 +153,5 @@ reference 或实际证据内容。
   provider 未接受和 session 撤销恢复。双人审批与 export 仍需独立 threat review。
 - Staff recent-auth 只证明同一账号在当前 session 内再次提供单因素；它不是 phishing-resistant
   MFA，WebAuthn/passkey、recovery 和 break-glass 仍为 `Partial`。
+- Appeal token 不能访问普通 authenticated surface；他人事件、同级/自身目标、原处置人复核、重复 key
+  变更 payload 和 stale version 有 handler→PostgreSQL 负向测试。

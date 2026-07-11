@@ -191,6 +191,11 @@ pub async fn admin_thread_action(
             }
         }
         "hide" => {
+            if thread.hidden_at.is_some() || thread.deleted_at.is_some() {
+                return Err(AppError::Conflict(
+                    "thread cannot be hidden from its current state".into(),
+                ));
+            }
             crate::repo::hide_thread(&mut *tx, id).await?;
             if was_visible {
                 activity::contributions::deactivate_contribution(
@@ -253,7 +258,7 @@ pub async fn admin_thread_action(
         metadata.as_ref(),
     )
     .await?;
-    governance::record_account_event_tx(
+    let governance_event_id = governance::record_account_event_with_id_tx(
         &mut tx,
         governance::AccountActor { account_id: auth.id, role: &auth.role },
         &format!("forum.thread.{action}"),
@@ -263,6 +268,25 @@ pub async fn admin_thread_action(
         metadata.as_ref(),
     )
     .await?;
+    if matches!(action.as_str(), "hide" | "delete") {
+        if let Some(author_id) = thread.author_id {
+            governance::notices::create_notice_tx(
+                &mut tx,
+                author_id,
+                "content_restricted",
+                &format!("audit:{governance_event_id}:forum-thread"),
+                Some(governance_event_id),
+                None,
+                "forum_thread",
+                &id.to_string(),
+                &format!(
+                    "你的主题已被{}，可在申诉中心查看并申请复核。",
+                    if action == "hide" { "隐藏" } else { "软移除" }
+                ),
+            )
+            .await?;
+        }
+    }
     tx.commit().await?;
 
     crate::cache::invalidate_thread_surfaces(state.redis.as_ref(), id, thread.board_id).await;

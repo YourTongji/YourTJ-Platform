@@ -426,7 +426,7 @@ async fn create_sanction(
         "kind": kind,
         "endsAt": ends_at.map(|timestamp| timestamp.timestamp()),
     });
-    governance::record_account_event_tx(
+    let event_id = governance::record_account_event_with_id_tx(
         &mut tx,
         AccountActor { account_id: auth.id, role: &auth.role },
         "identity.user.sanctioned",
@@ -434,6 +434,21 @@ async fn create_sanction(
         &sanction_id.to_string(),
         reason,
         Some(&metadata),
+    )
+    .await?;
+    governance::notices::create_notice_tx(
+        &mut tx,
+        account_id,
+        "sanction_applied",
+        &format!("audit:{event_id}:sanction"),
+        Some(event_id),
+        None,
+        "sanction",
+        &sanction_id.to_string(),
+        &format!(
+            "账号已被{}，可在申诉中心查看并申请复核。",
+            if kind == "suspend" { "封禁" } else { "禁言" }
+        ),
     )
     .await?;
     tx.commit().await?;

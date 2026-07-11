@@ -86,6 +86,101 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/auth/appeal/email/verify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Exchange an appeal-purpose email code for an appeal-only credential
+         * @description Suspended accounts may use this credential only for their own appeal cases and governance notices.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["AppealEmailVerification"];
+                };
+            };
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AppealAccessToken"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/appeal/password": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Verify campus email and password for appeal-only access
+         * @description Returns no refresh token and does not authorize any non-appeal route.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** Format: email */
+                        email: string;
+                        /** Format: password */
+                        password: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AppealAccessToken"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/auth/refresh": {
         parameters: {
             query?: never;
@@ -5100,6 +5195,263 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/me/appeals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List my appeal cases and immutable status history
+         * @description Accepts either a normal account bearer or a short-lived appeal-only bearer.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description Opaque pagination cursor */
+                    cursor?: components["parameters"]["Cursor"];
+                    limit?: components["parameters"]["Limit"];
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AppealPage"];
+                    };
+                };
+                401: components["responses"]["Unauthorized"];
+            };
+        };
+        put?: never;
+        /**
+         * Submit an appeal for my own active governance disposition
+         * @description One case per original event. The original action must be within 30 days and still active.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header: {
+                    /** @description Account-scoped key. Reuse with a different event or reason returns conflict. */
+                    "Idempotency-Key": components["parameters"]["AppealIdempotencyKey"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["SubmitAppealInput"];
+                };
+            };
+            responses: {
+                /** @description idempotent replay */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Appeal"];
+                    };
+                };
+                /** @description created */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Appeal"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
+                404: components["responses"]["NotFound"];
+                409: components["responses"]["Conflict"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/me/appeals/{id}/withdraw": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Withdraw my unclaimed appeal without erasing history */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["AppealTransitionInput"];
+                };
+            };
+            responses: {
+                /** @description withdrawn */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Appeal"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
+                404: components["responses"]["NotFound"];
+                409: components["responses"]["Conflict"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/me/governance-notices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List mandatory account-private governance notices
+         * @description Notices contain no staff identity, reporter identity, or private evidence.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    unread?: boolean;
+                    /** @description Opaque pagination cursor */
+                    cursor?: components["parameters"]["Cursor"];
+                    limit?: components["parameters"]["Limit"];
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["GovernanceNoticePage"];
+                    };
+                };
+                401: components["responses"]["Unauthorized"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/me/governance-notices/unread-count": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Count unread mandatory governance notices */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            count: number;
+                        };
+                    };
+                };
+                401: components["responses"]["Unauthorized"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/me/governance-notices/read": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Mark selected or all governance notices read */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["GovernanceNoticeReadInput"];
+                };
+            };
+            responses: {
+                /** @description marked */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/notifications": {
         parameters: {
             query?: never;
@@ -5708,6 +6060,146 @@ export interface paths {
         };
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/appeals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List lower-role appeal cases visible to an independent reviewer */
+        get: {
+            parameters: {
+                query?: {
+                    status?: components["schemas"]["AppealStatus"];
+                    /** @description Opaque pagination cursor */
+                    cursor?: components["parameters"]["Cursor"];
+                    limit?: components["parameters"]["Limit"];
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AdminAppealPage"];
+                    };
+                };
+                403: components["responses"]["Forbidden"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/appeals/{id}/review": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Claim a submitted appeal for independent review
+         * @description The reviewer must outrank the appellant and cannot be the original disposition actor.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["AppealTransitionInput"];
+                };
+            };
+            responses: {
+                /** @description in review */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AdminAppeal"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+                409: components["responses"]["Conflict"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/appeals/{id}/decision": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Decide an assigned appeal and atomically apply any owner-domain reversal
+         * @description Content targets support upheld/overturned. Sanctions additionally support a shortening amendment; unsupported adjustments fail closed.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["AppealDecisionInput"];
+                };
+            };
+            responses: {
+                /** @description decided */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AdminAppeal"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+                409: components["responses"]["Conflict"];
+            };
+        };
         delete?: never;
         options?: never;
         head?: never;
@@ -8821,19 +9313,19 @@ export interface components {
             account: components["schemas"]["Account"];
         };
         /** @enum {string} */
-        EmailCodePurpose: "login" | "registration";
+        EmailCodePurpose: "login" | "registration" | "appeal";
         EmailCodeRequest: {
             /** Format: email */
             email: string;
             captchaToken: string;
-            /** @description Optional only for rolling compatibility. New clients must send it; omission binds a concrete login or registration purpose when the code is issued. */
+            /** @description Optional only for rolling compatibility. Appeal codes are consumed only by /auth/appeal/email/verify. */
             purpose?: components["schemas"]["EmailCodePurpose"];
         };
         EmailCodeVerification: {
             /** Format: email */
             email: string;
             code: string;
-            /** @description Optional only for rolling compatibility. When present it must match the issued code; omission can consume only login or registration codes, never password-reset codes. */
+            /** @description Optional only for rolling compatibility. This full-login endpoint rejects appeal-purpose codes. */
             purpose?: components["schemas"]["EmailCodePurpose"];
             handle?: string;
             /** Format: password */
@@ -8871,6 +9363,87 @@ export interface components {
             /** Format: password */
             password?: string;
             code?: string;
+        };
+        AppealAccessToken: {
+            /** @description Short-lived bearer accepted only by /me/appeals and /me/governance-notices. */
+            accessToken: string;
+            expiresAt: number;
+        };
+        AppealEmailVerification: {
+            /** Format: email */
+            email: string;
+            code: string;
+        };
+        /** @enum {string} */
+        AppealStatus: "submitted" | "in_review" | "upheld" | "overturned" | "amended" | "withdrawn";
+        AppealHistory: {
+            id: string;
+            fromStatus?: components["schemas"]["AppealStatus"] | null;
+            toStatus: components["schemas"]["AppealStatus"];
+            reason: string;
+            /** @description Bounded public decision metadata; currently only a shortened sanction endsAt. */
+            metadata?: Record<string, never> | null;
+            createdAt: number;
+        };
+        Appeal: {
+            id: string;
+            governanceEventId: string;
+            originalAction: string;
+            /** @description Safe disposition summary for the owner; authorized staff may receive the internal reason. */
+            originalReason?: string | null;
+            /** @enum {string} */
+            targetKind: "sanction" | "forum_thread" | "forum_comment" | "review";
+            targetId: string;
+            /** @enum {string} */
+            dispositionKind: "silence" | "suspend" | "hide" | "delete";
+            status: components["schemas"]["AppealStatus"];
+            submissionReason: string;
+            submittedAt: number;
+            appealableUntil: number;
+            reviewStartedAt?: number | null;
+            decisionReason?: string | null;
+            amendment?: Record<string, never> | null;
+            decidedAt?: number | null;
+            version: number;
+            history: components["schemas"]["AppealHistory"][];
+        };
+        AdminAppeal: components["schemas"]["Appeal"] & {
+            appellantAccountId: string;
+            reviewerAccountId?: string | null;
+        };
+        SubmitAppealInput: {
+            governanceEventId: string;
+            reason: string;
+        };
+        AppealTransitionInput: {
+            expectedVersion: number;
+            reason: string;
+        };
+        AppealDecisionInput: {
+            expectedVersion: number;
+            /** @enum {string} */
+            outcome: "upheld" | "overturned" | "amended";
+            reason: string;
+            /** @description Only for amended sanctions; must shorten the active sanction. */
+            amendedEndsAt?: number | null;
+        };
+        GovernanceNotice: {
+            id: string;
+            /** @enum {string} */
+            noticeType: "sanction_applied" | "content_restricted" | "appeal_submitted" | "appeal_in_review" | "appeal_upheld" | "appeal_overturned" | "appeal_amended" | "appeal_withdrawn";
+            /** @enum {string} */
+            subjectKind: "sanction" | "forum_thread" | "forum_comment" | "review" | "appeal";
+            subjectId: string;
+            summary: string;
+            appealId?: string | null;
+            targetUrl: string;
+            read: boolean;
+            readAt?: number | null;
+            createdAt: number;
+        };
+        GovernanceNoticeReadInput: {
+            ids?: string[];
+            all?: boolean;
         };
         Department: {
             id?: string;
@@ -9798,6 +10371,15 @@ export interface components {
         NotificationPage: components["schemas"]["Page"] & {
             items?: components["schemas"]["Notification"][];
         };
+        AppealPage: components["schemas"]["Page"] & {
+            items?: components["schemas"]["Appeal"][];
+        };
+        AdminAppealPage: components["schemas"]["Page"] & {
+            items?: components["schemas"]["AdminAppeal"][];
+        };
+        GovernanceNoticePage: components["schemas"]["Page"] & {
+            items?: components["schemas"]["GovernanceNotice"][];
+        };
         TaskPage: components["schemas"]["Page"] & {
             items?: components["schemas"]["Task"][];
         };
@@ -10524,6 +11106,8 @@ export interface components {
         IdempotencyKey: string;
         WalletIdempotencyKey: string;
         ReconciliationIdempotencyKey: string;
+        /** @description Account-scoped key. Reuse with a different event or reason returns conflict. */
+        AppealIdempotencyKey: string;
     };
     requestBodies: never;
     headers: never;

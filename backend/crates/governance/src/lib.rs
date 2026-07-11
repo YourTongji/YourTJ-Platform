@@ -9,6 +9,9 @@ use serde::Serialize;
 use shared::{AppResult, Page};
 use sqlx::{FromRow, PgConnection, PgPool};
 
+pub mod appeals;
+pub mod notices;
+
 #[derive(Debug, Clone, FromRow)]
 struct AuditEventRow {
     id: i64,
@@ -57,10 +60,26 @@ pub async fn record_account_event_tx(
     reason: &str,
     metadata: Option<&serde_json::Value>,
 ) -> AppResult<()> {
-    sqlx::query(
+    record_account_event_with_id_tx(tx, actor, action, target_type, target_id, reason, metadata)
+        .await?;
+    Ok(())
+}
+
+/// Append an account-authored event and return its immutable event id.
+#[allow(clippy::too_many_arguments)] // reason: audit fields are intentionally explicit to prevent opaque request-body logging
+pub async fn record_account_event_with_id_tx(
+    tx: &mut PgConnection,
+    actor: AccountActor<'_>,
+    action: &str,
+    target_type: &str,
+    target_id: &str,
+    reason: &str,
+    metadata: Option<&serde_json::Value>,
+) -> AppResult<i64> {
+    let event_id = sqlx::query_scalar(
         "INSERT INTO governance.audit_events \
          (actor_kind, actor_account_id, actor_role, action, target_type, target_id, reason, metadata) \
-         VALUES ('account', $1, $2, $3, $4, $5, $6, $7)",
+         VALUES ('account', $1, $2, $3, $4, $5, $6, $7) RETURNING id",
     )
     .bind(actor.account_id)
     .bind(actor.role)
@@ -69,9 +88,9 @@ pub async fn record_account_event_tx(
     .bind(target_id)
     .bind(reason)
     .bind(metadata)
-    .execute(tx)
+    .fetch_one(tx)
     .await?;
-    Ok(())
+    Ok(event_id)
 }
 
 /// Append an account-authored audit event as its own transaction.
@@ -102,19 +121,33 @@ pub async fn record_system_event_tx(
     reason: &str,
     metadata: Option<&serde_json::Value>,
 ) -> AppResult<()> {
-    sqlx::query(
+    record_system_event_with_id_tx(tx, action, target_type, target_id, reason, metadata).await?;
+    Ok(())
+}
+
+/// Append a system-authored event and return its immutable event id.
+#[allow(clippy::too_many_arguments)] // reason: audit fields are intentionally explicit to prevent opaque request-body logging
+pub async fn record_system_event_with_id_tx(
+    tx: &mut PgConnection,
+    action: &str,
+    target_type: &str,
+    target_id: &str,
+    reason: &str,
+    metadata: Option<&serde_json::Value>,
+) -> AppResult<i64> {
+    let event_id = sqlx::query_scalar(
         "INSERT INTO governance.audit_events \
          (actor_kind, action, target_type, target_id, reason, metadata) \
-         VALUES ('system', $1, $2, $3, $4, $5)",
+         VALUES ('system', $1, $2, $3, $4, $5) RETURNING id",
     )
     .bind(action)
     .bind(target_type)
     .bind(target_id)
     .bind(reason)
     .bind(metadata)
-    .execute(tx)
+    .fetch_one(tx)
     .await?;
-    Ok(())
+    Ok(event_id)
 }
 
 /// Return newest audit events with bounded cursor pagination.
@@ -167,4 +200,32 @@ pub async fn list_events(
         .collect();
     let next_cursor = has_more.then(|| visible_rows.last().map(|row| row.id.to_string())).flatten();
     Ok(Page::new(items, next_cursor))
+}
+
+/// Return whether a later audit event touched either exact owner-provided target key.
+///
+/// Owner domains use this as a conservative fail-closed guard before reversing a disposition.
+#[allow(clippy::too_many_arguments)] // reason: two exact target keys avoid a cross-product or opaque JSON query
+pub async fn has_later_target_event_tx(
+    connection: &mut PgConnection,
+    original_event_id: i64,
+    target_type: &str,
+    target_id: &str,
+    alternate_target_type: Option<&str>,
+    alternate_target_id: Option<&str>,
+) -> AppResult<bool> {
+    Ok(sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM governance.audit_events \
+         WHERE id > $1 AND ( \
+           (target_type = $2 AND target_id = $3) OR \
+           ($4::text IS NOT NULL AND target_type = $4 AND target_id = $5) \
+         ))",
+    )
+    .bind(original_event_id)
+    .bind(target_type)
+    .bind(target_id)
+    .bind(alternate_target_type)
+    .bind(alternate_target_id)
+    .fetch_one(connection)
+    .await?)
 }
