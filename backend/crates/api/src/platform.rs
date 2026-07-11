@@ -249,6 +249,7 @@ mod tests {
             redis: None,
             system_private_key: vec![0u8; 32],
             system_public_key_b64: String::new(),
+            email_encryption: None,
             sse_tx: None,
         };
 

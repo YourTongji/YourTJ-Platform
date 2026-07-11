@@ -5,6 +5,7 @@
 use sqlx::PgPool;
 use tokio::sync::broadcast;
 
+use crate::email_crypto::EmailEncryption;
 use crate::sse::SsePayload;
 use crate::Config;
 
@@ -41,6 +42,9 @@ pub struct AppState {
 
     /// System Ed25519 public key (base64-encoded).
     pub system_public_key_b64: String,
+
+    /// Email encryption for PII-at-rest (None when not configured).
+    pub email_encryption: Option<EmailEncryption>,
 
     /// SSE broadcast sender for real-time notification delivery.
     /// `None` when SSE is not configured / disabled.

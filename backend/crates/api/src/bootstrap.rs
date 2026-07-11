@@ -65,6 +65,16 @@ pub async fn run() -> anyhow::Result<()> {
     let (sse_tx, _sse_rx) = broadcast::channel::<SsePayload>(128);
     forum::sse::init_global(sse_tx.clone());
 
+    let email_encryption = shared::email_crypto::EmailEncryption::from_keys(
+        config.email_encryption_active_version,
+        &config.email_encryption_active_aead_hex,
+        &config.email_encryption_active_blind_hex,
+        &[], // legacy pairs loaded from env in future rotations
+    )?;
+    if config.email_encryption_strict && email_encryption.is_none() {
+        anyhow::bail!("EMAIL_ENCRYPTION_STRICT=true but no encryption keys are configured");
+    }
+
     let state = AppState {
         db,
         config: config.clone(),
@@ -76,6 +86,7 @@ pub async fn run() -> anyhow::Result<()> {
         redis: redis_pool,
         system_private_key,
         system_public_key_b64,
+        email_encryption,
         sse_tx: Some(sse_tx),
     };
 

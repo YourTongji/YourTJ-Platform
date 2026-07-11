@@ -34,6 +34,7 @@ pub async fn create_test_app() -> (PgPool, axum::Router) {
         redis: None,
         system_private_key: seed.to_vec(),
         system_public_key_b64: public_key_b64,
+        email_encryption: None,
         sse_tx: None,
     };
 

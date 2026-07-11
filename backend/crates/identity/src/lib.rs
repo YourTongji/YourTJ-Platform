@@ -6,6 +6,7 @@
 //! - The server stores only Ed25519 *public* keys — never private keys or secrets.
 //! - Old wallets are merged via a signed challenge (`/wallet/claim`), not by import.
 
+use shared::AppState;
 pub mod auth;
 pub mod auth_middleware;
 mod email_code;
@@ -21,7 +22,6 @@ mod models;
 
 use axum::routing::{get, post};
 use axum::Router;
-use shared::AppState;
 
 /// All routes owned by the identity domain.
 pub fn routes(state: AppState) -> Router {

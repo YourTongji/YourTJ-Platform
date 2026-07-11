@@ -13,7 +13,10 @@ use lettre::AsyncTransport;
 #[allow(dead_code)]
 pub async fn send_email(config: &Config, to: &str, subject: &str, body: &str) {
     if config.smtp_host.is_empty() {
-        tracing::info!(to, subject, body, "SMTP not configured — logging email instead");
+        tracing::info!(
+            subject,
+            "SMTP not configured — logging email instead (recipient and body redacted)"
+        );
         return;
     }
 
@@ -33,8 +36,8 @@ pub async fn send_email(config: &Config, to: &str, subject: &str, body: &str) {
 
     let to_addr: lettre::message::Mailbox = match to.parse() {
         Ok(a) => a,
-        Err(e) => {
-            tracing::warn!(error = %e, to, "invalid recipient email address");
+        Err(_) => {
+            tracing::warn!(subject, "invalid recipient email address");
             return;
         }
     };
@@ -47,7 +50,7 @@ pub async fn send_email(config: &Config, to: &str, subject: &str, body: &str) {
     {
         Ok(e) => e,
         Err(e) => {
-            tracing::warn!(error = %e, "failed to build email message");
+            tracing::warn!(error = %e, subject, "failed to build email message");
             return;
         }
     };
@@ -70,7 +73,7 @@ pub async fn send_email(config: &Config, to: &str, subject: &str, body: &str) {
     };
 
     match transport.send(email).await {
-        Ok(_) => tracing::info!(to, subject, "email sent"),
-        Err(e) => tracing::warn!(error = %e, to, subject, "failed to send email"),
+        Ok(_) => tracing::info!(subject, "email sent"),
+        Err(e) => tracing::warn!(error = %e, subject, "failed to send email"),
     }
 }

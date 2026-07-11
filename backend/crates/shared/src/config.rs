@@ -24,6 +24,10 @@ pub struct Config {
     pub oss_access_key_secret: String,
     pub oss_role_arn: String,
     pub oss_callback_base_url: String,
+    pub email_encryption_active_version: u8,
+    pub email_encryption_active_aead_hex: String,
+    pub email_encryption_active_blind_hex: String,
+    pub email_encryption_strict: bool,
 }
 
 impl Config {
@@ -57,6 +61,15 @@ impl Config {
             oss_access_key_secret: env_or_default("OSS_ACCESS_KEY_SECRET", ""),
             oss_role_arn: env_or_default("OSS_ROLE_ARN", ""),
             oss_callback_base_url: env_or_default("OSS_CALLBACK_BASE_URL", ""),
+            email_encryption_active_version: env_or_default_u64(
+                "EMAIL_ENCRYPTION_ACTIVE_VERSION",
+                0,
+            ) as u8,
+            email_encryption_active_aead_hex: env_or_default("EMAIL_ENCRYPTION_ACTIVE_AEAD", ""),
+            email_encryption_active_blind_hex: env_or_default("EMAIL_ENCRYPTION_ACTIVE_BLIND", ""),
+            email_encryption_strict: std::env::var("EMAIL_ENCRYPTION_STRICT")
+                .map(|v| v == "1" || v == "true")
+                .unwrap_or(false),
         })
     }
 

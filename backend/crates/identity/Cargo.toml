@@ -24,6 +24,7 @@ deadpool-redis.workspace = true
 tracing.workspace = true
 argon2.workspace = true
 zxcvbn.workspace = true
+hmac.workspace = true
 
 credit.workspace = true
 
