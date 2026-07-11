@@ -34,6 +34,9 @@ pub async fn authenticate(
     let token = header.strip_prefix("Bearer ").ok_or_else(auth::unauthorized)?;
 
     let claims = auth::verify_jwt(token, jwt_secret)?;
+    if claims.scope.is_some() {
+        return Err(auth::forbidden());
+    }
     let account_id: i64 = claims.sub.parse().map_err(|_| auth::unauthorized())?;
 
     let account = sqlx::query_as::<_, AccountAuthRow>(
