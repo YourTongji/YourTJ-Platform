@@ -68,10 +68,11 @@ pub async fn create_intent(
     .ok_or(CreditError::WalletNotBound)?;
 
     let intent_id = uuid::Uuid::new_v4();
-    let request_hash = request_hash(&input.request);
-    let snapshot = build_snapshot(pool, account_id, &input.action, &input.request).await?;
+    let normalized_request = normalize_request(&input.action, &input.request)?;
+    let request_hash = request_hash(&normalized_request);
+    let snapshot = build_snapshot(pool, account_id, &input.action, &normalized_request).await?;
     let ledger_entry =
-        prepare_ledger_entry(account_id, intent_id, &input.action, &input.request, &snapshot)?;
+        prepare_ledger_entry(account_id, intent_id, &input.action, &normalized_request, &snapshot)?;
     let ledger_canonical = ledger_entry.as_ref().map(crate::ledger::canonicalize);
     let expires_at = Utc::now().timestamp() + INTENT_TTL_SECONDS;
     let signing_bytes = crate::ledger::canonicalize(&serde_json::json!({
@@ -152,6 +153,7 @@ pub async fn consume_intent(
     action: &str,
     request: &Value,
 ) -> AppResult<ConsumedIntent> {
+    let normalized_request = normalize_request(action, request)?;
     let intent_id = required_header(headers, "x-wallet-intent")?
         .parse::<uuid::Uuid>()
         .map_err(|_| CreditError::IntentUnavailable)?;
@@ -169,7 +171,7 @@ pub async fn consume_intent(
     .ok_or(CreditError::IntentUnavailable)?;
     if intent.account_id != account_id
         || intent.action != action
-        || intent.request_hash != request_hash(request)
+        || intent.request_hash != request_hash(&normalized_request)
         || intent.idempotency_key != idempotency_key
         || intent.expires_at.timestamp() <= Utc::now().timestamp()
         || intent.consumed_at.is_some()
@@ -184,7 +186,8 @@ pub async fn consume_intent(
     .bind(&intent.public_key)
     .fetch_optional(&mut *conn)
     .await?;
-    let current_snapshot = build_snapshot_tx(conn, account_id, action, request, true).await?;
+    let current_snapshot =
+        build_snapshot_tx(conn, account_id, action, &normalized_request, true).await?;
     if current_key.is_none()
         || !crate::ledger::verify_signature(&intent.signing_bytes, signature, &intent.public_key)
         || current_snapshot != intent.snapshot
@@ -206,6 +209,16 @@ pub async fn consume_intent(
         .execute(&mut *conn)
         .await?;
     Ok(ConsumedIntent { signature: signature.to_string(), ledger_entry })
+}
+
+fn normalize_request(action: &str, request: &Value) -> AppResult<Value> {
+    if action == "credit.task.create" {
+        let input: crate::dto::TaskInput = serde_json::from_value(request.clone())
+            .map_err(|_| AppError::BadRequest("invalid task signing request".into()))?;
+        serde_json::to_value(input).map_err(|error| AppError::Internal(anyhow::Error::new(error)))
+    } else {
+        Ok(request.clone())
+    }
 }
 
 fn required_header<'a>(headers: &'a HeaderMap, name: &str) -> AppResult<&'a str> {
@@ -470,7 +483,7 @@ fn optional_i64_string(value: &Value, field: &str) -> AppResult<Option<i64>> {
 mod tests {
     use serde_json::json;
 
-    use super::request_hash;
+    use super::{normalize_request, request_hash};
 
     #[test]
     fn request_hash_is_canonical() {
@@ -483,5 +496,20 @@ mod tests {
     #[test]
     fn request_hash_detects_tampering() {
         assert_ne!(request_hash(&json!({ "amount": 10 })), request_hash(&json!({ "amount": 11 })));
+    }
+
+    #[test]
+    fn task_request_normalization_treats_omitted_optionals_as_null() {
+        let omitted = serde_json::json!({ "title": "Task", "rewardAmount": 10 });
+        let explicit = serde_json::json!({
+            "title": "Task",
+            "rewardAmount": 10,
+            "description": null,
+            "contactInfo": null
+        });
+        assert_eq!(
+            normalize_request("credit.task.create", &omitted).unwrap(),
+            normalize_request("credit.task.create", &explicit).unwrap()
+        );
     }
 }
