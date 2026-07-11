@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { Link, NavLink } from "react-router";
 
+import { capabilitiesForAccount } from "@/components/admin/capabilities";
 import { useAuth } from "@/context/auth-provider";
 import { cn } from "@/lib/utils";
 
@@ -104,8 +105,9 @@ function PromotionSlot() {
 
 export function SiteSidebar({ onNavigate }: { onNavigate?: () => void }) {
   const { account } = useAuth();
+  const hasStaffCapabilities = capabilitiesForAccount(account).size > 0;
   const secondaryItems =
-    account?.role === "admin" || account?.role === "mod"
+    hasStaffCapabilities
       ? [...communityNavigation, adminNavigation]
       : communityNavigation;
 

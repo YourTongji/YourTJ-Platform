@@ -29,6 +29,11 @@ Default API base is `/api/v2`. During local development, Vite proxies `/api` to
 `http://localhost:8080`. Set `VITE_API_BASE_URL` when deploying behind another
 gateway.
 
+TongjiCaptcha defaults to `https://captcha.07211024.xyz`. Set `VITE_CAPTCHA_URL`
+when a deployment uses another compatible service base. The reusable browser flow
+loads real challenge images from `/api/captcha`, verifies selected indices through
+`/api/verify`, and passes only the returned single-use token to protected API writes.
+
 ## Feature Map
 
 | Area | Routes | State | Backend APIs |

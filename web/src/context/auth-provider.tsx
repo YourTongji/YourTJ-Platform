@@ -15,7 +15,7 @@ interface AuthContextValue {
   account: Account | null;
   isAuthenticated: boolean;
   isLoading: boolean;
-  requestCode: (email: string) => Promise<void>;
+  requestCode: (email: string, captchaToken: string) => Promise<void>;
   verifyEmail: (input: {
     email: string;
     code: string;
@@ -59,8 +59,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       account,
       isAuthenticated: Boolean(account),
       isLoading,
-      requestCode: async (email) => {
-        await api.requestEmailCode(email);
+      requestCode: async (email, captchaToken) => {
+        await api.requestEmailCode(email, captchaToken);
         toast.success("验证码已发送");
       },
       verifyEmail: async (input) => {

@@ -5,6 +5,7 @@ import { useNavigate } from "react-router";
 import { toast } from "sonner";
 
 import { PageHeader } from "@/components/common/page-header";
+import { YourTJCaptcha } from "@/components/common/yourtj-captcha";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -18,8 +19,9 @@ export function LoginPage() {
   const [code, setCode] = React.useState("");
   const [handle, setHandle] = React.useState("");
   const [password, setPassword] = React.useState("");
+  const [captchaOpen, setCaptchaOpen] = React.useState(false);
   const request = useMutation({
-    mutationFn: () => requestCode(email),
+    mutationFn: (captchaToken: string) => requestCode(email.trim(), captchaToken),
     onError: (error) => toast.error(error instanceof Error ? error.message : "发送失败"),
   });
   const verify = useMutation({
@@ -57,26 +59,57 @@ export function LoginPage() {
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="space-y-2">
-            <Label>同济邮箱</Label>
+            <Label htmlFor="login-email">同济邮箱</Label>
             <div className="flex gap-2">
-              <Input value={email} onChange={(event) => setEmail(event.target.value)} placeholder="name@tongji.edu.cn" />
-              <Button variant="secondary" onClick={() => request.mutate()} disabled={!email || request.isPending}>
+              <Input
+                id="login-email"
+                type="email"
+                value={email}
+                onChange={(event) => setEmail(event.target.value)}
+                placeholder="name@tongji.edu.cn"
+                autoComplete="email"
+              />
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() => setCaptchaOpen(true)}
+                disabled={!email.trim() || request.isPending}
+              >
                 发送验证码
               </Button>
             </div>
           </div>
           <div className="space-y-2">
-            <Label>验证码</Label>
-            <Input value={code} onChange={(event) => setCode(event.target.value)} inputMode="numeric" />
+            <Label htmlFor="login-code">验证码</Label>
+            <Input
+              id="login-code"
+              value={code}
+              onChange={(event) => setCode(event.target.value)}
+              inputMode="numeric"
+              autoComplete="one-time-code"
+            />
           </div>
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="space-y-2">
-              <Label>公开 handle</Label>
-              <Input value={handle} onChange={(event) => setHandle(event.target.value)} placeholder="可选" />
+              <Label htmlFor="login-handle">公开 handle</Label>
+              <Input
+                id="login-handle"
+                value={handle}
+                onChange={(event) => setHandle(event.target.value)}
+                placeholder="可选"
+                autoComplete="username"
+              />
             </div>
             <div className="space-y-2">
-              <Label>密码</Label>
-              <Input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="可选，首次设置" />
+              <Label htmlFor="login-password">密码</Label>
+              <Input
+                id="login-password"
+                type="password"
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                placeholder="可选，首次设置"
+                autoComplete="new-password"
+              />
             </div>
           </div>
           <Button className="w-full" onClick={() => verify.mutate()} disabled={!email || !code || verify.isPending}>
@@ -85,6 +118,14 @@ export function LoginPage() {
           </Button>
         </CardContent>
       </Card>
+      <YourTJCaptcha
+        open={captchaOpen}
+        onOpenChange={setCaptchaOpen}
+        onVerified={(captchaToken) => {
+          setCaptchaOpen(false);
+          request.mutate(captchaToken);
+        }}
+      />
     </div>
   );
 }

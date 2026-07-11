@@ -7,6 +7,10 @@ import { toast } from "sonner";
 import { PageHeader } from "@/components/common/page-header";
 import { EmptyState, ErrorState, LoadingState } from "@/components/common/states";
 import { TeaBadge } from "@/components/common/tea-badge";
+import {
+  CommentModerationControls,
+  ThreadModerationControls,
+} from "@/components/forum/moderation-controls";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -42,7 +46,10 @@ function CommentCard({ comment, threadId }: { comment: Comment; threadId: string
             {comment.isHidden ? <Badge variant="outline">已隐藏</Badge> : null}
             {comment.isDeleted ? <Badge variant="outline">已删除</Badge> : null}
           </div>
-          <Badge variant="secondary">{comment.voteCount ?? 0}</Badge>
+          <div className="flex items-center gap-1">
+            <Badge variant="secondary">{comment.voteCount ?? 0}</Badge>
+            <CommentModerationControls comment={comment} threadId={threadId} />
+          </div>
         </div>
         <p className="mt-3 whitespace-pre-wrap text-sm leading-relaxed">{comment.body}</p>
         <div className="mt-3 flex gap-2">
@@ -100,7 +107,7 @@ function PollCard({
               className="w-full rounded-md border p-3 text-left transition-colors hover:bg-accent disabled:opacity-70"
             >
               <div className="flex items-center justify-between gap-3">
-                <span className="font-medium">{option.label ?? option.body}</span>
+                <span className="font-medium">{option.label}</span>
                 <span className="text-sm text-muted-foreground">{count} 票 · {percent}%</span>
               </div>
               <div className="mt-2 h-2 overflow-hidden rounded-full bg-muted">
@@ -201,6 +208,15 @@ export function ThreadDetailPage() {
 
   const item = thread.data;
   const board = boards.data?.find((boardItem) => boardItem.id === item.boardId);
+  const replyUnavailableReason = item.deletedAt
+    ? "帖子已被软删除，恢复后才能继续回复。"
+    : item.hiddenAt
+      ? "帖子正在治理隐藏状态，恢复公开后才能继续回复。"
+      : item.archivedAt
+        ? "帖子已归档，不再接受新回复。"
+        : item.closedAt
+          ? "帖子已由版主关闭，不再接受新回复。"
+          : null;
 
   return (
     <div className="space-y-5">
@@ -224,6 +240,7 @@ export function ThreadDetailPage() {
               <Bookmark className="h-4 w-4" />
               收藏
             </Button>
+            <ThreadModerationControls thread={item} boards={boards.data ?? []} />
           </>
         }
       />
@@ -236,6 +253,9 @@ export function ThreadDetailPage() {
             <Badge variant="secondary">{item.voteCount ?? 0} 票</Badge>
             {item.pinnedAt ? <Badge>置顶</Badge> : null}
             {item.closedAt ? <Badge variant="outline">已关闭</Badge> : null}
+            {item.archivedAt ? <Badge variant="outline">已归档</Badge> : null}
+            {item.hiddenAt ? <Badge variant="outline">已隐藏</Badge> : null}
+            {item.deletedAt ? <Badge variant="destructive">已删除</Badge> : null}
             {(item.tags ?? []).map((tag) => <Badge key={tag} variant="outline">#{tag}</Badge>)}
           </div>
           <p className="whitespace-pre-wrap text-sm leading-7">{item.body || "这条帖子没有正文。"}</p>
@@ -258,7 +278,11 @@ export function ThreadDetailPage() {
 
       {item.poll ? <PollCard poll={item.poll} threadId={threadId} /> : null}
 
-      <CommentForm threadId={threadId} />
+      {replyUnavailableReason ? (
+        <EmptyState title="当前帖子不可回复" description={replyUnavailableReason} />
+      ) : (
+        <CommentForm threadId={threadId} />
+      )}
 
       <section className="space-y-3">
         <div className="flex items-center gap-2">

@@ -1,7 +1,22 @@
 import { apiRequest } from "./client";
 import type {
   Account,
+  ActivityPolicy,
+  ActivityPolicyUpdateInput,
+  ActivityCalendar,
+  AdminAuditEvent,
+  AdminBoardCreateInput,
+  AdminBoardUpdateInput,
+  AdminCourseCreateInput,
+  AdminCourseUpdateInput,
+  AdminForumFlag,
+  AdminOverview,
+  AdminUser,
+  AdminUserInviteInput,
+  AdminTagCreateInput,
+  AdminTagUpdateInput,
   Announcement,
+  AnnouncementInput,
   Board,
   Bookmark,
   Calendar,
@@ -13,6 +28,8 @@ import type {
   Department,
   DmConversation,
   DmMessage,
+  DmReportReason,
+  DmReport,
   Faculty,
   LatestUpdate,
   LedgerEntry,
@@ -20,25 +37,36 @@ import type {
   Major,
   Notification,
   Page,
+  Poll,
   Product,
   Purchase,
   Review,
+  ReviewReport,
+  Sanction,
   SearchResult,
   SelectionCourse,
   Setting,
+  SettingUpdateInput,
   Tag,
   Task,
   ThreadDetailWithPoll,
   ThreadFeed,
   TimeSlot,
+  Upload,
+  IgnoreUser,
+  UserComment,
+  UserProfile,
+  UserThread,
+  WatchedWord,
+  WatchedWordInput,
   Wallet,
 } from "./types";
 
 export const api = {
-  requestEmailCode(email: string) {
+  requestEmailCode(email: string, captchaToken: string) {
     return apiRequest<void>("/auth/email/request-code", {
       method: "POST",
-      body: { email },
+      body: { email, captchaToken },
       auth: false,
     });
   },
@@ -62,22 +90,23 @@ export const api = {
     return apiRequest<Account>("/me", { method: "PATCH", body: input });
   },
 
+  myActivity(from?: string, to?: string) {
+    return apiRequest<ActivityCalendar>("/me/activity", { query: { from, to } });
+  },
+
   publicUser(handle: string) {
-    return apiRequest<Account & { threadCount?: number; commentCount?: number }>(
-      `/users/${encodeURIComponent(handle)}`,
-      { auth: false },
-    );
+    return apiRequest<UserProfile>(`/users/${encodeURIComponent(handle)}`, { auth: false });
   },
 
   userThreads(handle: string, cursor?: string | null) {
-    return apiRequest<Page<ThreadFeed>>(`/users/${encodeURIComponent(handle)}/threads`, {
+    return apiRequest<Page<UserThread>>(`/users/${encodeURIComponent(handle)}/threads`, {
       query: { cursor, limit: 20 },
       auth: false,
     });
   },
 
   userComments(handle: string, cursor?: string | null) {
-    return apiRequest<Page<Comment>>(`/users/${encodeURIComponent(handle)}/comments`, {
+    return apiRequest<Page<UserComment>>(`/users/${encodeURIComponent(handle)}/comments`, {
       query: { cursor, limit: 20 },
       auth: false,
     });
@@ -126,7 +155,13 @@ export const api = {
 
   createReview(
     id: string,
-    body: { rating: number; comment?: string; semester?: string; score?: string },
+    body: {
+      rating: number;
+      comment?: string;
+      semester?: string;
+      score?: string;
+      captchaToken: string;
+    },
     idempotencyKey: string,
   ) {
     return apiRequest<Review>(`/courses/${encodeURIComponent(id)}/reviews`, {
@@ -144,10 +179,10 @@ export const api = {
     return apiRequest<void>(`/reviews/${encodeURIComponent(id)}/like`, { method: "DELETE" });
   },
 
-  reportReview(id: string, reason: string) {
+  reportReview(id: string, reason: string, captchaToken: string) {
     return apiRequest<void>(`/reviews/${encodeURIComponent(id)}/report`, {
       method: "POST",
-      body: { reason },
+      body: { reason, captchaToken },
     });
   },
 
@@ -241,7 +276,6 @@ export const api = {
   }) {
     return apiRequest<Page<ThreadFeed>>("/forum/threads", {
       query: { board: query.board, tag: query.tag, sort: query.feed, cursor: query.cursor, limit: 20 },
-      auth: false,
     });
   },
 
@@ -256,13 +290,12 @@ export const api = {
   },
 
   thread(id: string) {
-    return apiRequest<ThreadDetailWithPoll>(`/forum/threads/${encodeURIComponent(id)}`, { auth: false });
+    return apiRequest<ThreadDetailWithPoll>(`/forum/threads/${encodeURIComponent(id)}`);
   },
 
   comments(threadId: string, cursor?: string | null) {
     return apiRequest<Page<Comment>>(`/forum/threads/${encodeURIComponent(threadId)}/comments`, {
       query: { cursor, limit: 50 },
-      auth: false,
     });
   },
 
@@ -273,8 +306,41 @@ export const api = {
     });
   },
 
+  moderateForumThread(
+    id: string,
+    action:
+      | "pin"
+      | "unpin"
+      | "close"
+      | "reopen"
+      | "archive"
+      | "unarchive"
+      | "delete"
+      | "restore"
+      | "hide"
+      | "unhide"
+      | "move",
+    body: { reason: string; globally?: boolean; boardId?: string },
+  ) {
+    return apiRequest<{ ok: boolean }>(
+      `/admin/forum/threads/${encodeURIComponent(id)}/${action}`,
+      { method: "POST", body },
+    );
+  },
+
+  moderateForumComment(
+    id: string,
+    action: "delete" | "restore" | "hide" | "unhide",
+    reason: string,
+  ) {
+    return apiRequest<{ ok: boolean }>(
+      `/admin/forum/comments/${encodeURIComponent(id)}/${action}`,
+      { method: "POST", body: { reason } },
+    );
+  },
+
   votePost(id: string, value: "up" | "down", postType: "thread" | "comment" = "thread") {
-    return apiRequest<void>(`/forum/posts/${encodeURIComponent(id)}/vote`, {
+    return apiRequest<{ ok: boolean; voteCount: number }>(`/forum/posts/${encodeURIComponent(id)}/vote`, {
       method: "POST",
       body: { value, postType },
     });
@@ -286,7 +352,7 @@ export const api = {
     note?: string,
     postType: "thread" | "comment" = "thread",
   ) {
-    return apiRequest<void>(`/forum/posts/${encodeURIComponent(id)}/flag`, {
+    return apiRequest<{ ok: boolean; autoHidden: boolean; autoSilenced: boolean }>(`/forum/posts/${encodeURIComponent(id)}/flag`, {
       method: "POST",
       body: { reason, note, postType },
     });
@@ -313,14 +379,30 @@ export const api = {
     return apiRequest<void>("/forum/subscriptions", { method: "PUT", body });
   },
 
-  dmConversations() {
-    return apiRequest<DmConversation[]>("/forum/dm/conversations");
+  ignoredUsers(cursor?: string | null) {
+    return apiRequest<Page<IgnoreUser>>("/me/ignores", { query: { cursor, limit: 100 } });
   },
 
-  createDmConversation(recipientId: string) {
-    return apiRequest<{ id?: string }>("/forum/dm/conversations", {
+  ignoreUser(accountId: string) {
+    return apiRequest<void>(`/me/ignores/${encodeURIComponent(accountId)}`, { method: "PUT" });
+  },
+
+  unignoreUser(accountId: string) {
+    return apiRequest<void>(`/me/ignores/${encodeURIComponent(accountId)}`, {
+      method: "DELETE",
+    });
+  },
+
+  dmConversations(cursor?: string | null) {
+    return apiRequest<Page<DmConversation>>("/forum/dm/conversations", {
+      query: { cursor, limit: 30 },
+    });
+  },
+
+  createDmConversation(recipientHandle: string) {
+    return apiRequest<DmConversation>("/forum/dm/conversations", {
       method: "POST",
-      body: { recipientId },
+      body: { recipientHandle },
     });
   },
 
@@ -337,15 +419,29 @@ export const api = {
     });
   },
 
+  markDmConversationRead(id: string, lastReadMessageId?: string | null) {
+    return apiRequest<void>(`/forum/dm/conversations/${encodeURIComponent(id)}/read`, {
+      method: "POST",
+      body: { lastReadMessageId },
+    });
+  },
+
+  reportDmMessage(id: string, reason: DmReportReason, note?: string) {
+    return apiRequest<void>(`/forum/dm/messages/${encodeURIComponent(id)}/report`, {
+      method: "POST",
+      body: { reason, note },
+    });
+  },
+
   votePoll(id: string, optionId: string) {
-    return apiRequest<void>(`/forum/polls/${encodeURIComponent(id)}/vote`, {
+    return apiRequest<{ ok: boolean }>(`/forum/polls/${encodeURIComponent(id)}/vote`, {
       method: "POST",
       body: { optionId },
     });
   },
 
   pollResults(id: string) {
-    return apiRequest<{ id?: string; question?: string; options?: Array<{ id?: string; label?: string; voteCount?: number }>; myVotes?: string[] }>(
+    return apiRequest<Poll>(
       `/forum/polls/${encodeURIComponent(id)}/results`,
       { auth: false },
     );
@@ -467,23 +563,147 @@ export const api = {
     });
   },
 
-  adminReviews(status: "visible" | "hidden" | "pending" | "all" = "pending") {
-    return apiRequest<Page<Review>>("/admin/reviews", { query: { status, limit: 30 } });
+  adminOverview() {
+    return apiRequest<AdminOverview>("/admin/overview");
   },
 
-  toggleReview(id: string) {
-    return apiRequest<Review>(`/admin/reviews/${encodeURIComponent(id)}/toggle`, { method: "POST" });
+  adminAuditEvents(query: {
+    actorId?: string;
+    action?: string;
+    targetType?: string;
+    cursor?: string | null;
+  }) {
+    return apiRequest<Page<AdminAuditEvent>>("/admin/audit-events", {
+      query: { ...query, limit: 30 },
+    });
   },
 
-  adminReports(status: "open" | "resolved" | "all" = "open") {
-    return apiRequest<Page<{ id?: string; reviewId?: string; reason?: string; status?: string; createdAt?: number }>>(
-      "/admin/reports",
-      { query: { status, limit: 30 } },
-    );
+  adminActivityPolicy() {
+    return apiRequest<ActivityPolicy>("/admin/activity-policy");
   },
 
-  resolveReport(id: string, action: string, note?: string) {
-    return apiRequest<void>(`/admin/reports/${encodeURIComponent(id)}/resolve`, {
+  updateAdminActivityPolicy(body: ActivityPolicyUpdateInput) {
+    return apiRequest<ActivityPolicy>("/admin/activity-policy", { method: "PUT", body });
+  },
+
+  adminActivityPolicyHistory(cursor?: string | null) {
+    return apiRequest<Page<ActivityPolicy>>("/admin/activity-policy/history", {
+      query: { cursor, limit: 30 },
+    });
+  },
+
+  adminUsers(query: {
+    q?: string;
+    role?: "user" | "mod" | "admin";
+    status?: "active" | "suspended" | "deleted";
+    cursor?: string | null;
+  }) {
+    return apiRequest<Page<AdminUser>>("/admin/users", { query: { ...query, limit: 30 } });
+  },
+
+  inviteAdminUser(body: AdminUserInviteInput) {
+    return apiRequest<AdminUser>("/admin/users", { method: "POST", body });
+  },
+
+  updateAdminUserRole(id: string, role: "user" | "mod", reason: string) {
+    return apiRequest<AdminUser>(`/admin/users/${encodeURIComponent(id)}/role`, {
+      method: "PATCH",
+      body: { role, reason },
+    });
+  },
+
+  revokeAdminUserSessions(id: string, reason: string) {
+    return apiRequest<void>(`/admin/users/${encodeURIComponent(id)}/sessions/revoke`, {
+      method: "POST",
+      body: { reason },
+    });
+  },
+
+  adminUserSanctions(id: string) {
+    return apiRequest<Sanction[]>(`/admin/users/${encodeURIComponent(id)}/sanctions`);
+  },
+
+  unsanctionAdminUser(id: string, sanctionId: string, reason: string) {
+    return apiRequest<void>(`/admin/users/${encodeURIComponent(id)}/unsanction`, {
+      method: "POST",
+      body: { sanctionId, reason },
+    });
+  },
+
+  sanctionAdminUser(
+    id: string,
+    kind: "silence" | "suspend",
+    body: { reason: string; endsAt?: number | null },
+  ) {
+    return apiRequest<void>(`/admin/users/${encodeURIComponent(id)}/${kind}`, {
+      method: "POST",
+      body,
+    });
+  },
+
+  adminReviews(status: "visible" | "hidden" | "pending" | "all" = "pending", cursor?: string | null) {
+    return apiRequest<Page<Review>>("/admin/reviews", { query: { status, cursor, limit: 30 } });
+  },
+
+  toggleReview(id: string, reason: string) {
+    return apiRequest<{ ok: boolean }>(`/admin/reviews/${encodeURIComponent(id)}/toggle`, {
+      method: "POST",
+      body: { reason },
+    });
+  },
+
+  deleteAdminReview(id: string, reason: string) {
+    return apiRequest<void>(`/admin/reviews/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      body: { reason },
+    });
+  },
+
+  adminReports(
+    status: "open" | "upheld" | "rejected" | "ignored" | "all" = "open",
+    cursor?: string | null,
+  ) {
+    return apiRequest<Page<ReviewReport>>("/admin/reports", {
+      query: { status, cursor, limit: 30 },
+    });
+  },
+
+  resolveReport(id: string, action: "uphold" | "reject" | "ignore", note: string) {
+    return apiRequest<ReviewReport>(`/admin/reports/${encodeURIComponent(id)}/resolve`, {
+      method: "POST",
+      body: { action, note },
+    });
+  },
+
+  adminForumFlags(status: "open" | "all" = "open", cursor?: string | null) {
+    return apiRequest<Page<AdminForumFlag>>("/admin/forum/flags", {
+      query: { status, cursor, limit: 30 },
+    });
+  },
+
+  adminForumThread(id: string) {
+    return apiRequest<ThreadDetailWithPoll>(`/admin/forum/threads/${encodeURIComponent(id)}`);
+  },
+
+  adminForumComment(id: string) {
+    return apiRequest<Comment>(`/admin/forum/comments/${encodeURIComponent(id)}`);
+  },
+
+  resolveAdminForumFlag(id: string, action: "uphold" | "reject" | "ignore", note: string) {
+    return apiRequest<AdminForumFlag>(`/admin/forum/flags/${encodeURIComponent(id)}/resolve`, {
+      method: "POST",
+      body: { action, note },
+    });
+  },
+
+  adminDmReports(status: "open" | "upheld" | "rejected" = "open", cursor?: string | null) {
+    return apiRequest<Page<DmReport>>("/admin/dm/reports", {
+      query: { status, cursor, limit: 30 },
+    });
+  },
+
+  resolveAdminDmReport(id: string, action: "uphold" | "reject", note?: string) {
+    return apiRequest<DmReport>(`/admin/dm/reports/${encodeURIComponent(id)}/resolve`, {
       method: "POST",
       body: { action, note },
     });
@@ -493,22 +713,134 @@ export const api = {
     return apiRequest<Setting[]>("/admin/settings");
   },
 
-  updateAdminSetting(key: string, value: string) {
-    return apiRequest<void>(`/admin/settings/${encodeURIComponent(key)}`, {
+  updateAdminSetting(key: string, body: SettingUpdateInput) {
+    return apiRequest<Setting>(`/admin/settings/${encodeURIComponent(key)}`, {
       method: "PUT",
-      body: { value },
+      body,
     });
   },
 
-  triggerSelectionSync() {
-    return apiRequest<void>("/admin/selection/sync", { method: "POST" });
+  adminAnnouncements(cursor?: string | null) {
+    return apiRequest<Page<Announcement>>("/admin/announcements", {
+      query: { cursor, limit: 30 },
+    });
   },
 
-  reindexReviews() {
-    return apiRequest<void>("/admin/reviews/reindex", { method: "POST" });
+  createAdminAnnouncement(body: AnnouncementInput) {
+    return apiRequest<Announcement>("/admin/announcements", { method: "POST", body });
   },
 
-  reindexForum() {
-    return apiRequest<void>("/admin/forum/reindex", { method: "POST" });
+  updateAdminAnnouncement(id: string, body: AnnouncementInput) {
+    return apiRequest<Announcement>(`/admin/announcements/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body,
+    });
+  },
+
+  deleteAdminAnnouncement(id: string, reason: string) {
+    return apiRequest<void>(`/admin/announcements/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      body: { reason },
+    });
+  },
+
+  adminCourses(cursor?: string | null) {
+    return apiRequest<Page<Course>>("/admin/courses", { query: { cursor, limit: 30 } });
+  },
+
+  createAdminCourse(body: AdminCourseCreateInput) {
+    return apiRequest<Course>("/admin/courses", { method: "POST", body });
+  },
+
+  updateAdminCourse(id: string, body: AdminCourseUpdateInput) {
+    return apiRequest<Course>(`/admin/courses/${encodeURIComponent(id)}`, {
+      method: "PUT",
+      body,
+    });
+  },
+
+  deleteAdminCourse(id: string, reason: string) {
+    return apiRequest<void>(`/admin/courses/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      body: { reason },
+    });
+  },
+
+  adminMediaUploads(cursor?: string | null) {
+    return apiRequest<Page<Upload>>("/admin/media/uploads", { query: { cursor, limit: 30 } });
+  },
+
+  moderateAdminMediaUpload(id: string, action: "approve" | "block", reason: string) {
+    return apiRequest<{ ok: boolean }>(`/admin/media/uploads/${encodeURIComponent(id)}/${action}`, {
+      method: "POST",
+      body: { reason },
+    });
+  },
+
+  createAdminBoard(body: AdminBoardCreateInput) {
+    return apiRequest<Board>("/admin/forum/boards", { method: "POST", body });
+  },
+
+  updateAdminBoard(id: string, body: AdminBoardUpdateInput) {
+    return apiRequest<Board>(`/admin/forum/boards/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body,
+    });
+  },
+
+  deleteAdminBoard(id: string, reason: string) {
+    return apiRequest<{ ok: boolean }>(`/admin/forum/boards/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      body: { reason },
+    });
+  },
+
+  adminTags() {
+    return apiRequest<Tag[]>("/admin/forum/tags");
+  },
+
+  createAdminTag(body: AdminTagCreateInput) {
+    return apiRequest<Tag>("/admin/forum/tags", { method: "POST", body });
+  },
+
+  updateAdminTag(id: string, body: AdminTagUpdateInput) {
+    return apiRequest<Tag>(`/admin/forum/tags/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body,
+    });
+  },
+
+  deleteAdminTag(id: string, reason: string) {
+    return apiRequest<{ ok: boolean }>(`/admin/forum/tags/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      body: { reason },
+    });
+  },
+
+  adminWatchedWords() {
+    return apiRequest<WatchedWord[]>("/admin/forum/watched-words");
+  },
+
+  createAdminWatchedWord(body: WatchedWordInput) {
+    return apiRequest<WatchedWord>("/admin/forum/watched-words", { method: "POST", body });
+  },
+
+  deleteAdminWatchedWord(id: string, reason: string) {
+    return apiRequest<{ ok: boolean }>(`/admin/forum/watched-words/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      body: { reason },
+    });
+  },
+
+  triggerSelectionSync(reason: string) {
+    return apiRequest<void>("/admin/selection/sync", { method: "POST", body: { reason } });
+  },
+
+  reindexReviews(reason: string) {
+    return apiRequest<void>("/admin/reviews/reindex", { method: "POST", body: { reason } });
+  },
+
+  reindexForum(reason: string) {
+    return apiRequest<void>("/admin/forum/reindex", { method: "POST", body: { reason } });
   },
 };
