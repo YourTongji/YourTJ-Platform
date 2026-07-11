@@ -16,8 +16,14 @@ pub enum CreditError {
     #[error("product not found")]
     ProductNotFound,
 
+    #[error("purchase not found")]
+    PurchaseNotFound,
+
     #[error("invalid action: {0}")]
     InvalidAction(String),
+
+    #[error("state changed while processing the request")]
+    StateConflict,
 
     #[error("invalid wallet signature")]
     InvalidSignature,
@@ -36,8 +42,11 @@ impl From<CreditError> for AppError {
     fn from(err: CreditError) -> Self {
         match err {
             CreditError::InsufficientBalance => AppError::BadRequest(err.to_string()),
-            CreditError::TaskNotFound | CreditError::ProductNotFound => AppError::NotFound,
+            CreditError::TaskNotFound
+            | CreditError::ProductNotFound
+            | CreditError::PurchaseNotFound => AppError::NotFound,
             CreditError::InvalidAction(msg) => AppError::BadRequest(msg),
+            CreditError::StateConflict => AppError::Conflict(err.to_string()),
             CreditError::InvalidSignature | CreditError::IntentUnavailable => AppError::Forbidden,
             CreditError::WalletNotBound | CreditError::IdempotencyConflict => {
                 AppError::BadRequest(err.to_string())

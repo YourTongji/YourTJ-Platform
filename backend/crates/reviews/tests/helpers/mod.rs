@@ -211,7 +211,7 @@ async fn run_migrations(pool: &PgPool) {
     sqlx::query("DELETE FROM identity.email_codes").execute(pool).await.ok();
     sqlx::query("DELETE FROM identity.account_keys").execute(pool).await.ok();
     sqlx::query("DELETE FROM credit.wallets").execute(pool).await.ok();
-    sqlx::query("DELETE FROM credit.ledger").execute(pool).await.ok();
+    sqlx::query("TRUNCATE credit.ledger RESTART IDENTITY").execute(pool).await.ok();
     // TRUNCATE ... CASCADE removes accounts and every row referencing them
     // (across crates), so leftover FK references never block cleanup and cause
     // cross-suite email collisions. Plain DELETE silently fails on such refs.

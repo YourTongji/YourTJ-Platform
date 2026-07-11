@@ -111,7 +111,6 @@ pub struct ProductDto {
     pub description: Option<String>,
     pub price: i64,
     pub stock: i32,
-    pub delivery_info: Option<String>,
     pub status: String,
     pub created_at: i64,
 }
@@ -137,6 +136,8 @@ pub struct PurchaseDto {
     pub seller_id: String,
     pub amount: i64,
     pub status: String,
+    pub delivery_info: Option<String>,
+    pub created_at: i64,
 }
 
 /// POST /credit/purchases/{id}/action

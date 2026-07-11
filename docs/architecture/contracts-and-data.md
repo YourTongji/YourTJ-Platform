@@ -101,6 +101,12 @@ Fresh database 必须只通过 sqlx migration ledger 建立。普通启动、CI 
 - `credit.ledger` 是 append-only 权威；wallet balance 是可重建 projection。
 - Append 序列化，验证 prev hash、canonical payload、signature、nonce 和 signing intent。
 - System mint 和用户受控操作使用明确 signer；私钥从 runtime secret 注入。
+- 新 ledger row 只允许 `mint`、`tip`、`escrow_hold`、`escrow_release`；数据库拒绝 update/delete。
+- Task/purchase 状态转换在事务内 `FOR UPDATE`，用 expected status CAS 并检查 affected rows；release、
+  终态和 hold 清理必须同事务提交。
+- Tip target 由 forum/reviews owner public API 解析，API composition 通过 identity public API 验证
+  recipient eligibility；credit 不跨域直查内容或账号私有表。
+- Public Product 不包含 delivery instructions；只有 buyer/seller 可访问的 Purchase surface 返回。
 - 不新增 recharge、withdraw、fiat conversion 或 free transfer；冲突需求必须停止并升级确认。
 
 ## Change impact matrix

@@ -41,6 +41,7 @@
 | 治理证据 | reports、sanctions、appeals、audit | capability + purpose | 防篡改、访问审计、期限/hold |
 | 运营数据 | job log、metrics、aggregated promo events | operators | 聚合、去标识、有限保留 |
 | 积分记录 | ledger、wallet projection | owner/verification policy | ledger 不改写，删除后 tombstone |
+| 交易履约信息 | escrow product `deliveryInfo` | purchase buyer/seller | 不进入公开 listing/search/log；随订单保留与删除策略最小化 |
 
 新 column/event/index 前必须在对应产品文档说明 data category、purpose、controller/processor、
 可见者、retention、export 和 deletion。没有答案时不得先“留着以后分析”。

@@ -44,6 +44,7 @@ import type {
   ReviewReport,
   Sanction,
   SearchResult,
+  SigningIntent,
   SelectionCourse,
   Setting,
   SettingUpdateInput,
@@ -61,6 +62,20 @@ import type {
   WatchedWordInput,
   Wallet,
 } from "./types";
+
+export interface WalletAuthorization {
+  idempotencyKey: string;
+  intentId: string;
+  signature: string;
+}
+
+function walletHeaders(authorization: WalletAuthorization) {
+  return {
+    "Idempotency-Key": authorization.idempotencyKey,
+    "X-Wallet-Intent": authorization.intentId,
+    "X-Wallet-Sig": authorization.signature,
+  };
+}
 
 export const api = {
   requestEmailCode(email: string, captchaToken: string) {
@@ -501,15 +516,31 @@ export const api = {
     return apiRequest<LedgerVerify>("/wallet/ledger/verify", { auth: false });
   },
 
+  creditSigningIntent(
+    action:
+      | "credit.tip"
+      | "credit.task.create"
+      | "credit.task.action"
+      | "credit.product.purchase"
+      | "credit.purchase.action",
+    request: Record<string, unknown>,
+    idempotencyKey: string,
+  ) {
+    return apiRequest<SigningIntent>("/credit/signing-intents", {
+      method: "POST",
+      body: { action, request },
+      headers: { "Idempotency-Key": idempotencyKey },
+    });
+  },
+
   tip(
     body: { toAccountId: string; amount: number; targetType: "review" | "thread" | "comment"; targetId: string },
-    walletSig: string,
-    idempotencyKey: string,
+    authorization: WalletAuthorization,
   ) {
     return apiRequest<void>("/credit/tip", {
       method: "POST",
       body,
-      headers: { "X-Wallet-Sig": walletSig, "Idempotency-Key": idempotencyKey },
+      headers: walletHeaders(authorization),
     });
   },
 
@@ -519,23 +550,30 @@ export const api = {
     });
   },
 
-  createTask(body: { title: string; description?: string; rewardAmount: number; contactInfo?: string }, walletSig: string) {
+  createTask(
+    body: { title: string; description?: string; rewardAmount: number; contactInfo?: string },
+    authorization: WalletAuthorization,
+  ) {
     return apiRequest<Task>("/credit/tasks", {
       method: "POST",
       body,
-      headers: { "X-Wallet-Sig": walletSig },
+      headers: walletHeaders(authorization),
     });
   },
 
   acceptTask(id: string) {
-    return apiRequest<Task>(`/credit/tasks/${encodeURIComponent(id)}/accept`, { method: "POST" });
+    return apiRequest<void>(`/credit/tasks/${encodeURIComponent(id)}/accept`, { method: "POST" });
   },
 
-  taskAction(id: string, action: "submit" | "confirm" | "cancel" | "reject" | "delete", walletSig: string) {
-    return apiRequest<Task>(`/credit/tasks/${encodeURIComponent(id)}/action`, {
+  taskAction(
+    id: string,
+    action: "submit" | "confirm" | "cancel" | "reject" | "delete",
+    authorization?: WalletAuthorization,
+  ) {
+    return apiRequest<void>(`/credit/tasks/${encodeURIComponent(id)}/action`, {
       method: "POST",
       body: { action },
-      headers: { "X-Wallet-Sig": walletSig },
+      headers: authorization ? walletHeaders(authorization) : undefined,
     });
   },
 
@@ -547,10 +585,10 @@ export const api = {
     return apiRequest<Product>("/credit/products", { method: "POST", body });
   },
 
-  purchaseProduct(id: string, walletSig: string) {
+  purchaseProduct(id: string, authorization: WalletAuthorization) {
     return apiRequest<Purchase>(`/credit/products/${encodeURIComponent(id)}/purchase`, {
       method: "POST",
-      headers: { "X-Wallet-Sig": walletSig },
+      headers: walletHeaders(authorization),
     });
   },
 
@@ -558,11 +596,15 @@ export const api = {
     return apiRequest<Page<Purchase>>("/credit/purchases", { query: { cursor, limit: 30 } });
   },
 
-  purchaseAction(id: string, action: "accept" | "deliver" | "confirm", walletSig: string) {
-    return apiRequest<Purchase>(`/credit/purchases/${encodeURIComponent(id)}/action`, {
+  purchaseAction(
+    id: string,
+    action: "accept" | "deliver" | "confirm" | "cancel",
+    authorization?: WalletAuthorization,
+  ) {
+    return apiRequest<void>(`/credit/purchases/${encodeURIComponent(id)}/action`, {
       method: "POST",
       body: { action },
-      headers: { "X-Wallet-Sig": walletSig },
+      headers: authorization ? walletHeaders(authorization) : undefined,
     });
   },
 

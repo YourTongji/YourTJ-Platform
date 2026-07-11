@@ -60,6 +60,7 @@ export type Review = Schema["Review"];
 export type ReviewReport = Schema["Report"];
 export type Sanction = Schema["Sanction"];
 export type SearchResult = Schema["SearchResult"];
+export type SigningIntent = Schema["SigningIntent"];
 export type Setting = Schema["Setting"];
 export type Tag = Schema["Tag"];
 export type Task = Schema["Task"];

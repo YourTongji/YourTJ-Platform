@@ -37,7 +37,7 @@ components:
 
   parameters:
     Cursor: { name: cursor, in: query, schema: { type: string }, description: Opaque pagination cursor }
-    Limit: { name: limit, in: query, schema: { type: integer, default: 20, maximum: 100 } }
+    Limit: { name: limit, in: query, schema: { type: integer, default: 20, minimum: 1, maximum: 100 } }
     WalletIntent:
       name: X-Wallet-Intent
       in: header
@@ -50,6 +50,18 @@ components:
       required: true
       schema: { type: string }
       description: Base64 Ed25519 signature over the intent's exact signingBytes
+    OptionalWalletIntent:
+      name: X-Wallet-Intent
+      in: header
+      required: false
+      schema: { type: string, format: uuid }
+      description: Required only for the value-moving actions documented on this operation
+    OptionalWalletSig:
+      name: X-Wallet-Sig
+      in: header
+      required: false
+      schema: { type: string }
+      description: Required only for the value-moving actions documented on this operation
     IdempotencyKey:
       name: Idempotency-Key
       in: header
@@ -201,7 +213,7 @@ components:
       properties:
         seq: { type: integer }
         txId: { type: string }
-        type: { type: string, enum: [mint, tip, escrow_hold, escrow_release, admin_adjust] }
+        type: { type: string, enum: [mint, tip, escrow_hold, escrow_release] }
         fromAccount: { type: string, nullable: true }
         toAccount: { type: string, nullable: true }
         amount: { type: integer }
@@ -231,6 +243,7 @@ components:
     TipInput:
       type: object
       required: [toAccountId, amount, targetType, targetId]
+      description: The recipient must be the active author of the visible target; self-tips are rejected.
       properties:
         toAccountId: { type: string }
         amount: { type: integer, minimum: 1 }
@@ -263,6 +276,7 @@ components:
         action: { type: string, enum: [submit, confirm, cancel, reject, delete] }
     Product:
       type: object
+      description: Public listing data. Private delivery instructions are never exposed here.
       properties:
         id: { type: string }
         sellerId: { type: string }
@@ -290,12 +304,13 @@ components:
         sellerId: { type: string }
         amount: { type: integer }
         status: { type: string, enum: [pending, accepted, delivered, completed, cancelled] }
+        deliveryInfo: { type: string, nullable: true, description: Visible only to the purchase buyer and seller }
         createdAt: { type: integer }
     PurchaseAction:
       type: object
       required: [action]
       properties:
-        action: { type: string, enum: [accept, deliver, confirm] }
+        action: { type: string, enum: [accept, deliver, confirm, cancel] }
 
     # ---- search ----
     CourseSearchHit:
@@ -1317,7 +1332,8 @@ paths:
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/TipInput" } } } }
       responses:
         "204": { description: tipped }
-        "402": { description: insufficient balance, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
   # NOTE: /credit/bounty and /credit/bounty/{id}/confirm are aliases for
   # /credit/tasks POST and /credit/tasks/{id}/action confirm; backend only
   # exposes the canonical /credit/tasks routes.
@@ -1388,7 +1404,7 @@ paths:
       tags: [credit]
       summary: Task square / my tasks
       parameters:
-        - { name: status, in: query, schema: { type: string, enum: [open, in_progress, submitted, completed, all] } }
+        - { name: status, in: query, schema: { type: string, enum: [open, in_progress, submitted, completed, cancelled, all] } }
         - { $ref: "#/components/parameters/Cursor" }
         - { $ref: "#/components/parameters/Limit" }
       responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/TaskPage" } } } } }
@@ -1399,27 +1415,28 @@ paths:
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/TaskInput" } } } }
       responses:
         "201": { description: created, content: { application/json: { schema: { $ref: "#/components/schemas/Task" } } } }
-        "402": { description: insufficient balance, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
   /credit/tasks/{id}/accept:
     post:
       tags: [credit]
       summary: Accept a task
       parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
-      responses: { "204": { description: accepted } }
+      responses: { "204": { description: accepted }, "400": { $ref: "#/components/responses/BadRequest" }, "409": { $ref: "#/components/responses/Conflict" } }
   /credit/tasks/{id}/action:
     post:
       tags: [credit]
       summary: Two-phase confirm — submit / confirm(release) / cancel / reject / delete
-      parameters: [{ name: id, in: path, required: true, schema: { type: string } }, { $ref: "#/components/parameters/WalletIntent" }, { $ref: "#/components/parameters/WalletSig" }, { $ref: "#/components/parameters/WalletIdempotencyKey" }]
+      description: confirm/cancel/reject and an open-task delete require wallet intent, signature and idempotency headers; submit and deletion after cancellation do not move value.
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }, { $ref: "#/components/parameters/OptionalWalletIntent" }, { $ref: "#/components/parameters/OptionalWalletSig" }, { $ref: "#/components/parameters/IdempotencyKey" }]
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/TaskAction" } } } }
-      responses: { "204": { description: updated } }
+      responses: { "204": { description: updated }, "400": { $ref: "#/components/responses/BadRequest" }, "409": { $ref: "#/components/responses/Conflict" } }
 
   # ---- escrow market: products / purchases ----
   /credit/products:
     get:
       tags: [credit]
       summary: Product listings
-      parameters: [{ $ref: "#/components/parameters/Cursor" }, { $ref: "#/components/parameters/Limit" }]
+      parameters: [{ name: status, in: query, schema: { type: string, enum: [on_sale, off_sale, sold_out, all] } }, { $ref: "#/components/parameters/Cursor" }, { $ref: "#/components/parameters/Limit" }]
       responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/ProductPage" } } } } }
     post:
       tags: [credit]
@@ -1433,7 +1450,7 @@ paths:
       parameters: [{ name: id, in: path, required: true, schema: { type: string } }, { $ref: "#/components/parameters/WalletIntent" }, { $ref: "#/components/parameters/WalletSig" }, { $ref: "#/components/parameters/WalletIdempotencyKey" }]
       responses:
         "201": { description: created, content: { application/json: { schema: { $ref: "#/components/schemas/Purchase" } } } }
-        "402": { description: insufficient balance, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
   /credit/purchases:
     get:
       tags: [credit]
@@ -1443,10 +1460,11 @@ paths:
   /credit/purchases/{id}/action:
     post:
       tags: [credit]
-      summary: Escrow steps — accept / deliver / confirm(release)
-      parameters: [{ name: id, in: path, required: true, schema: { type: string } }, { $ref: "#/components/parameters/WalletIntent" }, { $ref: "#/components/parameters/WalletSig" }, { $ref: "#/components/parameters/WalletIdempotencyKey" }]
+      summary: Escrow steps — accept / deliver / confirm(release) / cancel(refund)
+      description: confirm and cancel require wallet intent, signature and idempotency headers; accept and deliver are non-value seller transitions.
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }, { $ref: "#/components/parameters/OptionalWalletIntent" }, { $ref: "#/components/parameters/OptionalWalletSig" }, { $ref: "#/components/parameters/IdempotencyKey" }]
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/PurchaseAction" } } } }
-      responses: { "204": { description: updated } }
+      responses: { "204": { description: updated }, "400": { $ref: "#/components/responses/BadRequest" }, "409": { $ref: "#/components/responses/Conflict" } }
 
   # ============ search ============
   /search:

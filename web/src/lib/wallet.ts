@@ -1,7 +1,5 @@
 import { ed25519 } from "@noble/curves/ed25519";
 
-import { randomUuid } from "@/lib/random";
-
 const WALLET_SEED_KEY = "yourtj.walletSeed";
 
 function bytesToBase64(bytes: Uint8Array) {
@@ -23,27 +21,6 @@ function base64ToBytes(value: string) {
 
 function utf8(value: string) {
   return new TextEncoder().encode(value);
-}
-
-function sortValue(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map(sortValue);
-  }
-  if (value && typeof value === "object") {
-    const sorted: Record<string, unknown> = {};
-    for (const key of Object.keys(value as Record<string, unknown>).sort()) {
-      const item = (value as Record<string, unknown>)[key];
-      if (item !== undefined) {
-        sorted[key] = sortValue(item);
-      }
-    }
-    return sorted;
-  }
-  return value;
-}
-
-export function canonicalJson(value: unknown) {
-  return JSON.stringify(sortValue(value));
 }
 
 export function hasLocalWallet() {
@@ -72,20 +49,11 @@ export function getLocalWallet() {
   };
 }
 
-export function signPayload(payload: unknown) {
+export function signExactBytes(value: string) {
   const stored = localStorage.getItem(WALLET_SEED_KEY);
   if (!stored) {
     throw new Error("请先在本机生成并绑定钱包公钥");
   }
   const seed = base64ToBytes(stored);
-  const signature = ed25519.sign(utf8(canonicalJson(payload)), seed);
-  return bytesToBase64(signature);
-}
-
-export function buildClientSignedPayload(payload: unknown) {
-  return {
-    payload,
-    timestamp: Math.floor(Date.now() / 1000),
-    nonce: randomUuid(),
-  };
+  return bytesToBase64(ed25519.sign(utf8(value), seed));
 }

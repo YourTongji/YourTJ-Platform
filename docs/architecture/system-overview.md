@@ -107,7 +107,8 @@ iOS 与 Flutter 在独立仓库，只消费 OpenAPI 生成的类型和平台 HTT
 ## 硬性不变量
 
 - 公共身份与校园邮箱分离；新 PII 必须有用途、保护、保留和删除答案。
-- 资金类写入验证 Ed25519 signing intent/signature/replay protection，ledger append-only 且可验证。
+- 资金类写入验证 Ed25519 signing intent/signature/replay protection；ledger 在应用与数据库层
+  append-only 且可验证，task/purchase 转换使用 row lock + CAS。
 - 积分无充值、提现、法币兑换或自由 transfer。
 - Media 业务只引用已授权 asset；第三方 URL 不是可信业务事实。
 - Staff 操作按 capability、target hierarchy、reason 和 audit 授权。

@@ -18,6 +18,7 @@ mod notifications;
 pub mod repo;
 mod sanctions;
 pub mod sse;
+pub mod tip_targets;
 pub mod trust_levels;
 pub mod watched_words;
 

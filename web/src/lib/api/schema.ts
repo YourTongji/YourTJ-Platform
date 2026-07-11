@@ -927,15 +927,8 @@ export interface paths {
                     };
                     content?: never;
                 };
-                /** @description insufficient balance */
-                402: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": components["schemas"]["Error"];
-                    };
-                };
+                400: components["responses"]["BadRequest"];
+                404: components["responses"]["NotFound"];
             };
         };
         delete?: never;
@@ -1133,7 +1126,7 @@ export interface paths {
         get: {
             parameters: {
                 query?: {
-                    status?: "open" | "in_progress" | "submitted" | "completed" | "all";
+                    status?: "open" | "in_progress" | "submitted" | "completed" | "cancelled" | "all";
                     /** @description Opaque pagination cursor */
                     cursor?: components["parameters"]["Cursor"];
                     limit?: components["parameters"]["Limit"];
@@ -1185,15 +1178,7 @@ export interface paths {
                         "application/json": components["schemas"]["Task"];
                     };
                 };
-                /** @description insufficient balance */
-                402: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": components["schemas"]["Error"];
-                    };
-                };
+                400: components["responses"]["BadRequest"];
             };
         };
         delete?: never;
@@ -1230,6 +1215,8 @@ export interface paths {
                     };
                     content?: never;
                 };
+                400: components["responses"]["BadRequest"];
+                409: components["responses"]["Conflict"];
             };
         };
         delete?: never;
@@ -1247,16 +1234,19 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Two-phase confirm — submit / confirm(release) / cancel / reject / delete */
+        /**
+         * Two-phase confirm — submit / confirm(release) / cancel / reject / delete
+         * @description confirm/cancel/reject and an open-task delete require wallet intent, signature and idempotency headers; submit and deletion after cancellation do not move value.
+         */
         post: {
             parameters: {
                 query?: never;
-                header: {
-                    /** @description One-time signing intent returned by POST /credit/signing-intents */
-                    "X-Wallet-Intent": components["parameters"]["WalletIntent"];
-                    /** @description Base64 Ed25519 signature over the intent's exact signingBytes */
-                    "X-Wallet-Sig": components["parameters"]["WalletSig"];
-                    "Idempotency-Key": components["parameters"]["WalletIdempotencyKey"];
+                header?: {
+                    /** @description Required only for the value-moving actions documented on this operation */
+                    "X-Wallet-Intent"?: components["parameters"]["OptionalWalletIntent"];
+                    /** @description Required only for the value-moving actions documented on this operation */
+                    "X-Wallet-Sig"?: components["parameters"]["OptionalWalletSig"];
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
                 };
                 path: {
                     id: string;
@@ -1276,6 +1266,8 @@ export interface paths {
                     };
                     content?: never;
                 };
+                400: components["responses"]["BadRequest"];
+                409: components["responses"]["Conflict"];
             };
         };
         delete?: never;
@@ -1295,6 +1287,7 @@ export interface paths {
         get: {
             parameters: {
                 query?: {
+                    status?: "on_sale" | "off_sale" | "sold_out" | "all";
                     /** @description Opaque pagination cursor */
                     cursor?: components["parameters"]["Cursor"];
                     limit?: components["parameters"]["Limit"];
@@ -1384,15 +1377,7 @@ export interface paths {
                         "application/json": components["schemas"]["Purchase"];
                     };
                 };
-                /** @description insufficient balance */
-                402: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": components["schemas"]["Error"];
-                    };
-                };
+                400: components["responses"]["BadRequest"];
             };
         };
         delete?: never;
@@ -1450,16 +1435,19 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Escrow steps — accept / deliver / confirm(release) */
+        /**
+         * Escrow steps — accept / deliver / confirm(release) / cancel(refund)
+         * @description confirm and cancel require wallet intent, signature and idempotency headers; accept and deliver are non-value seller transitions.
+         */
         post: {
             parameters: {
                 query?: never;
-                header: {
-                    /** @description One-time signing intent returned by POST /credit/signing-intents */
-                    "X-Wallet-Intent": components["parameters"]["WalletIntent"];
-                    /** @description Base64 Ed25519 signature over the intent's exact signingBytes */
-                    "X-Wallet-Sig": components["parameters"]["WalletSig"];
-                    "Idempotency-Key": components["parameters"]["WalletIdempotencyKey"];
+                header?: {
+                    /** @description Required only for the value-moving actions documented on this operation */
+                    "X-Wallet-Intent"?: components["parameters"]["OptionalWalletIntent"];
+                    /** @description Required only for the value-moving actions documented on this operation */
+                    "X-Wallet-Sig"?: components["parameters"]["OptionalWalletSig"];
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
                 };
                 path: {
                     id: string;
@@ -1479,6 +1467,8 @@ export interface paths {
                     };
                     content?: never;
                 };
+                400: components["responses"]["BadRequest"];
+                409: components["responses"]["Conflict"];
             };
         };
         delete?: never;
@@ -6312,7 +6302,7 @@ export interface components {
             seq?: number;
             txId?: string;
             /** @enum {string} */
-            type?: "mint" | "tip" | "escrow_hold" | "escrow_release" | "admin_adjust";
+            type?: "mint" | "tip" | "escrow_hold" | "escrow_release";
             fromAccount?: string | null;
             toAccount?: string | null;
             amount?: number;
@@ -6336,6 +6326,7 @@ export interface components {
             /** Format: int64 */
             expiresAt: number;
         };
+        /** @description The recipient must be the active author of the visible target; self-tips are rejected. */
         TipInput: {
             toAccountId: string;
             amount: number;
@@ -6366,6 +6357,7 @@ export interface components {
             /** @enum {string} */
             action: "submit" | "confirm" | "cancel" | "reject" | "delete";
         };
+        /** @description Public listing data. Private delivery instructions are never exposed here. */
         Product: {
             id?: string;
             sellerId?: string;
@@ -6392,11 +6384,13 @@ export interface components {
             amount?: number;
             /** @enum {string} */
             status?: "pending" | "accepted" | "delivered" | "completed" | "cancelled";
+            /** @description Visible only to the purchase buyer and seller */
+            deliveryInfo?: string | null;
             createdAt?: number;
         };
         PurchaseAction: {
             /** @enum {string} */
-            action: "accept" | "deliver" | "confirm";
+            action: "accept" | "deliver" | "confirm" | "cancel";
         };
         CourseSearchHit: {
             id: string;
@@ -7251,6 +7245,10 @@ export interface components {
         WalletIntent: string;
         /** @description Base64 Ed25519 signature over the intent's exact signingBytes */
         WalletSig: string;
+        /** @description Required only for the value-moving actions documented on this operation */
+        OptionalWalletIntent: string;
+        /** @description Required only for the value-moving actions documented on this operation */
+        OptionalWalletSig: string;
         IdempotencyKey: string;
         WalletIdempotencyKey: string;
     };

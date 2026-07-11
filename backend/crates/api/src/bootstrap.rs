@@ -272,6 +272,7 @@ pub async fn run() -> anyhow::Result<()> {
 
 /// Compose the full application router from per-domain routers.
 fn build_router(state: AppState) -> Router {
+    let tip_target_resolver = std::sync::Arc::new(crate::tip_targets::ContentTipTargetResolver);
     let cors = CorsLayer::new().allow_origin(Any).allow_methods(Any).allow_headers(Any);
 
     let request_id_layer = SetRequestIdLayer::x_request_id(MakeRequestUuid);
@@ -291,7 +292,7 @@ fn build_router(state: AppState) -> Router {
         .merge(search::routes(state.clone()))
         .merge(courses::routes(state.clone()))
         .merge(reviews::routes(state.clone()))
-        .merge(credit::routes(state.clone()))
+        .merge(credit::routes(state.clone(), tip_target_resolver))
         .merge(forum::routes(state.clone()))
         .merge(media::routes(state.clone()))
         .merge(crate::onebox::routes(state.clone()))
