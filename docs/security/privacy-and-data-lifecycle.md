@@ -6,7 +6,7 @@
 >
 > 负责人：Privacy owner、Security owner、Domain maintainers
 >
-> 最近核验：2026-07-11，migration `0034_social_identity_privacy.sql`
+> 最近核验：2026-07-12，migrations `0034`、`0037`、`0038`、`0040`
 
 本规范将数据最小化、可见性、导出、删除和保留作为产品前置条件。它不是法律意见；涉及 PIPL、
 未成年人、广告或跨境处理的最终政策需要合格法律与隐私负责人确认。
@@ -54,6 +54,7 @@
 | 运营数据 | job log、metrics、aggregated promo events | operators | 聚合、去标识、有限保留 |
 | 公告 receipt | announcement/revision、seen/dismiss/ack time | 本人、汇总后的公告管理员 | 账号删除级联清除，不记录设备/IP；后台只返回聚合计数 |
 | 积分记录 | ledger、wallet projection | owner/verification policy | ledger 不改写，删除后 tombstone |
+| 积分完整性证据 | run reason、operator id、wallet account id、派生/缓存差额 | `credit.integrity` staff | 随 ledger/audit 完整性证据保留；不含邮箱、签名、key 或原始错误 |
 | 交易履约信息 | escrow product `deliveryInfo` | purchase buyer/seller | 不进入公开 listing/search/log；随订单保留与删除策略最小化 |
 
 新 column/event/index 前必须在对应产品文档说明 data category、purpose、controller/processor、

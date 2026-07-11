@@ -6,7 +6,7 @@
 >
 > 负责人：Platform maintainers、Domain maintainers
 >
-> 最近核验：2026-07-11，`origin/main@ed8a06c`
+> 最近核验：2026-07-12，`codex/x-credit-reconciliation`
 
 本规范说明产品规则如何落实为 HTTP 契约、migration、domain API、事务和可重建投影。它不复制
 完整 OpenAPI 或 DDL。
@@ -137,6 +137,13 @@ Fresh database 必须只通过 sqlx migration ledger 建立。普通启动、CI 
   recipient eligibility；credit 不跨域直查内容或账号私有表。
 - Public Product 不包含 delivery instructions；只有 buyer/seller 可访问的 Purchase surface 返回。
 - 不新增 recharge、withdraw、fiat conversion 或 free transfer；冲突需求必须停止并升级确认。
+- Credit reconciliation run/result 由 credit domain 持久化：请求 reason 和 idempotency key hash 去重，
+  active run 由 partial unique index 与数据库 advisory lock 双重互斥。每次扫描使用 repeatable-read
+  snapshot，先验证 ledger，再用 full outer comparison 生成只读 wallet projection evidence；run/result
+  写入和 governance audit 不得触碰 wallet cache 或 append-only ledger。Resume 只重新获取同一 run 的
+  lock 并追加 attempt audit，terminal run 是目标状态幂等，不会重放扫描。
+- Reconciliation schema 是 additive 空表，不回填历史 run，旧应用版本会忽略；滚动部署先执行 migration
+  再开放新 route。异常回退时停用新 route 并保留 evidence 表，不能通过删除表或改 ledger 伪造恢复。
 
 ## Change impact matrix
 

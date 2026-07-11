@@ -425,6 +425,7 @@ dependencies = [
  "chrono",
  "deadpool-redis",
  "forum",
+ "governance",
  "hex",
  "identity",
  "redis",

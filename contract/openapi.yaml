@@ -72,6 +72,11 @@ components:
       in: header
       required: true
       schema: { type: string, minLength: 1, maxLength: 128 }
+    ReconciliationIdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema: { type: string, minLength: 8, maxLength: 128, pattern: '^[!-~]+$' }
 
   responses:
     BadRequest:   { description: Bad request, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
@@ -322,6 +327,58 @@ components:
         ok: { type: boolean }
         latestSeq: { type: integer }
         latestHash: { type: string }
+    ReconciliationRunInput:
+      type: object
+      additionalProperties: false
+      required: [reason]
+      properties:
+        reason: { type: string, minLength: 3, maxLength: 500 }
+    CreditReconciliationRun:
+      type: object
+      required: [id, status, requestedBy, reason, walletsChecked, driftedWallets, missingWallets, balanceDriftedWallets, sequenceDriftedWallets, totalAbsoluteDrift, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        status: { type: string, enum: [queued, running, succeeded, failed] }
+        requestedBy: { type: string }
+        reason: { type: string }
+        ledgerOk: { type: boolean, nullable: true }
+        ledgerLatestSeq: { type: integer, format: int64, nullable: true }
+        ledgerLatestHash: { type: string, nullable: true }
+        ledgerFailureSeq: { type: integer, format: int64, nullable: true }
+        walletsChecked: { type: integer, format: int64, minimum: 0 }
+        driftedWallets: { type: integer, format: int64, minimum: 0 }
+        missingWallets: { type: integer, format: int64, minimum: 0 }
+        balanceDriftedWallets: { type: integer, format: int64, minimum: 0 }
+        sequenceDriftedWallets: { type: integer, format: int64, minimum: 0 }
+        totalAbsoluteDrift: { type: string, pattern: '^[0-9]+$' }
+        errorCode: { type: string, nullable: true }
+        createdAt: { type: integer, format: int64 }
+        startedAt: { type: integer, format: int64, nullable: true }
+        completedAt: { type: integer, format: int64, nullable: true }
+    CreditReconciliationWallet:
+      type: object
+      required: [accountId, expectedBalance, delta, expectedLastSeq, walletExists, hasBalanceDrift, hasSequenceDrift]
+      properties:
+        accountId: { type: string }
+        expectedBalance: { type: string, pattern: '^-?[0-9]+$' }
+        actualBalance: { type: string, pattern: '^-?[0-9]+$', nullable: true }
+        delta: { type: string, pattern: '^-?[0-9]+$' }
+        expectedLastSeq: { type: integer, format: int64, minimum: 0 }
+        actualLastSeq: { type: integer, format: int64, minimum: 0, nullable: true }
+        walletExists: { type: boolean }
+        hasBalanceDrift: { type: boolean }
+        hasSequenceDrift: { type: boolean }
+    CreditReconciliationStats:
+      type: object
+      required: [totalRuns, failedRuns, ledgerFailureRuns, runsWithDrift]
+      properties:
+        totalRuns: { type: integer, format: int64, minimum: 0 }
+        failedRuns: { type: integer, format: int64, minimum: 0 }
+        ledgerFailureRuns: { type: integer, format: int64, minimum: 0 }
+        runsWithDrift: { type: integer, format: int64, minimum: 0 }
+        latestRun:
+          allOf: [{ $ref: "#/components/schemas/CreditReconciliationRun" }]
+          nullable: true
     SigningIntentInput:
       type: object
       required: [action, request]
@@ -1029,6 +1086,14 @@ components:
       allOf:
         - $ref: "#/components/schemas/Page"
         - { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/LedgerEntry" } } } }
+    CreditReconciliationRunPage:
+      allOf:
+        - $ref: "#/components/schemas/Page"
+        - { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/CreditReconciliationRun" } } } }
+    CreditReconciliationWalletPage:
+      allOf:
+        - $ref: "#/components/schemas/Page"
+        - { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/CreditReconciliationWallet" } } } }
     ReportPage:
       allOf:
         - $ref: "#/components/schemas/Page"
@@ -2738,6 +2803,67 @@ paths:
         - { $ref: "#/components/parameters/Cursor" }
         - { $ref: "#/components/parameters/Limit" }
       responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/AdminAuditEventPage" } } } }, "403": { $ref: "#/components/responses/Forbidden" } }
+  /admin/credit/reconciliations:
+    get:
+      tags: [admin, credit]
+      summary: List persistent read-only credit reconciliation runs
+      parameters: [{ $ref: "#/components/parameters/Cursor" }, { $ref: "#/components/parameters/Limit" }]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/CreditReconciliationRunPage" } } } }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      tags: [admin, credit]
+      summary: Request an idempotent read-only ledger and wallet projection reconciliation
+      description: Verifies the append-only ledger before comparing every derived wallet balance. It never changes wallet balances or ledger rows.
+      parameters: [{ $ref: "#/components/parameters/ReconciliationIdempotencyKey" }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/ReconciliationRunInput" } } } }
+      responses:
+        "201": { description: created, content: { application/json: { schema: { $ref: "#/components/schemas/CreditReconciliationRun" } } } }
+        "200": { description: idempotent replay, content: { application/json: { schema: { $ref: "#/components/schemas/CreditReconciliationRun" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /admin/credit/reconciliations/stats:
+    get:
+      tags: [admin, credit]
+      summary: Read aggregate credit reconciliation health counters
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/CreditReconciliationStats" } } } }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /admin/credit/reconciliations/{id}:
+    get:
+      tags: [admin, credit]
+      summary: Read one credit reconciliation run
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/CreditReconciliationRun" } } } }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /admin/credit/reconciliations/{id}/resume:
+    post:
+      tags: [admin, credit]
+      summary: Resume a queued or interrupted credit reconciliation run
+      description: Target-state idempotent. A terminal run is returned unchanged and never executed again.
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/ReconciliationRunInput" } } } }
+      responses:
+        "200": { description: current run state, content: { application/json: { schema: { $ref: "#/components/schemas/CreditReconciliationRun" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /admin/credit/reconciliations/{id}/wallets:
+    get:
+      tags: [admin, credit]
+      summary: Read per-wallet projection comparisons for one reconciliation run
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: driftOnly, in: query, schema: { type: boolean, default: true } }
+        - { $ref: "#/components/parameters/Cursor" }
+        - { $ref: "#/components/parameters/Limit" }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/CreditReconciliationWalletPage" } } } }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /admin/activity-policy:
     get:
       tags: [admin, activity]

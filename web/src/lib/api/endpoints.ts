@@ -32,6 +32,9 @@ import type {
   Course,
   CourseDetail,
   CourseNature,
+  CreditReconciliationRun,
+  CreditReconciliationStats,
+  CreditReconciliationWallet,
   Department,
   DeviceSessionPage,
   DmConversation,
@@ -788,6 +791,48 @@ export const api = {
 
   verifyLedger() {
     return apiRequest<LedgerVerify>("/wallet/ledger/verify", { auth: false });
+  },
+
+  adminCreditReconciliationStats() {
+    return apiRequest<CreditReconciliationStats>("/admin/credit/reconciliations/stats");
+  },
+
+  adminCreditReconciliations(cursor?: string | null) {
+    return apiRequest<Page<CreditReconciliationRun>>("/admin/credit/reconciliations", {
+      query: { cursor, limit: 30 },
+    });
+  },
+
+  requestAdminCreditReconciliation(reason: string, idempotencyKey: string) {
+    return apiRequest<CreditReconciliationRun>("/admin/credit/reconciliations", {
+      method: "POST",
+      body: { reason },
+      headers: { "Idempotency-Key": idempotencyKey },
+    });
+  },
+
+  adminCreditReconciliation(id: string) {
+    return apiRequest<CreditReconciliationRun>(
+      `/admin/credit/reconciliations/${encodeURIComponent(id)}`,
+    );
+  },
+
+  resumeAdminCreditReconciliation(id: string, reason: string) {
+    return apiRequest<CreditReconciliationRun>(
+      `/admin/credit/reconciliations/${encodeURIComponent(id)}/resume`,
+      { method: "POST", body: { reason } },
+    );
+  },
+
+  adminCreditReconciliationWallets(
+    id: string,
+    cursor?: string | null,
+    driftOnly = true,
+  ) {
+    return apiRequest<Page<CreditReconciliationWallet>>(
+      `/admin/credit/reconciliations/${encodeURIComponent(id)}/wallets`,
+      { query: { cursor, driftOnly, limit: 50 } },
+    );
   },
 
   creditSigningIntent(

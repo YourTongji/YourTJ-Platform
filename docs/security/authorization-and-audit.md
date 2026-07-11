@@ -6,7 +6,7 @@
 >
 > 负责人：Security owner、Identity/Governance maintainers
 >
-> 最近核验：2026-07-11，`origin/main@33584db`
+> 最近核验：2026-07-12，`codex/x-credit-reconciliation`
 
 后端授权每一个 staff 操作。Web 按 capability 隐藏导航只是可用性和数据最小化措施，绝不是
 安全边界。
@@ -50,10 +50,12 @@
 | `promotions.manage` | — | yes | 自营推广、排期、站内目标和 clean asset reference |
 | `verifications.manage` | — | yes | typed 身份/特殊认证定义、低角色账号授予历史与撤销 |
 | `operations.jobs` | — | yes | selection sync/reindex triggers |
+| `credit.integrity` | — | yes | 运行和读取只读 ledger/wallet reconciliation |
 
 用户角色没有 staff capability。没有 capability 可以查看任意校园邮箱/DM、编辑 wallet balance 或
-append 任意 ledger。推广和人工认证分别使用 `promotions.manage` 与 `verifications.manage`；PII reveal
-和 credit integrity 若上线也必须使用独立 capability，不能塞进过宽的 `community.manage`。
+append 任意 ledger。推广、人工认证与积分完整性分别使用 `promotions.manage`、`verifications.manage`
+和只读 `credit.integrity`；PII reveal 若上线也必须使用独立 capability，不能塞进过宽的
+`community.manage`。
 
 ## 授权规则
 
@@ -71,6 +73,10 @@ append 任意 ledger。推广和人工认证分别使用 `promotions.manage` 与
 - 商品 `deliveryInfo` 是订单双方信息，不进入公开 Product DTO、搜索、日志或第三方订单列表。
 - SSE/实时请求通过 Authorization header 认证，不把 access token 放入 URL/query；事件只作为刷新提示，
   客户端仍从受授权 API 读取 durable 通知与私信状态。
+- Credit reconcile 的 request/resume/start/succeeded/failed 使用同一 run id 关联 audit；reason、账本是否通过和
+  bounded drift counts 可入 metadata，idempotency key、签名、邮箱、数据库错误和完整 ledger payload 不入。
+- `credit.integrity` 只允许验证和读取持久结果，不授予 wallet update、ledger append 或历史 ledger
+  mutation；即使直接构造请求，普通用户和 moderator 也必须被拒绝。
 - 后端 denial 使用统一错误 envelope；客户端不能靠 capability 推断隐藏数据存在。
 - `verifications.manage` 只允许管理员处理 lower-role account。Definition 只接受受控 category/icon/style；
   grant 默认私密，公开开关不能绕过 definition policy，重复有效 grant 与重复/过期撤销返回 conflict。

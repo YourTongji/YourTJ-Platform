@@ -48,6 +48,7 @@ pub enum Capability {
     ManagePromotions,
     ManageVerifications,
     RunOperations,
+    ManageCreditIntegrity,
 }
 
 impl Capability {
@@ -68,6 +69,7 @@ impl Capability {
             Self::ManagePromotions => "promotions.manage",
             Self::ManageVerifications => "verifications.manage",
             Self::RunOperations => "operations.jobs",
+            Self::ManageCreditIntegrity => "credit.integrity",
         }
     }
 }
@@ -95,6 +97,7 @@ const ADMIN_CAPABILITIES: &[Capability] = &[
     Capability::ManagePromotions,
     Capability::ManageVerifications,
     Capability::RunOperations,
+    Capability::ManageCreditIntegrity,
 ];
 
 pub fn capabilities_for_role(role: &str) -> &'static [Capability] {
@@ -185,6 +188,7 @@ mod tests {
         assert!(!moderator.has_capability(Capability::ManageActivity));
         assert!(!moderator.has_capability(Capability::ManagePromotions));
         assert!(!moderator.has_capability(Capability::ManageVerifications));
+        assert!(!moderator.has_capability(Capability::ManageCreditIntegrity));
         assert!(!moderator.has_capability(Capability::ChangeRoles));
     }
 
@@ -194,6 +198,7 @@ mod tests {
         assert!(administrator.has_capability(Capability::ManageAnnouncements));
         assert!(administrator.has_capability(Capability::ManagePromotions));
         assert!(administrator.has_capability(Capability::ManageVerifications));
+        assert!(administrator.has_capability(Capability::ManageCreditIntegrity));
     }
 
     #[test]

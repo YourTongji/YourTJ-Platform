@@ -18,6 +18,7 @@ pub mod error;
 pub mod handlers;
 pub mod ledger;
 pub mod models;
+pub mod reconciliation;
 pub mod repo;
 pub mod signing;
 pub mod tip_targets;
@@ -95,6 +96,20 @@ pub fn routes(
         .route("/api/v2/wallet/tip", post(handlers::tip))
         .route("/api/v2/wallet/ledger", get(handlers::get_ledger))
         .route("/api/v2/wallet/ledger/verify", get(handlers::verify_ledger))
+        .route(
+            "/api/v2/admin/credit/reconciliations",
+            get(handlers::list_reconciliation_runs).post(handlers::request_reconciliation_run),
+        )
+        .route("/api/v2/admin/credit/reconciliations/stats", get(handlers::reconciliation_stats))
+        .route("/api/v2/admin/credit/reconciliations/{id}", get(handlers::get_reconciliation_run))
+        .route(
+            "/api/v2/admin/credit/reconciliations/{id}/resume",
+            post(handlers::resume_reconciliation_run),
+        )
+        .route(
+            "/api/v2/admin/credit/reconciliations/{id}/wallets",
+            get(handlers::list_reconciliation_wallets),
+        )
         // Tasks
         .route("/api/v2/credit/tasks", get(handlers::list_tasks).post(handlers::create_task))
         .route("/api/v2/credit/tasks/{id}/accept", post(handlers::accept_task))

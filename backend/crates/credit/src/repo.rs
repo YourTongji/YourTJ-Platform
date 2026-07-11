@@ -225,6 +225,15 @@ pub async fn verify_full_ledger(
     pool: &PgPool,
     system_public_key_b64: &str,
 ) -> AppResult<LedgerVerify> {
+    let mut conn = pool.acquire().await?;
+    verify_full_ledger_conn(&mut conn, system_public_key_b64).await
+}
+
+/// Connection-scoped ledger verification for callers that need one database snapshot.
+pub(crate) async fn verify_full_ledger_conn(
+    conn: &mut sqlx::PgConnection,
+    system_public_key_b64: &str,
+) -> AppResult<LedgerVerify> {
     use std::collections::HashMap;
 
     #[derive(sqlx::FromRow)]
@@ -241,7 +250,7 @@ pub async fn verify_full_ledger(
                 metadata, signer, signature, prev_hash, hash, created_at \
          FROM credit.ledger ORDER BY seq ASC",
     )
-    .fetch_all(pool)
+    .fetch_all(&mut *conn)
     .await?;
 
     if rows.is_empty() {
@@ -262,7 +271,7 @@ pub async fn verify_full_ledger(
             "SELECT account_id, public_key FROM identity.account_keys WHERE account_id = ANY($1)",
         )
         .bind(&signer_ids)
-        .fetch_all(pool)
+        .fetch_all(&mut *conn)
         .await?;
         for (account_id, public_key) in key_rows {
             pk_map.entry(account_id).or_default().push(public_key);
@@ -287,7 +296,7 @@ pub async fn verify_full_ledger(
              FROM credit.signing_intents WHERE id = ANY($1)",
         )
         .bind(&intent_ids)
-        .fetch_all(pool)
+        .fetch_all(&mut *conn)
         .await?
     };
     let intent_map: HashMap<uuid::Uuid, IntentVerificationRow> =

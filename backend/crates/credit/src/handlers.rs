@@ -12,6 +12,7 @@ use shared::{AppResult, AppState, Page};
 
 use crate::dto::{
     LedgerEntryDto, LedgerVerify, ProductDto, ProductInput, PurchaseAction, PurchaseDto,
+    ReconciliationRunDto, ReconciliationRunInput, ReconciliationStatsDto, ReconciliationWalletDto,
     SigningIntentInput, SigningIntentOutput, TaskAction, TaskDto, TaskInput, TipInput, WalletDto,
 };
 use crate::error::CreditError;
@@ -184,6 +185,140 @@ pub async fn get_ledger(
 pub async fn verify_ledger(State(state): State<AppState>) -> AppResult<Json<LedgerVerify>> {
     let result = repo::verify_full_ledger(&state.db, &state.system_public_key_b64).await?;
     Ok(Json(result))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReconciliationRunsQuery {
+    pub cursor: Option<String>,
+    #[serde(default = "default_limit")]
+    pub limit: i64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReconciliationWalletsQuery {
+    pub cursor: Option<String>,
+    #[serde(default = "default_limit")]
+    pub limit: i64,
+    #[serde(default = "default_true")]
+    pub drift_only: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn parse_reconciliation_id(id: &str) -> AppResult<uuid::Uuid> {
+    id.parse().map_err(|_| shared::AppError::BadRequest("invalid reconciliation id".into()))
+}
+
+async fn authenticate_credit_integrity(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> AppResult<shared::AuthAccount> {
+    let auth = crate::auth::authenticate(headers, &state.db, &state.jwt_secret)
+        .await
+        .map_err(map_auth_err)?;
+    auth.require_capability(shared::auth::Capability::ManageCreditIntegrity)
+        .map_err(|_| shared::AppError::Forbidden)?;
+    Ok(auth)
+}
+
+/// POST /api/v2/admin/credit/reconciliations — run a read-only integrity comparison.
+pub async fn request_reconciliation_run(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<ReconciliationRunInput>,
+) -> AppResult<(StatusCode, Json<ReconciliationRunDto>)> {
+    let auth = authenticate_credit_integrity(&state, &headers).await?;
+    let idempotency_key = headers
+        .get("idempotency-key")
+        .and_then(|header| header.to_str().ok())
+        .ok_or_else(|| shared::AppError::BadRequest("Idempotency-Key is required".into()))?;
+    let actor = governance::AccountActor { account_id: auth.id, role: &auth.role };
+    let (run, was_created) = crate::reconciliation::request_run(
+        &state.db,
+        actor,
+        &body.reason,
+        idempotency_key,
+        &state.system_public_key_b64,
+    )
+    .await?;
+    let status = if was_created { StatusCode::CREATED } else { StatusCode::OK };
+    Ok((status, Json(run)))
+}
+
+/// GET /api/v2/admin/credit/reconciliations — list durable integrity runs.
+pub async fn list_reconciliation_runs(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<ReconciliationRunsQuery>,
+) -> AppResult<Json<Page<ReconciliationRunDto>>> {
+    authenticate_credit_integrity(&state, &headers).await?;
+    Ok(Json(
+        crate::reconciliation::list_runs(&state.db, query.cursor.as_deref(), query.limit).await?,
+    ))
+}
+
+/// GET /api/v2/admin/credit/reconciliations/{id} — inspect one run summary.
+pub async fn get_reconciliation_run(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> AppResult<Json<ReconciliationRunDto>> {
+    authenticate_credit_integrity(&state, &headers).await?;
+    Ok(Json(crate::reconciliation::get_run(&state.db, parse_reconciliation_id(&id)?).await?))
+}
+
+/// POST /api/v2/admin/credit/reconciliations/{id}/resume — resume an interrupted run.
+pub async fn resume_reconciliation_run(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    Json(body): Json<ReconciliationRunInput>,
+) -> AppResult<Json<ReconciliationRunDto>> {
+    let auth = authenticate_credit_integrity(&state, &headers).await?;
+    let actor = governance::AccountActor { account_id: auth.id, role: &auth.role };
+    Ok(Json(
+        crate::reconciliation::resume_run(
+            &state.db,
+            actor,
+            parse_reconciliation_id(&id)?,
+            &body.reason,
+            &state.system_public_key_b64,
+        )
+        .await?,
+    ))
+}
+
+/// GET /api/v2/admin/credit/reconciliations/{id}/wallets — inspect wallet drift.
+pub async fn list_reconciliation_wallets(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    Query(query): Query<ReconciliationWalletsQuery>,
+) -> AppResult<Json<Page<ReconciliationWalletDto>>> {
+    authenticate_credit_integrity(&state, &headers).await?;
+    Ok(Json(
+        crate::reconciliation::list_wallet_results(
+            &state.db,
+            parse_reconciliation_id(&id)?,
+            query.cursor.as_deref(),
+            query.limit,
+            query.drift_only,
+        )
+        .await?,
+    ))
+}
+
+/// GET /api/v2/admin/credit/reconciliations/stats — integrity outcome counters.
+pub async fn reconciliation_stats(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> AppResult<Json<ReconciliationStatsDto>> {
+    authenticate_credit_integrity(&state, &headers).await?;
+    Ok(Json(crate::reconciliation::stats(&state.db).await?))
 }
 
 // ---------------------------------------------------------------------------

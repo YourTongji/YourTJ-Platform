@@ -6,7 +6,7 @@
 >
 > 负责人：Community operations、Security owner、Identity/Forum/Reviews/Media/Web maintainers
 >
-> 最近核验：2026-07-11，`origin/main@33584db`
+> 最近核验：2026-07-12，`codex/x-credit-reconciliation`
 
 管理后台是社区政策的执行界面，不是数据库编辑器。所有操作必须先有产品语义、capability、
 目标层级、理由、审计、恢复和通知，再决定按钮放在哪里。
@@ -26,6 +26,8 @@
 - governance audit 记录多域 staff/system 事件；论坛自动隐藏与 staff 隐藏有不同 provenance。
 - 人工身份/特殊认证由 platform typed definition 与可过期/可撤销 grant 独立建模；后台使用专属
   `verifications.manage` 创建、授予、查看历史和撤销，reason/audit 与 mutation 同事务。
+- 积分完整性区使用独立 `credit.integrity` capability，持久展示只读 ledger verification、逐钱包
+  projection comparison、漂移汇总、请求原因与任务状态，不提供余额编辑或任意流水写入。
 
 ### Partial
 
@@ -33,7 +35,8 @@
 - 缺账号停用/删除/恢复/purge、当事人通知、申诉和独立复核。
 - generic settings 只有 string key/value；job trigger 无 durable 状态、进度、失败日志或重试。
 - 成就徽章后端存在但定义、人工授予与撤销 UI 仍不完整；它不复用已经闭环的身份/特殊认证后台。
-- 推广的曝光/点击聚合、公告 receipt 保留策略、批量审核、只读积分完整性与服务健康视图缺失。
+- 推广的曝光/点击聚合、公告 receipt 保留策略、批量审核和综合服务健康视图缺失；积分完整性已有
+  只读视图，但告警/SLO 和受审批 projection 重建仍缺。
 - 高风险角色/永久封禁/PII 操作没有 recent-auth 或双人确认。
 
 ## Trust level 与当前自动规则
@@ -176,7 +179,7 @@ sanction、trust-level rate limit 和 watched words，尚未接入同一 captcha
 | Settings | typed/versioned setting | `platform.settings` |
 | Jobs | sync/reindex/reconcile 状态、日志、重试 | `operations.jobs` |
 | Audit | actor/action/target/result/request filters、受控 export | `audit.read` |
-| Credit integrity | 只读 ledger verify/reconcile | 独立只读 capability |
+| Credit integrity | 只读 ledger verify/reconcile、逐 wallet 漂移证据 | `credit.integrity` |
 
 高风险按钮使用明确的动词和后果文本，要求 reason，防止重复提交；颜色不是唯一状态信号。列表
 包含 loading、empty、error 和分页。批量操作先 preview，限制数量，返回每项结果并共享 correlation id。
@@ -189,7 +192,9 @@ sanction、trust-level rate limit 和 watched words，尚未接入同一 captcha
   progress、bounded log、dedupe key、retry count 和 timestamps。
 - 重试幂等；同类互斥任务有锁，UI 的“已提交”不能显示为“已完成”。
 - 运营健康至少显示审核积压/时长、任务失败、索引/投影漂移、邮件/OSS 故障和恢复状态。
-- credit 只提供 verify/reconcile 结果，不提供任意 balance editor。
+- credit 只提供 verify/reconcile 结果，不提供任意 balance editor。每次 run 需要 reason 与幂等 key，
+  同类任务单并发；中断 run 通过理由化 resume 恢复且不新建快照；账本验证失败时停止 projection
+  comparison，所有异常只留证不自动修复。
 
 社区规则、隐私政策和服务条款不是普通 announcement/string setting。它们需要 immutable version、
 draft/review/published/retired、effective time、owner/approver、diff、适用受众和用户 acceptance receipt。

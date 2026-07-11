@@ -16,6 +16,7 @@ export const ADMIN_CAPABILITIES = {
   managePromotions: "promotions.manage",
   manageVerifications: "verifications.manage",
   runOperations: "operations.jobs",
+  manageCreditIntegrity: "credit.integrity",
 } as const;
 
 export type AdminCapability = (typeof ADMIN_CAPABILITIES)[keyof typeof ADMIN_CAPABILITIES];

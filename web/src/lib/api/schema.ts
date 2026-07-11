@@ -5380,6 +5380,258 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/credit/reconciliations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List persistent read-only credit reconciliation runs */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description Opaque pagination cursor */
+                    cursor?: components["parameters"]["Cursor"];
+                    limit?: components["parameters"]["Limit"];
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["CreditReconciliationRunPage"];
+                    };
+                };
+                403: components["responses"]["Forbidden"];
+            };
+        };
+        put?: never;
+        /**
+         * Request an idempotent read-only ledger and wallet projection reconciliation
+         * @description Verifies the append-only ledger before comparing every derived wallet balance. It never changes wallet balances or ledger rows.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header: {
+                    "Idempotency-Key": components["parameters"]["ReconciliationIdempotencyKey"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["ReconciliationRunInput"];
+                };
+            };
+            responses: {
+                /** @description idempotent replay */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["CreditReconciliationRun"];
+                    };
+                };
+                /** @description created */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["CreditReconciliationRun"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                403: components["responses"]["Forbidden"];
+                409: components["responses"]["Conflict"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/credit/reconciliations/stats": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read aggregate credit reconciliation health counters */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["CreditReconciliationStats"];
+                    };
+                };
+                403: components["responses"]["Forbidden"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/credit/reconciliations/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read one credit reconciliation run */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["CreditReconciliationRun"];
+                    };
+                };
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/credit/reconciliations/{id}/resume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Resume a queued or interrupted credit reconciliation run
+         * @description Target-state idempotent. A terminal run is returned unchanged and never executed again.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["ReconciliationRunInput"];
+                };
+            };
+            responses: {
+                /** @description current run state */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["CreditReconciliationRun"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/credit/reconciliations/{id}/wallets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read per-wallet projection comparisons for one reconciliation run */
+        get: {
+            parameters: {
+                query?: {
+                    driftOnly?: boolean;
+                    /** @description Opaque pagination cursor */
+                    cursor?: components["parameters"]["Cursor"];
+                    limit?: components["parameters"]["Limit"];
+                };
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["CreditReconciliationWalletPage"];
+                    };
+                };
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/activity-policy": {
         parameters: {
             query?: never;
@@ -8017,6 +8269,65 @@ export interface components {
             latestSeq?: number;
             latestHash?: string;
         };
+        ReconciliationRunInput: {
+            reason: string;
+        };
+        CreditReconciliationRun: {
+            /** Format: uuid */
+            id: string;
+            /** @enum {string} */
+            status: "queued" | "running" | "succeeded" | "failed";
+            requestedBy: string;
+            reason: string;
+            ledgerOk?: boolean | null;
+            /** Format: int64 */
+            ledgerLatestSeq?: number | null;
+            ledgerLatestHash?: string | null;
+            /** Format: int64 */
+            ledgerFailureSeq?: number | null;
+            /** Format: int64 */
+            walletsChecked: number;
+            /** Format: int64 */
+            driftedWallets: number;
+            /** Format: int64 */
+            missingWallets: number;
+            /** Format: int64 */
+            balanceDriftedWallets: number;
+            /** Format: int64 */
+            sequenceDriftedWallets: number;
+            totalAbsoluteDrift: string;
+            errorCode?: string | null;
+            /** Format: int64 */
+            createdAt: number;
+            /** Format: int64 */
+            startedAt?: number | null;
+            /** Format: int64 */
+            completedAt?: number | null;
+        };
+        CreditReconciliationWallet: {
+            accountId: string;
+            expectedBalance: string;
+            actualBalance?: string | null;
+            delta: string;
+            /** Format: int64 */
+            expectedLastSeq: number;
+            /** Format: int64 */
+            actualLastSeq?: number | null;
+            walletExists: boolean;
+            hasBalanceDrift: boolean;
+            hasSequenceDrift: boolean;
+        };
+        CreditReconciliationStats: {
+            /** Format: int64 */
+            totalRuns: number;
+            /** Format: int64 */
+            failedRuns: number;
+            /** Format: int64 */
+            ledgerFailureRuns: number;
+            /** Format: int64 */
+            runsWithDrift: number;
+            latestRun?: components["schemas"]["CreditReconciliationRun"] | null;
+        };
         SigningIntentInput: {
             /** @enum {string} */
             action: "credit.tip" | "credit.task.create" | "credit.task.action" | "credit.product.purchase" | "credit.purchase.action";
@@ -8700,6 +9011,12 @@ export interface components {
         LedgerPage: components["schemas"]["Page"] & {
             items?: components["schemas"]["LedgerEntry"][];
         };
+        CreditReconciliationRunPage: components["schemas"]["Page"] & {
+            items?: components["schemas"]["CreditReconciliationRun"][];
+        };
+        CreditReconciliationWalletPage: components["schemas"]["Page"] & {
+            items?: components["schemas"]["CreditReconciliationWallet"][];
+        };
         ReportPage: components["schemas"]["Page"] & {
             items?: components["schemas"]["Report"][];
         };
@@ -9327,6 +9644,7 @@ export interface components {
         OptionalWalletSig: string;
         IdempotencyKey: string;
         WalletIdempotencyKey: string;
+        ReconciliationIdempotencyKey: string;
     };
     requestBodies: never;
     headers: never;

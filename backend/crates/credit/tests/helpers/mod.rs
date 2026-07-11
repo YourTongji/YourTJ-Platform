@@ -100,7 +100,7 @@ async fn run_migrations(pool: &PgPool) {
     .await
     .unwrap_or(false);
     if is_fresh {
-        let migrations: [&str; 16] = [
+        let migrations: [&str; 21] = [
             include_str!("../../../../migrations/0001_init.sql"),
             include_str!("../../../../migrations/0002_escrow_selection.sql"),
             include_str!("../../../../migrations/0003_platform.sql"),
@@ -115,8 +115,13 @@ async fn run_migrations(pool: &PgPool) {
             include_str!("../../../../migrations/0012_natural_key_upsert.sql"),
             include_str!("../../../../migrations/0013_teacher_names.sql"),
             include_str!("../../../../migrations/0014_credit_signing_intents.sql"),
+            include_str!("../../../../migrations/0016_email_encryption.sql"),
             include_str!("../../../../migrations/0017_credit_prepared_ledger.sql"),
+            include_str!("../../../../migrations/0018_email_encrypted_storage.sql"),
+            include_str!("../../../../migrations/0022_governance.sql"),
             include_str!("../../../../migrations/0032_credit_integrity_constraints.sql"),
+            include_str!("../../../../migrations/0033_identity_auth_hardening.sql"),
+            include_str!("../../../../migrations/0038_credit_reconciliation.sql"),
         ];
         for (i, sql) in migrations.iter().enumerate() {
             sqlx::raw_sql(sql)
@@ -142,7 +147,40 @@ async fn run_migrations(pool: &PgPool) {
             .expect("migration 0032 failed");
     }
 
+    let has_governance: bool = sqlx::query_scalar(
+        "SELECT EXISTS( \
+           SELECT 1 FROM information_schema.tables \
+           WHERE table_schema = 'governance' AND table_name = 'audit_events' \
+         )",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or(false);
+    if !has_governance {
+        sqlx::raw_sql(include_str!("../../../../migrations/0022_governance.sql"))
+            .execute(pool)
+            .await
+            .expect("migration 0022 failed");
+    }
+
+    let has_reconciliation: bool = sqlx::query_scalar(
+        "SELECT EXISTS( \
+           SELECT 1 FROM information_schema.tables \
+           WHERE table_schema = 'credit' AND table_name = 'reconciliation_runs' \
+         )",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or(false);
+    if !has_reconciliation {
+        sqlx::raw_sql(include_str!("../../../../migrations/0038_credit_reconciliation.sql"))
+            .execute(pool)
+            .await
+            .expect("migration 0038 failed");
+    }
+
     // Clean test data from previous runs (always run, even if migrations were skipped).
+    sqlx::query("TRUNCATE credit.reconciliation_runs CASCADE").execute(pool).await.ok();
     sqlx::query("DELETE FROM credit.purchases").execute(pool).await.ok();
     sqlx::query("DELETE FROM credit.products").execute(pool).await.ok();
     sqlx::query("DELETE FROM credit.tasks").execute(pool).await.ok();
@@ -205,7 +243,11 @@ pub async fn signed_post_request(
         )
         .await
         .expect("create signing intent response");
-    assert_eq!(intent_response.status(), StatusCode::OK);
+    if intent_response.status() != StatusCode::OK {
+        let status = intent_response.status();
+        let error_body = read_json(intent_response).await;
+        panic!("signing intent failed with {status}: {error_body}");
+    }
     let intent = read_json(intent_response).await;
     let signing_bytes = intent["signingBytes"].as_str().expect("intent signingBytes");
     let signature = credit::ledger::sign_with_seed(signing_bytes, &seed);
