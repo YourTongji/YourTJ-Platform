@@ -319,6 +319,25 @@ CREATE TABLE reviews.review_reports (
   UNIQUE (review_id, reporter_account_id)
 );
 
+-- D1 的 client_id 不是平台 account_id；先原样保存，禁止伪造账户关系。
+CREATE TABLE reviews.legacy_review_likes (
+  review_id BIGINT NOT NULL REFERENCES reviews.reviews(id) ON DELETE CASCADE,
+  client_id TEXT NOT NULL,
+  created_at BIGINT NOT NULL,
+  PRIMARY KEY (review_id, client_id)
+);
+CREATE TABLE reviews.legacy_review_reports (
+  id BIGINT PRIMARY KEY,
+  review_id BIGINT NOT NULL REFERENCES reviews.reviews(id) ON DELETE CASCADE,
+  client_id TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  status TEXT NOT NULL,
+  admin_note TEXT,
+  created_at BIGINT NOT NULL,
+  updated_at BIGINT NOT NULL,
+  resolved_at BIGINT
+);
+
 -- ============ credit（Web2.5：中心账本 + Ed25519 签名 + 哈希链）============
 -- 账本 credit.ledger 是唯一权威，append-only、单调 seq、prev_hash 链接、每条带签名。
 -- 余额是账本的派生缓存（wallets.balance），事务内更新 + 夜间对账，禁止直接改余额。
