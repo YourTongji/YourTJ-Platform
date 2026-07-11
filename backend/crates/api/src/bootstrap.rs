@@ -101,6 +101,25 @@ pub async fn run() -> anyhow::Result<()> {
         captcha_verifier,
         sse_tx: Some(sse_tx),
     };
+    // Meilisearch index setup and readiness check on startup.
+    {
+        let meili_url = state.meili_url.clone();
+        let meili_key = state.meili_master_key.clone();
+        if !meili_url.is_empty() {
+            tokio::spawn(async move {
+                if let Err(e) = courses::meili::setup_course_index(&meili_url, &meili_key).await {
+                    tracing::warn!(error = %e, "meilisearch course index setup failed");
+                } else {
+                    tracing::info!("meilisearch course index ready");
+                }
+                if let Err(e) = courses::meili::setup_selection_index(&meili_url, &meili_key).await {
+                    tracing::warn!(error = %e, "meilisearch selection index setup failed");
+                }
+            });
+        } else {
+            tracing::warn!("MEILI_URL is empty — meilisearch is not configured; search will return empty results");
+        }
+    }
 
     // --- Forum background tasks ---
 

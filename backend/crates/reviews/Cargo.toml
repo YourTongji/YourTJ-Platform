@@ -14,9 +14,11 @@ sqlx.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 redis.workspace = true
+tokio.workspace = true
 deadpool-redis.workspace = true
 uuid.workspace = true
 identity.workspace = true
+courses.workspace = true
 
 [dev-dependencies]
 tower.workspace = true
