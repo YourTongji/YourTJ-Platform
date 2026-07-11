@@ -1,151 +1,209 @@
 # Community governance
 
-> **Status:** Current normative specification; implementation state is labelled per section
+> **Status:** DELIVERED IN THIS PR — lifecycle and transparency follow-ups are explicit
 >
 > **Owner:** Community operations + Identity/Forum/Reviews maintainers
 >
-> **Last verified:** 2026-07-11 against `origin/main@06a8898`
+> **Last verified:** 2026-07-11 against this PR, migrations `0022`–`0031`, OpenAPI, and current source
 >
-> **Authoritative sources:** `AGENTS.md` §5, `contract/openapi.yaml`, migrations `0001`, `0005`, `0006`, identity/forum/reviews source
+> **Authoritative sources:** `AGENTS.md` §5, `contract/openapi.yaml`, migrations
+> `0022_governance.sql` through `0031_forum_board_thread_count_reconcile.sql`,
+> identity/forum/reviews/media source
 
-This document defines how accounts and community content move through their lifecycles. It is the
-business-policy source for moderation; [RBAC and audit](../security/rbac-and-audit.md) defines who may
-perform each action.
+This document defines the delivered community-governance baseline and separates it from future account
+lifecycle, transparency, and retention work. [RBAC and audit](../security/rbac-and-audit.md) defines who
+may perform each delivered action.
 
 ## Implementation baseline
 
-- **CURRENT:** campus-email self-registration, `user/mod/admin` roles, forum soft deletion, forum flags,
-  review reports, silence/suspend sanctions, watched words, and forum-only staff action records exist.
-- **PR TARGET:** invitation-based manual account creation, explicit role hierarchy, consistent reversible
-  moderation across forum/reviews/media, central audit events, activity policy, and complete admin UI.
-- **FOLLOW-UP:** user-facing appeals case management, self-service data export, and automated retention
-  workers beyond the minimum deletion hooks delivered here.
+- **DELIVERED IN THIS PR:** expiring staff-created campus invitations, named capabilities, target-role
+  hierarchy checks, reasoned user sanctions and revocation, refresh-session revocation, and a
+  capability-driven admin UI.
+- **DELIVERED IN THIS PR:** reversible forum thread/comment moderation, explicit forum/review report
+  decisions, media approve/block, scoped reported-DM review, and cross-domain governance audit events for
+  the management mutations integrated in this PR.
+- **DELIVERED IN THIS PR:** automatic forum report hiding is represented separately from a staff hide;
+  reject/ignore restores only the automatic transition, while uphold keeps the contribution withdrawn and
+  soft-deletes the target.
+- **DELIVERED IN THIS PR:** content moderation enforces author-role hierarchy (`user < mod < admin`), and
+  staff cannot use the ordinary user-report endpoint as an unreasoned privileged moderation shortcut.
+- **DELIVERED IN THIS PR:** public forum search revalidates every Meilisearch candidate against PostgreSQL;
+  state transitions reconcile documents and full reindex waits for clear-before-add completion.
+- **FOLLOW-UP:** coherent `deactivated` and `deleted` account lifecycle actions, recovery, anonymization,
+  erasure, and purge workers. The existing account status enum is not a complete lifecycle implementation.
+- **FOLLOW-UP:** subject notifications, user-facing appeals, recent-authentication challenges, automated
+  retention, and transactional/outbox search-index delivery.
 
 ## Governing principles
 
-1. User speech is not silently rewritten. Staff normally hide, remove, restore, or request an author
-   correction. `redact` is exceptional, reasoned, and revision-preserving.
-2. Reversible action comes before destructive action. Permanent purge is a retention operation, not a
-   moderator button.
-3. Every staff mutation requires a reason and an atomic audit event.
-4. The subject is notified unless doing so would create a documented safety or legal risk.
-5. Public identity is the handle; campus email remains private and is only exposed to specifically
-   authorized account operations.
-6. Credit ledger history is never deleted or rewritten. Account erasure replaces identity links with a
-   non-identifying tombstone while preserving ledger verification.
+These principles govern current and follow-up work; only behavior explicitly labelled delivered below is
+implemented today.
 
-## Account lifecycle
+1. Staff do not silently rewrite user speech. Delivered actions hide, soft-delete, restore, or change
+   workflow state.
+2. Reversible action comes before permanent destruction. No delivered moderator control performs a
+   retention purge.
+3. Delivered staff mutations require a reason and write domain/governance audit records as part of their
+   protected transaction where applicable.
+4. Public identity is the handle; campus email is excluded from public and delivered staff-directory DTOs.
+5. Credit ledger history is never deleted or rewritten. Governance work must not add balance editors or
+   arbitrary ledger appends.
+6. **FOLLOW-UP:** subjects should receive action/duration/appeal guidance unless a documented safety or
+   legal exception applies.
 
-Account lifecycle and sanctions are separate dimensions:
+## Account lifecycle: delivered boundary
+
+The database currently has `active`, `suspended`, and `deleted` account-status values. This PR does not add
+`deactivated`, nor does it deliver admin endpoints for deactivate/reactivate/delete/recover/purge.
+
+Invitations are represented by account metadata (`invited_by`, `invited_at`, `invitation_expires_at`, and
+`invitation_accepted_at`) rather than a separate `invited` status. Suspension performed by the new admin
+workflow is an append-only sanction dimension; authentication checks both account status and active
+suspend sanctions.
+
+The intended lifecycle remains **FOLLOW-UP**:
 
 ```text
-invited -> active -> deactivated -> deleted
-               \-> active after reactivation
+active -> deactivated -> deleted -> purged mutable identity
+   ^           |
+   +-----------+ reactivation during the allowed window
 
-active + silence  = can sign in and read, cannot create community content
-active + suspend  = cannot authenticate or refresh sessions
+active + silence = authenticate/read, but protected community writes are denied
+active + suspend = authentication and refresh are denied
 ```
 
-The current database does not yet represent `invited` or `deactivated` separately and has both an account
-`suspended` status and suspend sanctions. **PR TARGET:** sanctions are the authority for time-bounded
-silence/suspension; lifecycle status is used for activation and deletion only. Code must not infer both.
+Do not infer that `deactivated` or the recovery/purge behavior exists merely because the legacy status enum
+contains `deleted`.
 
-### Registration
+### Registration and invitation delivered in this PR
 
-- **CURRENT:** a verified `@tongji.edu.cn` email can create an account.
-- **PR TARGET:** manual registration means creating a one-time, expiring invitation for a campus email.
-  The user still proves mailbox ownership and chooses credentials. Staff never set or view a plaintext
-  password and cannot bypass campus ownership verification.
-- Invitation creation is admin-only, rate-limited, idempotent per email, and audited. The UI displays only
-  a masked email after submission.
-- Role assignment is a separate admin-only action; invitations create ordinary users by default.
+- Existing campus-email self-registration remains available.
+- Authorized admins can create a one-time, seven-day campus invitation with handle and mandatory reason.
+  Invitations always start as `user`; staff may grant `mod` only through the separate audited role-change
+  workflow after mailbox verification.
+- Invitation creation stores an encrypted/blind-indexed email through the identity repository, records the
+  inviter, and writes a governance audit event in the same transaction.
+- The invited person must still prove mailbox ownership through the email-code flow. Staff cannot set or
+  view a plaintext password.
+- Expired invitations are rejected; successful verification records acceptance.
 
-### Suspension, deactivation, and deletion
+### Sanctions delivered in this PR
 
-- `silence` is a temporary or indefinite write restriction. It must cover forum posts/comments/votes,
-  reviews, DMs, and user-authored marketplace descriptions.
-- `suspend` blocks access-token use and refresh immediately, revokes active refresh sessions, and prevents
-  new sessions. Only admins may suspend; moderators may issue silence to ordinary users.
-- `deactivated` is a reversible account-owner/admin lifecycle action, not a misconduct label.
-- `deleted` begins a 30-day recovery window. Public identity is immediately replaced by a tombstone,
-  sessions and wallet keys are revoked, and email is inaccessible to normal staff. After the window,
-  encrypted email and mutable profile data are purged.
-- Public content is not automatically erased when doing so would break a discussion or ledger invariant;
-  its author is anonymized. A separate content-erasure request follows the content retention rules below.
+- `silence` blocks protected forum writes/votes, review writes, and DM creation/sending while allowing
+  authentication and reads.
+- `suspend` prevents authentication/refresh and revokes active sessions when issued.
+- Moderator capability permits silence of lower-role targets for at most 30 days; suspension is admin
+  capability only. Admins may issue longer or indefinite sanctions when policy requires it.
+- Self-action and equal/higher-role targets are rejected. Role changes also revoke active sessions.
+- Sanctions are appended with reason and optional end time; revocation marks the sanction revoked and
+  appends a new governance event rather than deleting history.
+- **FOLLOW-UP:** recent authentication or a separate confirmation challenge for indefinite/high-impact
+  sanctions and role changes.
+- **FOLLOW-UP:** subject notifications and appeal guidance.
 
-## Content lifecycle
+## Content lifecycle delivered in this PR
 
-| State | Public behavior | Reversible | Typical actor |
-|---|---|---:|---|
-| visible | Included in feeds/search/profile | — | author/system |
-| pending | Not generally discoverable; awaiting review | yes | system/mod |
-| hidden | Temporarily unavailable; evidence retained | yes | mod/system |
-| removed | Tombstone shown where structure matters | yes during retention window | author/mod |
-| redacted | Only prohibited fragment replaced; revision retained | yes by admin | admin |
-| purged | Payload physically removed after retention | no | retention worker |
+| State/action | Delivered behavior | Reversible now |
+|---|---|---:|
+| visible | included in the owning domain's normal reads | — |
+| pending review/media | withheld until decision where the domain supports pending state | yes |
+| hidden | excluded from public reads while evidence remains | yes |
+| soft-deleted/removed | payload and structural record retained; normal public reads exclude it | yes |
+| restored/unhidden | public visibility and activity contribution return only when no other hidden/deleted state remains | yes |
+| archived thread | removed from active discussion flow | yes through unarchive |
+| redacted | **FOLLOW-UP:** no general revision-preserving redaction workflow delivered | — |
+| purged | **FOLLOW-UP:** no retention purge worker or moderator button delivered | — |
 
-Forum threads/comments preserve structural tombstones. Reviews use hide/restore rather than physical
-deletion. Media is quarantined before object deletion. Search and caches must follow the same visibility
-state as PostgreSQL.
+Forum thread controls support pin/unpin, close/reopen, archive/unarchive, hide/unhide, soft-delete/restore,
+and move. Comments support hide/unhide and soft-delete/restore. Review moderation supports explicit report
+decisions and visibility/removal operations. Media supports approve/block; block removes the OSS object
+before committing the blocked state, while pending URLs are limited to the owner or staff. Staff cannot
+approve or block an upload they own.
 
-An author may edit their own content and receives normal revision history. A moderator may not use author
-edit endpoints to change meaning. Admin redaction is limited to exposed PII, illegal material, or a valid
-legal/safety request and records before/after hashes in restricted audit metadata.
+PostgreSQL is the authoritative state. Public forum search reconstructs results from current visible
+database rows, so a stale index document cannot disclose hidden, deleted, archived, or non-visible forum
+content. Forum state changes reconcile the affected document and full reindex clears before rebuilding.
+Transactional/outbox delivery and equivalent review/media index repair remain follow-up work.
 
-## Reports and moderation decisions
+## Reports and moderation decisions delivered in this PR
 
-Forum flags, review reports, media reports, and future DM reports remain domain-owned but use the same
-decision vocabulary:
+- Forum flags: `open -> upheld | rejected | ignored`.
+- Review reports: `open -> upheld | rejected | ignored`; migration `0023` maps legacy generic `resolved`
+  rows to neutral `ignored`.
+- DM reports: `open -> upheld | rejected`; there is no `ignored` DM status in the delivered schema.
+- Media uses approve/block actions rather than the report decision enum.
 
-- `open`: waiting for staff review.
-- `upheld`: policy violation confirmed; apply a specified reversible content action and, if warranted, a
-  sanction.
-- `rejected`: no violation; undo automatic hiding.
-- `ignored`: insufficient/actionless report; undo automatic hiding without rewarding or penalizing either
-  party.
+Forum flag weight can cross the automatic-hide threshold. That transition sets `auto_hidden_at`, hides the
+target, and reverses its activity contribution immediately. A rejected or ignored decision removes the
+hide only when it matches the recorded automatic transition and reactivates an otherwise-visible target.
+An upheld decision soft-deletes the target and keeps the activity contribution inactive.
+Moderators and administrators are rejected by the ordinary flag-submission endpoint; staff must use a
+reasoned, audited moderation action.
 
-A decision records policy category, free-text reason, actor, target, resulting action, timestamps, and
-related report IDs. “Resolve” without a decision is not sufficient. Duplicate reports by one account do
-not increase weight. Automated hiding is temporary until a human decision.
+Decision handlers require bounded notes/reasons, reject repeated resolution, and write the relevant domain
+history plus governance audit event. One reporter may have only one open report per target, but a later
+report creates a new row instead of erasing a prior terminal decision.
 
-## Sanctions and escalation
+## Captcha and abuse controls delivered in this PR
 
-- Moderators may silence ordinary users for a bounded period.
-- Admins may silence or suspend ordinary users and moderators.
-- No staff member may sanction themselves, an equal/higher role, or the final active administrator.
-- Repeated violations may escalate from warning -> silence -> suspension. The reason and end time are
-  mandatory; indefinite suspension requires an admin confirmation step.
-- Revocation creates a new audit event and never overwrites the original sanction history.
-- **FOLLOW-UP:** expose a user appeal case with status, evidence, reviewer, decision, and one independent
-  reviewer for sanctions longer than 30 days.
+- Web uses the official YourTJCaptcha challenge API for campus email-code requests, review publication,
+  and review reporting. `VITE_CAPTCHA_URL` may select the deployment; the default is the existing YourTJ
+  service.
+- The browser sends the resulting opaque pass token to the platform API. It does not send the campus
+  email or review body to the captcha service.
+- The backend verifies the pass token with the configured provider and atomically consumes its hash in
+  Redis under an operation-specific purpose. The runtime default is the official YourTJCaptcha
+  `/api/siteverify` endpoint and `CAPTCHA_SITEVERIFY_URL` may override it. Tokens are single-use per purpose
+  and oversized/empty tokens are rejected.
+- Protected operations fail closed when captcha verification or replay protection is unavailable.
+- Review publication stores account-scoped `Idempotency-Key`, request hash, review id, and the original
+  response atomically. A matching retry replays before captcha consumption; reuse for different review
+  content returns conflict.
+- The external captcha service necessarily receives ordinary network metadata and challenge-image
+  requests. Its deployment and retention policy must be covered by the platform privacy notice.
+- **FOLLOW-UP:** forum thread/comment captcha enforcement is still represented in the historical target
+  architecture but is not delivered by this PR; current forum writes use authentication, sanctions,
+  trust-level rate limits, and watched-word controls.
 
-## Retention and erasure
+## Retention and erasure are follow-up
 
-These are maximum product targets and require privacy-owner review before production rollout. A shorter
-legal or user-requested period wins unless security evidence must be preserved.
+No automated retention worker, account recovery window, message purge, content redaction worker, backup
+expiry enforcement, or legal-hold workflow is delivered in this PR. The following remain policy targets
+subject to privacy-owner review, not claims about current automation:
 
-| Data | Target retention |
+| Data | Follow-up target |
 |---|---|
-| Email verification/reset codes | delete within 24 hours after expiry |
-| Expired/revoked refresh sessions | 30 days; IP/user-agent fields at most 90 days |
-| Removed content payload | 30-day recovery, then redact; upheld-report evidence at most 180 days |
-| Unreported DM content | until participant deletion rules apply; 30-day recovery after both delete |
-| Reported DM excerpt/evidence | at most 180 days, access logged |
-| Fine-grained activity events | 400 days; daily totals follow account erasure policy |
-| Sanctions and staff audit events | 2 years, then aggregate or purge non-required metadata |
-| Credit ledger | permanent append-only record with deleted-account tombstone |
+| Expired verification/reset material | remove promptly after expiry |
+| Revoked sessions and device metadata | bounded security retention |
+| Soft-deleted public content | recovery window followed by redaction/purge where lawful |
+| Unreported DM content | participant-lifecycle policy and delayed purge after both delete |
+| Reported DM evidence | bounded evidence retention with access logging |
+| Fine-grained activity events | bounded projection/reconciliation retention |
+| Review publication idempotency records | bounded retry window, then purge; account/review deletion cascades |
+| Sanctions and staff audit | policy-defined security/governance retention |
+| Credit ledger | permanent append-only verification with a non-identifying account tombstone |
 
-Retention workers must be idempotent, observable, and auditable. Backups follow the same expiry intent and
-must not be used to silently reactivate erased production records.
+Workers must be idempotent, observable, and audited when implemented.
 
-## Acceptance criteria
+## Follow-up transparency and consistency
 
-- Every staff write has an allowed capability, mandatory reason, atomic audit event, and rejection tests.
-- Hide/remove actions can be restored inside their recovery window without losing revisions or counts.
-- A moderator cannot act on staff accounts or change roles/configuration.
-- Suspension revokes refresh sessions and blocks access immediately; expiry/revocation restores only the
-  intended capability.
-- Deleted accounts expose no email or former handle publicly and cannot authenticate.
-- Forum, reviews, media, search, cache, profiles, and activity totals agree on content visibility.
-- Report queues require `upheld`, `rejected`, or `ignored`; a generic resolved state is not the terminal
-  business decision.
+- User notification for sanctions and content actions, with duration/category and appeal guidance.
+- Appeal cases with evidence, status, reviewer, decision, and conflict-of-interest controls.
+- Recent-authentication challenges for high-impact staff actions.
+- Deactivate/delete/recovery/anonymization/purge lifecycle and self-service export.
+- Retention workers and legal holds.
+- Transactional/outbox synchronization for search-index delivery and equivalent review/media repair.
+
+## Delivered verification baseline
+
+- Delivered staff writes are mapped to named capabilities, require reasons, enforce target hierarchy, and
+  append audit records.
+- Forum hide/delete and comment/thread restoration preserve activity-count visibility invariants.
+- Automatic forum hide, reject/ignore, and uphold produce the documented contribution state.
+- Suspension revokes sessions and blocks authentication; sanction revocation preserves history.
+- Public/profile/admin directory responses do not expose campus email or arbitrary DM content.
+- Delivered report queues use only their documented terminal states and reject repeated decisions.
+- Forum/review moderation rejects equal/higher-role authors, and media moderation rejects self-review.
+
+Account deletion lifecycle, subject notifications, appeals, retention, and transactional search-index
+delivery are explicitly excluded from this delivered baseline.

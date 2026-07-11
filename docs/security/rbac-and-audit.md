@@ -1,123 +1,159 @@
 # RBAC and staff audit
 
-> **Status:** Current normative specification; expanded hierarchy and central audit are proposed in this PR
+> **Status:** DELIVERED IN THIS PR — security hardening is follow-up
 >
 > **Owner:** Security + Identity maintainers
 >
-> **Last verified:** 2026-07-11 against `origin/main@06a8898`
+> **Last verified:** 2026-07-11 against this PR, migration `0022_governance.sql`, OpenAPI, and current source
 >
-> **Authoritative sources:** `AGENTS.md`, `contract/openapi.yaml`, `shared::AuthAccount`, identity/forum/reviews/courses/media/admin source
+> **Authoritative sources:** `AGENTS.md`, `contract/openapi.yaml`, `shared::AuthAccount`, `backend/crates/governance`, identity/forum/reviews/courses/media/admin source
 
-Role checks protect backend operations. UI visibility is convenience only and never an authorization
-boundary.
+Backend checks authorize every delivered staff operation. Capability-based UI rendering is a usability and
+data-minimization measure, never an authorization boundary.
 
 ## Implementation baseline
 
-- **CURRENT:** `user`, `mod`, and `admin` roles exist; `require_mod` accepts both staff roles and
-  `require_admin` exists.
-- **CURRENT GAP:** most management endpoints use `require_mod`, so moderators can currently reach account
-  suspension, settings, course mutation, jobs, and policy-like operations. Audit is limited to forum
-  actions and is not transactionally guaranteed.
-- **PR TARGET:** capability-based guards derived from roles, hierarchy protection, admin-only sensitive
-  operations, and one append-only cross-domain audit stream.
-- **FOLLOW-UP:** separate privacy/security operator roles if operational staffing grows enough to justify
-  them. Until then, narrow capabilities are preferable to adding broad roles.
+- **DELIVERED IN THIS PR:** named capabilities are derived from persisted `user`, `mod`, and `admin` roles,
+  included in account responses, checked by admin handlers, and used to build Web navigation/actions.
+- **DELIVERED IN THIS PR:** identity user-management mutations reject self and equal/higher-role targets;
+  role changes and suspension/session actions revoke active refresh sessions as applicable.
+- **DELIVERED IN THIS PR:** forum and review content actions resolve the author's role through the
+  privacy-safe identity boundary; moderators cannot act on moderator/admin authors and administrators
+  cannot act on administrator authors.
+- **DELIVERED IN THIS PR:** `governance.audit_events` is an append-only cross-domain record with account,
+  system, and service actor kinds. Integrated management mutations write it transactionally; reported-DM
+  evidence listing is also audited.
+- **FOLLOW-UP:** recent-authentication challenges, standardized request id/source/result audit fields,
+  rejected-attempt audit, audit export controls, notification/appeal flows, and privacy-owner retention.
+- **FOLLOW-UP:** a complete deactivated/deleted account lifecycle and conflict-of-interest policy beyond
+  the delivered role hierarchy, including assignment, recusal, and independent appeal review.
 
-## Role hierarchy
+## Delivered role and capability mapping
 
 ```text
 user < mod < admin
-system/service is an actor type, not a human role
+system/service is an audit actor kind, not a human role
 ```
 
-- A moderator may act only on ordinary users and community content.
-- An admin may act on users and moderators but not silently override an equal admin.
-- No one may sanction themselves, promote themselves, demote the final active admin, or approve their own
-  privileged invitation/role change.
-- Role and suspension changes revoke refresh sessions and invalidate authorization caches immediately.
+The mapping in `shared::auth` is currently static by role; per-account capability delegation is not
+implemented.
 
-## Capability matrix
+| Named capability | user | mod | admin | Delivered use |
+|---|:---:|:---:|:---:|---|
+| `moderation.content` | — | yes | yes | forum/review/media queues, reported-DM evidence, forum inline actions |
+| `users.search` | — | yes | yes | privacy-safe user directory and sanction history |
+| `users.silence` | — | yes | yes | silence/revoke silence for lower-role targets |
+| `audit.read` | — | yes | yes | central audit list and filters |
+| `users.invite` | — | — | yes | expiring campus invitation |
+| `users.roles` | — | — | yes | lower-role role changes |
+| `users.suspend` | — | — | yes | suspension, revoke suspension, session revoke |
+| `community.manage` | — | — | yes | boards, tags, watched words, badge backend operations |
+| `courses.manage` | — | — | yes | course catalogue management |
+| `platform.settings` | — | — | yes | generic setting updates |
+| `activity.policy` | — | — | yes | scoring policy publish/history |
+| `announcements.manage` | — | — | yes | announcement management |
+| `operations.jobs` | — | — | yes | selection sync and reindex triggers |
 
-| Capability | user | mod | admin |
-|---|:---:|:---:|:---:|
-| create/edit own content and profile | yes | yes | yes |
-| review community/review/media report queues | — | yes | yes |
-| hide/remove/restore ordinary-user content | — | yes | yes |
-| view reported DM evidence only | — | yes | yes |
-| silence an ordinary user for a bounded period | — | yes | yes |
-| suspend, deactivate, or delete an account | — | — | yes |
-| invite an account or assign/revoke staff role | — | — | yes |
-| reveal a masked campus email | — | — | separate audited admin capability |
-| manage boards, tags, watched words, badges | — | read/operate as delegated | yes |
-| mutate course catalogue or platform settings | — | — | yes |
-| change activity weights | — | — | yes |
-| trigger sync/reindex/retention jobs | — | — | yes |
-| read domain-scoped staff log | — | yes | yes |
-| read/export full audit log | — | — | yes |
-| directly change wallet balance or ledger history | — | — | — |
-| run read-only credit verify/reconciliation | — | — | yes |
+No delivered capability allows direct wallet-balance mutation, arbitrary ledger append, general DM inbox
+browsing, or campus-email reveal.
 
-Delegation to moderators is explicit per capability, not implied by access to `/admin` routes.
+## Authorization rules delivered in this PR
 
-## Authorization rules
+- Handlers require the named capability before sensitive list or mutation work.
+- The identity user directory returns public operational fields only; it does not return campus email.
+- Identity account mutations lock the target, reject self/equal/higher-role actions, and require a bounded
+  reason.
+- An admin cannot change or sanction another admin under the delivered `require_lower_role` rule. This is
+  stricter than a separate “final admin only” guard.
+- Interactive role changes are limited to `user` and `mod`. Administrator provisioning stays out of band
+  until a separate super-admin/recovery policy can make promotion and demotion reversible.
+- Moderator-issued silence must end within 30 days; admins retain the separately authorized longer or
+  indefinite path. Both still require a lower-role target and an audit reason.
+- Role changes revoke the target's active refresh sessions. Suspension creates a sanction and revokes
+  sessions; authentication checks active suspend sanctions on every authenticated request.
+- A missing capability returns the platform error envelope. Backend denial remains effective even when a
+  caller manually constructs the request.
+- DM moderation exposes only reported-message evidence and records an audit event when that queue is read.
 
-- Define named server capabilities such as `moderation.content`, `moderation.dm_evidence`,
-  `users.silence`, `users.suspend`, `users.roles`, `platform.settings`, `activity.policy`, and
-  `operations.jobs`.
-- Each handler checks one named capability and target hierarchy before reading sensitive data or starting
-  a transaction.
-- List endpoints filter fields and rows by capability; authorization is not limited to mutation routes.
-- Sensitive actions require recent authentication or an explicit confirmation challenge. Access tokens
-  alone are insufficient for role changes, account deletion, email reveal, or indefinite suspension.
-- A 403 response uses the normal error envelope and reveals no target existence beyond what the caller may
-  already list.
+### Authorization follow-up
 
-## Central audit model proposed in this PR
+- Recent authentication or an explicit challenge for role changes, indefinite suspension, account
+  lifecycle deletion, PII reveal, and other high-impact actions. JWT `iat` is not currently used as a
+  recent-auth proof.
+- Dedicated PII-reveal capability and audited workflow; no email-reveal endpoint is delivered now.
+- Optional per-account capability grants if static role mapping becomes too broad.
 
-One platform-owned append-only audit table covers every staff and automated management action. Domain
-tables may keep operational histories, but they do not replace this record.
+## Central audit model delivered in this PR
 
-Required fields:
+Migration `0022` stores these fields:
 
-- immutable id and timestamp;
-- actor kind (`account`, `system`, `service`) and optional actor account id;
-- actor role/capability snapshot;
-- action and target type/id;
-- mandatory reason for mutations;
-- request id and source surface;
-- result (`succeeded`, `rejected`, `failed`);
-- non-sensitive before/after summary or hashes;
-- restricted metadata for policy category, related reports, and job id.
+- `id` and `created_at`;
+- `actor_kind` (`account`, `system`, or `service`);
+- nullable `actor_account_id` and `actor_role`;
+- `action`;
+- `target_type` and `target_id`;
+- nullable `reason`;
+- nullable `metadata` JSON; writers are responsible for keeping it non-sensitive and purpose-limited.
 
-The model must represent system actors without inventing account id `0`. Secrets, raw email, tokens,
-signatures, full request bodies, and unrestricted DM content never enter general audit metadata.
+The account actor invariant requires an account id exactly when `actor_kind = 'account'`. Actor handle is
+joined for the admin response and is not copied into the immutable event. The writer API also supports a
+system actor without inventing account id `0`.
 
-### Atomicity
+Secrets, raw campus email, tokens, signatures, full request bodies, and unrestricted DM content must not
+enter audit metadata.
 
-- A successful business mutation and its success audit event commit in the same transaction.
-- If audit insertion fails, the protected mutation fails.
-- Rejected privileged attempts record a bounded security event without leaking request secrets.
-- Background jobs record requested, started, succeeded/failed states linked by job id.
-- Audit rows are never updated or deleted by ordinary application flows. Corrections are new events.
+### Atomicity delivered in this PR
+
+- Integrated business mutations call `record_account_event_tx` or `record_system_event_tx` inside their
+  existing PostgreSQL transaction, so a failed audit insert prevents that transaction from committing.
+- Audit rows are append-only in ordinary application flows. Revocation and correction create new events.
+- Reported-DM evidence listing writes a separate reasoned read event because it is a read rather than a
+  domain mutation.
+- Operational trigger handlers audit the request, but no durable job lifecycle exists.
+
+### Audit fields and behaviors not delivered
+
+- **FOLLOW-UP:** first-class `request_id` and source-surface columns.
+- **FOLLOW-UP:** first-class result state such as `succeeded`, `rejected`, or `failed`.
+- **FOLLOW-UP:** standardized before/after hashes and actor capability snapshot. Current domain metadata is
+  action-specific and actor role is stored, but capabilities are not snapshotted.
+- **FOLLOW-UP:** bounded rejected/failed privileged-attempt events. Current writers primarily record
+  successful integrated operations.
+- **FOLLOW-UP:** persistent job requested/started/succeeded/failed events linked by a durable job id.
+- **FOLLOW-UP:** watermark/rate-limit/export workflow. The delivered console is a paginated read-only list.
 
 ## Staff safety and transparency
 
-- Destructive and high-impact UI actions show the target, effect, duration, and required reason before
-  confirmation.
-- The subject receives a notification with action category, duration, and appeal guidance unless a
-  documented exception applies.
-- Staff can see only the minimum PII needed. Email reveal and DM evidence view are themselves audited.
-- Audit export is admin-only, watermarked, rate-limited, and excludes encrypted secrets.
-- Retention follows [Community governance](../product/community-governance.md); access is reviewed at least
-  quarterly.
+### Delivered
 
-## Acceptance criteria
+- Risky Web actions show effect and target context, require a reason, and disable duplicate submission.
+- User-management responses and profile deep links use public identifiers rather than exposing campus
+  email.
+- Staff cannot browse arbitrary DMs; only participant-reported evidence is available.
+- Audit metadata is displayed only as the presence of structured context in the general console,
+  not dumped as an unrestricted request body.
 
-- Every management route maps to exactly one named capability and has user/mod/admin rejection tests.
-- Mods cannot suspend staff, modify roles/settings/activity policy/courses, or trigger operational jobs.
-- Admin self-action and final-admin protections are tested under concurrent requests.
-- Every successful management mutation produces one atomic audit event; forced audit failure rolls the
-  mutation back.
-- System jobs use a legal system actor rather than a fake account foreign key.
-- PII reveal and DM evidence access are independently capability-checked and auditable.
-- Frontend controls render from capabilities, but direct API calls remain correctly denied.
+### Follow-up
+
+- Subject notification with action category, duration, and appeal guidance.
+- User-visible appeals and independent review rules.
+- Recent-authentication challenges and exceptional-action dual approval.
+- Audit/evidence retention policy, automated deletion, legal holds, and periodic access review.
+- Transactional/outbox index delivery and audit correlation for asynchronous repairs; public forum search
+  already revalidates candidate visibility against PostgreSQL.
+
+## Delivered verification baseline
+
+- Account responses include the capability names for the persisted role; Web navigation/actions consume
+  those capabilities.
+- Moderators lack invitation, role, suspension, course, settings, activity-policy, announcement, and job
+  capabilities; direct backend calls are denied.
+- Identity user mutations reject self and equal/higher-role targets and revoke sessions where documented.
+- Forum/review moderation rejects equal/higher-role authors; media moderation rejects self-review.
+- Integrated management mutations append central audit events without logging campus email or DM bodies.
+- Reported-DM evidence listing is capability-checked and audited, with no general DM browsing route.
+- Frontend visibility and backend authorization are independently enforced.
+
+Recent auth, account deletion lifecycle, standardized request/result audit fields, subject notifications,
+appeals, retention, and transactional search-index delivery are explicitly excluded from this delivered
+baseline.

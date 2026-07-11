@@ -1,5 +1,14 @@
 # D1 数据导出与本地导入
 
+> **Status:** Operational migration procedure; not authoritative for current product behavior or APIs
+>
+> **Owner:** Data migration maintainers
+>
+> **Last structurally verified:** 2026-07-11 against tracked `tools/d1`, `backend/ops`, and migrations;
+> external D1 export access was not exercised in this PR
+>
+> **Authoritative sources:** tracked import/materialization scripts and numbered migrations
+
 ## 概述
 
 生产数据运行在 Cloudflare D1 上，本地开发调试时需要一份一致的离线副本。
@@ -68,6 +77,7 @@ done
 
 ```bash
 python3 tools/d1/d1_import_pg.py
+```
 
 从 `d1_export.db` 读数据 → `INSERT INTO selection.pk_*`。
 13 张表，约 141k 行。
@@ -99,6 +109,7 @@ psql "$DATABASE_URL" -f backend/ops/materialize_selection.sql
 
 ```bash
 python3 tools/d1/gen_reviews_sql.py | psql "$DATABASE_URL" -f -
+```
 
 由于 `reviews.reviews.id` 是 `GENERATED ALWAYS AS IDENTITY`，需 `OVERRIDING SYSTEM VALUE`。
 由于 `account_id` 是 FK 指向 `identity.accounts`（D1 没有此表），导入时填 `NULL`。

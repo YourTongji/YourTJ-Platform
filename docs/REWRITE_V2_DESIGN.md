@@ -210,6 +210,20 @@ paths:
 > 选 **PolarDB PostgreSQL**：JSONB、部分索引、CITEXT、枚举更顺手，且搜索外置 Meilisearch 不依赖库内中文分词。
 > MySQL 变体：`CITEXT`→`VARCHAR + 唯一索引(lower())`，`BYTEA`→`VARBINARY`，枚举→`ENUM`/`CHECK`，`JSONB`→`JSON`。
 > 单库多 schema，按域隔离。
+>
+> **Current addendum (2026-07-11):** the historical inline DDL below predates the governance rollout.
+> Current structure is append-only in migrations: `0020_activity.sql` owns activity events/counts/policy,
+> `0021_dm_moderation.sql` owns canonical DM/read/report state, `0022_governance.sql` owns central audit and
+> invitations, `0023_review_moderation_decisions.sql` owns explicit review-report decisions,
+> `0024_invitation_expiry.sql` owns invitation expiry/acceptance, and `0025_moderation_state.sql` owns
+> automated-hide provenance plus system-issued sanctions. `0026_forum_flag_attempts.sql` preserves
+> terminal report attempts, `0027_activity_backfill.sql` projects existing contributions, and
+> `0028_review_course_restrict.sql` protects retained review history from course deletion.
+> `0029_review_report_open_uniqueness.sql` preserves terminal cases while allowing later reports, and
+> `0030_review_create_idempotency.sql` provides durable review-publication replay, and
+> `0031_forum_board_thread_count_reconcile.sql` aligns historical board counters with the current
+> visible-thread invariant. Do not copy
+> this historical DDL to create a database; run the numbered migrations.
 
 ```sql
 CREATE EXTENSION IF NOT EXISTS citext;
@@ -616,6 +630,8 @@ Previously all system-originated ledger entries used literal `"system-signed"` a
 | `identity` | Auth, accounts, sessions, Ed25519 key management, wallet claim |
 | `credit` | Ledger, wallets, wallets balance, tasks, products, purchases |
 | `forum` | Boards, threads, comments, votes, notifications (moved from identity) |
+| `activity` | Idempotent contribution events, daily counts, versioned display weights |
+| `governance` | Append-only cross-domain staff/system audit events |
 | `courses` | Catalogue, teachers, departments, selection (选课) mirror, admin course CRUD (moved from api) |
 | `shared` | Config, JWT primitives (no DB queries), AppState, error types, pagination, cache, rate limiting |
 | `api` | Router composition, startup wiring, platform routes, admin stubs (selection sync, review reindex) |

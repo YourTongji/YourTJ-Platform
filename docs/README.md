@@ -1,10 +1,10 @@
 # YourTJ documentation
 
-> **Status:** Current documentation index and authority policy
+> **Status:** DELIVERED IN THIS PR — documentation index and authority policy
 >
 > **Owner:** Platform maintainers
 >
-> **Last verified:** 2026-07-11 against `origin/main@06a8898`
+> **Last verified:** 2026-07-11 against this PR, including migrations `0020`–`0031`
 >
 > **Authoritative sources:** `AGENTS.md`, `contract/openapi.yaml`, `backend/migrations/`, domain source code
 
@@ -27,16 +27,18 @@ and code is a bug, not an alternative implementation.
 
 ## Status vocabulary
 
-- **Current:** normative behavior already expected of the product.
-- **Proposed in this PR:** normative target that must not be described as deployed until its code and
-  contract land and pass verification.
-- **Future follow-up:** explicitly outside the current PR.
-- **Historical:** context only; never an authority for current behavior.
+Normative documents use exactly two implementation labels:
 
-The current governance PR uses inline labels — `CURRENT`, `PR TARGET`, and `FOLLOW-UP` — so readers can
-tell shipped behavior from intended behavior without consulting git history.
+- **DELIVERED IN THIS PR:** implemented in this branch and backed by the cited contract, migration, source,
+  and verification baseline.
+- **FOLLOW-UP:** not implemented by this PR. It remains a product/security requirement or backlog item and
+  must not be described as deployed.
 
-## Current normative documents
+“Historical” describes a document's authority class, not an implementation status. Do not introduce
+alternative implementation labels or unqualified future-tense requirements that readers could mistake
+for delivered behavior.
+
+## Normative documents
 
 - [Community governance](product/community-governance.md) — account and content lifecycle, moderation,
   sanctions, appeals, and retention.
@@ -48,6 +50,29 @@ tell shipped behavior from intended behavior without consulting git history.
   cross-domain audit requirements.
 - [Admin console](operations/admin-console.md) — information architecture, workflows, safety rules, and
   delivery criteria.
+
+## Migrations delivered in this PR
+
+- `0020_activity.sql` — append-only activity transitions, daily projections, and versioned score policy.
+- `0021_dm_moderation.sql` — canonical DM pairs, read pointers, reserved participant lifecycle fields, and
+  message reports.
+- `0022_governance.sql` — central governance audit events and invitation provenance.
+- `0023_review_moderation_decisions.sql` — explicit review-report terminal decisions.
+- `0024_invitation_expiry.sql` — expiring, accepted-once invitation metadata.
+- `0025_moderation_state.sql` — automatic forum-hide provenance, resolution notes, and system-issued
+  sanction support.
+- `0026_forum_flag_attempts.sql` — preserves terminal report decisions while allowing one later open
+  report attempt per reporter and target.
+- `0027_activity_backfill.sql` — idempotently projects existing visible community contributions into the
+  activity event and daily-count model.
+- `0028_review_course_restrict.sql` — prevents course deletion from cascading into retained review
+  history.
+- `0029_review_report_open_uniqueness.sql` — retains terminal review-report history while allowing one
+  later open report per reporter and review.
+- `0030_review_create_idempotency.sql` — stores account-scoped review request hashes and original
+  responses for durable publication replay.
+- `0031_forum_board_thread_count_reconcile.sql` — reconciles existing board counters with the visible,
+  non-hidden, non-deleted, non-archived thread definition maintained on future state transitions.
 
 ## Supporting and historical documents
 
@@ -64,6 +89,8 @@ tell shipped behavior from intended behavior without consulting git history.
 - Do not duplicate full OpenAPI paths or migration DDL in prose.
 - Do not hard-code path/schema/operation counts; derive them in CI when useful.
 - Change the contract first for HTTP changes, then implementation, generated clients, docs, and tests.
-- A behavior is only relabeled `CURRENT` after its migration, contract, backend authorization, frontend,
-  and rejection-path tests are complete.
+- A behavior is only labelled `DELIVERED IN THIS PR` after its migration/contract (when applicable),
+  backend authorization, frontend surface (when applicable), and verification baseline agree.
+- Known missing behavior is labelled `FOLLOW-UP`; schema placeholders alone do not make a feature
+  delivered.
 - Historical plans remain available for rationale but must carry a non-authoritative banner.

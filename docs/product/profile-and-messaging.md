@@ -1,125 +1,142 @@
 # Profiles and direct messaging
 
-> **Status:** Current normative specification; implementation state is labelled per section
+> **Status:** DELIVERED IN THIS PR — profile and core 1:1 messaging flows; lifecycle extensions are follow-up
 >
 > **Owner:** Identity/Forum/Web maintainers + Privacy owner
 >
-> **Last verified:** 2026-07-11 against `origin/main@06a8898`
+> **Last verified:** 2026-07-11 against this PR, migration `0021_dm_moderation.sql`, OpenAPI, and current source
 >
-> **Authoritative sources:** `contract/openapi.yaml`, migrations `0001`, `0005`, `0006`, identity/forum source, `web/src/pages/profile-page.tsx`, `web/src/pages/messages-page.tsx`
+> **Authoritative sources:** `contract/openapi.yaml`, `backend/migrations/0021_dm_moderation.sql`, identity/forum source, `web/src/pages/profile-page.tsx`, `web/src/pages/messages-page.tsx`
 
-This document defines public profile boundaries and the minimum safe 1:1 direct-message product. Campus
-email is an authentication attribute, not a community profile field.
+This document defines public profile boundaries and the delivered minimum safe 1:1 direct-message
+product. Campus email is an authentication attribute, not a community profile field.
 
 ## Implementation baseline
 
-- **CURRENT:** public profile, public thread/comment endpoints, 1:1 DM conversations/messages, ignore
-  relations, and a basic Web profile/messages page exist.
-- **CURRENT GAP:** profile list responses and DM conversation responses do not match their OpenAPI page
-  schemas; the current UI therefore cannot be considered complete. DM has no read state, report flow,
-  archive/delete state, or post-creation block enforcement.
-- **PR TARGET:** align responses and clients, complete profile states, add capability-driven staff actions,
-  and provide a safe, usable conversation experience with unread/read, block, and report semantics.
-- **FOLLOW-UP:** attachments, message search, public activity heatmaps, and user data export.
+- **DELIVERED IN THIS PR:** one aligned public profile DTO, paginated public thread/comment lists, profile
+  loading/empty/error/pagination states, profile-to-DM entry, and capability-aware user-governance links.
+- **DELIVERED IN THIS PR:** conversation creation by public handle, one database-enforced canonical
+  conversation per unordered pair, paginated inbox/messages, monotonic read pointers, exact unread counts,
+  bidirectional block enforcement, message reports, and a scoped admin evidence queue.
+- **DELIVERED IN THIS PR:** the responsive Web inbox supports new conversations, older-page loading,
+  sending, read marking, block/unblock, and reporting a specific message.
+- **FOLLOW-UP:** participant archive/delete actions and their recovery/retention worker are not delivered,
+  even though migration `0021` reserves participant columns for those states.
+- **FOLLOW-UP:** attachments, message search, public-profile heatmaps/privacy controls, and user data export.
 
-## Profile views
+## Profile views delivered in this PR
 
-| Field | Public profile | Account owner | Authorized staff |
+| Field | Public profile API/UI | Account owner | Staff console |
 |---|---:|---:|---:|
 | handle, avatar | yes | yes | yes |
+| opaque account id | returned for relationship actions | yes | yes |
 | join date, trust level, badges, public counts | yes | yes | yes |
-| public threads/comments | yes | yes | yes |
-| daily activity heatmap | no in this PR | yes | only for a documented moderation need |
-| role | display only `mod/admin` staff badge | yes | yes |
-| account id | no | yes | yes |
-| campus email | never | masked | masked by default; reveal is separate audited capability |
-| sanctions/reports | no | own active sanctions and notices | role-scoped |
-| sessions/wallet keys | no | own only | security-admin workflow only |
+| public threads/comments | yes, paginated | yes | yes |
+| role | displayed as community/staff badge | yes | yes |
+| daily activity heatmap | no | available only from authenticated `/me/activity` | no profile heatmap |
+| campus email | never | not exposed by profile APIs | not exposed by delivered directory UI |
+| sanctions and session controls | no | no self-service view in this PR | capability-scoped |
 
-Deleted, removed, or hidden content is absent from public activity lists. A removed account renders a
-stable `已注销用户` tombstone and never leaks the former handle through profile URLs or API payloads.
+Hidden and soft-deleted forum content is excluded from public profile activity lists. Complete account
+deactivation/deletion tombstones and former-handle erasure are **FOLLOW-UP** with the account lifecycle.
 
 ### Profile API behavior
 
-- `GET /users/{handle}` returns one documented schema containing handle, avatar, staff badge where
-  applicable, trust level, badges, counts, and join timestamp. It never returns email.
-- `GET /users/{handle}/threads` and `/comments` use the platform cursor `Page<T>` envelope and a bounded
-  limit; Web renders loading, empty, error, and pagination states.
-- `PATCH /me` edits only owner-controlled public fields. Role, trust, sanctions, and activity counts are
-  never accepted from this endpoint.
-- Staff controls on a profile are shown from capabilities, not by checking role strings alone. Backend
-  authorization remains decisive.
+- `GET /users/{handle}` returns the documented `UserProfile`: id, handle, avatar, role, trust level,
+  badges, public counts, and join timestamp. It never returns email.
+- `GET /users/{handle}/threads` and `/comments` return bounded cursor `Page<T>` envelopes. Web consumes
+  those envelopes and exposes load-more states.
+- `PATCH /me` accepts only owner-controlled public fields. Role, trust, sanctions, and counts are not
+  writable through this endpoint.
+- Profile staff UI is capability-derived and deep-links to the user directory; backend authorization is
+  still decisive.
 
-## Starting a conversation
+## Starting a conversation delivered in this PR
 
-- The primary entry is a `私信` action on a user profile or handle search. Requiring users to know a
-  numeric account id is not an acceptable final UI.
-- DMs are 1:1. The database enforces one canonical conversation per unordered account pair so concurrent
-  creation cannot produce duplicates.
-- A user cannot message themselves, deleted/suspended recipients, or an account that has blocked them.
-- TL0 cannot initiate a conversation but may reply to an existing staff/system conversation when policy
-  permits.
-- Creating or sending is rate-limited. Active silence blocks DM writes.
+- The primary entry is `私信` on a profile or the new-conversation handle form. Users never need to enter
+  a numeric account id.
+- `POST /forum/dm/conversations` accepts `recipientHandle`.
+- The database stores `account_low_id` and `account_high_id`, enforces `low < high`, and applies a unique
+  constraint to the pair. Concurrent creation returns the same canonical conversation.
+- Users cannot message themselves, inactive/suspended recipients, or an account where either side has
+  blocked the other.
+- Trust-level 0 cannot initiate a conversation. Active silence blocks conversation creation and sending.
+- Sending rechecks participant lifecycle, sanctions, and both directions of the block relationship, then
+  applies a token-bucket rate limit.
 
-## Conversation and message lifecycle
+## Read, unread, and message behavior delivered in this PR
 
-Each participant has independent `last_read_message_id`, `archived_at`, and `deleted_at` state. Listing
-conversations returns the other user's public identity, last-message excerpt/time, and exact unread count.
+- Inbox and message lists are cursor-paginated and participant-scoped.
+- The inbox returns the other user's public identity, last-message excerpt/time, and exact unread count.
+- `POST /forum/dm/conversations/{id}/read` advances only the authenticated participant's
+  `last_read_message_id`; it never moves the pointer backwards.
+- Messages are immutable, must contain 1–16000 characters, and are available only to active participants.
+- The Web inbox marks the newest visible message read and refreshes the conversation unread count.
+- A new message creates a recipient notification containing a bounded excerpt, conversation id, and
+  sender handle rather than the full conversation.
 
-- Sending creates an immutable message. Ordinary messages are not edited in place.
-- `POST /forum/dm/conversations/{id}/read` only advances the participant's read pointer.
-- Archive hides a conversation from the default inbox but preserves it for the other participant.
-- Delete removes it from that participant's view after a recovery window; it does not erase the other
-  participant's copy.
-- When both participants delete, unreported message bodies are eligible for purge after 30 days.
-- Blocking applies immediately to existing conversations: the blocked party can no longer send, while
-  both parties retain access to prior messages according to retention policy.
+### Participant lifecycle not yet delivered
 
-Messages have a documented non-empty length bound, plain-text/Markdown rendering rules, and the same
-malicious-link and media safety boundary as public content. Notification payloads contain only a short
-escaped excerpt, never the full message.
+Migration `0021` adds participant `archived_at` and `deleted_at`, but this PR does not expose archive or
+delete endpoints or UI. Therefore the following remain **FOLLOW-UP**:
 
-## Privacy and moderation
+- independent archive/unarchive and delete/recover actions;
+- both-participant deletion semantics;
+- delayed body purge and legal-hold handling;
+- an idempotent, observable retention worker.
 
-- Staff cannot browse DM inboxes. Normal admin endpoints expose conversation metadata only.
-- A participant may report a specific message with category and note. The report captures the target
-  message and the minimum surrounding context needed for review.
-- Only a moderator handling that report may access its evidence; every evidence view and action is
-  audited. Unrelated messages remain hidden.
-- Report decisions use `upheld/rejected/ignored`. Upheld abuse may remove the message from both views and
-  apply a sanction under [Community governance](community-governance.md).
-- Transport and database encryption, backup access, and staff evidence access are operational security
-  controls; the product does not claim end-to-end encryption.
+The presence of columns alone must not be described as a shipped lifecycle.
 
-## Retention
+## Blocking delivered in this PR
 
-- Active, unreported messages remain available until participant deletion rules apply.
-- Both-participant deletion starts a 30-day recovery period, then removes message bodies.
-- Reported excerpts and required surrounding context are retained at most 180 days after final decision,
-  unless a documented legal hold applies.
-- Conversation metadata is minimized and removed/anonymized with the account lifecycle.
-- DM content is excluded from search, activity scoring, public profile counts, digests, and model-training
-  datasets.
+- `/me/ignores` lists block relationships with cursor pagination; PUT/DELETE add or remove a relationship.
+- Blocking is checked in both directions when opening or sending in an existing conversation.
+- The profile and conversation UI offer block/unblock with explicit confirmation.
+- Blocking does not grant either participant access to new data and does not expose unrelated private
+  messages.
 
-## Web experience proposed in this PR
+## Reporting and staff evidence delivered in this PR
 
-- Two-pane desktop inbox and single-pane mobile flow with stable conversation URLs.
-- Handle/avatar, last excerpt/time, unread badge, loading/error/empty/pagination states.
-- Profile `私信` button prefills the recipient; handle search replaces account-id input.
-- Messages are visually separated by sender, ordered consistently, preserve line breaks, and scroll to
-  unread/latest without losing pagination position.
-- Send supports Enter/Shift+Enter intentionally, disables while pending, prevents duplicate submission,
-  and announces errors accessibly.
-- Conversation menu exposes archive, block/unblock, and report where supported.
+- A participant can report a specific accessible message with a fixed category and optional bounded note;
+  duplicate reports of the same message by the same participant conflict.
+- Staff have no general DM inbox or message-browsing endpoint.
+- `GET /admin/dm/reports` is capability-checked and returns only report metadata, public reporter/sender
+  handles, and a bounded excerpt of the reported message. Listing evidence records a governance audit
+  event.
+- Staff may resolve an open DM report as `upheld` or `rejected`; the decision writes forum and governance
+  audit records in the same transaction.
+- The product does not claim end-to-end encryption. Database, transport, backup, and operator access are
+  separate operational controls.
 
-## Acceptance criteria
+## Web experience delivered in this PR
 
-- Profile DTOs, OpenAPI-generated types, Rust responses, and Web consumption agree exactly.
-- Public profile lists paginate and exclude hidden/removed content and private fields.
-- Concurrent conversation creation yields one conversation; non-participants receive 403 without data.
-- Read pointers only advance and unread counts are correct across two sessions.
-- Blocking an existing sender prevents the next message; silence and recipient lifecycle are enforced.
-- Staff cannot query arbitrary DM bodies; report evidence access and decisions are capability-checked and
-  audited.
-- Deletion and retention behavior is tested for one participant, both participants, reported messages,
-  and deleted accounts.
+- Two-pane desktop inbox and single-pane mobile flow use stable `?conversation=` URLs.
+- Conversation rows show handle/avatar, last excerpt/time, unread badge, and pagination states.
+- The profile `发私信` action opens the canonical conversation; the new-conversation form accepts the
+  exact public handle.
+- Messages are separated by sender, ordered consistently, preserve line breaks, and load older pages.
+- Sending disables duplicate submission and exposes errors; users can report a selected message or change
+  the block relationship from the conversation.
+
+## Follow-up privacy and retention work
+
+- Archive/delete/recovery APIs and UI, both-participant purge eligibility, and the retention worker.
+- Attachment storage, malware/content-type validation, authorization, deletion, and CDN policy.
+- Private message search. DM content remains excluded from the existing public search surface.
+- Public-profile activity visibility controls and data export.
+- Account-deletion anonymization and retention behavior across profile URLs, DMs, reports, and backups.
+
+## Delivered verification baseline
+
+- Profile DTOs, OpenAPI-generated types, Rust responses, and Web consumption agree.
+- Public lists paginate and exclude hidden/soft-deleted content and campus email.
+- Concurrent conversation creation yields one canonical pair; non-participants cannot list messages or
+  report inaccessible messages.
+- Read pointers advance monotonically and unread counts are derived per participant.
+- Blocking an existing sender prevents the next message; silence, trust, and recipient availability are
+  enforced.
+- Staff cannot query arbitrary DM bodies; reported evidence listing and decisions are capability-checked
+  and audited.
+
+Archive/delete/retention behavior is explicitly excluded from this baseline until its follow-up work
+lands.
