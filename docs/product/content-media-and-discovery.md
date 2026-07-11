@@ -27,6 +27,8 @@
   过滤、active/suspension、block/mute 与公开内容状态在服务端生效，不再复用 subscription 语义。
 - 所有主题列表返回同一 canonical Markdown 纯文本摘要及批量 viewer vote/bookmark state；首页与论坛页
   只展示这些服务端事实，不从数组位置或本地假数据推断摘要和互动状态。
+- 首页和论坛页以服务端 `nextCursor/hasMore` 继续当前 feed/filter，显式“加载更多”控件支持键盘和
+  辅助技术；切换 feed、板块或标签会建立新的查询边界，不拼接旧条件的数据。
 - 主题/评论详情返回当前用户 vote/bookmark 状态；主题同时返回有效 subscription、read position 和
   poll selections。vote、bookmark、subscription 和 poll vote 均有幂等撤销路径，计数与 activity
   在同一事务内校正。

@@ -1,5 +1,5 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Flame, Plus, Send, ThumbsUp } from "lucide-react";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Flame, Loader2, Plus, Send, ThumbsUp } from "lucide-react";
 import * as React from "react";
 import { Link, useSearchParams } from "react-router";
 import { toast } from "sonner";
@@ -272,14 +272,17 @@ export function ForumPage() {
   const tag = params.get("tag") ?? "all";
   const boards = useQuery({ queryKey: ["forum", "boards"], queryFn: api.boards });
   const tags = useQuery({ queryKey: ["forum", "tags"], queryFn: api.tags });
-  const threads = useQuery({
+  const threads = useInfiniteQuery({
     queryKey: ["forum", "threads", feed, board, tag],
-    queryFn: () =>
+    queryFn: ({ pageParam }) =>
       api.threads({
         feed,
         board: board === "all" ? undefined : board,
         tag: tag === "all" ? undefined : tag,
+        cursor: pageParam,
       }),
+    initialPageParam: null as string | null,
+    getNextPageParam: (page) => page.hasMore ? page.nextCursor ?? undefined : undefined,
   });
 
   function update(next: Record<string, string | null>) {
@@ -295,6 +298,7 @@ export function ForumPage() {
   }
 
   const boardItems = boards.data ?? [];
+  const threadItems = threads.data?.pages.flatMap((page) => page.items ?? []) ?? [];
 
   return (
     <div>
@@ -320,7 +324,7 @@ export function ForumPage() {
                 <TabsTrigger value="unread" disabled={!isAuthenticated}>未读</TabsTrigger>
               </TabsList>
             <Select value={board} onValueChange={(value) => update({ board: value })}>
-              <SelectTrigger className="w-full md:w-56">
+              <SelectTrigger className="w-full md:w-56" aria-label="筛选板块">
                 <SelectValue placeholder="全部板块" />
               </SelectTrigger>
               <SelectContent>
@@ -339,13 +343,25 @@ export function ForumPage() {
               <LoadingState />
             ) : threads.isError ? (
               <ErrorState error={threads.error} onRetry={() => void threads.refetch()} />
-            ) : (threads.data?.items ?? []).length === 0 ? (
+            ) : threadItems.length === 0 ? (
               <EmptyState title="还没有帖子" description="切换板块或发布第一条讨论。" />
             ) : (
               <div className="space-y-3">
-                {(threads.data?.items ?? []).map((thread) => (
+                {threadItems.map((thread) => (
                   <ThreadCard key={thread.id} thread={thread} boards={boardItems} />
                 ))}
+                {threads.hasNextPage ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="w-full"
+                    disabled={threads.isFetchingNextPage}
+                    onClick={() => void threads.fetchNextPage()}
+                  >
+                    {threads.isFetchingNextPage ? <Loader2 className="size-4 animate-spin" /> : null}
+                    {threads.isFetchingNextPage ? "正在加载" : "加载更多帖子"}
+                  </Button>
+                ) : null}
               </div>
             )}
           </TabsContent>

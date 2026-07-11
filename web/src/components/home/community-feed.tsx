@@ -1,4 +1,5 @@
 import {
+  Loader2,
   MessageCircle,
   ThumbsUp,
 } from "lucide-react";
@@ -108,6 +109,9 @@ export function CommunityFeed({
   isLoading,
   error,
   onRetry,
+  hasMore,
+  isLoadingMore,
+  onLoadMore,
   isAuthenticated,
 }: {
   mode: CommunityFeedMode;
@@ -116,6 +120,9 @@ export function CommunityFeed({
   isLoading: boolean;
   error?: unknown;
   onRetry: () => void;
+  hasMore?: boolean;
+  isLoadingMore?: boolean;
+  onLoadMore?: () => void;
   isAuthenticated: boolean;
 }) {
   return (
@@ -173,9 +180,23 @@ export function CommunityFeed({
             />
           ) : (
             <div className="space-y-4">
-              {items.map((thread, index) => (
-                <PostCard key={thread.id ?? `${thread.title}-${index}`} thread={thread} />
-              ))}
+              <div className="space-y-4">
+                {items.map((thread, index) => (
+                  <PostCard key={thread.id ?? `${thread.title}-${index}`} thread={thread} />
+                ))}
+              </div>
+              {hasMore && onLoadMore ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="w-full rounded-full"
+                  disabled={isLoadingMore}
+                  onClick={onLoadMore}
+                >
+                  {isLoadingMore ? <Loader2 className="size-4 animate-spin" /> : null}
+                  {isLoadingMore ? "正在加载" : "加载更多动态"}
+                </Button>
+              ) : null}
             </div>
           )}
         </TabsContent>

@@ -71,4 +71,28 @@ describe("CommunityFeed", () => {
 
     expect(screen.getByRole("tab", { name: "关注" })).toBeDisabled();
   });
+
+  it("offers an explicit accessible control for the next cursor page", async () => {
+    const onLoadMore = vi.fn();
+    const user = userEvent.setup();
+
+    render(
+      <MemoryRouter>
+        <CommunityFeed
+          mode="new"
+          onModeChange={vi.fn()}
+          items={[thread]}
+          isLoading={false}
+          onRetry={vi.fn()}
+          hasMore
+          isLoadingMore={false}
+          onLoadMore={onLoadMore}
+          isAuthenticated
+        />
+      </MemoryRouter>,
+    );
+
+    await user.click(screen.getByRole("button", { name: "加载更多动态" }));
+    expect(onLoadMore).toHaveBeenCalledOnce();
+  });
 });
