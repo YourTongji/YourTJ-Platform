@@ -6,9 +6,9 @@ info:
     The single source of truth for the v2 HTTP contract. Client type bindings
     (TS / Swift / Dart) are generated from this file — change the API here first,
     then implement and regenerate. Conventions: bearer JWT auth; money/escrow
-    writes additionally require `X-Wallet-Sig` (Ed25519); cursor pagination on
-    public lists; the error envelope `{ error: { code, message } }`; timestamps
-    are Unix seconds.
+    writes use one-time signing intents and require `X-Wallet-Intent`,
+    `X-Wallet-Sig`, and the same `Idempotency-Key`; cursor pagination on public
+    lists; the error envelope `{ error: { code, message } }`; timestamps are Unix seconds.
 servers:
   - url: https://api.yourtj.de/api/v2
 
@@ -24,6 +24,7 @@ tags:
   - { name: forum }
   - { name: notifications }
   - { name: platform }
+  - { name: media }
   - { name: admin }
 
 security:
@@ -36,17 +37,28 @@ components:
   parameters:
     Cursor: { name: cursor, in: query, schema: { type: string }, description: Opaque pagination cursor }
     Limit: { name: limit, in: query, schema: { type: integer, default: 20, maximum: 100 } }
+    WalletIntent:
+      name: X-Wallet-Intent
+      in: header
+      required: true
+      schema: { type: string, format: uuid }
+      description: One-time signing intent returned by POST /credit/signing-intents
     WalletSig:
       name: X-Wallet-Sig
       in: header
       required: true
       schema: { type: string }
-      description: Base64 Ed25519 signature over canonical(payload)+timestamp+nonce
+      description: Base64 Ed25519 signature over the intent's exact signingBytes
     IdempotencyKey:
       name: Idempotency-Key
       in: header
       required: false
-      schema: { type: string }
+      schema: { type: string, minLength: 1, maxLength: 128 }
+    WalletIdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema: { type: string, minLength: 1, maxLength: 128 }
 
   responses:
     BadRequest:   { description: Bad request, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
@@ -84,6 +96,7 @@ components:
         handle: { type: string }
         avatarUrl: { type: string, nullable: true }
         role: { type: string, enum: [user, mod, admin] }
+        trustLevel: { type: integer }
         createdAt: { type: integer }
     AuthTokens:
       type: object
@@ -141,6 +154,13 @@ components:
         comment: { type: string }
         semester: { type: string }
         score: { type: string }
+    CreateReviewInput:
+      allOf:
+        - $ref: "#/components/schemas/ReviewInput"
+        - type: object
+          required: [captchaToken]
+          properties:
+            captchaToken: { type: string, minLength: 1 }
     AiSummary:
       type: object
       properties:
@@ -176,6 +196,21 @@ components:
         ok: { type: boolean }
         latestSeq: { type: integer }
         latestHash: { type: string }
+    SigningIntentInput:
+      type: object
+      required: [action, request]
+      properties:
+        action:
+          type: string
+          enum: [credit.tip, credit.task.create, credit.task.action, credit.product.purchase, credit.purchase.action]
+        request: { type: object }
+    SigningIntent:
+      type: object
+      required: [intentId, signingBytes, expiresAt]
+      properties:
+        intentId: { type: string, format: uuid }
+        signingBytes: { type: string }
+        expiresAt: { type: integer, format: int64 }
     TipInput:
       type: object
       required: [toAccountId, amount, targetType, targetId]
@@ -515,6 +550,51 @@ components:
         description: { type: string, nullable: true }
         image: { type: string, nullable: true }
         siteName: { type: string, nullable: true }
+    # ---- media ----
+    UploadIntentInput:
+      type: object
+      required: [kind, contentType]
+      properties:
+        kind: { type: string, enum: [image, file] }
+        contentType: { type: string }
+    UploadCredentials:
+      type: object
+      required: [uploadIntentId, accessKeyId, accessKeySecret, securityToken, region, bucket, prefix, ossKey, callbackUrl, callbackBody, expiration]
+      properties:
+        uploadIntentId: { type: string, format: uuid }
+        accessKeyId: { type: string }
+        accessKeySecret: { type: string }
+        securityToken: { type: string }
+        region: { type: string }
+        bucket: { type: string }
+        prefix: { type: string }
+        ossKey: { type: string }
+        callbackUrl: { type: string, format: uri }
+        callbackBody: { type: string }
+        expiration: { type: integer, description: Unix seconds }
+    Upload:
+      type: object
+      properties:
+        id: { type: string }
+        accountId: { type: string }
+        kind: { type: string, enum: [image, file] }
+        ossKey: { type: string }
+        url: { type: string }
+        bytes: { type: integer }
+        mime: { type: string }
+        sha256: { type: string }
+        status: { type: string, enum: [pending, clean, blocked] }
+        createdAt: { type: integer }
+    UploadUrl:
+      type: object
+      required: [url]
+      properties:
+        url: { type: string }
+    UploadPage:
+      allOf:
+        - $ref: "#/components/schemas/Page"
+        - { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/Upload" } } } }
+
     # ---- admin ----
     Badge:
       type: object
@@ -567,7 +647,7 @@ paths:
       summary: Send a verification code to a @tongji.edu.cn address
       requestBody:
         required: true
-        content: { application/json: { schema: { type: object, required: [email], properties: { email: { type: string, format: email } } } } }
+        content: { application/json: { schema: { type: object, required: [email, captchaToken], properties: { email: { type: string, format: email }, captchaToken: { type: string, minLength: 1 } } } } }
       responses:
         "204": { description: sent }
         "429": { $ref: "#/components/responses/RateLimited" }
@@ -713,30 +793,86 @@ paths:
       responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/LedgerVerify" } } } } }
 
   # ============ credit: controlled money ops (NO free transfer — design §6.3) ============
+  /credit/signing-intents:
+    post:
+      tags: [credit]
+      summary: Create a request- and snapshot-bound one-time wallet signing intent
+      parameters: [{ $ref: "#/components/parameters/WalletIdempotencyKey" }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/SigningIntentInput" } } } }
+      responses:
+        "200": { description: exact bytes to sign, content: { application/json: { schema: { $ref: "#/components/schemas/SigningIntent" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
   /credit/tip:
     post:
       tags: [credit]
       summary: Tip — controlled transfer bound to a specific piece of content
-      parameters: [{ $ref: "#/components/parameters/WalletSig" }, { $ref: "#/components/parameters/IdempotencyKey" }]
+      parameters: [{ $ref: "#/components/parameters/WalletIntent" }, { $ref: "#/components/parameters/WalletSig" }, { $ref: "#/components/parameters/WalletIdempotencyKey" }]
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/TipInput" } } } }
       responses:
-        "200": { description: ok }
+        "204": { description: tipped }
         "402": { description: insufficient balance, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
-  /credit/bounty:
+  # NOTE: /credit/bounty and /credit/bounty/{id}/confirm are aliases for
+  # /credit/tasks POST and /credit/tasks/{id}/action confirm; backend only
+  # exposes the canonical /credit/tasks routes.
+
+  # ============ password auth — local-only, not in OpenAPI for mobile thin clients ============
+  /auth/password/login:
     post:
-      tags: [credit]
-      summary: Post a bounty (escrow_hold)
-      parameters: [{ $ref: "#/components/parameters/WalletSig" }]
-      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/TaskInput" } } } }
+      tags: [auth]
+      security: []
+      summary: Campus email + password login
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [email, password], properties: { email: { type: string, format: email }, password: { type: string, format: password } } } } } }
       responses:
-        "201": { description: created, content: { application/json: { schema: { $ref: "#/components/schemas/Task" } } } }
-        "402": { description: insufficient balance, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
-  /credit/bounty/{id}/confirm:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/AuthTokens" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /auth/password/forgot:
     post:
-      tags: [credit]
-      summary: Confirm completion and release (escrow_release)
-      parameters: [{ name: id, in: path, required: true, schema: { type: string } }, { $ref: "#/components/parameters/WalletSig" }]
-      responses: { "200": { description: released } }
+      tags: [auth]
+      security: []
+      summary: Request a password-reset code
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [email, captchaToken], properties: { email: { type: string, format: email }, captchaToken: { type: string, minLength: 1 } } } } } }
+      responses:
+        "204": { description: sent }
+        "429": { $ref: "#/components/responses/RateLimited" }
+  /auth/password/reset:
+    post:
+      tags: [auth]
+      security: []
+      summary: Reset password with code
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, code, newPassword]
+              properties:
+                email: { type: string, format: email }
+                code: { type: string }
+                newPassword: { type: string }
+      responses:
+        "204": { description: ok }
+        "400": { $ref: "#/components/responses/BadRequest" }
+  /auth/password/change:
+    post:
+      tags: [auth]
+      summary: Change the authenticated account's password
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [currentPassword, newPassword]
+              properties:
+                currentPassword: { type: string }
+                newPassword: { type: string }
+      responses:
+        "204": { description: ok }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
 
   # ---- escrow market: tasks ----
   /credit/tasks:
@@ -751,7 +887,7 @@ paths:
     post:
       tags: [credit]
       summary: Publish a task (escrow_hold of the reward)
-      parameters: [{ $ref: "#/components/parameters/WalletSig" }]
+      parameters: [{ $ref: "#/components/parameters/WalletIntent" }, { $ref: "#/components/parameters/WalletSig" }, { $ref: "#/components/parameters/WalletIdempotencyKey" }]
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/TaskInput" } } } }
       responses:
         "201": { description: created, content: { application/json: { schema: { $ref: "#/components/schemas/Task" } } } }
@@ -761,14 +897,14 @@ paths:
       tags: [credit]
       summary: Accept a task
       parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
-      responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Task" } } } } }
+      responses: { "204": { description: accepted } }
   /credit/tasks/{id}/action:
     post:
       tags: [credit]
       summary: Two-phase confirm — submit / confirm(release) / cancel / reject / delete
-      parameters: [{ name: id, in: path, required: true, schema: { type: string } }, { $ref: "#/components/parameters/WalletSig" }]
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }, { $ref: "#/components/parameters/WalletIntent" }, { $ref: "#/components/parameters/WalletSig" }, { $ref: "#/components/parameters/WalletIdempotencyKey" }]
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/TaskAction" } } } }
-      responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Task" } } } } }
+      responses: { "204": { description: updated } }
 
   # ---- escrow market: products / purchases ----
   /credit/products:
@@ -786,7 +922,7 @@ paths:
     post:
       tags: [credit]
       summary: Buy a product (escrow_hold of the price)
-      parameters: [{ name: id, in: path, required: true, schema: { type: string } }, { $ref: "#/components/parameters/WalletSig" }]
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }, { $ref: "#/components/parameters/WalletIntent" }, { $ref: "#/components/parameters/WalletSig" }, { $ref: "#/components/parameters/WalletIdempotencyKey" }]
       responses:
         "201": { description: created, content: { application/json: { schema: { $ref: "#/components/schemas/Purchase" } } } }
         "402": { description: insufficient balance, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
@@ -800,9 +936,9 @@ paths:
     post:
       tags: [credit]
       summary: Escrow steps — accept / deliver / confirm(release)
-      parameters: [{ name: id, in: path, required: true, schema: { type: string } }, { $ref: "#/components/parameters/WalletSig" }]
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }, { $ref: "#/components/parameters/WalletIntent" }, { $ref: "#/components/parameters/WalletSig" }, { $ref: "#/components/parameters/WalletIdempotencyKey" }]
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/PurchaseAction" } } } }
-      responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Purchase" } } } } }
+      responses: { "204": { description: updated } }
 
   # ============ search ============
   /search:
@@ -942,7 +1078,7 @@ paths:
       tags: [reviews]
       summary: Publish a review (captcha + idempotency)
       parameters: [{ name: id, in: path, required: true, schema: { type: string } }, { $ref: "#/components/parameters/IdempotencyKey" }]
-      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/ReviewInput" } } } }
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/CreateReviewInput" } } } }
       responses:
         "201": { description: created, content: { application/json: { schema: { $ref: "#/components/schemas/Review" } } } }
         "409": { $ref: "#/components/responses/Conflict" }
@@ -963,8 +1099,8 @@ paths:
       tags: [reviews]
       summary: Report a review
       parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
-      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [reason], properties: { reason: { type: string } } } } } }
-      responses: { "202": { description: queued } }
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [reason, captchaToken], properties: { reason: { type: string }, captchaToken: { type: string, minLength: 1 } } } } } }
+      responses: { "204": { description: reported } }
 
   # ============ forum (F0 + F1) ============
   /forum/boards:
@@ -1070,6 +1206,35 @@ paths:
       parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
       responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/PollResult" } } } } }
 
+  # ============ media ==========
+  /media/upload-credentials:
+    post:
+      tags: [media]
+      summary: Issue an OSS upload intent and scoped STS credentials
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/UploadIntentInput" } } } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/UploadCredentials" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /media/callback:
+    post:
+      tags: [media]
+      security: []
+      summary: Alibaba OSS signed upload callback
+      requestBody: { required: true, content: { application/json: { schema: { type: object } } } }
+      responses:
+        "200": { description: ok }
+        "400": { $ref: "#/components/responses/BadRequest" }
+  /media/{id}/url:
+    get:
+      tags: [media]
+      summary: Get CDN/object URL for an uploaded object
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/UploadUrl" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   # ============ notifications ============
   /notifications:
     get:
@@ -1140,7 +1305,7 @@ paths:
       tags: [admin]
       summary: Toggle visibility (hide/unhide)
       parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
-      responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Review" } } } } }
+      responses: { "200": { description: ok, content: { application/json: { schema: { type: object, required: [ok], properties: { ok: { type: boolean } } } } } } }
   /admin/courses:
     get:
       tags: [admin]

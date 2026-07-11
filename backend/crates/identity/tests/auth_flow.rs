@@ -5,7 +5,9 @@ mod helpers;
 
 use axum::body::Body;
 use axum::http::{header, Method, Request, StatusCode};
-use helpers::{create_test_app, create_test_app_with_pool};
+use helpers::{
+    create_test_app, create_test_app_with_pool, create_test_app_with_pool_and_encryption,
+};
 use serde_json::{json, Value};
 use sha2::Digest as _;
 use tower::ServiceExt;
@@ -15,7 +17,8 @@ use tower::ServiceExt;
 #[tokio::test]
 async fn test_request_code_creates_record() {
     let (pool, app) = create_test_app().await;
-    let email = "alice@tongji.edu.cn";
+    let email = format!("alice-{}@tongji.edu.cn", uuid::Uuid::new_v4());
+    let captcha_token = format!("request-{}", uuid::Uuid::new_v4());
 
     let resp = app
         .oneshot(
@@ -23,7 +26,10 @@ async fn test_request_code_creates_record() {
                 .method(Method::POST)
                 .uri("/api/v2/auth/email/request-code")
                 .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(json!({ "email": email }).to_string()))
+                .header("x-forwarded-for", &captcha_token)
+                .body(Body::from(
+                    json!({ "email": email, "captchaToken": captcha_token }).to_string(),
+                ))
                 .unwrap(),
         )
         .await
@@ -34,7 +40,7 @@ async fn test_request_code_creates_record() {
     let count: Option<i64> = sqlx::query_scalar(
         "SELECT count(*) FROM identity.email_codes WHERE email = $1 AND attempts < 5",
     )
-    .bind(email)
+    .bind(&email)
     .fetch_one(&pool)
     .await
     .unwrap();
@@ -42,28 +48,27 @@ async fn test_request_code_creates_record() {
     assert!(count.unwrap() > 0);
 }
 
-// Ignored: the test app runs without Redis (`redis: None`), and
-// `check_token_bucket` is a no-op without a Redis backend, so no 429 is ever
-// returned. The token-bucket logic itself is covered by `shared::ratelimit`
-// tests. Run this with a Redis-backed app to exercise the end-to-end limit.
 #[tokio::test]
-#[ignore = "requires Redis; test app runs without a Redis backend"]
 async fn test_request_code_rate_limited() {
     let (_, app) = create_test_app().await;
+    let email = format!("bob-{}@tongji.edu.cn", uuid::Uuid::new_v4());
 
-    let make_req = || {
+    let make_req = |captcha_token: &str| {
         Request::builder()
             .method(Method::POST)
             .uri("/api/v2/auth/email/request-code")
             .header(header::CONTENT_TYPE, "application/json")
-            .body(Body::from(json!({ "email": "bob@tongji.edu.cn" }).to_string()))
+            .header("x-forwarded-for", captcha_token)
+            .body(Body::from(json!({ "email": email, "captchaToken": captcha_token }).to_string()))
             .unwrap()
     };
 
-    let r1 = app.clone().oneshot(make_req()).await.unwrap();
+    let first_token = format!("request-{}", uuid::Uuid::new_v4());
+    let second_token = format!("request-{}", uuid::Uuid::new_v4());
+    let r1 = app.clone().oneshot(make_req(&first_token)).await.unwrap();
     assert_eq!(r1.status(), StatusCode::NO_CONTENT);
 
-    let r2 = app.oneshot(make_req()).await.unwrap();
+    let r2 = app.oneshot(make_req(&second_token)).await.unwrap();
     assert_eq!(r2.status(), StatusCode::TOO_MANY_REQUESTS);
 }
 
@@ -72,7 +77,8 @@ async fn test_request_code_rate_limited() {
 #[tokio::test]
 async fn test_verify_correct_code_creates_account() {
     let (pool, app) = create_test_app().await;
-    let email = "charlie@tongji.edu.cn";
+    let email = format!("charlie-{}@tongji.edu.cn", uuid::Uuid::new_v4());
+    let captcha_token = format!("request-{}", uuid::Uuid::new_v4());
 
     app.clone()
         .oneshot(
@@ -80,7 +86,10 @@ async fn test_verify_correct_code_creates_account() {
                 .method(Method::POST)
                 .uri("/api/v2/auth/email/request-code")
                 .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(json!({ "email": email }).to_string()))
+                .header("x-forwarded-for", &captcha_token)
+                .body(Body::from(
+                    json!({ "email": email, "captchaToken": captcha_token }).to_string(),
+                ))
                 .unwrap(),
         )
         .await
@@ -91,7 +100,7 @@ async fn test_verify_correct_code_creates_account() {
          WHERE email = $1 AND expires_at > now() AND attempts < 5 \
          ORDER BY created_at DESC LIMIT 1",
     )
-    .bind(email)
+    .bind(&email)
     .fetch_one(&pool)
     .await
     .unwrap();
@@ -105,7 +114,10 @@ async fn test_verify_correct_code_creates_account() {
                 .method(Method::POST)
                 .uri("/api/v2/auth/email/verify")
                 .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(json!({ "email": email, "code": correct_code }).to_string()))
+                .body(Body::from(
+                    json!({ "email": email, "code": correct_code, "handle": "charlie" })
+                        .to_string(),
+                ))
                 .unwrap(),
         )
         .await
@@ -121,8 +133,87 @@ async fn test_verify_correct_code_creates_account() {
 }
 
 #[tokio::test]
+async fn test_email_flow_stores_only_encrypted_account_email() {
+    let (pool, _) = create_test_app().await;
+    let encryption = shared::email_crypto::EmailEncryption::from_keys(
+        1,
+        "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+        "101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f",
+        &[],
+    )
+    .unwrap()
+    .unwrap();
+    let app =
+        create_test_app_with_pool_and_encryption(pool.clone(), Some(encryption.clone())).await;
+    let email = format!("encrypted-{}@tongji.edu.cn", uuid::Uuid::new_v4());
+    let captcha_token = format!("request-{}", uuid::Uuid::new_v4());
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/v2/auth/email/request-code")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header("x-forwarded-for", &captcha_token)
+                .body(Body::from(
+                    json!({ "email": email, "captchaToken": captcha_token }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+    let blind_index = encryption.blind_index(&email);
+    let code_hash: String = sqlx::query_scalar(
+        "SELECT code_hash FROM identity.email_codes WHERE email_blind_index = $1",
+    )
+    .bind(&blind_index)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let stored_code_email: Option<String> = sqlx::query_scalar(
+        "SELECT email::text FROM identity.email_codes WHERE email_blind_index = $1",
+    )
+    .bind(&blind_index)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(stored_code_email.is_none());
+
+    let code = helpers::brute_force_code(&code_hash);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/v2/auth/email/verify")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(json!({ "email": email, "code": code }).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let stored_account: (Option<String>, Option<String>, Option<String>) = sqlx::query_as(
+        "SELECT email::text, email_ciphertext, email_blind_index \
+         FROM identity.accounts WHERE email_blind_index = $1",
+    )
+    .bind(blind_index)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(stored_account.0.is_none());
+    assert!(stored_account.1.is_some());
+    assert!(stored_account.2.is_some());
+}
+
+#[tokio::test]
 async fn test_verify_wrong_code_fails() {
     let (_, app) = create_test_app().await;
+    let email = format!("dave-{}@tongji.edu.cn", uuid::Uuid::new_v4());
+    let captcha_token = format!("request-{}", uuid::Uuid::new_v4());
 
     app.clone()
         .oneshot(
@@ -130,7 +221,10 @@ async fn test_verify_wrong_code_fails() {
                 .method(Method::POST)
                 .uri("/api/v2/auth/email/request-code")
                 .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(json!({ "email": "dave@tongji.edu.cn" }).to_string()))
+                .header("x-forwarded-for", &captcha_token)
+                .body(Body::from(
+                    json!({ "email": email, "captchaToken": captcha_token }).to_string(),
+                ))
                 .unwrap(),
         )
         .await
@@ -142,9 +236,7 @@ async fn test_verify_wrong_code_fails() {
                 .method(Method::POST)
                 .uri("/api/v2/auth/email/verify")
                 .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(
-                    json!({ "email": "dave@tongji.edu.cn", "code": "000000" }).to_string(),
-                ))
+                .body(Body::from(json!({ "email": email, "code": "000000" }).to_string()))
                 .unwrap(),
         )
         .await

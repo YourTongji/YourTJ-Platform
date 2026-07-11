@@ -142,8 +142,19 @@ pub async fn list_settings_handler(
     Ok(Json(items))
 }
 
-/// POST /api/v2/startup/verify — captcha stub (accept any token, return 200)
-pub async fn startup_verify_handler() -> AppResult<Json<serde_json::Value>> {
+/// POST /api/v2/startup/verify — captcha verification
+pub async fn startup_verify_handler(
+    State(state): State<AppState>,
+    Json(body): Json<serde_json::Value>,
+) -> AppResult<Json<serde_json::Value>> {
+    let token = body.get("token").and_then(|v| v.as_str()).unwrap_or("");
+    shared::captcha::require_captcha(
+        state.captcha_verifier.as_deref(),
+        state.redis.as_ref(),
+        "startup",
+        token,
+    )
+    .await?;
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
@@ -249,6 +260,8 @@ mod tests {
             redis: None,
             system_private_key: vec![0u8; 32],
             system_public_key_b64: String::new(),
+            email_encryption: None,
+            captcha_verifier: Some(std::sync::Arc::new(shared::captcha::FakeCaptcha)),
             sse_tx: None,
         };
 
@@ -257,12 +270,13 @@ mod tests {
                 Request::builder()
                     .method(Method::POST)
                     .uri("/api/v2/startup/verify")
-                    .body(Body::empty())
+                    .header(axum::http::header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"token":"test-token"}"#))
                     .expect("request builds"),
             )
             .await
             .expect("request succeeds");
 
-        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 }

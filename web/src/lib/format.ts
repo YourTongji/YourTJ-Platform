@@ -1,3 +1,5 @@
+import { randomUuid } from "@/lib/random";
+
 export function formatUnixTime(value?: number | string | null) {
   if (value === undefined || value === null || value === "") {
     return "未知";
@@ -82,5 +84,5 @@ export function shortHash(value?: string | null, size = 8) {
 }
 
 export function idempotencyKey(prefix: string) {
-  return `${prefix}:${crypto.randomUUID()}`;
+  return `${prefix}:${randomUuid()}`;
 }

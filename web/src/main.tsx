@@ -29,30 +29,33 @@ if (storedTheme === "dark") {
   document.documentElement.classList.add("dark");
 }
 
-const router = createBrowserRouter([
-  {
-    path: "/",
-    element: <AppLayout />,
-    errorElement: <NotFoundPage />,
-    children: [
-      { index: true, element: <HomePage /> },
-      { path: "login", element: <LoginPage /> },
-      { path: "forum", element: <ForumPage /> },
-      { path: "forum/threads/:id", element: <ThreadDetailPage /> },
-      { path: "courses", element: <CoursesPage /> },
-      { path: "courses/:id", element: <CourseDetailPage /> },
-      { path: "schedule", element: <SchedulePage /> },
-      { path: "wallet", element: <WalletPage /> },
-      { path: "notifications", element: <NotificationsPage /> },
-      { path: "messages", element: <MessagesPage /> },
-      { path: "bookmarks", element: <BookmarksPage /> },
-      { path: "profile/:handle", element: <ProfilePage /> },
-      { path: "settings", element: <SettingsPage /> },
-      { path: "admin", element: <AdminPage /> },
-      { path: "*", element: <NotFoundPage /> },
-    ],
-  },
-]);
+const router = createBrowserRouter(
+  [
+    {
+      path: "/",
+      element: <AppLayout />,
+      errorElement: <NotFoundPage />,
+      children: [
+        { index: true, element: <HomePage /> },
+        { path: "login", element: <LoginPage /> },
+        { path: "forum", element: <ForumPage /> },
+        { path: "forum/threads/:id", element: <ThreadDetailPage /> },
+        { path: "courses", element: <CoursesPage /> },
+        { path: "courses/:id", element: <CourseDetailPage /> },
+        { path: "schedule", element: <SchedulePage /> },
+        { path: "wallet", element: <WalletPage /> },
+        { path: "notifications", element: <NotificationsPage /> },
+        { path: "messages", element: <MessagesPage /> },
+        { path: "bookmarks", element: <BookmarksPage /> },
+        { path: "profile/:handle", element: <ProfilePage /> },
+        { path: "settings", element: <SettingsPage /> },
+        { path: "admin", element: <AdminPage /> },
+        { path: "*", element: <NotFoundPage /> },
+      ],
+    },
+  ],
+  { basename: import.meta.env.BASE_URL },
+);
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>

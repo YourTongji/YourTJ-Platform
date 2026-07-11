@@ -5,8 +5,11 @@
 use sqlx::PgPool;
 use tokio::sync::broadcast;
 
+use crate::captcha::CaptchaVerifier;
+use crate::email_crypto::EmailEncryption;
 use crate::sse::SsePayload;
 use crate::Config;
+use std::sync::Arc;
 
 /// Application state available to all handlers via `State<AppState>`.
 #[derive(Clone)]
@@ -41,6 +44,12 @@ pub struct AppState {
 
     /// System Ed25519 public key (base64-encoded).
     pub system_public_key_b64: String,
+
+    /// Email encryption for PII-at-rest (None when not configured).
+    pub email_encryption: Option<EmailEncryption>,
+
+    /// Pluggable captcha verifier (None when captcha is disabled or not configured).
+    pub captcha_verifier: Option<Arc<dyn CaptchaVerifier>>,
 
     /// SSE broadcast sender for real-time notification delivery.
     /// `None` when SSE is not configured / disabled.

@@ -26,6 +26,7 @@ export interface paths {
                     "application/json": {
                         /** Format: email */
                         email: string;
+                        captchaToken: string;
                     };
                 };
             };
@@ -802,6 +803,49 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/credit/signing-intents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create a request- and snapshot-bound one-time wallet signing intent */
+        post: {
+            parameters: {
+                query?: never;
+                header: {
+                    "Idempotency-Key": components["parameters"]["WalletIdempotencyKey"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["SigningIntentInput"];
+                };
+            };
+            responses: {
+                /** @description exact bytes to sign */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["SigningIntent"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/credit/tip": {
         parameters: {
             query?: never;
@@ -816,9 +860,11 @@ export interface paths {
             parameters: {
                 query?: never;
                 header: {
-                    /** @description Base64 Ed25519 signature over canonical(payload)+timestamp+nonce */
+                    /** @description One-time signing intent returned by POST /credit/signing-intents */
+                    "X-Wallet-Intent": components["parameters"]["WalletIntent"];
+                    /** @description Base64 Ed25519 signature over the intent's exact signingBytes */
                     "X-Wallet-Sig": components["parameters"]["WalletSig"];
-                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                    "Idempotency-Key": components["parameters"]["WalletIdempotencyKey"];
                 };
                 path?: never;
                 cookie?: never;
@@ -829,8 +875,8 @@ export interface paths {
                 };
             };
             responses: {
-                /** @description ok */
-                200: {
+                /** @description tipped */
+                204: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -853,7 +899,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/credit/bounty": {
+    "/auth/password/login": {
         parameters: {
             query?: never;
             header?: never;
@@ -862,41 +908,36 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Post a bounty (escrow_hold) */
+        /** Campus email + password login */
         post: {
             parameters: {
                 query?: never;
-                header: {
-                    /** @description Base64 Ed25519 signature over canonical(payload)+timestamp+nonce */
-                    "X-Wallet-Sig": components["parameters"]["WalletSig"];
-                };
+                header?: never;
                 path?: never;
                 cookie?: never;
             };
             requestBody: {
                 content: {
-                    "application/json": components["schemas"]["TaskInput"];
+                    "application/json": {
+                        /** Format: email */
+                        email: string;
+                        /** Format: password */
+                        password: string;
+                    };
                 };
             };
             responses: {
-                /** @description created */
-                201: {
+                /** @description ok */
+                200: {
                     headers: {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": components["schemas"]["Task"];
+                        "application/json": components["schemas"]["AuthTokens"];
                     };
                 };
-                /** @description insufficient balance */
-                402: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": components["schemas"]["Error"];
-                    };
-                };
+                400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
             };
         };
         delete?: never;
@@ -905,7 +946,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/credit/bounty/{id}/confirm": {
+    "/auth/password/forgot": {
         parameters: {
             query?: never;
             header?: never;
@@ -914,28 +955,119 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Confirm completion and release (escrow_release) */
+        /** Request a password-reset code */
         post: {
             parameters: {
                 query?: never;
-                header: {
-                    /** @description Base64 Ed25519 signature over canonical(payload)+timestamp+nonce */
-                    "X-Wallet-Sig": components["parameters"]["WalletSig"];
-                };
-                path: {
-                    id: string;
-                };
+                header?: never;
+                path?: never;
                 cookie?: never;
             };
-            requestBody?: never;
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** Format: email */
+                        email: string;
+                        captchaToken: string;
+                    };
+                };
+            };
             responses: {
-                /** @description released */
-                200: {
+                /** @description sent */
+                204: {
                     headers: {
                         [name: string]: unknown;
                     };
                     content?: never;
                 };
+                429: components["responses"]["RateLimited"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/password/reset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reset password with code */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** Format: email */
+                        email: string;
+                        code: string;
+                        newPassword: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description ok */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                400: components["responses"]["BadRequest"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/password/change": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Change the authenticated account's password */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        currentPassword: string;
+                        newPassword: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description ok */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
             };
         };
         delete?: never;
@@ -983,8 +1115,11 @@ export interface paths {
             parameters: {
                 query?: never;
                 header: {
-                    /** @description Base64 Ed25519 signature over canonical(payload)+timestamp+nonce */
+                    /** @description One-time signing intent returned by POST /credit/signing-intents */
+                    "X-Wallet-Intent": components["parameters"]["WalletIntent"];
+                    /** @description Base64 Ed25519 signature over the intent's exact signingBytes */
                     "X-Wallet-Sig": components["parameters"]["WalletSig"];
+                    "Idempotency-Key": components["parameters"]["WalletIdempotencyKey"];
                 };
                 path?: never;
                 cookie?: never;
@@ -1042,14 +1177,12 @@ export interface paths {
             };
             requestBody?: never;
             responses: {
-                /** @description ok */
-                200: {
+                /** @description accepted */
+                204: {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content: {
-                        "application/json": components["schemas"]["Task"];
-                    };
+                    content?: never;
                 };
             };
         };
@@ -1073,8 +1206,11 @@ export interface paths {
             parameters: {
                 query?: never;
                 header: {
-                    /** @description Base64 Ed25519 signature over canonical(payload)+timestamp+nonce */
+                    /** @description One-time signing intent returned by POST /credit/signing-intents */
+                    "X-Wallet-Intent": components["parameters"]["WalletIntent"];
+                    /** @description Base64 Ed25519 signature over the intent's exact signingBytes */
                     "X-Wallet-Sig": components["parameters"]["WalletSig"];
+                    "Idempotency-Key": components["parameters"]["WalletIdempotencyKey"];
                 };
                 path: {
                     id: string;
@@ -1087,14 +1223,12 @@ export interface paths {
                 };
             };
             responses: {
-                /** @description ok */
-                200: {
+                /** @description updated */
+                204: {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content: {
-                        "application/json": components["schemas"]["Task"];
-                    };
+                    content?: never;
                 };
             };
         };
@@ -1182,8 +1316,11 @@ export interface paths {
             parameters: {
                 query?: never;
                 header: {
-                    /** @description Base64 Ed25519 signature over canonical(payload)+timestamp+nonce */
+                    /** @description One-time signing intent returned by POST /credit/signing-intents */
+                    "X-Wallet-Intent": components["parameters"]["WalletIntent"];
+                    /** @description Base64 Ed25519 signature over the intent's exact signingBytes */
                     "X-Wallet-Sig": components["parameters"]["WalletSig"];
+                    "Idempotency-Key": components["parameters"]["WalletIdempotencyKey"];
                 };
                 path: {
                     id: string;
@@ -1272,8 +1409,11 @@ export interface paths {
             parameters: {
                 query?: never;
                 header: {
-                    /** @description Base64 Ed25519 signature over canonical(payload)+timestamp+nonce */
+                    /** @description One-time signing intent returned by POST /credit/signing-intents */
+                    "X-Wallet-Intent": components["parameters"]["WalletIntent"];
+                    /** @description Base64 Ed25519 signature over the intent's exact signingBytes */
                     "X-Wallet-Sig": components["parameters"]["WalletSig"];
+                    "Idempotency-Key": components["parameters"]["WalletIdempotencyKey"];
                 };
                 path: {
                     id: string;
@@ -1286,14 +1426,12 @@ export interface paths {
                 };
             };
             responses: {
-                /** @description ok */
-                200: {
+                /** @description updated */
+                204: {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content: {
-                        "application/json": components["schemas"]["Purchase"];
-                    };
+                    content?: never;
                 };
             };
         };
@@ -2073,7 +2211,7 @@ export interface paths {
             };
             requestBody: {
                 content: {
-                    "application/json": components["schemas"]["ReviewInput"];
+                    "application/json": components["schemas"]["CreateReviewInput"];
                 };
             };
             responses: {
@@ -2217,12 +2355,13 @@ export interface paths {
                 content: {
                     "application/json": {
                         reason: string;
+                        captchaToken: string;
                     };
                 };
             };
             responses: {
-                /** @description queued */
-                202: {
+                /** @description reported */
+                204: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -3279,6 +3418,127 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/media/upload-credentials": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Issue an OSS upload intent and scoped STS credentials */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["UploadIntentInput"];
+                };
+            };
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["UploadCredentials"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/media/callback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Alibaba OSS signed upload callback */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                400: components["responses"]["BadRequest"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/media/{id}/url": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get CDN/object URL for an uploaded object */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["UploadUrl"];
+                    };
+                };
+                401: components["responses"]["Unauthorized"];
+                404: components["responses"]["NotFound"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/notifications": {
         parameters: {
             query?: never;
@@ -3775,7 +4035,9 @@ export interface paths {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": components["schemas"]["Review"];
+                        "application/json": {
+                            ok: boolean;
+                        };
                     };
                 };
             };
@@ -5116,6 +5378,7 @@ export interface components {
             avatarUrl?: string | null;
             /** @enum {string} */
             role?: "user" | "mod" | "admin";
+            trustLevel?: number;
             createdAt?: number;
         };
         AuthTokens: {
@@ -5167,6 +5430,9 @@ export interface components {
             semester?: string;
             score?: string;
         };
+        CreateReviewInput: components["schemas"]["ReviewInput"] & {
+            captchaToken: string;
+        };
         AiSummary: {
             courseId?: string;
             summary?: string;
@@ -5200,6 +5466,18 @@ export interface components {
             ok?: boolean;
             latestSeq?: number;
             latestHash?: string;
+        };
+        SigningIntentInput: {
+            /** @enum {string} */
+            action: "credit.tip" | "credit.task.create" | "credit.task.action" | "credit.product.purchase" | "credit.purchase.action";
+            request: Record<string, never>;
+        };
+        SigningIntent: {
+            /** Format: uuid */
+            intentId: string;
+            signingBytes: string;
+            /** Format: int64 */
+            expiresAt: number;
         };
         TipInput: {
             toAccountId: string;
@@ -5628,6 +5906,47 @@ export interface components {
             image?: string | null;
             siteName?: string | null;
         };
+        UploadIntentInput: {
+            /** @enum {string} */
+            kind: "image" | "file";
+            contentType: string;
+        };
+        UploadCredentials: {
+            /** Format: uuid */
+            uploadIntentId: string;
+            accessKeyId: string;
+            accessKeySecret: string;
+            securityToken: string;
+            region: string;
+            bucket: string;
+            prefix: string;
+            ossKey: string;
+            /** Format: uri */
+            callbackUrl: string;
+            callbackBody: string;
+            /** @description Unix seconds */
+            expiration: number;
+        };
+        Upload: {
+            id?: string;
+            accountId?: string;
+            /** @enum {string} */
+            kind?: "image" | "file";
+            ossKey?: string;
+            url?: string;
+            bytes?: number;
+            mime?: string;
+            sha256?: string;
+            /** @enum {string} */
+            status?: "pending" | "clean" | "blocked";
+            createdAt?: number;
+        };
+        UploadUrl: {
+            url: string;
+        };
+        UploadPage: components["schemas"]["Page"] & {
+            items?: components["schemas"]["Upload"][];
+        };
         Badge: {
             id?: string;
             name?: string;
@@ -5720,9 +6039,12 @@ export interface components {
         /** @description Opaque pagination cursor */
         Cursor: string;
         Limit: number;
-        /** @description Base64 Ed25519 signature over canonical(payload)+timestamp+nonce */
+        /** @description One-time signing intent returned by POST /credit/signing-intents */
+        WalletIntent: string;
+        /** @description Base64 Ed25519 signature over the intent's exact signingBytes */
         WalletSig: string;
         IdempotencyKey: string;
+        WalletIdempotencyKey: string;
     };
     requestBodies: never;
     headers: never;

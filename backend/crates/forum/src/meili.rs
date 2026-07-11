@@ -5,6 +5,11 @@
 
 use shared::AppResult;
 
+fn meili_api_key(api_key: &str) -> Option<&str> {
+    let api_key = api_key.trim();
+    (!api_key.is_empty()).then_some(api_key)
+}
+
 /// Document structure stored in Meilisearch.
 #[allow(dead_code)]
 #[derive(Debug, serde::Serialize)]
@@ -26,7 +31,7 @@ pub struct ForumThreadDoc {
 /// Logs error but does not fail the request.
 #[allow(dead_code)]
 pub async fn sync_thread_to_meili(meili_url: &str, meili_key: &str, doc: &ForumThreadDoc) {
-    let client = match meilisearch_sdk::client::Client::new(meili_url, Some(meili_key)) {
+    let client = match meilisearch_sdk::client::Client::new(meili_url, meili_api_key(meili_key)) {
         Ok(c) => c,
         Err(e) => {
             tracing::warn!(error = %e, "failed to create meilisearch client");
@@ -42,7 +47,7 @@ pub async fn sync_thread_to_meili(meili_url: &str, meili_key: &str, doc: &ForumT
 /// Delete a thread document from Meilisearch on soft-delete.
 #[allow(dead_code)]
 pub async fn delete_thread_from_meili(meili_url: &str, meili_key: &str, thread_id: i64) {
-    let client = match meilisearch_sdk::client::Client::new(meili_url, Some(meili_key)) {
+    let client = match meilisearch_sdk::client::Client::new(meili_url, meili_api_key(meili_key)) {
         Ok(c) => c,
         Err(e) => {
             tracing::warn!(error = %e, "failed to create meilisearch client");
@@ -64,7 +69,7 @@ pub async fn search_threads(
     query: &str,
     limit: usize,
 ) -> Vec<serde_json::Value> {
-    let client = match meilisearch_sdk::client::Client::new(meili_url, Some(meili_key)) {
+    let client = match meilisearch_sdk::client::Client::new(meili_url, meili_api_key(meili_key)) {
         Ok(c) => c,
         Err(e) => {
             tracing::warn!(error = %e, "Meili client failed — forum search returning empty");
@@ -125,7 +130,7 @@ pub async fn reindex_forum(pool: &sqlx::PgPool, meili_url: &str, meili_key: &str
         })
         .collect();
 
-    let client = match meilisearch_sdk::client::Client::new(meili_url, Some(meili_key)) {
+    let client = match meilisearch_sdk::client::Client::new(meili_url, meili_api_key(meili_key)) {
         Ok(c) => c,
         Err(e) => {
             tracing::warn!(error = %e, "failed to create meilisearch client for reindex");

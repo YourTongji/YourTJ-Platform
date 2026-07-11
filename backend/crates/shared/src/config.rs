@@ -18,6 +18,17 @@ pub struct Config {
     pub smtp_username: String,
     pub smtp_password: String,
     pub smtp_from: String,
+    pub oss_region: String,
+    pub oss_bucket: String,
+    pub oss_access_key_id: String,
+    pub oss_access_key_secret: String,
+    pub oss_role_arn: String,
+    pub oss_callback_base_url: String,
+    pub email_encryption_active_version: u8,
+    pub email_encryption_active_aead_hex: String,
+    pub email_encryption_active_blind_hex: String,
+    pub email_encryption_strict: bool,
+    pub captcha_siteverify_url: String,
 }
 
 impl Config {
@@ -45,6 +56,22 @@ impl Config {
             smtp_username: env_or_default("SMTP_USERNAME", ""),
             smtp_password: env_or_default("SMTP_PASSWORD", ""),
             smtp_from: env_or_default("SMTP_FROM", ""),
+            oss_region: env_or_default("OSS_REGION", ""),
+            oss_bucket: env_or_default("OSS_BUCKET", ""),
+            oss_access_key_id: env_or_default("OSS_ACCESS_KEY_ID", ""),
+            oss_access_key_secret: env_or_default("OSS_ACCESS_KEY_SECRET", ""),
+            oss_role_arn: env_or_default("OSS_ROLE_ARN", ""),
+            oss_callback_base_url: env_or_default("OSS_CALLBACK_BASE_URL", ""),
+            email_encryption_active_version: env_or_default_u64(
+                "EMAIL_ENCRYPTION_ACTIVE_VERSION",
+                0,
+            ) as u8,
+            email_encryption_active_aead_hex: env_or_default("EMAIL_ENCRYPTION_ACTIVE_AEAD", ""),
+            email_encryption_active_blind_hex: env_or_default("EMAIL_ENCRYPTION_ACTIVE_BLIND", ""),
+            email_encryption_strict: std::env::var("EMAIL_ENCRYPTION_STRICT")
+                .map(|v| v == "1" || v == "true")
+                .unwrap_or(false),
+            captcha_siteverify_url: env_or_default("CAPTCHA_SITEVERIFY_URL", ""),
         })
     }
 

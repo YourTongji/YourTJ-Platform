@@ -22,11 +22,12 @@ anyhow.workspace = true
 redis.workspace = true
 deadpool-redis.workspace = true
 tracing.workspace = true
+tokio.workspace = true
 argon2.workspace = true
 zxcvbn.workspace = true
+hmac.workspace = true
 
 credit.workspace = true
 
 [dev-dependencies]
 tower.workspace = true
-tokio = { workspace = true, features = ["macros"] }

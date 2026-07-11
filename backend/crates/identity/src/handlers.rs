@@ -71,6 +71,13 @@ pub async fn request_code(
     if !email.ends_with("@tongji.edu.cn") {
         return Err(IdentityError::InvalidEmailDomain.into());
     }
+    shared::captcha::require_captcha(
+        state.captcha_verifier.as_deref(),
+        state.redis.as_ref(),
+        "email_code",
+        &body.captcha_token,
+    )
+    .await?;
 
     // Rate-limit code requests: 1 per 60 seconds per email (Redis-backed).
     shared::ratelimit::check_token_bucket(state.redis.as_ref(), "email_code", &email, 1, 60)
@@ -88,7 +95,14 @@ pub async fn request_code(
     let code_hash = hash_code(&code);
     let expires_at = Utc::now() + chrono::Duration::minutes(10);
 
-    repo::insert_email_code(&state.db, &email, &code_hash, expires_at).await?;
+    repo::insert_email_code(
+        &state.db,
+        state.email_encryption.as_ref(),
+        &email,
+        &code_hash,
+        expires_at,
+    )
+    .await?;
 
     shared::email::send_email(
         &state.config,
@@ -115,51 +129,66 @@ pub async fn verify_email(
     }
 
     // Look up the live code row.
-    let code_row =
-        repo::find_email_code(&state.db, &email).await?.ok_or(IdentityError::CodeExpired)?;
+    let code_row = repo::find_email_code(&state.db, state.email_encryption.as_ref(), &email)
+        .await?
+        .ok_or(IdentityError::CodeExpired)?;
 
     if code_row.attempts >= 5 {
         return Err(IdentityError::CodeExhausted.into());
     }
 
     let is_valid = verify_code(&body.code, &code_row.code_hash);
-    repo::increment_code_attempts(&state.db, &email).await?;
+    repo::increment_code_attempts(&state.db, state.email_encryption.as_ref(), &email).await?;
 
     if !is_valid {
         return Err(IdentityError::InvalidCode.into());
     }
 
     // Find or create the account.
-    let account = match repo::find_account_by_email(&state.db, &email).await? {
-        Some(acct) => {
-            // Existing account: set password if provided and no password is set.
-            if let Some(pw) = body.password.as_deref() {
-                let current_hash = repo::find_password_hash(&state.db, &email).await?;
-                if current_hash.is_none() {
+    let account =
+        match repo::find_account_by_email(&state.db, state.email_encryption.as_ref(), &email)
+            .await?
+        {
+            Some(acct) => {
+                // Existing account: set password if provided and no password is set.
+                if let Some(pw) = body.password.as_deref() {
+                    let current_hash = repo::find_password_hash(
+                        &state.db,
+                        state.email_encryption.as_ref(),
+                        &email,
+                    )
+                    .await?;
+                    if current_hash.is_none() {
+                        password::validate(pw, &email)?;
+                        let hash = password::hash(pw)?;
+                        repo::update_password_hash(&state.db, acct.id, &hash).await?;
+                    }
+                }
+                acct
+            }
+            None => {
+                // First login — auto-provision.
+                let handle_opt = body.handle.as_deref();
+                // Validate handle if supplied.
+                if let Some(h) = handle_opt {
+                    validate_handle(h)?;
+                }
+                let account = repo::insert_account(
+                    &state.db,
+                    state.email_encryption.as_ref(),
+                    &email,
+                    handle_opt,
+                )
+                .await?;
+                // Set password if provided in same registration step.
+                if let Some(pw) = body.password.as_deref() {
                     password::validate(pw, &email)?;
                     let hash = password::hash(pw)?;
-                    repo::update_password_hash(&state.db, acct.id, &hash).await?;
+                    repo::update_password_hash(&state.db, account.id, &hash).await?;
                 }
+                account
             }
-            acct
-        }
-        None => {
-            // First login — auto-provision.
-            let handle_opt = body.handle.as_deref();
-            // Validate handle if supplied.
-            if let Some(h) = handle_opt {
-                validate_handle(h)?;
-            }
-            let account = repo::insert_account(&state.db, &email, handle_opt).await?;
-            // Set password if provided in same registration step.
-            if let Some(pw) = body.password.as_deref() {
-                password::validate(pw, &email)?;
-                let hash = password::hash(pw)?;
-                repo::update_password_hash(&state.db, account.id, &hash).await?;
-            }
-            account
-        }
-    };
+        };
 
     // Create access + refresh tokens.
     let access_token = create_access_token(account.id, &state.jwt_secret, state.jwt_ttl)
@@ -206,9 +235,10 @@ pub async fn refresh(
     repo::revoke_session(&state.db, session.id).await?;
 
     // Get the account.
-    let account = repo::find_account_by_id(&state.db, session.account_id)
-        .await?
-        .ok_or(shared::AppError::Unauthorized)?;
+    let account =
+        repo::find_account_by_id(&state.db, state.email_encryption.as_ref(), session.account_id)
+            .await?
+            .ok_or(shared::AppError::Unauthorized)?;
 
     // Create new token pair.
     let access_token = create_access_token(account.id, &state.jwt_secret, state.jwt_ttl)
@@ -257,8 +287,9 @@ pub async fn get_me(
     )
     .await
     .map_err(|_r| shared::AppError::Unauthorized)?;
-    let account =
-        repo::find_account_by_id(&state.db, auth.id).await?.ok_or(shared::AppError::NotFound)?;
+    let account = repo::find_account_by_id(&state.db, state.email_encryption.as_ref(), auth.id)
+        .await?
+        .ok_or(shared::AppError::NotFound)?;
     Ok(Json(row_to_dto(&account)))
 }
 
@@ -269,14 +300,9 @@ pub async fn get_user_profile(
     Path(handle): Path<String>,
 ) -> AppResult<Json<UserProfileDto>> {
     // Look up account by handle (CITEXT, case-insensitive).
-    let account = sqlx::query_as::<_, crate::models::AccountRow>(
-        "SELECT id, email, handle, avatar_url, role, status, trust_level, created_at \
-         FROM identity.accounts WHERE handle = $1",
-    )
-    .bind(&handle)
-    .fetch_optional(&state.db)
-    .await?
-    .ok_or(shared::AppError::NotFound)?;
+    let account = repo::find_account_by_handle(&state.db, state.email_encryption.as_ref(), &handle)
+        .await?
+        .ok_or(shared::AppError::NotFound)?;
 
     // Aggregate stats from forum.user_stats (LEFT JOIN behaviour via COALESCE).
     let (thread_count, comment_count, votes_received) = sqlx::query_as::<_, (i32, i32, i32)>(
@@ -348,6 +374,7 @@ pub async fn update_me(
 
     let row = repo::update_account(
         &state.db,
+        state.email_encryption.as_ref(),
         auth.id,
         body.handle.as_deref(),
         body.avatar_url.as_deref(),
@@ -934,13 +961,14 @@ pub async fn password_login(
         .await?;
 
     // Look up the account.
-    let account = repo::find_account_by_email(&state.db, &email)
+    let account = repo::find_account_by_email(&state.db, state.email_encryption.as_ref(), &email)
         .await?
         .ok_or(shared::AppError::Unauthorized)?;
 
     // Verify password.
-    let phc =
-        repo::find_password_hash(&state.db, &email).await?.ok_or(IdentityError::NoPasswordSet)?;
+    let phc = repo::find_password_hash(&state.db, state.email_encryption.as_ref(), &email)
+        .await?
+        .ok_or(IdentityError::NoPasswordSet)?;
 
     if !password::verify(&body.password, &phc) {
         return Err(IdentityError::WrongPassword.into());
@@ -977,9 +1005,16 @@ pub async fn password_forgot(
     if !email.ends_with("@tongji.edu.cn") {
         return Err(IdentityError::InvalidEmailDomain.into());
     }
+    shared::captcha::require_captcha(
+        state.captcha_verifier.as_deref(),
+        state.redis.as_ref(),
+        "password_forgot",
+        &body.captcha_token,
+    )
+    .await?;
 
     // Must have a password set to reset it.
-    let hash = repo::find_password_hash(&state.db, &email).await?;
+    let hash = repo::find_password_hash(&state.db, state.email_encryption.as_ref(), &email).await?;
     if hash.is_none() {
         return Err(IdentityError::NoPasswordSet.into());
     }
@@ -992,7 +1027,14 @@ pub async fn password_forgot(
     let code_hash = hash_code(&code);
     let expires_at = Utc::now() + chrono::Duration::minutes(10);
 
-    repo::insert_email_code(&state.db, &email, &code_hash, expires_at).await?;
+    repo::insert_email_code(
+        &state.db,
+        state.email_encryption.as_ref(),
+        &email,
+        &code_hash,
+        expires_at,
+    )
+    .await?;
 
     shared::email::send_email(
         &state.config,
@@ -1020,21 +1062,23 @@ pub async fn password_reset(
     }
 
     // Must have a password set to reset it (can't reset a non-existent password).
-    let current_hash = repo::find_password_hash(&state.db, &email).await?;
+    let current_hash =
+        repo::find_password_hash(&state.db, state.email_encryption.as_ref(), &email).await?;
     if current_hash.is_none() {
         return Err(IdentityError::NoPasswordSet.into());
     }
 
     // Look up the live code row.
-    let code_row =
-        repo::find_email_code(&state.db, &email).await?.ok_or(IdentityError::CodeExpired)?;
+    let code_row = repo::find_email_code(&state.db, state.email_encryption.as_ref(), &email)
+        .await?
+        .ok_or(IdentityError::CodeExpired)?;
 
     if code_row.attempts >= 5 {
         return Err(IdentityError::CodeExhausted.into());
     }
 
     let is_valid = verify_code(&body.code, &code_row.code_hash);
-    repo::increment_code_attempts(&state.db, &email).await?;
+    repo::increment_code_attempts(&state.db, state.email_encryption.as_ref(), &email).await?;
 
     if !is_valid {
         return Err(IdentityError::InvalidCode.into());
@@ -1045,8 +1089,9 @@ pub async fn password_reset(
     let new_hash = password::hash(&body.new_password)?;
 
     // Find account to get its id.
-    let account =
-        repo::find_account_by_email(&state.db, &email).await?.ok_or(shared::AppError::NotFound)?;
+    let account = repo::find_account_by_email(&state.db, state.email_encryption.as_ref(), &email)
+        .await?
+        .ok_or(shared::AppError::NotFound)?;
 
     repo::update_password_hash(&state.db, account.id, &new_hash).await?;
 
@@ -1084,16 +1129,11 @@ pub async fn password_change(
     .await?;
 
     // Look up account to get the email for password validation.
-    let account_row = sqlx::query_as::<_, crate::models::AccountRow>(
-        "SELECT id, email::text, handle, avatar_url, role::text, status::text, trust_level, created_at \
-         FROM identity.accounts WHERE id = $1",
-    )
-    .bind(auth.id)
-    .fetch_optional(&state.db)
-    .await?
-    .ok_or(shared::AppError::NotFound)?;
+    let account_row = repo::find_account_by_id(&state.db, state.email_encryption.as_ref(), auth.id)
+        .await?
+        .ok_or(shared::AppError::NotFound)?;
 
-    let phc = repo::find_password_hash(&state.db, &account_row.email)
+    let phc = repo::find_password_hash_by_account_id(&state.db, auth.id)
         .await?
         .ok_or(IdentityError::NoPasswordSet)?;
 

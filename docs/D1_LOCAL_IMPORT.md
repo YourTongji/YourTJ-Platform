@@ -102,6 +102,8 @@ python3 tools/d1/gen_reviews_sql.py | psql "$DATABASE_URL" -f -
 
 由于 `reviews.reviews.id` 是 `GENERATED ALWAYS AS IDENTITY`，需 `OVERRIDING SYSTEM VALUE`。
 由于 `account_id` 是 FK 指向 `identity.accounts`（D1 没有此表），导入时填 `NULL`。
+旧 `course_id` 不可直接复用；生成器通过 D1 `courses.code` 查找规范化后的课程 ID，
+若课程代码未物化则导入会因外键/非空约束失败，避免静默挂错课程。
 
 ## 数据映射对照
 
@@ -124,8 +126,8 @@ python3 tools/d1/gen_reviews_sql.py | psql "$DATABASE_URL" -f -
 | `fetchlog` | `selection.pk_fetch_logs` | 抓取日志 |
 | `categories` | `public.categories` | 课程类别 |
 | `reviews` | `reviews.reviews` | 评价 |
-| `review_likes` | `reviews.review_likes` | 评价点赞（暂未导入） |
-| `review_reports` | `reviews.review_reports` | 评价举报（暂未完整导入） |
+| `review_likes` | `reviews.legacy_review_likes` | 保留旧 `client_id`，不伪造平台账户 |
+| `review_reports` | `reviews.legacy_review_reports` | 保留旧 `client_id`，供后续审核迁移 |
 | `ai_summaries` | 暂无 | AI 摘要 |
 | `settings` | 暂无 | 配置项 |
 | `_cf_KV` | 无 | Cloudflare 内部，跳过 |

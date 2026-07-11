@@ -46,6 +46,13 @@ pub async fn create_review(
     )
     .await
     .map_err(|_r| shared::AppError::Unauthorized)?;
+    shared::captcha::require_captcha(
+        state.captcha_verifier.as_deref(),
+        state.redis.as_ref(),
+        "review_create",
+        body.captcha_token.as_deref().unwrap_or_default(),
+    )
+    .await?;
 
     shared::ratelimit::check_token_bucket(
         state.redis.as_ref(),
@@ -71,6 +78,15 @@ pub async fn create_review(
     let cid = course_id.to_string();
     shared::cache::bump_version_opt(state.redis.as_ref(), "course", &cid).await.ok();
     shared::cache::bump_version_opt(state.redis.as_ref(), "reviews", &cid).await.ok();
+    if let Ok(review_id) = dto.id.parse::<i64>() {
+        courses::meili::sync_review_to_meili(
+            &state.meili_url,
+            &state.meili_master_key,
+            review_id,
+            &state.db,
+        )
+        .await;
+    }
 
     Ok((StatusCode::CREATED, Json(dto)))
 }
@@ -105,6 +121,14 @@ pub async fn edit_review(
     // Bump course cache version so next read goes to DB.
     let cid = dto.course_id.clone();
     shared::cache::bump_version_opt(state.redis.as_ref(), "course", &cid).await.ok();
+
+    courses::meili::sync_review_to_meili(
+        &state.meili_url,
+        &state.meili_master_key,
+        review_id,
+        &state.db,
+    )
+    .await;
 
     Ok(Json(dto))
 }
@@ -180,6 +204,14 @@ pub async fn report_review(
     )
     .await
     .map_err(|_r| shared::AppError::Unauthorized)?;
+
+    shared::captcha::require_captcha(
+        state.captcha_verifier.as_deref(),
+        state.redis.as_ref(),
+        "review_report",
+        &body.captcha_token,
+    )
+    .await?;
 
     repo::report_review(&state.db, review_id, auth.id, &body.reason).await?;
 

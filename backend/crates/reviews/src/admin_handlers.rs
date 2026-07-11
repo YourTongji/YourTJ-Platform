@@ -3,7 +3,7 @@
 //! Every handler requires a `mod` or `admin` role.
 
 use axum::extract::{Path, Query, State};
-use axum::http::HeaderMap;
+use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
 use serde::Deserialize;
 use shared::pagination::Page;
@@ -108,6 +108,13 @@ pub async fn admin_edit_review(
     .await?;
 
     bump_review_cache(&state, review_id).await;
+    courses::meili::sync_review_to_meili(
+        &state.meili_url,
+        &state.meili_master_key,
+        review_id,
+        &state.db,
+    )
+    .await;
 
     Ok(Json(dto))
 }
@@ -117,7 +124,7 @@ pub async fn admin_delete_review(
     State(state): State<AppState>,
     Path(review_id): Path<i64>,
     headers: HeaderMap,
-) -> AppResult<Json<serde_json::Value>> {
+) -> AppResult<StatusCode> {
     let auth = identity::auth_middleware::authenticate(
         &headers,
         &state.db,
@@ -131,8 +138,15 @@ pub async fn admin_delete_review(
     repo::admin_soft_delete_review(&state.db, review_id).await?;
 
     bump_review_cache(&state, review_id).await;
+    courses::meili::sync_review_to_meili(
+        &state.meili_url,
+        &state.meili_master_key,
+        review_id,
+        &state.db,
+    )
+    .await;
 
-    Ok(Json(serde_json::json!({ "ok": true })))
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// POST /admin/reviews/{id}/toggle — toggle visibility.
@@ -154,6 +168,13 @@ pub async fn admin_toggle_review(
     repo::admin_toggle_review_visibility(&state.db, review_id).await?;
 
     bump_review_cache(&state, review_id).await;
+    courses::meili::sync_review_to_meili(
+        &state.meili_url,
+        &state.meili_master_key,
+        review_id,
+        &state.db,
+    )
+    .await;
 
     Ok(Json(serde_json::json!({ "ok": true })))
 }

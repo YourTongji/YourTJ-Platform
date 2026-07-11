@@ -7,6 +7,11 @@ use meilisearch_sdk::client::Client;
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, PgPool};
 
+fn meili_api_key(api_key: &str) -> Option<&str> {
+    let api_key = api_key.trim();
+    (!api_key.is_empty()).then_some(api_key)
+}
+
 /// Minimal search result returned to clients.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -20,7 +25,8 @@ pub struct SearchResult {
 /// Setup the Meilisearch "courses" index with searchable, filterable, and
 /// sortable attributes.
 pub async fn setup_course_index(url: &str, api_key: &str) -> Result<(), String> {
-    let client = Client::new(url, Some(api_key)).map_err(|e| format!("Meili client: {e}"))?;
+    let client =
+        Client::new(url, meili_api_key(api_key)).map_err(|e| format!("Meili client: {e}"))?;
 
     let index = client
         .create_index("courses", None)
@@ -44,6 +50,8 @@ pub async fn setup_course_index(url: &str, api_key: &str) -> Result<(), String> 
             "aliases",
             "teacherName",
             "department",
+            "courseName",
+            "comment",
         ])
         .await
         .map_err(|e| format!("Meili searchable attrs: {e}"))?;
@@ -95,7 +103,7 @@ pub async fn sync_course_to_meili(url: &str, api_key: &str, course_id: i64, pool
 
     let record = serde_json::to_value(&doc).unwrap_or_default();
 
-    match Client::new(url, Some(api_key)) {
+    match Client::new(url, meili_api_key(api_key)) {
         Ok(client) => {
             let index = client.index("courses");
             if let Err(e) = index.add_documents(&[record], Some("id")).await {
@@ -115,7 +123,7 @@ pub async fn search_courses_and_reviews(
     q: &str,
     limit: usize,
 ) -> Vec<SearchResult> {
-    let client = match Client::new(url, Some(api_key)) {
+    let client = match Client::new(url, meili_api_key(api_key)) {
         Ok(c) => c,
         Err(e) => {
             tracing::warn!(error = %e, "Meili client failed — search returning empty");
@@ -139,7 +147,8 @@ pub async fn search_courses_and_reviews(
 
 /// Setup the Meilisearch "selection_courses" index with searchable attributes.
 pub async fn setup_selection_index(url: &str, api_key: &str) -> Result<(), String> {
-    let client = Client::new(url, Some(api_key)).map_err(|e| format!("Meili client: {e}"))?;
+    let client =
+        Client::new(url, meili_api_key(api_key)).map_err(|e| format!("Meili client: {e}"))?;
 
     match client.create_index("selection_courses", None).await {
         Ok(index) => {
@@ -187,7 +196,7 @@ pub async fn search_selection_courses(
     q: &str,
     limit: usize,
 ) -> Vec<SelectionCourseDocument> {
-    let client = match Client::new(url, Some(api_key)) {
+    let client = match Client::new(url, meili_api_key(api_key)) {
         Ok(c) => c,
         Err(e) => {
             tracing::warn!(error = %e, "Meili client failed — selection search returning empty");
@@ -252,7 +261,7 @@ pub async fn sync_selection_courses_to_meili(url: &str, api_key: &str, pool: &Pg
         })
         .collect();
 
-    let client = match Client::new(url, Some(api_key)) {
+    let client = match Client::new(url, meili_api_key(api_key)) {
         Ok(c) => c,
         Err(e) => {
             tracing::warn!(error = %e, "Meili client failed during selection sync");
@@ -334,7 +343,18 @@ pub async fn sync_review_to_meili(url: &str, api_key: &str, review_id: i64, pool
     let record = match build_review_document(review_id, pool).await {
         Ok(Some(r)) => r,
         Ok(None) => {
-            tracing::warn!(review_id, "review not found for Meili sync");
+            match Client::new(url, meili_api_key(api_key)) {
+                Ok(client) => {
+                    if let Err(error) =
+                        client.index("courses").delete_document(format!("review:{review_id}")).await
+                    {
+                        tracing::warn!(error = %error, review_id, "Meili review delete failed");
+                    }
+                }
+                Err(error) => {
+                    tracing::warn!(error = %error, review_id, "Meili client creation failed during review delete");
+                }
+            }
             return;
         }
         Err(e) => {
@@ -343,7 +363,7 @@ pub async fn sync_review_to_meili(url: &str, api_key: &str, review_id: i64, pool
         }
     };
 
-    match Client::new(url, Some(api_key)) {
+    match Client::new(url, meili_api_key(api_key)) {
         Ok(client) => {
             let index = client.index("courses");
             if let Err(e) = index.add_documents(&[record], Some("id")).await {
@@ -373,7 +393,7 @@ async fn build_review_document(
         "SELECT r.id, r.comment, c.name AS course_name, c.code AS course_code \
          FROM reviews.reviews r \
          JOIN courses.courses c ON c.id = r.course_id \
-         WHERE r.id = $1",
+         WHERE r.id = $1 AND r.status = 'visible'",
     )
     .bind(review_id)
     .fetch_optional(pool)
@@ -385,6 +405,7 @@ async fn build_review_document(
             "name": format!("Review: {}", r.course_name),
             "code": r.course_code,
             "courseName": r.course_name,
+            "comment": r.comment,
             "kind": "review",
         }))),
         None => Ok(None),

@@ -65,6 +65,36 @@ pub async fn run() -> anyhow::Result<()> {
     let (sse_tx, _sse_rx) = broadcast::channel::<SsePayload>(128);
     forum::sse::init_global(sse_tx.clone());
 
+    let email_encryption = shared::email_crypto::EmailEncryption::from_keys(
+        config.email_encryption_active_version,
+        &config.email_encryption_active_aead_hex,
+        &config.email_encryption_active_blind_hex,
+        &[], // legacy pairs loaded from env in future rotations
+    )?;
+    match email_encryption.as_ref() {
+        Some(encryption) => {
+            identity::backfill_email_encryption(&db, encryption).await?;
+            if config.email_encryption_strict && identity::has_unencrypted_email_rows(&db).await? {
+                anyhow::bail!("EMAIL_ENCRYPTION_STRICT=true but plaintext email rows remain");
+            }
+        }
+        None if config.email_encryption_strict => {
+            anyhow::bail!("EMAIL_ENCRYPTION_STRICT=true but no encryption keys are configured");
+        }
+        None => {}
+    }
+
+    // Captcha verifier (fail closed when not configured).
+    let captcha_verifier: Option<std::sync::Arc<dyn shared::captcha::CaptchaVerifier>> =
+        if config.captcha_siteverify_url.is_empty() {
+            None
+        } else {
+            Some(std::sync::Arc::new(shared::captcha::YourTongjiCaptcha::new(
+                config.captcha_siteverify_url.clone(),
+                std::time::Duration::from_secs(5),
+            )))
+        };
+
     let state = AppState {
         db,
         config: config.clone(),
@@ -76,8 +106,30 @@ pub async fn run() -> anyhow::Result<()> {
         redis: redis_pool,
         system_private_key,
         system_public_key_b64,
+        email_encryption,
+        captcha_verifier,
         sse_tx: Some(sse_tx),
     };
+    // Meilisearch index setup and readiness check on startup.
+    {
+        let meili_url = state.meili_url.clone();
+        let meili_key = state.meili_master_key.clone();
+        if !meili_url.is_empty() {
+            tokio::spawn(async move {
+                if let Err(e) = courses::meili::setup_course_index(&meili_url, &meili_key).await {
+                    tracing::warn!(error = %e, "meilisearch course index setup failed");
+                } else {
+                    tracing::info!("meilisearch course index ready");
+                }
+                if let Err(e) = courses::meili::setup_selection_index(&meili_url, &meili_key).await
+                {
+                    tracing::warn!(error = %e, "meilisearch selection index setup failed");
+                }
+            });
+        } else {
+            tracing::warn!("MEILI_URL is empty — meilisearch is not configured; search will return empty results");
+        }
+    }
 
     // --- Forum background tasks ---
 
@@ -231,6 +283,7 @@ fn build_router(state: AppState) -> Router {
 
     Router::new()
         .route("/health", get(health))
+        .route("/api/v2/health", get(health))
         .merge(crate::platform::routes(state.clone()))
         .merge(crate::admin::routes(state.clone()))
         .merge(identity::routes(state.clone()))
@@ -362,7 +415,44 @@ fn derive_system_key(hex_key: &str) -> anyhow::Result<(Vec<u8>, String)> {
 
 #[cfg(test)]
 mod tests {
-    use super::legacy_marker_query;
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use shared::AppState;
+    use tower::ServiceExt as _;
+
+    use super::{build_router, legacy_marker_query};
+
+    #[tokio::test]
+    async fn health_is_available_under_versioned_api_path() {
+        let state = AppState {
+            db: sqlx::PgPool::connect_lazy("postgres://user:password@localhost/test")
+                .expect("valid lazy postgres URL"),
+            config: shared::Config::from_env().expect("test Config::from_env"),
+            jwt_secret: "integration-test-secret-32bytes!".into(),
+            jwt_ttl: 900,
+            refresh_ttl: 604800,
+            meili_url: String::new(),
+            meili_master_key: String::new(),
+            redis: None,
+            system_private_key: vec![0u8; 32],
+            system_public_key_b64: String::new(),
+            email_encryption: None,
+            captcha_verifier: None,
+            sse_tx: None,
+        };
+
+        let response = build_router(state)
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v2/health")
+                    .body(Body::empty())
+                    .expect("request builds"),
+            )
+            .await
+            .expect("request succeeds");
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
 
     #[test]
     fn legacy_marker_query_only_baselines_pre_migrator_schema() {

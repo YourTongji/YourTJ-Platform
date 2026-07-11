@@ -6,6 +6,7 @@
 //! - The server stores only Ed25519 *public* keys — never private keys or secrets.
 //! - Old wallets are merged via a signed challenge (`/wallet/claim`), not by import.
 
+use shared::AppState;
 pub mod auth;
 pub mod auth_middleware;
 mod email_code;
@@ -21,7 +22,6 @@ mod models;
 
 use axum::routing::{get, post};
 use axum::Router;
-use shared::AppState;
 
 /// All routes owned by the identity domain.
 pub fn routes(state: AppState) -> Router {
@@ -50,4 +50,17 @@ pub fn routes(state: AppState) -> Router {
         .route("/api/v2/admin/users/{id}/unsanction", post(handlers::unsanction_user))
         .route("/api/v2/admin/users/{id}/sanctions", get(handlers::list_user_sanctions))
         .with_state(state)
+}
+
+/// Encrypt legacy plaintext identity emails before the application accepts traffic.
+pub async fn backfill_email_encryption(
+    pool: &sqlx::PgPool,
+    encryption: &shared::email_crypto::EmailEncryption,
+) -> shared::AppResult<()> {
+    repo::backfill_email_encryption(pool, encryption).await
+}
+
+/// Report whether any identity email is still stored outside the encrypted path.
+pub async fn has_unencrypted_email_rows(pool: &sqlx::PgPool) -> shared::AppResult<bool> {
+    repo::has_unencrypted_email_rows(pool).await
 }

@@ -1,7 +1,7 @@
 //! Shared test helpers for the credit integration test suite.
 
 use axum::body::{to_bytes, Body};
-use axum::http::Response;
+use axum::http::{Request, Response, StatusCode};
 use serde_json::Value;
 use shared::AppState;
 use sqlx::PgPool;
@@ -34,6 +34,8 @@ pub async fn create_test_app() -> (PgPool, axum::Router) {
         redis: None,
         system_private_key: seed.to_vec(),
         system_public_key_b64: public_key_b64,
+        email_encryption: None,
+        captcha_verifier: None,
         sse_tx: None,
     };
 
@@ -50,13 +52,22 @@ async fn run_migrations(pool: &PgPool) {
     .await
     .unwrap_or(false);
     if is_fresh {
-        let migrations: [&str; 6] = [
+        let migrations: [&str; 15] = [
             include_str!("../../../../migrations/0001_init.sql"),
             include_str!("../../../../migrations/0002_escrow_selection.sql"),
             include_str!("../../../../migrations/0003_platform.sql"),
             include_str!("../../../../migrations/0004_review_remediation.sql"),
             include_str!("../../../../migrations/0005_forum_parity.sql"),
             include_str!("../../../../migrations/0006_forum_f2_f3.sql"),
+            include_str!("../../../../migrations/0007_badges_feature.sql"),
+            include_str!("../../../../migrations/0008_badge_mint_bridge.sql"),
+            include_str!("../../../../migrations/0009_selection_raw_pk.sql"),
+            include_str!("../../../../migrations/0010_selection_raw_normalized.sql"),
+            include_str!("../../../../migrations/0011_password_auth.sql"),
+            include_str!("../../../../migrations/0012_natural_key_upsert.sql"),
+            include_str!("../../../../migrations/0013_teacher_names.sql"),
+            include_str!("../../../../migrations/0014_credit_signing_intents.sql"),
+            include_str!("../../../../migrations/0017_credit_prepared_ledger.sql"),
         ];
         for (i, sql) in migrations.iter().enumerate() {
             sqlx::raw_sql(sql)
@@ -70,6 +81,7 @@ async fn run_migrations(pool: &PgPool) {
     sqlx::query("DELETE FROM credit.purchases").execute(pool).await.ok();
     sqlx::query("DELETE FROM credit.products").execute(pool).await.ok();
     sqlx::query("DELETE FROM credit.tasks").execute(pool).await.ok();
+    sqlx::query("DELETE FROM credit.signing_intents").execute(pool).await.ok();
     sqlx::query("DELETE FROM credit.ledger").execute(pool).await.ok();
     sqlx::query("DELETE FROM credit.wallets").execute(pool).await.ok();
     sqlx::query("DELETE FROM identity.sessions").execute(pool).await.ok();
@@ -79,6 +91,81 @@ async fn run_migrations(pool: &PgPool) {
     // (across crates), so leftover FK references never block cleanup and cause
     // cross-suite email collisions. Plain DELETE silently fails on such refs.
     sqlx::query("TRUNCATE identity.accounts CASCADE").execute(pool).await.ok();
+}
+
+/// Build a wallet-signed POST request using the production signing-intent protocol.
+#[allow(dead_code)]
+#[allow(clippy::too_many_arguments)] // reason: integration requests keep transport and signed payload explicit.
+pub async fn signed_post_request(
+    app: &axum::Router,
+    pool: &PgPool,
+    token: &str,
+    account_id: i64,
+    uri: &str,
+    action: &str,
+    signing_request: Value,
+    body: Option<Value>,
+) -> Request<Body> {
+    use tower::ServiceExt as _;
+
+    let seed = test_wallet_seed(account_id);
+    let public_key = credit::ledger::derive_public_key(&seed);
+    let public_key_b64 =
+        base64::Engine::encode(&base64::engine::general_purpose::STANDARD, public_key);
+    sqlx::query(
+        "INSERT INTO identity.account_keys (account_id, public_key) VALUES ($1, $2) \
+         ON CONFLICT (public_key) DO NOTHING",
+    )
+    .bind(account_id)
+    .bind(public_key_b64)
+    .execute(pool)
+    .await
+    .expect("bind test wallet key");
+
+    let idempotency_key = uuid::Uuid::new_v4().to_string();
+    let intent_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v2/credit/signing-intents")
+                .method("POST")
+                .header("Authorization", format!("Bearer {token}"))
+                .header("Idempotency-Key", &idempotency_key)
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({ "action": action, "request": signing_request }).to_string(),
+                ))
+                .expect("build signing intent request"),
+        )
+        .await
+        .expect("create signing intent response");
+    assert_eq!(intent_response.status(), StatusCode::OK);
+    let intent = read_json(intent_response).await;
+    let signing_bytes = intent["signingBytes"].as_str().expect("intent signingBytes");
+    let signature = credit::ledger::sign_with_seed(signing_bytes, &seed);
+
+    let mut builder = Request::builder()
+        .uri(uri)
+        .method("POST")
+        .header("Authorization", format!("Bearer {token}"))
+        .header("Idempotency-Key", idempotency_key)
+        .header("X-Wallet-Intent", intent["intentId"].as_str().expect("intent id"))
+        .header("X-Wallet-Sig", signature);
+    let request_body = match body {
+        Some(body) => {
+            builder = builder.header("Content-Type", "application/json");
+            Body::from(body.to_string())
+        }
+        None => Body::empty(),
+    };
+    builder.body(request_body).expect("build signed request")
+}
+
+#[allow(dead_code)]
+fn test_wallet_seed(account_id: i64) -> [u8; 32] {
+    use sha2::Digest as _;
+
+    sha2::Sha256::digest(format!("yourtj-test-wallet-{account_id}").as_bytes()).into()
 }
 
 /// Read the JSON body from a response.

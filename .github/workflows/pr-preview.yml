@@ -1,9 +1,6 @@
 name: pr-preview
 
 on:
-  # Explicit push with empty branches → prevents phantom push failure runs
-  push:
-    branches: []
   pull_request:
     types: [opened, synchronize, reopened, closed]
     paths:
@@ -27,10 +24,18 @@ jobs:
     if: github.event.action != 'closed'
     runs-on: ubuntu-latest
     outputs:
-      backend: ${{ steps.filter.outputs.backend }}
-      frontend: ${{ steps.filter.outputs.frontend }}
+      backend: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.filter.outputs.backend }}
+      frontend: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.filter.outputs.frontend }}
     steps:
       - uses: actions/checkout@v4
+      - name: validate PR number
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+        run: |
+          if ! [[ "$PR_NUMBER" =~ ^[0-9]+$ ]] || (( PR_NUMBER > 99 )); then
+            echo "invalid or unsupported PR number: $PR_NUMBER" >&2
+            exit 64
+          fi
       - uses: dorny/paths-filter@v3
         id: filter
         with:
@@ -90,6 +95,7 @@ jobs:
       - name: build
         env:
           VITE_API_BASE_URL: /pr-${{ github.event.pull_request.number || github.event.inputs.pr_number }}/api/v2
+          VITE_BASE_PATH: /pr-${{ github.event.pull_request.number || github.event.inputs.pr_number }}/
         run: pnpm run build
       - uses: actions/upload-artifact@v4
         with:
@@ -103,6 +109,7 @@ jobs:
   deploy:
     if: always() && github.event.action != 'closed'
     needs: [changes, backend, frontend]
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/download-artifact@v4
@@ -127,8 +134,8 @@ jobs:
             Port ${{ secrets.PREVIEW_PORT }}
             User ${{ secrets.PREVIEW_USER }}
             IdentityFile ~/.ssh/preview_key
-            StrictHostKeyChecking no
-            UserKnownHostsFile /dev/null
+            StrictHostKeyChecking accept-new
+            UserKnownHostsFile ~/.ssh/preview_known_hosts
           EOF
 
       - name: transfer backend image
@@ -160,7 +167,18 @@ jobs:
         run: |
           PR="${{ github.event.pull_request.number || github.event.inputs.pr_number }}"
           FE_DIR="/opt/yourtj-preview/pr/${PR}/frontend"
-          ssh preview "/opt/yourtj-preview/deploy-pr.sh ${PR} ${FE_DIR}"
+          ssh preview /opt/yourtj-preview/deploy-pr.sh "$PR" "$FE_DIR"
+
+      - name: verify public preview routes
+        run: |
+          PR="${{ github.event.pull_request.number || github.event.inputs.pr_number }}"
+          ssh preview bash -s -- "$PR" <<'EOF'
+            PR="$1"
+            curl --fail --silent --show-error --retry 10 --retry-delay 1 --retry-connrefused \
+              http://127.0.0.1:8080/pr-${PR}/ >/dev/null
+            curl --fail --silent --show-error --retry 10 --retry-delay 1 --retry-connrefused \
+              http://127.0.0.1:8080/pr-${PR}/api/v2/health >/dev/null
+          EOF
 
       - name: summary
         if: always()
@@ -192,8 +210,8 @@ jobs:
             Port ${{ secrets.PREVIEW_PORT }}
             User ${{ secrets.PREVIEW_USER }}
             IdentityFile ~/.ssh/preview_key
-            StrictHostKeyChecking no
-            UserKnownHostsFile /dev/null
+            StrictHostKeyChecking accept-new
+            UserKnownHostsFile ~/.ssh/preview_known_hosts
           EOF
 
       - name: cleanup

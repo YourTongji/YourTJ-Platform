@@ -12,7 +12,7 @@
 |---|---|
 | Base | `/api/v2` |
 | 鉴权 | `Authorization: Bearer <access_jwt>`（15min）；refresh 走 `/auth/refresh` |
-| 资金签名 | 资金/escrow 写操作额外带 `X-Wallet-Sig: <base64(ed25519)>`，签名对象 = 规范化 JSON（按 key 排序）+ `timestamp`+`nonce`；公钥由 `account_id` 反查 `account_keys` |
+| 资金签名 | 资金/escrow 用户发起写操作先 `POST /api/v2/credit/signing-intents` 取得服务端规范化 `signingBytes`；提交写操作时必须同时带 `X-Wallet-Intent`、`X-Wallet-Sig`、同一个 `Idempotency-Key`。意图绑定 account/key/action/request/snapshot/TTL，并在同一事务中一次性消费。|
 | 分页 | 游标优先：`?cursor=<opaque>&limit=20` → `{ items, next_cursor, has_more }`；管理后台允许 `page/limit` |
 | 幂等 | 写操作支持 `Idempotency-Key` 头（发帖/转账/点赞防重放）|
 | 错误 | `{ "error": { "code": "REVIEW_DUPLICATE", "message": "...", "details": {} } }`，HTTP 状态 + 稳定 code |
@@ -319,6 +319,25 @@ CREATE TABLE reviews.review_reports (
   UNIQUE (review_id, reporter_account_id)
 );
 
+-- D1 的 client_id 不是平台 account_id；先原样保存，禁止伪造账户关系。
+CREATE TABLE reviews.legacy_review_likes (
+  review_id BIGINT NOT NULL REFERENCES reviews.reviews(id) ON DELETE CASCADE,
+  client_id TEXT NOT NULL,
+  created_at BIGINT NOT NULL,
+  PRIMARY KEY (review_id, client_id)
+);
+CREATE TABLE reviews.legacy_review_reports (
+  id BIGINT PRIMARY KEY,
+  review_id BIGINT NOT NULL REFERENCES reviews.reviews(id) ON DELETE CASCADE,
+  client_id TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  status TEXT NOT NULL,
+  admin_note TEXT,
+  created_at BIGINT NOT NULL,
+  updated_at BIGINT NOT NULL,
+  resolved_at BIGINT
+);
+
 -- ============ credit（Web2.5：中心账本 + Ed25519 签名 + 哈希链）============
 -- 账本 credit.ledger 是唯一权威，append-only、单调 seq、prev_hash 链接、每条带签名。
 -- 余额是账本的派生缓存（wallets.balance），事务内更新 + 夜间对账，禁止直接改余额。
@@ -571,7 +590,13 @@ Previously all system-originated ledger entries used literal `"system-signed"` a
 - Comment path generation uses `FOR UPDATE` row locks inside a transaction
 - Unique partial index on `(thread_id, path)` prevents concurrent path collisions
 
-### 8.6 Domain boundaries
+### 8.6 OSS upload trust boundary
+
+- `POST /api/v2/media/upload-credentials` creates a 15-minute account-bound upload intent and returns Alibaba STS credentials whose policy permits `oss:PutObject` only for that intent's exact object key.
+- OSS callbacks accept only HTTPS public-key URLs on `gosspublic.alicdn.com`, disable redirects, verify RSA PKCS#1 v1.5 with MD5 over the OSS canonical path/body, and atomically consume the upload intent with upload-row creation.
+- Missing OSS configuration fails media routes closed; long-lived access keys and role secrets are loaded only from environment variables.
+
+### 8.7 Domain boundaries
 
 | Crate | Owns |
 |---|---|
@@ -582,7 +607,7 @@ Previously all system-originated ledger entries used literal `"system-signed"` a
 | `shared` | Config, JWT primitives (no DB queries), AppState, error types, pagination, cache, rate limiting |
 | `api` | Router composition, startup wiring, platform routes, admin stubs (selection sync, review reindex) |
 
-### 8.7 Rate limits (Redis token bucket)
+### 8.8 Rate limits (Redis token bucket)
 
 | Operation | Rate |
 |---|---|

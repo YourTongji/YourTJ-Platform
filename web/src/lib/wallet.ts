@@ -1,5 +1,7 @@
 import { ed25519 } from "@noble/curves/ed25519";
 
+import { randomUuid } from "@/lib/random";
+
 const WALLET_SEED_KEY = "yourtj.walletSeed";
 
 function bytesToBase64(bytes: Uint8Array) {
@@ -84,6 +86,6 @@ export function buildClientSignedPayload(payload: unknown) {
   return {
     payload,
     timestamp: Math.floor(Date.now() / 1000),
-    nonce: crypto.randomUUID(),
+    nonce: randomUuid(),
   };
 }

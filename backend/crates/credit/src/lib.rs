@@ -18,6 +18,7 @@ pub mod handlers;
 pub mod ledger;
 pub mod models;
 pub mod repo;
+pub mod signing;
 
 use axum::routing::{get, post};
 use axum::Router;
@@ -67,6 +68,7 @@ pub fn routes(state: AppState) -> Router {
     Router::new()
         // Wallet
         .route("/api/v2/wallet", get(handlers::get_wallet))
+        .route("/api/v2/credit/signing-intents", post(handlers::create_signing_intent))
         // Canonical: POST /api/v2/credit/tip — alias: POST /api/v2/wallet/tip
         .route("/api/v2/credit/tip", post(handlers::tip))
         .route("/api/v2/wallet/tip", post(handlers::tip))

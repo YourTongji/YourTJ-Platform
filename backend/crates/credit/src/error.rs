@@ -24,6 +24,12 @@ pub enum CreditError {
 
     #[error("wallet not bound — bind an Ed25519 key first")]
     WalletNotBound,
+
+    #[error("wallet signing intent is unavailable")]
+    IntentUnavailable,
+
+    #[error("idempotency key was already used for another request")]
+    IdempotencyConflict,
 }
 
 impl From<CreditError> for AppError {
@@ -32,8 +38,10 @@ impl From<CreditError> for AppError {
             CreditError::InsufficientBalance => AppError::BadRequest(err.to_string()),
             CreditError::TaskNotFound | CreditError::ProductNotFound => AppError::NotFound,
             CreditError::InvalidAction(msg) => AppError::BadRequest(msg),
-            CreditError::InvalidSignature => AppError::Forbidden,
-            CreditError::WalletNotBound => AppError::BadRequest(err.to_string()),
+            CreditError::InvalidSignature | CreditError::IntentUnavailable => AppError::Forbidden,
+            CreditError::WalletNotBound | CreditError::IdempotencyConflict => {
+                AppError::BadRequest(err.to_string())
+            }
         }
     }
 }

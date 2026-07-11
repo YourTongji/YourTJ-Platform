@@ -208,6 +208,15 @@ pub async fn verify_full_ledger(
 ) -> AppResult<LedgerVerify> {
     use std::collections::HashMap;
 
+    #[derive(sqlx::FromRow)]
+    struct IntentVerificationRow {
+        id: uuid::Uuid,
+        account_id: i64,
+        public_key: String,
+        signing_bytes: String,
+        ledger_canonical: Option<String>,
+    }
+
     let rows: Vec<LedgerEntryRow> = sqlx::query_as(
         "SELECT seq, tx_id, type, from_account, to_account, amount, nonce, \
                 metadata, signer, signature, prev_hash, hash, created_at \
@@ -220,28 +229,50 @@ pub async fn verify_full_ledger(
         return Ok(LedgerVerify { ok: true, latest_seq: None, latest_hash: None });
     }
 
-    // Batch-load public keys for all non-system signers in a single query.
     let signer_ids: Vec<i64> = rows
         .iter()
-        .filter(|r| r.signer != "system")
-        .filter_map(|r| r.signer.parse::<i64>().ok())
+        .filter(|row| row.signer != "system")
+        .filter_map(|row| row.signer.parse::<i64>().ok())
         .collect::<std::collections::HashSet<_>>()
         .into_iter()
         .collect();
 
-    let mut pk_map: HashMap<i64, String> = HashMap::new();
+    let mut pk_map: HashMap<i64, Vec<String>> = HashMap::new();
     if !signer_ids.is_empty() {
         let key_rows: Vec<(i64, String)> = sqlx::query_as(
-            "SELECT account_id, public_key FROM identity.account_keys \
-             WHERE account_id = ANY($1)",
+            "SELECT account_id, public_key FROM identity.account_keys WHERE account_id = ANY($1)",
         )
         .bind(&signer_ids)
         .fetch_all(pool)
         .await?;
         for (account_id, public_key) in key_rows {
-            pk_map.insert(account_id, public_key);
+            pk_map.entry(account_id).or_default().push(public_key);
         }
     }
+
+    let intent_ids: Vec<uuid::Uuid> = rows
+        .iter()
+        .filter_map(|row| {
+            row.metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("signing_intent_id"))
+                .and_then(Value::as_str)
+                .and_then(|intent_id| intent_id.parse::<uuid::Uuid>().ok())
+        })
+        .collect();
+    let intent_rows: Vec<IntentVerificationRow> = if intent_ids.is_empty() {
+        Vec::new()
+    } else {
+        sqlx::query_as(
+            "SELECT id, account_id, public_key, signing_bytes, ledger_canonical \
+             FROM credit.signing_intents WHERE id = ANY($1)",
+        )
+        .bind(&intent_ids)
+        .fetch_all(pool)
+        .await?
+    };
+    let intent_map: HashMap<uuid::Uuid, IntentVerificationRow> =
+        intent_rows.into_iter().map(|intent| (intent.id, intent)).collect();
 
     let mut expected_prev = GENESIS_HASH.to_string();
     for row in &rows {
@@ -283,15 +314,54 @@ pub async fn verify_full_ledger(
                 });
             }
         } else if let Ok(account_id) = row.signer.parse::<i64>() {
-            if let Some(pk) = pk_map.get(&account_id) {
-                if !crate::ledger::verify_signature(&canonical, &row.signature, pk) {
-                    return Ok(LedgerVerify {
-                        ok: false,
-                        latest_seq: Some(row.seq),
-                        latest_hash: Some(row.hash.clone()),
-                    });
+            let intent_id = row
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("signing_intent_id"))
+                .and_then(Value::as_str);
+            let is_valid = if let Some(intent_id) = intent_id {
+                let intent_id = match intent_id.parse::<uuid::Uuid>() {
+                    Ok(intent_id) => intent_id,
+                    Err(_) => {
+                        return Ok(LedgerVerify {
+                            ok: false,
+                            latest_seq: Some(row.seq),
+                            latest_hash: Some(row.hash.clone()),
+                        });
+                    }
+                };
+                match intent_map.get(&intent_id) {
+                    Some(intent) => {
+                        intent.account_id == account_id
+                            && intent.ledger_canonical.as_deref() == Some(canonical.as_str())
+                            && crate::ledger::verify_signature(
+                                &intent.signing_bytes,
+                                &row.signature,
+                                &intent.public_key,
+                            )
+                    }
+                    None => false,
                 }
+            } else {
+                pk_map.get(&account_id).is_some_and(|public_keys| {
+                    public_keys.iter().any(|public_key| {
+                        crate::ledger::verify_signature(&canonical, &row.signature, public_key)
+                    })
+                })
+            };
+            if !is_valid {
+                return Ok(LedgerVerify {
+                    ok: false,
+                    latest_seq: Some(row.seq),
+                    latest_hash: Some(row.hash.clone()),
+                });
             }
+        } else {
+            return Ok(LedgerVerify {
+                ok: false,
+                latest_seq: Some(row.seq),
+                latest_hash: Some(row.hash.clone()),
+            });
         }
 
         expected_prev = row.hash.clone();
@@ -523,6 +593,22 @@ pub async fn find_task(pool: &PgPool, id: i64) -> AppResult<Option<TaskRow>> {
     Ok(row)
 }
 
+/// Lock and return a task inside an existing state-transition transaction.
+pub async fn find_task_for_update_tx(
+    conn: &mut sqlx::PgConnection,
+    id: i64,
+) -> AppResult<Option<TaskRow>> {
+    let row = sqlx::query_as(
+        "SELECT id, creator_id, acceptor_id, title, description, \
+                reward_amount, contact_info, status::text, hold_tx_id, created_at \
+         FROM credit.tasks WHERE id = $1 FOR UPDATE",
+    )
+    .bind(id)
+    .fetch_optional(&mut *conn)
+    .await?;
+    Ok(row)
+}
+
 /// Update a task's acceptor and transition status to `in_progress`.
 pub async fn accept_task(pool: &PgPool, id: i64, acceptor_id: i64) -> AppResult<()> {
     sqlx::query(
@@ -707,6 +793,22 @@ pub async fn find_product(pool: &PgPool, id: i64) -> AppResult<Option<ProductRow
     Ok(row)
 }
 
+/// Lock and return a product inside a purchase transaction.
+pub async fn find_product_for_update_tx(
+    conn: &mut sqlx::PgConnection,
+    id: i64,
+) -> AppResult<Option<ProductRow>> {
+    let row = sqlx::query_as(
+        "SELECT id, seller_id, title, description, price, stock, \
+                delivery_info, status::text, created_at \
+         FROM credit.products WHERE id = $1 FOR UPDATE",
+    )
+    .bind(id)
+    .fetch_optional(&mut *conn)
+    .await?;
+    Ok(row)
+}
+
 /// Update product status.
 pub async fn update_product_status(pool: &PgPool, id: i64, status: &str) -> AppResult<()> {
     sqlx::query("UPDATE credit.products SET status = $1::credit.product_status WHERE id = $2")
@@ -745,10 +847,15 @@ pub async fn decrement_stock(pool: &PgPool, id: i64) -> AppResult<()> {
 
 /// Transaction-internal variant of [`decrement_stock`].
 pub async fn decrement_stock_tx(conn: &mut sqlx::PgConnection, id: i64) -> AppResult<()> {
-    sqlx::query("UPDATE credit.products SET stock = stock - 1 WHERE id = $1 AND stock > 0")
-        .bind(id)
-        .execute(&mut *conn)
-        .await?;
+    let affected =
+        sqlx::query("UPDATE credit.products SET stock = stock - 1 WHERE id = $1 AND stock > 0")
+            .bind(id)
+            .execute(&mut *conn)
+            .await?
+            .rows_affected();
+    if affected != 1 {
+        return Err(CreditError::InvalidAction("product is sold out".into()).into());
+    }
 
     Ok(())
 }
@@ -844,6 +951,21 @@ pub async fn find_purchase(pool: &PgPool, id: i64) -> AppResult<Option<PurchaseR
     .fetch_optional(pool)
     .await?;
 
+    Ok(row)
+}
+
+/// Lock and return a purchase inside an existing state-transition transaction.
+pub async fn find_purchase_for_update_tx(
+    conn: &mut sqlx::PgConnection,
+    id: i64,
+) -> AppResult<Option<PurchaseRow>> {
+    let row = sqlx::query_as(
+        "SELECT id, product_id, buyer_id, seller_id, amount, status::text, hold_tx_id \
+         FROM credit.purchases WHERE id = $1 FOR UPDATE",
+    )
+    .bind(id)
+    .fetch_optional(&mut *conn)
+    .await?;
     Ok(row)
 }
 
