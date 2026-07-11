@@ -36,7 +36,7 @@
 | 内容正确性 | `Partial` | 编辑没有复用创建校验，存在绕过敏感词/长度的风险；评论更新 SQL 返回列不一致；tags、subscription、poll/vote viewer state 和 read tracking 未接齐 |
 | Trust/板块权限 | `Partial` | TL2/TL3 promotion 缺 active-days；TL3 demotion 可一次降两级；board `is_locked/min_trust_to_post` 字段存在但发帖路径未执行 |
 | 创作体验 | `Partial` | Web 仍为 textarea + 纯文本；草稿 API/实现/前端不一致；无 Markdown、预览、autosave、附件和编辑冲突处理 |
-| Link preview/Onebox | `Partial` | 初始 host 有 allowlist，但 redirect 后不重验 host/私网 IP；response 先无界读取再按 byte 截 UTF-8，存在 SSRF、内存和 panic 风险 |
+| Link preview/Onebox | `Partial` | 已实现 HTTPS、逐跳 allowlist/DNS/public-IP pin、流式 body 上限、安全 UTF-8、无远程预览图和最小化日志；仍缺维护中的 HTML parser、media proxy、错误缓存与完整网络 fixture |
 | 媒体 | `Partial` | 后端 STS、回调和审核已存在；头像、帖子、评论、课评、私信没有 asset binding；缺缩略图、EXIF 清理、配额、孤儿回收和 CDN 访问策略；管理 UI 对 block 是否删除 OSS 的文案与后端相反 |
 | Feed | `Partial` | 首页有固定摘要、按列表位置伪造徽章和无行为的收藏/分享/筛选；缺真实 following feed 和明确 recommended 规则 |
 | 聚合搜索 | `Partial` | 后端/契约/Web 对 courses、reviews、threads 的 shape 和类型过滤不一致；论坛、课程、课评尚未形成稳定 typed federated search |
@@ -54,8 +54,8 @@
 1. 验证码增加 purpose、原子一次性消费和统一防枚举响应；密码重置/修改撤销其他会话。
 2. Web 拆分登录、注册、忘记/重置密码；提供明确密码登录并避免邮箱前缀成为公开 handle。
 3. 创建与编辑共享 canonical 内容验证/治理管线，修复评论更新 SQL 和草稿契约漂移。
-4. 修复 Onebox：每次 redirect 重验 scheme/host/DNS/private IP，流式限制 body，UTF-8 安全解析，
-   禁止未代理的远程预览图；Markdown 上线前覆盖 SSRF/redirect/body-size 测试。
+4. 为 Onebox 补维护中的 HTML parser、规范化/错误缓存与 redirect/private-IP/body-size 网络 fixture；
+   安全 media proxy 交付前继续禁用远程预览图和 Markdown 自动 link preview。
 5. 修正 trust promotion/demotion，并在发主题时执行 board lock/min-trust；明确 staff 内容达到普通
    举报阈值时自动隐藏还是升级复核，并为阈值与角色边界补测试。
 6. 接通 tags、tag filter、subscription、poll/vote/viewer state、read tracking 与撤销互动。

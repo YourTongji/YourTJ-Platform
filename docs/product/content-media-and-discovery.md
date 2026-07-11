@@ -70,9 +70,14 @@ plain-text projection 与恶意样例必须由共享 protocol profile 和 confor
 
 ## Link preview / Onebox
 
-当前 Onebox 只对初始 URL host 查 allowlist，但 HTTP client 允许 redirect，后续目标没有重新验证；
-response 先完整读入内存，再按 byte index 截 512 KiB，既不是真正 body limit，也可能在 UTF-8 中间
-切片 panic。Markdown 自动识别链接前必须先修复这条 SSRF/资源边界。
+当前 Onebox 已只接受标准端口 HTTPS，并在每次 redirect 前重新执行 domain allowlist、DNS 和
+public-IP 检查；所有解析出的地址都必须为公网地址，请求固定到已验证地址，body 以 512 KiB
+流式上限读取并用容错 UTF-8 解码。远程 `og:image` 不返回给客户端，cache hash 包含 policy version，
+日志只记录 URL hash、允许域名和错误类别。
+
+该能力仍为 `Partial`：OG metadata 仍使用有界正则提取而不是维护中的 HTML parser；尚无安全
+media proxy、规范化 URL/短期错误缓存和完整的网络 fixture 测试。Markdown 自动 link preview
+必须等这些剩余边界完成后才可默认开启。
 
 目标规则：
 

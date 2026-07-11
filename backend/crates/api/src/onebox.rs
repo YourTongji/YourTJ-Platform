@@ -1,6 +1,7 @@
 //! Onebox link preview module. Fetches OG meta tags from whitelisted domains and
 //! returns preview cards. Cached in both Redis (fast) and Postgres (persistent).
 
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::time::Duration;
 
 use axum::extract::{Query, State};
@@ -13,6 +14,12 @@ use serde::{Deserialize, Serialize};
 use sha2::Digest as _;
 use shared::{AppError, AppResult, AppState};
 use sqlx::PgPool;
+
+const MAX_BODY_BYTES: usize = 512 * 1024;
+const MAX_REDIRECTS: usize = 5;
+const ONEBOX_POLICY_VERSION: &str = "v2";
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(3);
+const TOTAL_TIMEOUT: Duration = Duration::from_secs(6);
 
 // ---------------------------------------------------------------------------
 // DTOs
@@ -76,7 +83,10 @@ pub async fn get_onebox(
         return Err(AppError::BadRequest("url is required".into()));
     }
 
-    let domain = extract_domain(&url).ok_or_else(|| AppError::BadRequest("invalid URL".into()))?;
+    let parsed = parse_target_url(&url)
+        .map_err(|_| AppError::BadRequest("URL must be a safe HTTPS URL".into()))?;
+    let domain =
+        parsed.host_str().ok_or_else(|| AppError::BadRequest("invalid URL".into()))?.to_string();
 
     // Check domain whitelist from platform.settings.
     if !is_allowed_domain(&state.db, state.redis.as_ref(), &domain).await? {
@@ -98,10 +108,15 @@ pub async fn get_onebox(
     }
 
     // Fetch OG tags from the remote URL.
-    let mut result = match fetch_og_tags(&url).await {
+    let mut result = match fetch_og_tags(&state.db, state.redis.as_ref(), &url).await {
         Ok(r) => r,
-        Err(e) => {
-            tracing::warn!(error = %e, %url, "onebox fetch failed");
+        Err(error) => {
+            tracing::warn!(
+                url_hash,
+                domain,
+                error_category = error.category(),
+                "onebox fetch failed"
+            );
             return Err(AppError::BadRequest("failed to fetch link preview".into()));
         }
     };
@@ -117,22 +132,24 @@ pub async fn get_onebox(
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Extract the hostname from a URL string. Returns `None` if the URL has no
-/// recognised scheme or no hostname.
-fn extract_domain(url: &str) -> Option<String> {
-    let rest = url.strip_prefix("http://").or_else(|| url.strip_prefix("https://"))?;
-    let hostname = rest.split(['/', '?', '#']).next()?;
-    let hostname = hostname.split(':').next()?;
-    if hostname.is_empty() {
-        None
-    } else {
-        Some(hostname.to_lowercase())
+fn parse_target_url(url: &str) -> Result<reqwest::Url, OneboxFetchError> {
+    let parsed = reqwest::Url::parse(url).map_err(|_| OneboxFetchError::InvalidUrl)?;
+    if parsed.scheme() != "https"
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.host_str().is_none()
+        || parsed.port_or_known_default() != Some(443)
+    {
+        return Err(OneboxFetchError::UnsafeTarget);
     }
+    Ok(parsed)
 }
 
 /// Compute the SHA-256 hexadecimal hash of a URL for use as a cache key.
 fn compute_url_hash(url: &str) -> String {
     let mut hasher = sha2::Sha256::new();
+    hasher.update(ONEBOX_POLICY_VERSION.as_bytes());
+    hasher.update([0]);
     hasher.update(url.as_bytes());
     hex::encode(hasher.finalize())
 }
@@ -308,12 +325,201 @@ async fn save_preview(
     }
 }
 
-/// Fetch a remote URL and parse Open Graph meta tags from its HTML.
-/// - 3-second HTTP timeout
-/// - 512 KB body limit
-/// - No JavaScript execution
-/// - User-Agent: YourTJ-Onebox/1.0
-async fn fetch_og_tags(url: &str) -> Result<OneboxResult, anyhow::Error> {
+#[derive(Debug)]
+enum OneboxFetchError {
+    InvalidUrl,
+    UnsafeTarget,
+    DomainNotAllowed,
+    DnsResolution,
+    Request,
+    Redirect,
+    UpstreamStatus,
+    InvalidContentType,
+    BodyTooLarge,
+    Timeout,
+}
+
+impl OneboxFetchError {
+    fn category(&self) -> &'static str {
+        match self {
+            Self::InvalidUrl => "invalid_url",
+            Self::UnsafeTarget => "unsafe_target",
+            Self::DomainNotAllowed => "domain_not_allowed",
+            Self::DnsResolution => "dns_resolution",
+            Self::Request => "request",
+            Self::Redirect => "redirect",
+            Self::UpstreamStatus => "upstream_status",
+            Self::InvalidContentType => "invalid_content_type",
+            Self::BodyTooLarge => "body_too_large",
+            Self::Timeout => "timeout",
+        }
+    }
+}
+
+async fn resolve_public_target(
+    pool: &PgPool,
+    redis: Option<&deadpool_redis::Pool>,
+    url: &reqwest::Url,
+) -> Result<(String, SocketAddr), OneboxFetchError> {
+    let host = url.host_str().ok_or(OneboxFetchError::InvalidUrl)?.to_string();
+    if !is_allowed_domain(pool, redis, &host).await.map_err(|_| OneboxFetchError::Request)? {
+        return Err(OneboxFetchError::DomainNotAllowed);
+    }
+
+    let mut addresses: Vec<SocketAddr> = tokio::net::lookup_host((host.as_str(), 443))
+        .await
+        .map_err(|_| OneboxFetchError::DnsResolution)?
+        .collect();
+    addresses.sort_unstable();
+    addresses.dedup();
+    if addresses.is_empty() || addresses.iter().any(|address| !is_public_ip(address.ip())) {
+        return Err(OneboxFetchError::UnsafeTarget);
+    }
+
+    Ok((host, addresses[0]))
+}
+
+fn is_public_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ipv4) => is_public_ipv4(ipv4),
+        IpAddr::V6(ipv6) => is_public_ipv6(ipv6),
+    }
+}
+
+fn is_public_ipv4(ip: Ipv4Addr) -> bool {
+    let [first, second, third, _fourth] = ip.octets();
+    !matches!(
+        (first, second, third),
+        (0, _, _)
+            | (10, _, _)
+            | (100, 64..=127, _)
+            | (127, _, _)
+            | (169, 254, _)
+            | (172, 16..=31, _)
+            | (192, 0, 0 | 2)
+            | (192, 88, 99)
+            | (192, 168, _)
+            | (198, 18..=19, _)
+            | (198, 51, 100)
+            | (203, 0, 113)
+            | (224..=255, _, _)
+    )
+}
+
+fn is_public_ipv6(ip: Ipv6Addr) -> bool {
+    if let Some(embedded) = ip.to_ipv4() {
+        return is_public_ipv4(embedded);
+    }
+    let segments = ip.segments();
+    let is_unique_local = segments[0] & 0xfe00 == 0xfc00;
+    let is_link_local = segments[0] & 0xffc0 == 0xfe80;
+    let is_site_local = segments[0] & 0xffc0 == 0xfec0;
+    let is_nat64 =
+        segments[0] == 0x0064 && segments[1] == 0xff9b && (segments[2] == 0 || segments[2] == 1);
+    let is_ietf_special = segments[0] == 0x2001 && segments[1] <= 0x01ff;
+    let is_documentation = segments[0] == 0x2001 && segments[1] == 0x0db8;
+    let is_six_to_four = segments[0] == 0x2002;
+    !ip.is_unspecified()
+        && !ip.is_loopback()
+        && !ip.is_multicast()
+        && !is_unique_local
+        && !is_link_local
+        && !is_site_local
+        && !is_nat64
+        && !is_ietf_special
+        && !is_documentation
+        && !is_six_to_four
+}
+
+async fn fetch_bounded_html(
+    pool: &PgPool,
+    redis: Option<&deadpool_redis::Pool>,
+    initial_url: reqwest::Url,
+) -> Result<String, OneboxFetchError> {
+    let mut current_url = initial_url;
+    for redirect_count in 0..=MAX_REDIRECTS {
+        let (host, address) = resolve_public_target(pool, redis, &current_url).await?;
+        let client = reqwest::Client::builder()
+            .timeout(REQUEST_TIMEOUT)
+            .user_agent("YourTJ-Onebox/2.0")
+            .redirect(reqwest::redirect::Policy::none())
+            .resolve(&host, address)
+            .build()
+            .map_err(|_| OneboxFetchError::Request)?;
+        let mut response =
+            client.get(current_url.clone()).send().await.map_err(|_| OneboxFetchError::Request)?;
+
+        if response.status().is_redirection() {
+            if redirect_count == MAX_REDIRECTS {
+                return Err(OneboxFetchError::Redirect);
+            }
+            let location = response
+                .headers()
+                .get(reqwest::header::LOCATION)
+                .and_then(|value| value.to_str().ok())
+                .ok_or(OneboxFetchError::Redirect)?;
+            current_url = parse_target_url(
+                current_url.join(location).map_err(|_| OneboxFetchError::Redirect)?.as_str(),
+            )?;
+            continue;
+        }
+
+        if !response.status().is_success() {
+            return Err(OneboxFetchError::UpstreamStatus);
+        }
+        let content_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        if !content_type.starts_with("text/html")
+            && !content_type.starts_with("application/xhtml+xml")
+        {
+            return Err(OneboxFetchError::InvalidContentType);
+        }
+        if response.content_length().is_some_and(|length| length > MAX_BODY_BYTES as u64) {
+            return Err(OneboxFetchError::BodyTooLarge);
+        }
+
+        let mut bytes = Vec::with_capacity(
+            response.content_length().unwrap_or(16 * 1024).min(MAX_BODY_BYTES as u64) as usize,
+        );
+        while let Some(chunk) = response.chunk().await.map_err(|_| OneboxFetchError::Request)? {
+            append_bounded_chunk(&mut bytes, &chunk)?;
+        }
+        return Ok(decode_html_bytes(&bytes));
+    }
+
+    Err(OneboxFetchError::Redirect)
+}
+
+fn append_bounded_chunk(bytes: &mut Vec<u8>, chunk: &[u8]) -> Result<(), OneboxFetchError> {
+    if bytes.len().saturating_add(chunk.len()) > MAX_BODY_BYTES {
+        return Err(OneboxFetchError::BodyTooLarge);
+    }
+    bytes.extend_from_slice(chunk);
+    Ok(())
+}
+
+fn decode_html_bytes(bytes: &[u8]) -> String {
+    String::from_utf8_lossy(bytes).into_owned()
+}
+
+/// Fetch a remote URL and parse bounded Open Graph metadata without loading subresources.
+async fn fetch_og_tags(
+    pool: &PgPool,
+    redis: Option<&deadpool_redis::Pool>,
+    url: &str,
+) -> Result<OneboxResult, OneboxFetchError> {
+    let parsed = parse_target_url(url)?;
+    let body = tokio::time::timeout(TOTAL_TIMEOUT, fetch_bounded_html(pool, redis, parsed))
+        .await
+        .map_err(|_| OneboxFetchError::Timeout)??;
+    Ok(parse_og_tags(&body, url))
+}
+
+fn parse_og_tags(body: &str, url: &str) -> OneboxResult {
     static OG_META_RE: Lazy<Regex> = Lazy::new(|| {
         Regex::new(
             r###"<meta\s+(?:[^>]*?\s)?(?:property="og:([^"]+)"\s+[^>]*?content="([^"]*)"|content="([^"]*)"\s+[^>]*?property="og:([^"]+)")\s*/?>"###,
@@ -325,26 +531,8 @@ async fn fetch_og_tags(url: &str) -> Result<OneboxResult, anyhow::Error> {
         Regex::new(r###"<title[^>]*>([^<]*)</title>"###).expect("invalid title regex")
     });
 
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(3))
-        .user_agent("YourTJ-Onebox/1.0")
-        .redirect(reqwest::redirect::Policy::limited(5))
-        .build()?;
-
-    let resp = client.get(url).send().await?;
-    let status = resp.status();
-    if !status.is_success() {
-        anyhow::bail!("HTTP {status}");
-    }
-
-    let body = resp.text().await?;
-
-    // Truncate to 512 KB to limit memory usage.
-    let body = if body.len() > 524_288 { &body[..524_288] } else { body.as_str() };
-
     let mut title = None;
     let mut description = None;
-    let mut image_url = None;
     let mut site_name = None;
 
     for cap in OG_META_RE.captures_iter(body) {
@@ -356,12 +544,11 @@ async fn fetch_og_tags(url: &str) -> Result<OneboxResult, anyhow::Error> {
             continue;
         };
 
-        let content = html_unescape(content);
+        let content = html_unescape(content).trim().to_string();
         match prop {
-            "title" => title = Some(content),
-            "description" => description = Some(content),
-            "image" => image_url = Some(content),
-            "site_name" => site_name = Some(content),
+            "title" => title = bounded_text(&content, 300),
+            "description" => description = bounded_text(&content, 1_000),
+            "site_name" => site_name = bounded_text(&content, 100),
             _ => {}
         }
     }
@@ -369,18 +556,28 @@ async fn fetch_og_tags(url: &str) -> Result<OneboxResult, anyhow::Error> {
     // Fallback to the document <title> when no og:title is present.
     if title.is_none() {
         if let Some(cap) = TITLE_RE.captures(body) {
-            title = cap.get(1).map(|m| html_unescape(m.as_str()));
+            title = cap.get(1).and_then(|value| bounded_text(&html_unescape(value.as_str()), 300));
         }
     }
 
-    Ok(OneboxResult {
+    OneboxResult {
         r#type: "card".into(),
         url: url.to_string(),
         title,
         description,
-        image_url,
+        // Remote preview images would leak reader IPs and bypass the media trust boundary.
+        image_url: None,
         site_name,
-    })
+    }
+}
+
+fn bounded_text(value: &str, max_chars: usize) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.chars().take(max_chars).collect())
+    }
 }
 
 /// Decode the most common HTML entities in a string.
@@ -398,4 +595,105 @@ fn html_unescape(s: &str) -> String {
 /// All onebox-owned routes.
 pub fn routes(state: AppState) -> Router {
     Router::new().route("/api/v2/onebox", get(get_onebox)).with_state(state)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+
+    use super::{
+        append_bounded_chunk, compute_url_hash, decode_html_bytes, is_public_ip, matches_domain,
+        parse_og_tags, parse_target_url, MAX_BODY_BYTES,
+    };
+
+    #[test]
+    fn target_url_requires_https_without_credentials_or_custom_port() {
+        assert!(parse_target_url("https://example.com/path?q=1").is_ok());
+        assert!(parse_target_url("http://example.com/path").is_err());
+        assert!(parse_target_url("https://user:secret@example.com/path").is_err());
+        assert!(parse_target_url("https://example.com:8443/path").is_err());
+        assert!(parse_target_url("not a url").is_err());
+    }
+
+    #[test]
+    fn domain_matching_respects_label_boundaries() {
+        let whitelist = vec!["example.com".to_string()];
+        assert!(matches_domain(&whitelist, "example.com"));
+        assert!(matches_domain(&whitelist, "news.example.com"));
+        assert!(!matches_domain(&whitelist, "example.com.attacker.test"));
+        assert!(!matches_domain(&whitelist, "notexample.com"));
+    }
+
+    #[test]
+    fn private_metadata_and_documentation_addresses_are_rejected() {
+        for address in [
+            Ipv4Addr::new(10, 0, 0, 1),
+            Ipv4Addr::new(100, 100, 0, 1),
+            Ipv4Addr::new(127, 0, 0, 1),
+            Ipv4Addr::new(169, 254, 169, 254),
+            Ipv4Addr::new(172, 16, 0, 1),
+            Ipv4Addr::new(192, 168, 0, 1),
+            Ipv4Addr::new(192, 0, 2, 1),
+            Ipv4Addr::new(198, 51, 100, 1),
+            Ipv4Addr::new(203, 0, 113, 1),
+        ] {
+            assert!(!is_public_ip(IpAddr::V4(address)), "accepted {address}");
+        }
+        assert!(!is_public_ip(IpAddr::V6(Ipv6Addr::LOCALHOST)));
+        assert!(!is_public_ip(IpAddr::V6("fc00::1".parse().expect("valid IPv6"))));
+        assert!(!is_public_ip(IpAddr::V6("fe80::1".parse().expect("valid IPv6"))));
+        assert!(!is_public_ip(IpAddr::V6(
+            "::ffff:192.168.1.1".parse().expect("valid mapped IPv6"),
+        )));
+        assert!(!is_public_ip(IpAddr::V6("64:ff9b::a00:1".parse().expect("valid NAT64 IPv6"),)));
+        assert!(!is_public_ip(IpAddr::V6("2002:a00:1::".parse().expect("valid 6to4 IPv6"),)));
+        assert!(is_public_ip(IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8))));
+        assert!(is_public_ip(IpAddr::V6(
+            "2606:4700:4700::1111".parse().expect("valid public IPv6"),
+        )));
+    }
+
+    #[test]
+    fn parser_bounds_fields_and_never_returns_remote_images() {
+        let long_title = "同".repeat(400);
+        let body = format!(
+            r#"<html><head>
+            <meta property="og:title" content="{long_title}">
+            <meta property="og:description" content="A &amp; B">
+            <meta property="og:image" content="https://tracker.example/pixel.png">
+            <meta property="og:site_name" content="Campus">
+            </head></html>"#,
+        );
+        let result = parse_og_tags(&body, "https://example.com/article");
+        assert_eq!(result.title.expect("title").chars().count(), 300);
+        assert_eq!(result.description.as_deref(), Some("A & B"));
+        assert_eq!(result.site_name.as_deref(), Some("Campus"));
+        assert!(result.image_url.is_none());
+    }
+
+    #[test]
+    fn cache_hash_is_deterministic_and_url_specific() {
+        assert_eq!(
+            compute_url_hash("https://example.com"),
+            compute_url_hash("https://example.com")
+        );
+        assert_ne!(
+            compute_url_hash("https://example.com"),
+            compute_url_hash("https://example.org")
+        );
+    }
+
+    #[test]
+    fn bounded_reader_rejects_oversize_before_appending() {
+        let mut bytes = vec![b'a'; MAX_BODY_BYTES];
+        assert!(append_bounded_chunk(&mut bytes, b"x").is_err());
+        assert_eq!(bytes.len(), MAX_BODY_BYTES);
+    }
+
+    #[test]
+    fn invalid_utf8_is_decoded_without_byte_boundary_panics() {
+        let decoded = decode_html_bytes(&[b'a', 0xf0, 0x28, 0x8c, 0x28, b'b']);
+        assert!(decoded.starts_with('a'));
+        assert!(decoded.ends_with('b'));
+    }
 }
