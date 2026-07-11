@@ -96,6 +96,7 @@ components:
         handle: { type: string }
         avatarUrl: { type: string, nullable: true }
         role: { type: string, enum: [user, mod, admin] }
+        trustLevel: { type: integer }
         createdAt: { type: integer }
     AuthTokens:
       type: object
@@ -803,21 +804,68 @@ paths:
       responses:
         "200": { description: ok }
         "402": { description: insufficient balance, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
-  /credit/bounty:
+  # NOTE: /credit/bounty and /credit/bounty/{id}/confirm are aliases for
+  # /credit/tasks POST and /credit/tasks/{id}/action confirm; backend only
+  # exposes the canonical /credit/tasks routes.
+
+  # ============ password auth — local-only, not in OpenAPI for mobile thin clients ============
+  /auth/password/login:
     post:
-      tags: [credit]
-      summary: Post a bounty (escrow_hold)
-      parameters: [{ $ref: "#/components/parameters/WalletSig" }]
-      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/TaskInput" } } } }
+      tags: [auth]
+      security: []
+      summary: Campus email + password login
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [email, password], properties: { email: { type: string, format: email }, password: { type: string, format: password } } } } } }
       responses:
-        "201": { description: created, content: { application/json: { schema: { $ref: "#/components/schemas/Task" } } } }
-        "402": { description: insufficient balance, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
-  /credit/bounty/{id}/confirm:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/AuthTokens" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /auth/password/forgot:
     post:
-      tags: [credit]
-      summary: Confirm completion and release (escrow_release)
-      parameters: [{ name: id, in: path, required: true, schema: { type: string } }, { $ref: "#/components/parameters/WalletSig" }]
-      responses: { "200": { description: released } }
+      tags: [auth]
+      security: []
+      summary: Request a password-reset code
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [email], properties: { email: { type: string, format: email } } } } } }
+      responses:
+        "204": { description: sent }
+        "429": { $ref: "#/components/responses/RateLimited" }
+  /auth/password/reset:
+    post:
+      tags: [auth]
+      security: []
+      summary: Reset password with code
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, code, newPassword]
+              properties:
+                email: { type: string, format: email }
+                code: { type: string }
+                newPassword: { type: string }
+      responses:
+        "204": { description: ok }
+        "400": { $ref: "#/components/responses/BadRequest" }
+  /auth/password/change:
+    post:
+      tags: [auth]
+      summary: Change the authenticated account's password
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [currentPassword, newPassword]
+              properties:
+                currentPassword: { type: string }
+                newPassword: { type: string }
+      responses:
+        "204": { description: ok }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
 
   # ---- escrow market: tasks ----
   /credit/tasks:
