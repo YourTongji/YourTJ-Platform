@@ -1,6 +1,6 @@
 //! Privacy-safe account directory queries for other domains.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use chrono::{DateTime, Utc};
 use shared::AppResult;
@@ -19,12 +19,22 @@ pub struct PublicAccount {
     pub role: String,
     pub trust_level: i16,
     pub profile_visibility: String,
+    pub activity_visibility: String,
     pub followers_visibility: String,
     pub following_visibility: String,
     pub discoverable: bool,
     pub dm_policy: String,
+    pub mention_policy: String,
     pub is_campus_verified: bool,
     pub created_at: DateTime<Utc>,
+}
+
+/// Minimal active-account projection used to resolve semantic mention recipients.
+#[derive(Debug, Clone, FromRow)]
+pub struct MentionTarget {
+    pub id: i64,
+    pub handle: String,
+    pub mention_policy: String,
 }
 
 /// Minimal account state used by other domains for privileged target checks.
@@ -44,10 +54,12 @@ pub async fn find_public_account_by_handle(
                 profile.website, profile.avatar_asset_id, profile.banner_asset_id, \
                 account.role::text, account.trust_level, \
                 COALESCE(privacy.profile_visibility, 'campus') AS profile_visibility, \
+                COALESCE(privacy.activity_visibility, 'only_me') AS activity_visibility, \
                 COALESCE(privacy.followers_visibility, 'followers') AS followers_visibility, \
                 COALESCE(privacy.following_visibility, 'followers') AS following_visibility, \
                 COALESCE(privacy.discoverable, TRUE) AS discoverable, \
                 COALESCE(privacy.dm_policy, 'following') AS dm_policy, \
+                COALESCE(privacy.mention_policy, 'everyone') AS mention_policy, \
                 account.email_verified_at IS NOT NULL AS is_campus_verified, account.created_at \
          FROM identity.accounts AS account \
          LEFT JOIN identity.profiles AS profile ON profile.account_id = account.id \
@@ -89,10 +101,12 @@ pub async fn find_public_accounts_by_ids(
                 profile.website, profile.avatar_asset_id, profile.banner_asset_id, \
                 account.role::text, account.trust_level, \
                 COALESCE(privacy.profile_visibility, 'campus') AS profile_visibility, \
+                COALESCE(privacy.activity_visibility, 'only_me') AS activity_visibility, \
                 COALESCE(privacy.followers_visibility, 'followers') AS followers_visibility, \
                 COALESCE(privacy.following_visibility, 'followers') AS following_visibility, \
                 COALESCE(privacy.discoverable, TRUE) AS discoverable, \
                 COALESCE(privacy.dm_policy, 'following') AS dm_policy, \
+                COALESCE(privacy.mention_policy, 'everyone') AS mention_policy, \
                 account.email_verified_at IS NOT NULL AS is_campus_verified, account.created_at \
          FROM identity.accounts AS account \
          LEFT JOIN identity.profiles AS profile ON profile.account_id = account.id \
@@ -109,6 +123,41 @@ pub async fn find_public_accounts_by_ids(
     .fetch_all(pool)
     .await?;
     Ok(accounts)
+}
+
+/// Batch-resolve exact handles to active, non-suspended mention targets without selecting PII.
+pub async fn find_mention_targets_by_handles(
+    pool: &PgPool,
+    handles: &[String],
+) -> AppResult<Vec<MentionTarget>> {
+    let mut seen = HashSet::new();
+    let normalized_handles: Vec<String> = handles
+        .iter()
+        .map(|handle| handle.to_ascii_lowercase())
+        .filter(|handle| seen.insert(handle.clone()))
+        .collect();
+    if normalized_handles.is_empty() {
+        return Ok(Vec::new());
+    }
+    let targets = sqlx::query_as::<_, MentionTarget>(
+        "SELECT account.id, account.handle::text, \
+                COALESCE(privacy.mention_policy, 'everyone') AS mention_policy \
+         FROM identity.accounts AS account \
+         LEFT JOIN identity.profile_privacy AS privacy ON privacy.account_id = account.id \
+         WHERE lower(account.handle::text) = ANY($1) \
+           AND account.status = 'active'::identity.account_status \
+           AND NOT EXISTS ( \
+             SELECT 1 FROM identity.sanctions AS sanction \
+             WHERE sanction.account_id = account.id AND sanction.kind = 'suspend' \
+               AND sanction.revoked_at IS NULL AND sanction.starts_at <= now() \
+               AND (sanction.ends_at IS NULL OR sanction.ends_at > now()) \
+           ) \
+         ORDER BY account.id",
+    )
+    .bind(&normalized_handles)
+    .fetch_all(pool)
+    .await?;
+    Ok(targets)
 }
 
 /// Resolve an exact handle only so another domain can remove an owner-held relationship.

@@ -106,6 +106,9 @@ iOS 与 Flutter 在独立仓库，只消费 OpenAPI 生成的类型和平台 HTT
 - 搜索、通知、媒体处理和重型 reconciliation 是异步副作用，目标使用 transactional outbox 与
   幂等 consumer；当前仍存在 fire-and-forget 路径，应标为 `Partial`。
 - 公开搜索必须在返回前应用数据库可见性/隐私 policy；索引不能扩大权限。
+- Profile authored-content 聚合由 Forum 提供，但 profile/activity/mention policy 仍归 Identity；Forum
+  通过 owner public projection 或 batch API 取得最小 policy，再结合自己的 follow/block/mute 事实。
+  公共论坛内容的 canonical route 与 profile activity list 是两个独立授权 surface。
 - `search` 只并行编排 owner crate public API；courses/reviews/forum 各自按候选 id 回 PostgreSQL
   重建结果，避免 gateway 或聚合层拥有他域 SQL。
 - 缓存使用版本化 key/短 TTL；失效失败不得改变数据库事实。

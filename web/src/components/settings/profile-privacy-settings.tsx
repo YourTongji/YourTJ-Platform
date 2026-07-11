@@ -38,6 +38,12 @@ const dmPolicyOptions = [
   { value: "nobody", label: "不接受新私信" },
 ] as const;
 
+const mentionPolicyOptions = [
+  { value: "everyone", label: "所有校园成员" },
+  { value: "following", label: "仅我关注的人" },
+  { value: "nobody", label: "不接收提及" },
+] as const;
+
 function PrivacySelect({
   id,
   label,
@@ -89,7 +95,13 @@ export function ProfilePrivacySettings() {
   React.useEffect(() => setHandle(account?.handle ?? ""), [account]);
 
   React.useEffect(() => {
-    if (privacy.data) setPrivacyForm(privacy.data);
+    if (privacy.data) {
+      setPrivacyForm({
+        ...privacy.data,
+        activityVisibility: privacy.data.activityVisibility ?? "only_me",
+        mentionPolicy: privacy.data.mentionPolicy ?? "everyone",
+      });
+    }
   }, [privacy.data]);
 
   const saveProfile = useMutation({
@@ -216,11 +228,25 @@ export function ProfilePrivacySettings() {
                   onChange={(value) => updatePrivacy("profileVisibility", value as ProfilePrivacy["profileVisibility"])}
                 />
                 <PrivacySelect
+                  id="activity-visibility"
+                  label="谁能查看活动列表"
+                  value={privacyForm.activityVisibility}
+                  options={profileVisibilityOptions}
+                  onChange={(value) => updatePrivacy("activityVisibility", value as ProfilePrivacy["activityVisibility"])}
+                />
+                <PrivacySelect
                   id="dm-policy"
                   label="谁能发起新私信"
                   value={privacyForm.dmPolicy}
                   options={dmPolicyOptions}
                   onChange={(value) => updatePrivacy("dmPolicy", value as ProfilePrivacy["dmPolicy"])}
+                />
+                <PrivacySelect
+                  id="mention-policy"
+                  label="谁能通过 @ 提及我"
+                  value={privacyForm.mentionPolicy}
+                  options={mentionPolicyOptions}
+                  onChange={(value) => updatePrivacy("mentionPolicy", value as ProfilePrivacy["mentionPolicy"])}
                 />
                 <PrivacySelect
                   id="followers-visibility"
@@ -237,6 +263,10 @@ export function ProfilePrivacySettings() {
                   onChange={(value) => updatePrivacy("followingVisibility", value as ProfilePrivacy["followingVisibility"])}
                 />
               </div>
+              <p className="text-sm leading-6 text-muted-foreground">
+                活动隐私只控制个人主页上的主题与回复列表；公共板块内容仍按板块规则展示。
+                不允许的 @handle 会保留为普通文字，但不会生成提及通知。
+              </p>
               <div className="flex items-center justify-between gap-4 rounded-lg border p-3">
                 <div>
                   <Label htmlFor="profile-discoverable">允许被发现</Label>

@@ -25,10 +25,12 @@ pub struct ProfileRecord {
 #[derive(Debug, Clone, FromRow)]
 pub struct ProfilePrivacyRecord {
     pub profile_visibility: String,
+    pub activity_visibility: String,
     pub followers_visibility: String,
     pub following_visibility: String,
     pub discoverable: bool,
     pub dm_policy: String,
+    pub mention_policy: String,
 }
 
 /// Return profile fields, lazily creating the one-to-one row when needed.
@@ -88,8 +90,8 @@ pub async fn get_or_create_privacy(
     .execute(pool)
     .await?;
     let privacy = sqlx::query_as::<_, ProfilePrivacyRecord>(
-        "SELECT profile_visibility, followers_visibility, following_visibility, \
-                discoverable, dm_policy \
+        "SELECT profile_visibility, activity_visibility, followers_visibility, \
+                following_visibility, discoverable, dm_policy, mention_policy \
          FROM identity.profile_privacy WHERE account_id = $1",
     )
     .bind(account_id)
@@ -104,31 +106,38 @@ pub async fn replace_privacy(
     pool: &PgPool,
     account_id: i64,
     profile_visibility: &str,
+    activity_visibility: Option<&str>,
     followers_visibility: &str,
     following_visibility: &str,
     discoverable: bool,
     dm_policy: &str,
+    mention_policy: Option<&str>,
 ) -> AppResult<ProfilePrivacyRecord> {
     let privacy = sqlx::query_as::<_, ProfilePrivacyRecord>(
         "INSERT INTO identity.profile_privacy \
-         (account_id, profile_visibility, followers_visibility, following_visibility, \
-          discoverable, dm_policy) \
-         VALUES ($1, $2, $3, $4, $5, $6) \
+         (account_id, profile_visibility, activity_visibility, followers_visibility, \
+          following_visibility, discoverable, dm_policy, mention_policy) \
+         VALUES ($1, $2, COALESCE($3, 'only_me'), $4, $5, $6, $7, \
+                 COALESCE($8, 'everyone')) \
          ON CONFLICT (account_id) DO UPDATE \
          SET profile_visibility = EXCLUDED.profile_visibility, \
+             activity_visibility = COALESCE($3, identity.profile_privacy.activity_visibility), \
              followers_visibility = EXCLUDED.followers_visibility, \
              following_visibility = EXCLUDED.following_visibility, \
              discoverable = EXCLUDED.discoverable, dm_policy = EXCLUDED.dm_policy, \
+             mention_policy = COALESCE($8, identity.profile_privacy.mention_policy), \
              updated_at = now() \
-         RETURNING profile_visibility, followers_visibility, following_visibility, \
-                   discoverable, dm_policy",
+         RETURNING profile_visibility, activity_visibility, followers_visibility, \
+                   following_visibility, discoverable, dm_policy, mention_policy",
     )
     .bind(account_id)
     .bind(profile_visibility)
+    .bind(activity_visibility)
     .bind(followers_visibility)
     .bind(following_visibility)
     .bind(discoverable)
     .bind(dm_policy)
+    .bind(mention_policy)
     .fetch_one(pool)
     .await?;
     Ok(privacy)

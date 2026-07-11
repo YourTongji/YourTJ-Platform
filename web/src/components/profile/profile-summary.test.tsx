@@ -37,6 +37,7 @@ describe("ProfileSummary verification semantics", () => {
             votesReceived: 8,
             followerCount: 2,
             followingCount: 1,
+            canViewActivity: true,
             createdAt: 1_700_000_000,
           }}
           relationship={undefined}

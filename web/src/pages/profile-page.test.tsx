@@ -88,6 +88,7 @@ describe("ProfilePage social relationships", () => {
       votesReceived: 5,
       followerCount: 2,
       followingCount: 1,
+      canViewActivity: true,
       createdAt: 1_700_000_000,
     });
     apiMocks.threads.mockReset().mockResolvedValue({ items: [], hasMore: false, nextCursor: null });
@@ -101,6 +102,7 @@ describe("ProfilePage social relationships", () => {
       blockedMe: false,
       canFollow: true,
       canStartConversation: true,
+      canMention: true,
     });
     apiMocks.follow.mockReset().mockResolvedValue(undefined);
     apiMocks.unfollow.mockReset().mockResolvedValue(undefined);
@@ -146,6 +148,36 @@ describe("ProfilePage social relationships", () => {
     expect(await screen.findByText("Carol")).toBeVisible();
     expect(apiMocks.followers).toHaveBeenCalledWith("bob", null);
 
+    await expectNoAccessibilityViolations(view.container);
+  });
+
+  it("shows an honest private-activity state without requesting protected lists", async () => {
+    apiMocks.profile.mockResolvedValue({
+      id: "2",
+      handle: "bob",
+      displayName: "Bob Builder",
+      bio: "Campus maker",
+      website: null,
+      avatarUrl: null,
+      bannerUrl: null,
+      role: "user",
+      trustLevel: 2,
+      badges: [],
+      verifications: [],
+      threadCount: 3,
+      commentCount: 4,
+      votesReceived: 5,
+      followerCount: 2,
+      followingCount: 1,
+      canViewActivity: false,
+      createdAt: 1_700_000_000,
+    });
+    const view = renderPage();
+
+    expect(await screen.findByText("活动列表未公开")).toBeVisible();
+    expect(screen.getByText(/公开内容仍可在对应板块和主题中查看/)).toBeVisible();
+    expect(apiMocks.threads).not.toHaveBeenCalled();
+    expect(apiMocks.comments).not.toHaveBeenCalled();
     await expectNoAccessibilityViolations(view.container);
   });
 });

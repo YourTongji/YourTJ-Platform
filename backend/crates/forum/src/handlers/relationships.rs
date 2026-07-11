@@ -80,6 +80,25 @@ pub(super) fn profile_content_is_visible(
         && !relationship.is_some_and(|state| state.blocked_by_me || state.blocked_me)
 }
 
+pub(super) fn activity_is_visible(
+    account: &identity::public_accounts::PublicAccount,
+    viewer_id: Option<i64>,
+    relationship: Option<RelationshipState>,
+) -> bool {
+    if !profile_content_is_visible(account, viewer_id, relationship) {
+        return false;
+    }
+    if viewer_id == Some(account.id) {
+        return true;
+    }
+    match account.activity_visibility.as_str() {
+        "public" => true,
+        "campus" => viewer_id.is_some(),
+        "only_me" => false,
+        _ => false,
+    }
+}
+
 fn list_is_visible(
     policy: &str,
     account_id: i64,
@@ -186,6 +205,14 @@ pub async fn get_relationship_handler(
             "nobody" => false,
             _ => false,
         };
+    let can_mention = !is_self
+        && !is_blocked
+        && match target.mention_policy.as_str() {
+            "everyone" => true,
+            "following" => relationship.followed_by,
+            "nobody" => false,
+            _ => false,
+        };
     Ok(Json(UserRelationshipDto {
         is_self,
         following: relationship.following,
@@ -195,6 +222,7 @@ pub async fn get_relationship_handler(
         blocked_me: relationship.blocked_me,
         can_follow: !is_self && !is_blocked,
         can_start_conversation,
+        can_mention,
     }))
 }
 

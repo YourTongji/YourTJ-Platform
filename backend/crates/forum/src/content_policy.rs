@@ -10,7 +10,7 @@ use shared::{AppError, AppResult};
 use crate::dto::{CommentInput, CommentUpdateInput, ContentFormat, ThreadInput, ThreadUpdateInput};
 
 static MENTION_PATTERN: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"@([\p{L}\p{N}_-]+)").expect("mention regex is static"));
+    Lazy::new(|| Regex::new(r"@([\p{L}\p{N}_.-]+)").expect("mention regex is static"));
 
 /// A validated mutation together with the visibility decision produced by policy.
 pub(crate) struct PreparedContent<T> {
@@ -162,7 +162,13 @@ pub(crate) fn mention_handles(body: &str, format: ContentFormat, own_handle: &st
     MENTION_PATTERN
         .captures_iter(&visible_text)
         .map(|capture| capture[1].to_owned())
-        .filter(|handle| handle != own_handle && seen.insert(handle.clone()))
+        .filter(|handle| {
+            (3..=30).contains(&handle.len())
+                && handle.chars().all(|character| {
+                    character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '-')
+                })
+        })
+        .filter(|handle| !handle.eq_ignore_ascii_case(own_handle) && seen.insert(handle.clone()))
         .take(10)
         .collect()
 }
@@ -353,11 +359,12 @@ mod tests {
 
     #[test]
     fn markdown_projection_and_mentions_ignore_markup_and_code() {
-        let source = "Hello **@alice** `@inline`\n\n```rust\n@block\n```\n[同济](/courses)";
+        let source =
+            "Hello **@alice.name** @OWNER `@inline`\n\n```rust\n@block\n```\n[同济](/courses)";
         assert_eq!(
             plain_text_projection(source, ContentFormat::MarkdownV1, 100),
-            "Hello @alice 同济"
+            "Hello @alice.name @OWNER 同济"
         );
-        assert_eq!(mention_handles(source, ContentFormat::MarkdownV1, "owner"), vec!["alice"]);
+        assert_eq!(mention_handles(source, ContentFormat::MarkdownV1, "owner"), vec!["alice.name"]);
     }
 }

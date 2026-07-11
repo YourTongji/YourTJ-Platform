@@ -6,7 +6,7 @@
 >
 > 负责人：Forum/Web/Platform maintainers、Community operations、Privacy owner
 >
-> 最近核验：2026-07-12，migrations `0044_dm_message_requests.sql`、`0047_governance_appeals.sql`
+> 最近核验：2026-07-12，migrations `0044`、`0047`、`0050` 与 Forum/governance notification tests
 
 通知告诉用户“发生了什么”，公告传达平台级信息，私信承载参与者之间的非公开交流。三者都
 涉及未读、实时、偏好和保留，但必须保持各自的权限和证据边界。
@@ -28,6 +28,9 @@
 - `/me/notification-prefs` 使用严格的 typed event×channel 契约；Web 可分别控制回复、提及、引用、
   赞同、徽章、订阅和私信站内提醒，以及每周摘要邮件。站内事件写入点在落库前执行同一偏好映射，
   未识别的安全/治理事件默认保留。
+- 提及通知同时服从接收方 mention policy：`following` 是接收方关注作者；self、双向 block、接收方
+  mute、inactive/suspended 和 `nobody` 都不会投递。Handle 由 Identity 批量解析，Forum 以有界批量
+  写入应用关系和通知偏好；拒绝只省略通知，正文中的 `@handle` 仍是普通公开文字。
 - 后端已有每 7 天调度的 digest worker；它是发送骨架，不代表偏好、投递与运营闭环完成。
 - 公告有 `draft/scheduled/published/archived` 状态、时间窗口、受众、严重度、presentation、稳定排序、
   optimistic version、receipt revision 和 append-only mutation snapshot；管理写需要 capability、reason

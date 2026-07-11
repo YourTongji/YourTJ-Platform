@@ -97,6 +97,10 @@ capability，不能塞进过宽的 `community.manage`。
 - `credit.integrity` 只允许验证和读取持久结果，不授予 wallet update、ledger append 或历史 ledger
   mutation；即使直接构造请求，普通用户和 moderator 也必须被拒绝。
 - 后端 denial 使用统一错误 envelope；客户端不能靠 capability 推断隐藏数据存在。
+- Profile 的 `canViewActivity` 和 relationship `canMention` 是 viewer-specific 可用性事实，不是客户端
+  授权凭证。逐条 activity endpoint 与内容写入 side effect 必须重新检查 Identity policy、账号状态和
+  Forum block/follow 事实；mention 被拒绝时仍成功保存普通文字，不能通过状态码、延迟或 payload 暴露
+  target 是否存在、被 suspend 或选择了哪项 policy。
 - Author edit 以 canonical `contentVersion` 做 compare-and-swap；409 只返回当前版本，不回显新的正文
   或内部状态。revision 与 canonical mutation 原子，陈旧请求不能留下审计/历史半状态。
 - `verifications.manage` 只允许管理员处理 lower-role account。Definition 只接受受控 category/icon/style；

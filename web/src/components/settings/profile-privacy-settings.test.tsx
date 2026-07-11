@@ -56,10 +56,12 @@ describe("ProfilePrivacySettings", () => {
     });
     apiMocks.privacy.mockReset().mockResolvedValue({
       profileVisibility: "campus",
+      activityVisibility: "only_me",
       followersVisibility: "followers",
       followingVisibility: "followers",
       discoverable: true,
       dmPolicy: "following",
+      mentionPolicy: "everyone",
     });
     apiMocks.updateProfile.mockReset().mockResolvedValue({});
     apiMocks.updatePrivacy.mockReset().mockResolvedValue({});
@@ -84,16 +86,43 @@ describe("ProfilePrivacySettings", () => {
 
     const discoverability = await screen.findByRole("switch", { name: "允许被发现" });
     await user.click(discoverability);
+    expect(screen.getByRole("combobox", { name: "谁能查看活动列表" })).toBeVisible();
+    expect(screen.getByRole("combobox", { name: "谁能通过 @ 提及我" })).toBeVisible();
+    expect(screen.getByText(/不会生成提及通知/)).toBeVisible();
     await user.click(screen.getByRole("button", { name: "保存隐私设置" }));
     await waitFor(() => expect(apiMocks.updatePrivacy).toHaveBeenCalledWith({
       profileVisibility: "campus",
+      activityVisibility: "only_me",
       followersVisibility: "followers",
       followingVisibility: "followers",
       discoverable: false,
       dmPolicy: "following",
+      mentionPolicy: "everyone",
     }));
 
     expect(screen.queryByLabelText("头像 URL")).not.toBeInTheDocument();
     await expectNoAccessibilityViolations(view.container);
+  });
+
+  it("uses conservative defaults when a rolling old backend omits new policies", async () => {
+    apiMocks.privacy.mockResolvedValue({
+      profileVisibility: "campus",
+      followersVisibility: "followers",
+      followingVisibility: "followers",
+      discoverable: true,
+      dmPolicy: "following",
+    });
+    const user = userEvent.setup();
+    renderSettings();
+
+    const activity = await screen.findByRole("combobox", { name: "谁能查看活动列表" });
+    expect(activity).toHaveTextContent("仅自己");
+    expect(screen.getByRole("combobox", { name: "谁能通过 @ 提及我" }))
+      .toHaveTextContent("所有校园成员");
+    await user.click(screen.getByRole("button", { name: "保存隐私设置" }));
+    await waitFor(() => expect(apiMocks.updatePrivacy).toHaveBeenCalledWith(expect.objectContaining({
+      activityVisibility: "only_me",
+      mentionPolicy: "everyone",
+    })));
   });
 });

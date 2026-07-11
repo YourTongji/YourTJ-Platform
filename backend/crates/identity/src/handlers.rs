@@ -20,8 +20,9 @@ use crate::dto::{
     AccountDto, AppealAccessTokenOutput, AppealEmailVerificationInput, AuthTokensOutput,
     BindKeyInput, ClaimChallengeOutput, ClaimInput, MyProfileDto, PasswordChangeInput,
     PasswordForgotInput, PasswordLoginInput, PasswordResetInput, ProfilePrivacyDto,
-    ProfileUpdateInput, RecentAuthMethod, RecentAuthStatusDto, RecentAuthVerifyInput, RefreshInput,
-    RequestCodeInput, SessionDto, UpdateMeInput, VerifyEmailInput, WalletDto,
+    ProfilePrivacyUpdateInput, ProfileUpdateInput, RecentAuthMethod, RecentAuthStatusDto,
+    RecentAuthVerifyInput, RefreshInput, RequestCodeInput, SessionDto, UpdateMeInput,
+    VerifyEmailInput, WalletDto,
 };
 use crate::email_code::{generate_code, hash_code, CodePurpose};
 use crate::error::IdentityError;
@@ -121,15 +122,21 @@ fn profile_to_dto(profile: crate::profiles::ProfileRecord) -> MyProfileDto {
 fn privacy_to_dto(privacy: crate::profiles::ProfilePrivacyRecord) -> ProfilePrivacyDto {
     ProfilePrivacyDto {
         profile_visibility: privacy.profile_visibility,
+        activity_visibility: privacy.activity_visibility,
         followers_visibility: privacy.followers_visibility,
         following_visibility: privacy.following_visibility,
         discoverable: privacy.discoverable,
         dm_policy: privacy.dm_policy,
+        mention_policy: privacy.mention_policy,
     }
 }
 
-fn validate_privacy(input: &ProfilePrivacyDto) -> AppResult<()> {
+fn validate_privacy(input: &ProfilePrivacyUpdateInput) -> AppResult<()> {
     if !matches!(input.profile_visibility.as_str(), "public" | "campus" | "only_me")
+        || input
+            .activity_visibility
+            .as_deref()
+            .is_some_and(|value| !matches!(value, "public" | "campus" | "only_me"))
         || !matches!(
             input.followers_visibility.as_str(),
             "public" | "campus" | "followers" | "only_me"
@@ -139,6 +146,10 @@ fn validate_privacy(input: &ProfilePrivacyDto) -> AppResult<()> {
             "public" | "campus" | "followers" | "only_me"
         )
         || !matches!(input.dm_policy.as_str(), "everyone" | "following" | "nobody")
+        || input
+            .mention_policy
+            .as_deref()
+            .is_some_and(|value| !matches!(value, "everyone" | "following" | "nobody"))
     {
         return Err(shared::AppError::BadRequest("invalid profile privacy policy".into()));
     }
@@ -869,7 +880,7 @@ pub async fn get_my_privacy(
 pub async fn replace_my_privacy(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(body): Json<ProfilePrivacyDto>,
+    Json(body): Json<ProfilePrivacyUpdateInput>,
 ) -> AppResult<Json<ProfilePrivacyDto>> {
     let auth = crate::auth_middleware::authenticate(
         &headers,
@@ -884,10 +895,12 @@ pub async fn replace_my_privacy(
         &state.db,
         auth.id,
         &body.profile_visibility,
+        body.activity_visibility.as_deref(),
         &body.followers_visibility,
         &body.following_visibility,
         body.discoverable,
         &body.dm_policy,
+        body.mention_policy.as_deref(),
     )
     .await?;
     crate::public_search::reconcile_user_in_background(&state, auth.id);

@@ -161,6 +161,18 @@ Fresh database 必须只通过 sqlx migration ledger 建立。普通启动、CI 
 - Identity 的 public account API 只返回 active、未 suspended 且无邮箱的 profile/privacy projection；
   新增 profile/list/new-DM target 解析通过该 API 与 Forum 的 follow/mute/block policy 组合。旧 Forum
   projection 中仍有直接 identity join，需按 owner public API 逐步迁移，不能作为新代码模式复制。
+- Activity 与 mention policy 由 Identity 的 `profile_privacy` 持有。Forum profile 读取 owner public
+  projection 后叠加 viewer auth/block，显式返回 `canViewActivity`；逐条 authored-content endpoints 重验
+  同一事实，公共 thread/feed route 不受 profile activity policy 反向影响。Profile aggregate 仍是公开
+  内容计数，不从 activity list 的拒绝推断为零。
+- Mention 创建先从 canonical visible text 得到最多 10 个去重 handle，再通过 Identity public batch API
+  一次解析 active、未 suspended 的 account id/canonical handle/policy。Forum 在一条有界 SQL 写路径中
+  应用 recipient-follows-actor、双向 block、recipient mute 和通知偏好；拒绝只省略语义通知，不修改
+  canonical 正文、不返回 target existence/policy，也不形成逐 handle 跨 schema SQL。
+- Migration `0050` 只增加非 PII policy columns，已有账号回填 activity=`only_me`、mention=`everyone`。
+  旧应用 writer 不触碰新列；新应用的 PUT 对旧客户端缺少这两个字段时保留当前值，避免 rolling window
+  把已设置的 policy 重置为默认。新 Web 遇到旧 backend 未返回字段时使用 only-me activity 与
+  everyone mention 的既有默认，不提交 undefined。发布顺序仍是先 additive migration，再部署读取新列的应用。
 - 第一阶段 follow 只有 `not_following/following`，没有 private-account pending；mute 不授权也不阻断，
   block 在任意方向阻止 follow/DM/回复/投票并删除双方 follow，解除时不恢复。
 - 新 PII migration 同时更新[隐私与数据生命周期](../security/privacy-and-data-lifecycle.md)。

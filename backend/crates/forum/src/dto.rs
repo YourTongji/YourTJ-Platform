@@ -587,6 +587,7 @@ pub struct UserProfileDto {
     pub votes_received: i32,
     pub follower_count: i32,
     pub following_count: i32,
+    pub can_view_activity: bool,
     pub created_at: i64,
 }
 
@@ -614,6 +615,7 @@ pub struct UserRelationshipDto {
     pub blocked_me: bool,
     pub can_follow: bool,
     pub can_start_conversation: bool,
+    pub can_mention: bool,
 }
 
 /// A badge displayed on a public community profile.

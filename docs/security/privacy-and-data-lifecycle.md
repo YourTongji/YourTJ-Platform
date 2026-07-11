@@ -6,7 +6,7 @@
 >
 > 负责人：Privacy owner、Security owner、Domain maintainers
 >
-> 最近核验：2026-07-12，migrations `0034`、`0037`、`0038`、`0040`、`0044`、`0047`、`0048`、`0049`、`0051`、`0052`
+> 最近核验：2026-07-12，migrations `0034`、`0037`、`0038`、`0040`、`0044`、`0047`、`0048`、`0049`、`0050`、`0051`、`0052`
 
 本规范将数据最小化、可见性、导出、删除和保留作为产品前置条件。它不是法律意见；涉及 PIPL、
 未成年人、广告或跨境处理的最终政策需要合格法律与隐私负责人确认。
@@ -41,11 +41,17 @@
   和 append-only transition history，内部 reviewer id 只在 capability-gated admin DTO 出现。
 - Appeal access JWT 只有一小时有效期、无 refresh/session 持久化，浏览器仅放 sessionStorage；普通 API
   拒绝该 scope，减少受限账号为申诉而重新开放其他个人数据的风险。
+- Activity visibility 默认 `only_me`，本人始终可读，`public` 允许匿名、`campus` 只允许已登录校园
+  账号；它在 profile visibility 和双向 block 之后控制逐条主题/回复列表及未来 likes/media/activity
+  tabs。Profile 可见时，主题/回复/获赞 aggregate 仍是公共内容贡献计数，不因列表私密而置零。
+- Mention policy 默认 `everyone`；`following` 表示接收方关注作者。Identity 的 batch projection 只
+  返回 active、未 suspended 账号的 id/handle/policy，Forum 再应用 follow/block/mute 和通知偏好。
+  不满足策略、未知或生命周期关闭的 handle 仍保留为公开普通文字，不产生通知或存在性信号。
 
 ### Partial
 
-- Activity/mention privacy 和 public profile 的外部搜索引擎索引政策尚未完成；精确 handle 直达仍由
-  profile visibility 决定，不因站内 discoverability 关闭而伪装成账号不存在。
+- Public profile 的外部搜索引擎索引政策尚未完成；精确 handle 直达仍由 profile visibility 决定，
+  不因站内 discoverability 关闭而伪装成账号不存在。
 - `deleted` 数据库状态不等于跨域匿名化、purge 或备份过期。
 - 无自助 export、deactivate、delete、recover 或 retention worker。
 - OSS、搜索索引、缓存、日志、备份、审计与积分的删除语义没有完整编排。
@@ -77,13 +83,14 @@
 ## 可见性与默认值
 
 - Board 声明 `public/campus/staff` 等访问级别；公共讨论不由作者 follow 关系临时改变。
-- Profile、follower/following、new-DM 和 discoverability 已使用独立设置；activity/mention 仍待实现。
+- Profile、activity、follower/following、new-DM、mention 和 discoverability 使用独立设置；隐藏
+  activity list 不会改变 board/content policy，拒绝 mention 不会改写公开正文。
 - Block/mute 是关系 policy，不通过前端隐藏代替服务端授权。
 - 人工认证只有在 definition 允许公开、grant 明确 `displayOnProfile`、未撤销且未到期时可见；过期和
   撤销实时从公开投影消失，不依赖前端缓存隐藏。
 - 搜索、feed、cache、CDN 与 notification 在输出时应用同一可见性规则。
-- 第一阶段默认：profile=`campus`、followers/following=`followers`、DM=`following`、discoverable=on；
-  owner 可将 profile/list 改为 public/campus/only_me 等 OpenAPI 声明的值。
+- 第一阶段默认：profile=`campus`、activity=`only_me`、followers/following=`followers`、
+  DM=`following`、mention=`everyone`、discoverable=on；owner 可按 OpenAPI 的有界枚举调整。
 
 ## Profile 与社交关系数据生命周期
 
@@ -94,6 +101,9 @@
 - display name/bio/website/asset id：owner 可编辑，viewer 仅在 profile policy 允许时读取；账号导出
   应包含原值，账号 purge 时随 account cascade 删除，公共内容不因此改写。
 - privacy policy：仅 owner 写，服务端读取；导出应包含，删除时 cascade，不进入公开 DTO 或日志。
+- `activity_visibility` 与 `mention_policy` 是非 PII 授权偏好，和其他 privacy policy 一起仅 owner 写、
+  导出包含、账号删除时 cascade。公开 DTO 只输出 viewer-specific `canViewActivity/canMention`，不输出
+  owner 原始 policy；普通日志、metrics 和通知 payload 不记录 policy 值。
 - follow：关系列表按 owner policy 和 discoverability 输出；账号导出包含自己的 incoming/outgoing
   关系，账号删除时 cascade，计数是可重建 projection。
 - 站内用户搜索文档是可全量重建的最小公开身份投影；owner 关闭 discoverability/only_me 后触发删除，

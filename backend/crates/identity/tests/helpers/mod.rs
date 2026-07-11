@@ -215,6 +215,21 @@ async fn run_migrations(pool: &PgPool) {
             .expect("migration 0034 failed");
     }
 
+    let has_activity_privacy: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM information_schema.columns \
+         WHERE table_schema = 'identity' AND table_name = 'profile_privacy' \
+           AND column_name = 'activity_visibility')",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or(false);
+    if !has_activity_privacy {
+        sqlx::raw_sql(include_str!("../../../../migrations/0050_activity_and_mention_privacy.sql"))
+            .execute(pool)
+            .await
+            .expect("migration 0050 failed");
+    }
+
     let has_recent_auth: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM information_schema.columns \
          WHERE table_schema = 'identity' AND table_name = 'sessions' \

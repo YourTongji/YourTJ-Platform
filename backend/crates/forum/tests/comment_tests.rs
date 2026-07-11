@@ -818,6 +818,73 @@ async fn queued_comment_is_hidden_without_activity_credit() {
 }
 
 #[tokio::test]
+async fn comment_mentions_share_the_recipient_policy_boundary() {
+    let (pool, app) = create_test_app().await;
+    let (actor_id, token) =
+        create_test_account(&pool, "comment-mention-actor@tongji.edu.cn", "comment-mention-actor")
+            .await;
+    let (allowed_id, _) = create_test_account(
+        &pool,
+        "comment-mention-allowed@tongji.edu.cn",
+        "comment-mention-allowed",
+    )
+    .await;
+    let (denied_id, _) = create_test_account(
+        &pool,
+        "comment-mention-denied@tongji.edu.cn",
+        "comment-mention-denied",
+    )
+    .await;
+    for (account_id, policy) in [(allowed_id, "everyone"), (denied_id, "nobody")] {
+        sqlx::query(
+            "INSERT INTO identity.profile_privacy (account_id, mention_policy) VALUES ($1, $2) \
+             ON CONFLICT (account_id) DO UPDATE SET mention_policy = EXCLUDED.mention_policy",
+        )
+        .bind(account_id)
+        .bind(policy)
+        .execute(&pool)
+        .await
+        .expect("set comment mention policy");
+    }
+    let thread_id = seed_thread(&pool, actor_id).await;
+    let response = create_comment_request(
+        &app,
+        thread_id,
+        &token,
+        json!({
+            "body": "hello @comment-mention-allowed and @comment-mention-denied",
+            "contentFormat": "plain_v1"
+        }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let created = read_json(response).await;
+    let comment_id = created["id"].as_str().expect("created comment id");
+
+    for _ in 0..50 {
+        let count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM forum.notifications WHERE type = 'mention'")
+                .fetch_one(&pool)
+                .await
+                .expect("poll comment mention");
+        if count >= 1 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    let notifications: Vec<(i64, serde_json::Value)> = sqlx::query_as(
+        "SELECT account_id, payload FROM forum.notifications WHERE type = 'mention'",
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("comment mention notifications");
+    assert_eq!(notifications.len(), 1);
+    assert_eq!(notifications[0].0, allowed_id);
+    assert_eq!(notifications[0].1["commentId"], comment_id);
+    assert_ne!(notifications[0].0, denied_id);
+}
+
+#[tokio::test]
 async fn comment_edits_share_create_policy_and_return_complete_canonical_row() {
     let (pool, app) = create_test_app().await;
     let (author_id, token) =

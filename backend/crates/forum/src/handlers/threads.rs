@@ -576,52 +576,37 @@ pub async fn create_thread(
     }
 
     if !is_queued {
-        let my_handle: String =
-            sqlx::query_scalar("SELECT handle FROM identity.accounts WHERE id = $1")
-                .bind(auth.id)
-                .fetch_one(&state.db)
-                .await
-                .unwrap_or_default();
         if let Some(ref body_text) = body.body {
-            let handles =
-                crate::content_policy::mention_handles(body_text, body.content_format, &my_handle);
+            let handles = crate::content_policy::mention_handles(
+                body_text,
+                body.content_format,
+                &row.author_handle,
+            );
 
             let thread_actor_id = auth.id;
             if !handles.is_empty() {
                 let pool = state.db.clone();
-                let thread_author = row.author_handle.clone();
                 let thread_body = row.body.clone().unwrap_or_default();
-                let thread_body_excerpt = crate::content_policy::plain_text_projection(
-                    &thread_body,
-                    crate::dto::ContentFormat::from_db(&row.content_format),
-                    100,
-                );
-                let thread_id_val = row.id;
+                let context = crate::mentions::MentionContext {
+                    thread_id: row.id,
+                    comment_id: None,
+                    author_handle: row.author_handle.clone(),
+                    body_excerpt: crate::content_policy::plain_text_projection(
+                        &thread_body,
+                        crate::dto::ContentFormat::from_db(&row.content_format),
+                        100,
+                    ),
+                };
                 tokio::spawn(async move {
-                    for handle in handles {
-                        let account_id: Option<i64> = sqlx::query_scalar(
-                            "SELECT id FROM identity.accounts WHERE handle = $1",
-                        )
-                        .bind(&handle)
-                        .fetch_optional(&pool)
-                        .await
-                        .unwrap_or(None);
-                        if let Some(aid) = account_id {
-                            crate::notification_hooks::create_notification(
-                                &pool,
-                                aid,
-                                "mention",
-                                serde_json::json!({
-                                    "threadId": thread_id_val.to_string(),
-                                    "authorHandle": thread_author,
-                                    "handle": handle,
-                                    "bodyExcerpt": thread_body_excerpt,
-                                }),
-                                None,
-                                Some(thread_actor_id),
-                            )
-                            .await;
-                        }
+                    if let Err(error) = crate::mentions::create_mention_notifications(
+                        &pool,
+                        thread_actor_id,
+                        &handles,
+                        context,
+                    )
+                    .await
+                    {
+                        tracing::warn!(%error, thread_actor_id, "failed to create mention notifications");
                     }
                 });
             }

@@ -15,6 +15,7 @@ mod dto;
 mod error;
 mod handlers;
 pub mod meili;
+mod mentions;
 mod models;
 pub mod notification_hooks;
 mod notifications;

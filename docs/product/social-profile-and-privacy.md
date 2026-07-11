@@ -6,7 +6,7 @@
 >
 > 负责人：Forum/Identity/Web maintainers、Privacy owner、Product owner
 >
-> 最近核验：2026-07-12，migrations `0034_social_identity_privacy.sql`、`0044_dm_message_requests.sql`、`0045_achievement_operations.sql`
+> 最近核验：2026-07-12，migrations `0034`、`0044`、`0045`、`0050` 与 owner-domain tests
 
 本规范定义公开资料、用户关注、板块/主题订阅、block、mute、资料隐私和徽章语义。目标是
 建立可解释的社交关系，而不是把所有关系都命名为 “following” 或 “屏蔽”。
@@ -41,11 +41,21 @@
 - 用户搜索以 `discoverable` 和已验证校园身份作为候选门槛，响应时重新应用 active/suspension、
   profile visibility、block/mute 与 clean avatar policy；匿名只看 public profile，校园登录用户可看
   public/campus，`only_me` 和 `discoverable=false` 不进入第三方搜索结果。
+- Activity visibility 已独立于 profile visibility：本人始终可看；`public` 允许匿名、`campus` 要求
+  登录校园账号、`only_me` 只允许本人。Profile DTO 返回 viewer-specific `canViewActivity`，Web 在
+  无权限时展示明确私密状态而不重复请求主题/回复列表；未来 likes/media/activity tabs 复用同一 gate。
+- Profile 上的主题、回复和获赞 aggregate 继续表示公共内容贡献总量，只要 profile 本身可见就展示；
+  activity policy 控制逐条列表，不反向隐藏 canonical 公共主题，也不把公开计数伪装成私密事实。
+- Mention policy 已支持 `everyone/following/nobody`；`following` 表示接收方关注发起人。Identity 批量
+  解析 active、未 suspended 的 handle，Forum 在单次有界写路径应用 policy、follow、block、mute 与
+  通知偏好。无权限、未知或生命周期关闭的 `@handle` 仍作为普通公开文字保存，不报错、不生成语义
+  通知，也不向发帖人暴露账号存在性或策略。
 
 ### Partial
 
-- 暂无 handle history/cooldown/redirect、公开 activity/media/likes tabs。
-- activity/mention 隐私仍未实现；public profile 是否允许外部搜索引擎索引仍需独立政策。
+- 暂无 handle history/cooldown/redirect、公开 media/likes tabs；公开 activity tab 只有主题/回复列表，
+  尚未形成 reaction/media 的独立 read model。
+- Public profile 是否允许外部搜索引擎索引仍需独立政策。
 - 第一阶段不做私密账号与 follow pending request；DM message request 使用独立状态机，二者不得混用。
 - Avatar/banner 已有 owner+clean binding 和上传状态 UI，但图片 scanner、变体、EXIF 清理和 orphan GC
   仍是媒体链路缺口；当前依赖独立 staff 人工审核，Web 不再提供任意 URL 输入。
@@ -77,8 +87,9 @@ Forum 订阅在用户界面统一显示为“订阅”；内部保留的 `follow
   计数；它不自动 block、不通知对方，也不阻止对方未来重新关注。
 
 relationship 一次返回 `following`、`followedBy`、`blockedByMe`、`blockedMe`、`muted`、
-`canFollow`、`canStartConversation`，Web 不再下载整张 block 列表推断单个用户状态。第一阶段没有
-follow `requestState`；DM request 只存在于私信 API。`canMention` 随 mention policy 一起后续增加。
+`canFollow`、`canStartConversation`、`canMention`，Web 不再下载整张 block 列表推断单个用户状态。
+`canMention` 只是当前关系和接收方策略的 viewer read model；内容写入仍重新批量检查，不能把按钮
+状态当授权。第一阶段没有 follow `requestState`；DM request 只存在于私信 API。
 
 ## Block 与 mute
 
@@ -125,6 +136,11 @@ follow `requestState`；DM request 只存在于私信 API。`canMention` 随 men
 公共论坛主题的可见性由 board policy 控制，不由作者 profile visibility 反向改变。若未来要做
 followers-only 内容，应建立独立内容类型和授权模型。
 
+上述默认值已经落库：activity=`only_me`、mention=`everyone`。Activity 的逐条列表权限在 profile
+visibility 和双向 block 之后应用；本人例外只绕过 activity policy，不绕过账号生命周期。Mention
+自己的 handle 不创建通知，block 任意方向都禁止语义 mention；mute 不阻止对方写普通公开文字，但
+会抑制接收方通知。
+
 ## 徽章、认证与角色标识
 
 三者必须分开：
@@ -164,6 +180,11 @@ Identity 同时维护最小化的用户搜索候选文档，只包含 account id
 第三方 URL 作为权威字段。上传 intent 会持久化可选的 `profile_avatar/profile_banner` usage，使待审
 状态可在刷新后恢复；usage 不是放宽授权的凭证，最终绑定仍重新验证 owner、image kind 和 clean 状态。
 
+Mention handle 解析属于 Identity 的最小 public batch API，只返回 account id、canonical handle 和
+mention policy，不返回邮箱、资料正文或生命周期内部原因；Forum 使用自己的 follow/block/mute 事实
+决定 notification side effect。Profile activity list 由 Forum 持有，但只消费 Identity 返回的
+activity visibility，不跨 schema 读取私有字段。
+
 ## 已决策与后续决策
 
 - 第一阶段 profile 默认 `campus`，followers/following 默认 `followers`，DM 默认 `following`，
@@ -181,6 +202,10 @@ Identity 同时维护最小化的用户搜索候选文档，只包含 account id
 - follow、subscription、mute、block 的文案、API 与行为不混用。
 - block/mute 在 profile、feed、search、notification、DM 和互动中使用同一 policy。
 - 隐私设置对匿名、校园成员、关系用户、本人和 staff 有矩阵化授权测试。
+- Profile 的 `canViewActivity` 与主题/回复 endpoint 使用同一 policy；私密状态不触发 Web 重试风暴，
+  aggregate 公共内容计数仍保持可解释。
+- Mention 覆盖 everyone/following/nobody/self/block/inactive/suspended；被拒绝的文字仍原样公开且没有
+  通知，relationship `canMention` 与最终写入授权一致。
 - 所有公开 profile 响应不含邮箱或内部治理字段，媒体来自平台 asset。
 - profile 上传刷新后仍能恢复待审/通过/未通过状态；待审或未通过资产没有可用绑定按钮，服务端也拒绝绑定。
 - 成就、认证和角色标识有独立 DTO、视觉语义和权限来源；成就/认证授予与撤销留下同事务审计。

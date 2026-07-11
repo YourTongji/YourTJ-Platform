@@ -553,7 +553,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Get profile, relationship-list, discovery, and new-DM privacy settings */
+        /** Get profile, activity, relationship-list, discovery, new-DM, and mention privacy settings */
         get: {
             parameters: {
                 query?: never;
@@ -585,7 +585,7 @@ export interface paths {
             };
             requestBody: {
                 content: {
-                    "application/json": components["schemas"]["ProfilePrivacy"];
+                    "application/json": components["schemas"]["ProfilePrivacyUpdateInput"];
                 };
             };
             responses: {
@@ -1043,7 +1043,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** User's visible threads subject to profile visibility and block rules */
+        /** User's visible threads subject to profile, activity visibility, and block rules */
         get: {
             parameters: {
                 query?: {
@@ -1068,6 +1068,7 @@ export interface paths {
                         "application/json": components["schemas"]["UserThreadPage"];
                     };
                 };
+                404: components["responses"]["NotFound"];
             };
         };
         put?: never;
@@ -1085,7 +1086,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** User's visible comments subject to profile visibility and block rules */
+        /** User's visible comments subject to profile, activity visibility, and block rules */
         get: {
             parameters: {
                 query?: {
@@ -1110,6 +1111,7 @@ export interface paths {
                         "application/json": components["schemas"]["UserCommentPage"];
                     };
                 };
+                404: components["responses"]["NotFound"];
             };
         };
         put?: never;
@@ -9278,6 +9280,16 @@ export interface components {
          * @enum {string}
          */
         DmPolicy: "everyone" | "following" | "nobody";
+        /**
+         * @description Controls profile activity lists, not the visibility of canonical public forum content.
+         * @enum {string}
+         */
+        ActivityVisibility: "public" | "campus" | "only_me";
+        /**
+         * @description following means accounts the recipient follows may create a semantic mention notification.
+         * @enum {string}
+         */
+        MentionPolicy: "everyone" | "following" | "nobody";
         MyProfile: {
             accountId: string;
             displayName: string | null;
@@ -9298,11 +9310,23 @@ export interface components {
         };
         ProfilePrivacy: {
             profileVisibility: components["schemas"]["ProfileVisibility"];
+            activityVisibility: components["schemas"]["ActivityVisibility"];
             followersVisibility: components["schemas"]["RelationshipListVisibility"];
             followingVisibility: components["schemas"]["RelationshipListVisibility"];
             /** @description Controls third-party relationship-list discovery and future account search, not exact-handle navigation. */
             discoverable: boolean;
             dmPolicy: components["schemas"]["DmPolicy"];
+            mentionPolicy: components["schemas"]["MentionPolicy"];
+        };
+        /** @description New activity and mention fields are optional only for rolling compatibility with older clients; current clients send both. */
+        ProfilePrivacyUpdateInput: {
+            profileVisibility: components["schemas"]["ProfileVisibility"];
+            activityVisibility?: components["schemas"]["ActivityVisibility"];
+            followersVisibility: components["schemas"]["RelationshipListVisibility"];
+            followingVisibility: components["schemas"]["RelationshipListVisibility"];
+            discoverable: boolean;
+            dmPolicy: components["schemas"]["DmPolicy"];
+            mentionPolicy?: components["schemas"]["MentionPolicy"];
         };
         ProfileAssetInput: {
             assetId: string;
@@ -10581,6 +10605,8 @@ export interface components {
             canFollow: boolean;
             /** @description Whether the current account may start a new conversation under block and recipient DM policy. */
             canStartConversation: boolean;
+            /** @description Whether the current account may create a semantic mention notification under block and recipient mention policy. */
+            canMention: boolean;
         };
         UserBadge: {
             slug: string;
@@ -10628,6 +10654,8 @@ export interface components {
             votesReceived: number;
             followerCount: number;
             followingCount: number;
+            /** @description Viewer-specific permission for authored-content lists and future activity, media, and likes tabs. Aggregate public-content counters remain visible with the profile. */
+            canViewActivity: boolean;
             createdAt: number;
         };
         UserThread: {

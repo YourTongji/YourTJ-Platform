@@ -43,6 +43,40 @@ async fn lock_pair(
     Ok(())
 }
 
+/// Lock several direct-interaction pairs in deterministic order with one database query.
+pub(crate) async fn lock_pairs(
+    tx: &mut Transaction<'_, Postgres>,
+    account_id: i64,
+    other_account_ids: &[i64],
+) -> AppResult<()> {
+    let mut lock_keys: Vec<String> = other_account_ids
+        .iter()
+        .copied()
+        .filter(|other_id| *other_id != account_id)
+        .map(|other_id| {
+            let account_low_id = account_id.min(other_id);
+            let account_high_id = account_id.max(other_id);
+            format!("forum-social:{account_low_id}:{account_high_id}")
+        })
+        .collect();
+    lock_keys.sort_unstable();
+    lock_keys.dedup();
+    if lock_keys.is_empty() {
+        return Ok(());
+    }
+    sqlx::query(
+        "SELECT pg_advisory_xact_lock(hashtextextended(ordered.lock_key, 0)) \
+         FROM ( \
+           SELECT pair.lock_key FROM unnest($1::text[]) AS pair(lock_key) \
+           ORDER BY pair.lock_key \
+         ) AS ordered",
+    )
+    .bind(&lock_keys)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
 /// Serialize a direct interaction with block mutation and reject either block direction.
 pub(crate) async fn lock_pair_unblocked(
     tx: &mut Transaction<'_, Postgres>,

@@ -122,6 +122,7 @@ export type MediaUsage = Schema["MediaUsage"];
 export type MyUpload = Schema["MyUpload"];
 export type ProfileUpdateInput = Schema["ProfileUpdateInput"];
 export type ProfilePrivacy = Schema["ProfilePrivacy"];
+export type ProfilePrivacyUpdateInput = Schema["ProfilePrivacyUpdateInput"];
 export type Upload = Schema["Upload"];
 export type UploadCredentials = Schema["UploadCredentials"];
 export type UploadUrl = Schema["UploadUrl"];

@@ -10,7 +10,7 @@ import {
   hasCapability,
 } from "@/components/admin/capabilities";
 import { PageHeader } from "@/components/common/page-header";
-import { ErrorState, LoadingState } from "@/components/common/states";
+import { EmptyState, ErrorState, LoadingState } from "@/components/common/states";
 import { ProfileActivitySection } from "@/components/profile/profile-activity-section";
 import {
   ProfileRelationshipListDialog,
@@ -31,25 +31,26 @@ export function ProfilePage() {
   const [confirmBlockOpen, setConfirmBlockOpen] = React.useState(false);
   const [relationshipList, setRelationshipList] = React.useState<ProfileRelationshipListKind | null>(null);
   const capabilities = React.useMemo(() => capabilitiesForAccount(account), [account]);
+  const viewerCacheKey = account?.id ?? "anonymous";
 
   const profile = useQuery({
-    queryKey: ["profile", name],
+    queryKey: ["profile", name, "viewer", viewerCacheKey],
     queryFn: () => api.publicUser(name),
     enabled: Boolean(name),
   });
   const threads = useInfiniteQuery({
-    queryKey: ["profile", name, "threads"],
+    queryKey: ["profile", name, "threads", viewerCacheKey],
     queryFn: ({ pageParam }) => api.userThreads(name, pageParam),
     initialPageParam: null as string | null,
     getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
-    enabled: Boolean(name),
+    enabled: Boolean(name) && profile.data?.canViewActivity === true,
   });
   const comments = useInfiniteQuery({
-    queryKey: ["profile", name, "comments"],
+    queryKey: ["profile", name, "comments", viewerCacheKey],
     queryFn: ({ pageParam }) => api.userComments(name, pageParam),
     initialPageParam: null as string | null,
     getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
-    enabled: Boolean(name),
+    enabled: Boolean(name) && profile.data?.canViewActivity === true,
   });
   const isSelf = Boolean(
     profile.data && account && (
@@ -58,7 +59,7 @@ export function ProfilePage() {
     ),
   );
   const socialRelationship = useQuery({
-    queryKey: ["profile", name, "relationship"],
+    queryKey: ["profile", name, "relationship", viewerCacheKey],
     queryFn: () => api.userRelationship(profile.data?.handle ?? name),
     enabled: isAuthenticated && Boolean(profile.data) && !isSelf,
   });
@@ -160,7 +161,7 @@ export function ProfilePage() {
         onOpenRelationshipList={setRelationshipList}
       />
 
-      {!contentHidden ? <div className="grid items-start gap-5 lg:grid-cols-2">
+      {!contentHidden && profile.data.canViewActivity ? <div className="grid items-start gap-5 lg:grid-cols-2">
         <ProfileActivitySection
           title="主题"
           icon={MessageSquare}
@@ -220,11 +221,19 @@ export function ProfilePage() {
         />
       </div> : null}
 
+      {!contentHidden && !profile.data.canViewActivity ? (
+        <EmptyState
+          title="活动列表未公开"
+          description="该用户限制了个人主页上的主题与回复列表；公开内容仍可在对应板块和主题中查看。"
+        />
+      ) : null}
+
       <ProfileRelationshipListDialog
         handle={profile.data.handle}
         kind={relationshipList ?? "followers"}
         open={relationshipList !== null}
         canRemoveFollowers={isSelf}
+        viewerCacheKey={viewerCacheKey}
         onOpenChange={(open) => !open && setRelationshipList(null)}
       />
     </div>

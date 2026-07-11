@@ -141,6 +141,14 @@ components:
       type: string
       description: "following means accounts the recipient follows may start a new conversation."
       enum: [everyone, following, nobody]
+    ActivityVisibility:
+      type: string
+      description: Controls profile activity lists, not the visibility of canonical public forum content.
+      enum: [public, campus, only_me]
+    MentionPolicy:
+      type: string
+      description: "following means accounts the recipient follows may create a semantic mention notification."
+      enum: [everyone, following, nobody]
     MyProfile:
       type: object
       required: [accountId, displayName, bio, website, avatarAssetId, bannerAssetId]
@@ -165,15 +173,29 @@ components:
           description: HTTPS URLs only.
     ProfilePrivacy:
       type: object
-      required: [profileVisibility, followersVisibility, followingVisibility, discoverable, dmPolicy]
+      required: [profileVisibility, activityVisibility, followersVisibility, followingVisibility, discoverable, dmPolicy, mentionPolicy]
       properties:
         profileVisibility: { $ref: "#/components/schemas/ProfileVisibility" }
+        activityVisibility: { $ref: "#/components/schemas/ActivityVisibility" }
         followersVisibility: { $ref: "#/components/schemas/RelationshipListVisibility" }
         followingVisibility: { $ref: "#/components/schemas/RelationshipListVisibility" }
         discoverable:
           type: boolean
           description: Controls third-party relationship-list discovery and future account search, not exact-handle navigation.
         dmPolicy: { $ref: "#/components/schemas/DmPolicy" }
+        mentionPolicy: { $ref: "#/components/schemas/MentionPolicy" }
+    ProfilePrivacyUpdateInput:
+      type: object
+      required: [profileVisibility, followersVisibility, followingVisibility, discoverable, dmPolicy]
+      description: New activity and mention fields are optional only for rolling compatibility with older clients; current clients send both.
+      properties:
+        profileVisibility: { $ref: "#/components/schemas/ProfileVisibility" }
+        activityVisibility: { $ref: "#/components/schemas/ActivityVisibility" }
+        followersVisibility: { $ref: "#/components/schemas/RelationshipListVisibility" }
+        followingVisibility: { $ref: "#/components/schemas/RelationshipListVisibility" }
+        discoverable: { type: boolean }
+        dmPolicy: { $ref: "#/components/schemas/DmPolicy" }
+        mentionPolicy: { $ref: "#/components/schemas/MentionPolicy" }
     ProfileAssetInput:
       type: object
       required: [assetId]
@@ -1605,7 +1627,7 @@ components:
         followedAt: { type: integer }
     UserRelationship:
       type: object
-      required: [isSelf, following, followedBy, muted, blockedByMe, blockedMe, canFollow, canStartConversation]
+      required: [isSelf, following, followedBy, muted, blockedByMe, blockedMe, canFollow, canStartConversation, canMention]
       properties:
         isSelf: { type: boolean }
         following: { type: boolean }
@@ -1617,6 +1639,9 @@ components:
         canStartConversation:
           type: boolean
           description: Whether the current account may start a new conversation under block and recipient DM policy.
+        canMention:
+          type: boolean
+          description: Whether the current account may create a semantic mention notification under block and recipient mention policy.
     # ---- public profile ----
     UserBadge:
       type: object
@@ -1649,7 +1674,7 @@ components:
         expiresAt: { type: integer, nullable: true }
     UserProfile:
       type: object
-      required: [id, handle, displayName, bio, website, avatarUrl, bannerUrl, role, trustLevel, badges, verifications, threadCount, commentCount, votesReceived, followerCount, followingCount, createdAt]
+      required: [id, handle, displayName, bio, website, avatarUrl, bannerUrl, role, trustLevel, badges, verifications, threadCount, commentCount, votesReceived, followerCount, followingCount, canViewActivity, createdAt]
       properties:
         id: { type: string }
         handle: { type: string }
@@ -1670,6 +1695,9 @@ components:
         votesReceived: { type: integer, minimum: 0 }
         followerCount: { type: integer, minimum: 0 }
         followingCount: { type: integer, minimum: 0 }
+        canViewActivity:
+          type: boolean
+          description: Viewer-specific permission for authored-content lists and future activity, media, and likes tabs. Aggregate public-content counters remain visible with the profile.
         createdAt: { type: integer }
     UserThread:
       type: object
@@ -2283,7 +2311,7 @@ paths:
   /me/privacy:
     get:
       tags: [identity]
-      summary: Get profile, relationship-list, discovery, and new-DM privacy settings
+      summary: Get profile, activity, relationship-list, discovery, new-DM, and mention privacy settings
       responses:
         "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/ProfilePrivacy" } } } }
         "401": { $ref: "#/components/responses/Unauthorized" }
@@ -2292,7 +2320,7 @@ paths:
       summary: Replace profile privacy settings
       requestBody:
         required: true
-        content: { application/json: { schema: { $ref: "#/components/schemas/ProfilePrivacy" } } }
+        content: { application/json: { schema: { $ref: "#/components/schemas/ProfilePrivacyUpdateInput" } } }
       responses:
         "200": { description: saved, content: { application/json: { schema: { $ref: "#/components/schemas/ProfilePrivacy" } } } }
         "400": { $ref: "#/components/responses/BadRequest" }
@@ -2396,16 +2424,20 @@ paths:
     get:
       tags: [identity]
       security: [{ bearer: [] }, {}]
-      summary: User's visible threads subject to profile visibility and block rules
+      summary: User's visible threads subject to profile, activity visibility, and block rules
       parameters: [{ name: handle, in: path, required: true, schema: { type: string } }, { $ref: "#/components/parameters/Cursor" }, { $ref: "#/components/parameters/Limit" }]
-      responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/UserThreadPage" } } } } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/UserThreadPage" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
   /users/{handle}/comments:
     get:
       tags: [identity]
       security: [{ bearer: [] }, {}]
-      summary: User's visible comments subject to profile visibility and block rules
+      summary: User's visible comments subject to profile, activity visibility, and block rules
       parameters: [{ name: handle, in: path, required: true, schema: { type: string } }, { $ref: "#/components/parameters/Cursor" }, { $ref: "#/components/parameters/Limit" }]
-      responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/UserCommentPage" } } } } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/UserCommentPage" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
   /users/{handle}/relationship:
     get:
       tags: [identity]

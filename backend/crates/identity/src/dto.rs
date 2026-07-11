@@ -196,10 +196,25 @@ pub struct ProfileUpdateInput {
 #[serde(rename_all = "camelCase")]
 pub struct ProfilePrivacyDto {
     pub profile_visibility: String,
+    pub activity_visibility: String,
     pub followers_visibility: String,
     pub following_visibility: String,
     pub discoverable: bool,
     pub dm_policy: String,
+    pub mention_policy: String,
+}
+
+/// PUT /me/privacy. Optional new fields preserve older clients during a rolling deploy.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfilePrivacyUpdateInput {
+    pub profile_visibility: String,
+    pub activity_visibility: Option<String>,
+    pub followers_visibility: String,
+    pub following_visibility: String,
+    pub discoverable: bool,
+    pub dm_policy: String,
+    pub mention_policy: Option<String>,
 }
 
 /// POST /wallet/bind

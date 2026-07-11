@@ -23,16 +23,18 @@ export function ProfileRelationshipListDialog({
   open,
   onOpenChange,
   canRemoveFollowers = false,
+  viewerCacheKey = "anonymous",
 }: {
   handle: string;
   kind: ProfileRelationshipListKind;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   canRemoveFollowers?: boolean;
+  viewerCacheKey?: string;
 }) {
   const queryClient = useQueryClient();
   const relationships = useInfiniteQuery({
-    queryKey: ["profile", handle, kind],
+    queryKey: ["profile", handle, kind, viewerCacheKey],
     queryFn: ({ pageParam }) => kind === "followers"
       ? api.userFollowers(handle, pageParam)
       : api.userFollowing(handle, pageParam),

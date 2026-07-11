@@ -65,6 +65,24 @@ async fn get_thread_request(
         .expect("thread detail response")
 }
 
+async fn get_relationship_request(
+    app: &axum::Router,
+    token: &str,
+    handle: &str,
+) -> axum::response::Response {
+    app.clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!("/api/v2/users/{handle}/relationship"))
+                .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::empty())
+                .expect("build relationship request"),
+        )
+        .await
+        .expect("relationship response")
+}
+
 async fn admin_thread_action_request(
     app: &axum::Router,
     thread_id: i64,
@@ -738,6 +756,136 @@ async fn queued_thread_is_hidden_without_activity_credit() {
         .await
         .expect("remove watched word");
     forum::watched_words::reload_watched_words(&pool).await.expect("reload watched words");
+}
+
+#[tokio::test]
+async fn thread_mentions_apply_recipient_policy_without_rejecting_literal_text() {
+    let (pool, app) = create_test_app().await;
+    let (actor_id, actor_token) =
+        create_test_account(&pool, "mention-actor@tongji.edu.cn", "mention-actor").await;
+    let (everyone_id, _) =
+        create_test_account(&pool, "mention-everyone@tongji.edu.cn", "mention-everyone").await;
+    let (following_id, _) =
+        create_test_account(&pool, "mention-following@tongji.edu.cn", "mention-following").await;
+    let (not_following_id, _) =
+        create_test_account(&pool, "mention-not-following@tongji.edu.cn", "mention-not-following")
+            .await;
+    let (nobody_id, _) =
+        create_test_account(&pool, "mention-nobody@tongji.edu.cn", "mention-nobody").await;
+    let (blocked_id, _) =
+        create_test_account(&pool, "mention-blocked@tongji.edu.cn", "mention-blocked").await;
+    let (suspended_id, _) =
+        create_test_account(&pool, "mention-suspended@tongji.edu.cn", "mention-suspended").await;
+    let (inactive_id, _) =
+        create_test_account(&pool, "mention-inactive@tongji.edu.cn", "mention-inactive").await;
+
+    for (account_id, policy) in [
+        (everyone_id, "everyone"),
+        (following_id, "following"),
+        (not_following_id, "following"),
+        (nobody_id, "nobody"),
+        (blocked_id, "everyone"),
+        (suspended_id, "everyone"),
+        (inactive_id, "everyone"),
+    ] {
+        sqlx::query(
+            "INSERT INTO identity.profile_privacy (account_id, mention_policy) VALUES ($1, $2) \
+             ON CONFLICT (account_id) DO UPDATE SET mention_policy = EXCLUDED.mention_policy",
+        )
+        .bind(account_id)
+        .bind(policy)
+        .execute(&pool)
+        .await
+        .expect("set mention policy");
+    }
+    sqlx::query("INSERT INTO forum.user_follows (follower_id, followed_id) VALUES ($1, $2)")
+        .bind(following_id)
+        .bind(actor_id)
+        .execute(&pool)
+        .await
+        .expect("seed recipient follow");
+    sqlx::query("INSERT INTO forum.user_ignores (account_id, ignored_account_id) VALUES ($1, $2)")
+        .bind(blocked_id)
+        .bind(actor_id)
+        .execute(&pool)
+        .await
+        .expect("seed mention block");
+    sqlx::query(
+        "INSERT INTO identity.sanctions (account_id, kind, reason, starts_at) \
+         VALUES ($1, 'suspend', 'mention privacy test', now())",
+    )
+    .bind(suspended_id)
+    .execute(&pool)
+    .await
+    .expect("suspend mention target");
+    sqlx::query("UPDATE identity.accounts SET status = 'deleted' WHERE id = $1")
+        .bind(inactive_id)
+        .execute(&pool)
+        .await
+        .expect("close mention target");
+
+    let literal_body = "@mention-everyone @mention-following @mention-not-following \
+                        @mention-nobody @mention-blocked @mention-suspended \
+                        @mention-inactive @MENTION-ACTOR @unknown-handle";
+    let response = create_thread_request(
+        &app,
+        &actor_token,
+        json!({
+            "boardId": "1",
+            "title": "Recipient-controlled mentions",
+            "body": literal_body,
+            "contentFormat": "plain_v1"
+        }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let created = read_json(response).await;
+    assert_eq!(created["body"], literal_body);
+
+    for _ in 0..50 {
+        let count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM forum.notifications WHERE type = 'mention'")
+                .fetch_one(&pool)
+                .await
+                .expect("poll mention notifications");
+        if count >= 2 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    let recipients: Vec<i64> = sqlx::query_scalar(
+        "SELECT account_id FROM forum.notifications WHERE type = 'mention' ORDER BY account_id",
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("mention recipients");
+    let mut expected_recipients = vec![everyone_id, following_id];
+    expected_recipients.sort_unstable();
+    assert_eq!(recipients, expected_recipients);
+
+    for (handle, expected) in [
+        ("mention-everyone", true),
+        ("mention-following", true),
+        ("mention-not-following", false),
+        ("mention-nobody", false),
+        ("mention-blocked", false),
+        ("mention-actor", false),
+    ] {
+        let response = get_relationship_request(&app, &actor_token, handle).await;
+        assert_eq!(response.status(), StatusCode::OK, "relationship for {handle}");
+        let relationship = read_json(response).await;
+        assert_eq!(relationship["canMention"], expected, "relationship for {handle}");
+    }
+    assert_eq!(
+        get_relationship_request(&app, &actor_token, "mention-suspended").await.status(),
+        StatusCode::NOT_FOUND
+    );
+    assert!(!recipients.contains(&nobody_id));
+    assert!(!recipients.contains(&blocked_id));
+    assert!(!recipients.contains(&suspended_id));
+    assert!(!recipients.contains(&inactive_id));
+    assert!(!recipients.contains(&actor_id));
+    assert!(!recipients.contains(&not_following_id));
 }
 
 #[tokio::test]

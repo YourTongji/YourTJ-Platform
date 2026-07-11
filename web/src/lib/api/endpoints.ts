@@ -96,6 +96,7 @@ import type {
   MyProfile,
   MyUpload,
   ProfilePrivacy,
+  ProfilePrivacyUpdateInput,
   ProfileUpdateInput,
   RecentAuthStatus,
   RecentAuthVerifyInput,
@@ -245,7 +246,7 @@ export const api = {
     return apiRequest<ProfilePrivacy>("/me/privacy");
   },
 
-  updateMyPrivacy(input: ProfilePrivacy) {
+  updateMyPrivacy(input: ProfilePrivacyUpdateInput) {
     return apiRequest<ProfilePrivacy>("/me/privacy", { method: "PUT", body: input });
   },
 

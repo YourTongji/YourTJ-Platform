@@ -35,21 +35,19 @@ async fn visible_account_by_handle(
     state: &AppState,
     headers: &HeaderMap,
     handle: &str,
-    includes_profile_content: bool,
-) -> AppResult<identity::public_accounts::PublicAccount> {
+) -> AppResult<(
+    identity::public_accounts::PublicAccount,
+    Option<i64>,
+    Option<crate::repo::relationships::RelationshipState>,
+)> {
     let viewer = super::relationships::optional_viewer(state, headers).await?;
     let viewer_id = viewer.as_ref().map(|account| account.id);
     let account = account_by_handle(state, handle).await?;
     let relationship = super::relationships::relationship_for(state, viewer_id, account.id).await?;
-    let is_visible = if includes_profile_content {
-        super::relationships::profile_content_is_visible(&account, viewer_id, relationship)
-    } else {
-        super::relationships::profile_is_visible(&account, viewer_id, relationship)
-    };
-    if !is_visible {
+    if !super::relationships::profile_is_visible(&account, viewer_id, relationship) {
         return Err(AppError::NotFound);
     }
-    Ok(account)
+    Ok((account, viewer_id, relationship))
 }
 
 /// GET /api/v2/users/{handle} — public community profile.
@@ -59,7 +57,10 @@ pub async fn get_user_profile(
     headers: HeaderMap,
     Path(handle): Path<String>,
 ) -> AppResult<Json<UserProfileDto>> {
-    let account = visible_account_by_handle(&state, &headers, &handle, false).await?;
+    let (account, viewer_id, relationship) =
+        visible_account_by_handle(&state, &headers, &handle).await?;
+    let can_view_activity =
+        super::relationships::activity_is_visible(&account, viewer_id, relationship);
     let asset_ids: Vec<i64> =
         [account.avatar_asset_id, account.banner_asset_id].into_iter().flatten().collect();
     let (stats, social_counts, badge_rows, asset_urls, verifications) = tokio::try_join!(
@@ -90,6 +91,7 @@ pub async fn get_user_profile(
         votes_received: stats.votes_received,
         follower_count: social_counts.follower_count,
         following_count: social_counts.following_count,
+        can_view_activity,
         created_at: account.created_at.timestamp(),
     }))
 }
@@ -102,7 +104,11 @@ pub async fn list_user_threads(
     Path(handle): Path<String>,
     Query(query): Query<PublicPostPageQuery>,
 ) -> AppResult<Json<shared::Page<UserThreadDto>>> {
-    let account = visible_account_by_handle(&state, &headers, &handle, true).await?;
+    let (account, viewer_id, relationship) =
+        visible_account_by_handle(&state, &headers, &handle).await?;
+    if !super::relationships::activity_is_visible(&account, viewer_id, relationship) {
+        return Err(AppError::NotFound);
+    }
     let (rows, next_cursor) = crate::repo::profiles::list_public_user_threads(
         &state.db,
         account.id,
@@ -132,7 +138,11 @@ pub async fn list_user_comments(
     Path(handle): Path<String>,
     Query(query): Query<PublicPostPageQuery>,
 ) -> AppResult<Json<shared::Page<UserCommentDto>>> {
-    let account = visible_account_by_handle(&state, &headers, &handle, true).await?;
+    let (account, viewer_id, relationship) =
+        visible_account_by_handle(&state, &headers, &handle).await?;
+    if !super::relationships::activity_is_visible(&account, viewer_id, relationship) {
+        return Err(AppError::NotFound);
+    }
     let (rows, next_cursor) = crate::repo::profiles::list_public_user_comments(
         &state.db,
         account.id,

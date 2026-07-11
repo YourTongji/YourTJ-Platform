@@ -4,7 +4,7 @@
 mod helpers;
 
 use axum::body::Body;
-use axum::http::{Request, StatusCode};
+use axum::http::{header, Request, StatusCode};
 use axum::Router;
 use helpers::{create_test_account, create_test_app, read_json};
 use serde_json::Value;
@@ -20,14 +20,132 @@ enum ThreadVisibility {
 }
 
 async fn get(app: &Router, uri: &str) -> (StatusCode, Value) {
+    get_as(app, uri, None).await
+}
+
+async fn get_as(app: &Router, uri: &str, token: Option<&str>) -> (StatusCode, Value) {
+    let mut request = Request::builder().uri(uri);
+    if let Some(token) = token {
+        request = request.header(header::AUTHORIZATION, format!("Bearer {token}"));
+    }
     let response = app
         .clone()
-        .oneshot(Request::builder().uri(uri).body(Body::empty()).expect("build request"))
+        .oneshot(request.body(Body::empty()).expect("build request"))
         .await
         .expect("profile response");
     let status = response.status();
     let body = read_json(response).await;
     (status, body)
+}
+
+#[tokio::test]
+async fn activity_visibility_gates_authored_lists_without_hiding_public_content_counts() {
+    let (pool, app) = create_test_app().await;
+    let (owner_id, owner_token) =
+        create_test_account(&pool, "activity-owner@tongji.edu.cn", "activity-owner").await;
+    let (viewer_id, viewer_token) =
+        create_test_account(&pool, "activity-viewer@tongji.edu.cn", "activity-viewer").await;
+    sqlx::query(
+        "INSERT INTO identity.profile_privacy (account_id, profile_visibility) \
+         VALUES ($1, 'public') ON CONFLICT (account_id) DO UPDATE \
+         SET profile_visibility = 'public', activity_visibility = 'only_me'",
+    )
+    .bind(owner_id)
+    .execute(&pool)
+    .await
+    .expect("set initial activity privacy");
+    let thread_id =
+        insert_thread(&pool, owner_id, "Public canonical thread", ThreadVisibility::Visible).await;
+    insert_comment(&pool, owner_id, thread_id, "Public canonical comment", false).await;
+    sqlx::query(
+        "INSERT INTO forum.user_stats \
+         (account_id, threads_created, comments_created, votes_received) \
+         VALUES ($1, 4, 7, 9)",
+    )
+    .bind(owner_id)
+    .execute(&pool)
+    .await
+    .expect("seed public aggregate counts");
+
+    let (anonymous_profile_status, anonymous_profile) =
+        get(&app, "/api/v2/users/activity-owner").await;
+    assert_eq!(anonymous_profile_status, StatusCode::OK);
+    assert_eq!(anonymous_profile["canViewActivity"], false);
+    assert_eq!(anonymous_profile["threadCount"], 4);
+    assert_eq!(anonymous_profile["commentCount"], 7);
+    assert_eq!(get(&app, "/api/v2/users/activity-owner/threads").await.0, StatusCode::NOT_FOUND);
+    assert_eq!(
+        get_as(&app, "/api/v2/users/activity-owner/comments", Some(&viewer_token),).await.0,
+        StatusCode::NOT_FOUND
+    );
+
+    let (self_profile_status, self_profile) =
+        get_as(&app, "/api/v2/users/activity-owner", Some(&owner_token)).await;
+    assert_eq!(self_profile_status, StatusCode::OK);
+    assert_eq!(self_profile["canViewActivity"], true);
+    assert_eq!(
+        get_as(&app, "/api/v2/users/activity-owner/threads", Some(&owner_token),).await.0,
+        StatusCode::OK
+    );
+
+    sqlx::query(
+        "UPDATE identity.profile_privacy SET activity_visibility = 'campus' \
+         WHERE account_id = $1",
+    )
+    .bind(owner_id)
+    .execute(&pool)
+    .await
+    .expect("allow campus activity");
+    assert_eq!(get(&app, "/api/v2/users/activity-owner/threads").await.0, StatusCode::NOT_FOUND);
+    let (campus_profile_status, campus_profile) =
+        get_as(&app, "/api/v2/users/activity-owner", Some(&viewer_token)).await;
+    assert_eq!(campus_profile_status, StatusCode::OK);
+    assert_eq!(campus_profile["canViewActivity"], true);
+    assert_eq!(
+        get_as(&app, "/api/v2/users/activity-owner/comments", Some(&viewer_token),).await.0,
+        StatusCode::OK
+    );
+
+    sqlx::query(
+        "UPDATE identity.profile_privacy SET activity_visibility = 'public' \
+         WHERE account_id = $1",
+    )
+    .bind(owner_id)
+    .execute(&pool)
+    .await
+    .expect("allow public activity");
+    assert_eq!(get(&app, "/api/v2/users/activity-owner/threads").await.0, StatusCode::OK);
+
+    sqlx::query("INSERT INTO forum.user_ignores (account_id, ignored_account_id) VALUES ($1, $2)")
+        .bind(viewer_id)
+        .bind(owner_id)
+        .execute(&pool)
+        .await
+        .expect("block activity owner");
+    let (blocked_profile_status, blocked_profile) =
+        get_as(&app, "/api/v2/users/activity-owner", Some(&viewer_token)).await;
+    assert_eq!(blocked_profile_status, StatusCode::OK);
+    assert_eq!(blocked_profile["canViewActivity"], false);
+    assert_eq!(
+        get_as(&app, "/api/v2/users/activity-owner/threads", Some(&viewer_token),).await.0,
+        StatusCode::NOT_FOUND
+    );
+
+    sqlx::query("DELETE FROM forum.user_ignores WHERE account_id = $1 AND ignored_account_id = $2")
+        .bind(viewer_id)
+        .bind(owner_id)
+        .execute(&pool)
+        .await
+        .expect("remove activity block");
+    sqlx::query(
+        "UPDATE identity.profile_privacy \
+         SET profile_visibility = 'campus', activity_visibility = 'public' WHERE account_id = $1",
+    )
+    .bind(owner_id)
+    .execute(&pool)
+    .await
+    .expect("tighten profile visibility");
+    assert_eq!(get(&app, "/api/v2/users/activity-owner").await.0, StatusCode::NOT_FOUND);
 }
 
 async fn insert_thread(
@@ -93,9 +211,10 @@ async fn profile_routes_preserve_contract_and_exclude_unavailable_content() {
     let (account_id, _) =
         create_test_account(&pool, "profile-boundary@tongji.edu.cn", "profile-boundary").await;
     sqlx::query(
-        "INSERT INTO identity.profile_privacy (account_id, profile_visibility) \
-         VALUES ($1, 'public') ON CONFLICT (account_id) DO UPDATE \
-         SET profile_visibility = 'public'",
+        "INSERT INTO identity.profile_privacy \
+         (account_id, profile_visibility, activity_visibility) \
+         VALUES ($1, 'public', 'public') ON CONFLICT (account_id) DO UPDATE \
+         SET profile_visibility = 'public', activity_visibility = 'public'",
     )
     .bind(account_id)
     .execute(&pool)
