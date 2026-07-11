@@ -42,8 +42,7 @@ pub async fn get_thread_for_moderation(
     let row =
         crate::repo::find_thread_for_moderation(&state.db, id).await?.ok_or(AppError::NotFound)?;
     let mut dto = crate::handlers::thread_to_detail_dto(&row);
-    dto.tags = crate::repo::get_thread_tag_slugs(&state.db, id).await?;
-    crate::handlers::attach_poll_to_detail(&state.db, id, &mut dto).await;
+    crate::handlers::hydrate_thread_detail(&state.db, id, None, &mut dto).await?;
     Ok(Json(dto))
 }
 

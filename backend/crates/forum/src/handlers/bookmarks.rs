@@ -1,10 +1,9 @@
 //! Bookmark handlers.
 
 use axum::extract::{Path, Query, State};
-use axum::http::HeaderMap;
+use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
 use serde::Deserialize;
-use serde_json::json;
 use shared::pagination::Page;
 use shared::{AppError, AppResult, AppState};
 
@@ -24,6 +23,12 @@ pub struct BookmarkListQuery {
     pub limit: i64,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BookmarkDeleteQuery {
+    post_type: String,
+}
+
 // ---------------------------------------------------------------------------
 // handlers
 // ---------------------------------------------------------------------------
@@ -34,7 +39,7 @@ pub async fn set_bookmark(
     Path(id_str): Path<String>,
     headers: HeaderMap,
     Json(body): Json<crate::dto::BookmarkInput>,
-) -> AppResult<Json<serde_json::Value>> {
+) -> AppResult<StatusCode> {
     let auth = identity::auth_middleware::authenticate(
         &headers,
         &state.db,
@@ -46,27 +51,25 @@ pub async fn set_bookmark(
 
     let post_id: i64 = id_str.parse().map_err(|_| AppError::NotFound)?;
 
-    // Detect target_type by checking whether the post_id exists in forum.threads
-    let exists_thread: bool =
-        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM forum.threads WHERE id = $1)")
-            .bind(post_id)
-            .fetch_one(&state.db)
-            .await
-            .unwrap_or(false);
-    let target_type = if exists_thread { "thread" } else { "comment" };
+    crate::repo::upsert_bookmark(
+        &state.db,
+        auth.id,
+        &body.post_type,
+        post_id,
+        body.note.as_deref(),
+    )
+    .await?;
 
-    crate::repo::upsert_bookmark(&state.db, auth.id, target_type, post_id, body.note.as_deref())
-        .await?;
-
-    Ok(Json(json!({"ok": true})))
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// DELETE /api/v2/forum/posts/{id}/bookmark
 pub async fn remove_bookmark(
     State(state): State<AppState>,
     Path(id_str): Path<String>,
+    Query(query): Query<BookmarkDeleteQuery>,
     headers: HeaderMap,
-) -> AppResult<Json<serde_json::Value>> {
+) -> AppResult<StatusCode> {
     let auth = identity::auth_middleware::authenticate(
         &headers,
         &state.db,
@@ -78,18 +81,9 @@ pub async fn remove_bookmark(
 
     let post_id: i64 = id_str.parse().map_err(|_| AppError::NotFound)?;
 
-    // Detect target_type by checking whether the post_id exists in forum.threads
-    let exists_thread: bool =
-        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM forum.threads WHERE id = $1)")
-            .bind(post_id)
-            .fetch_one(&state.db)
-            .await
-            .unwrap_or(false);
-    let target_type = if exists_thread { "thread" } else { "comment" };
+    crate::repo::delete_bookmark(&state.db, auth.id, &query.post_type, post_id).await?;
 
-    crate::repo::delete_bookmark(&state.db, auth.id, target_type, post_id).await?;
-
-    Ok(Json(json!({"ok": true})))
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// GET /api/v2/forum/bookmarks
@@ -107,9 +101,8 @@ pub async fn list_bookmarks_handler(
     .await
     .map_err(|_| AppError::Unauthorized)?;
 
-    let cursor: Option<i64> = q.cursor.and_then(|c| c.parse().ok());
     let (rows, next_cursor) =
-        crate::repo::list_bookmarks(&state.db, auth.id, cursor, q.limit).await?;
+        crate::repo::list_bookmarks(&state.db, auth.id, q.cursor.as_deref(), q.limit).await?;
 
     let items: Vec<BookmarkDto> = rows
         .into_iter()
@@ -121,6 +114,5 @@ pub async fn list_bookmarks_handler(
         })
         .collect();
 
-    let next_str = next_cursor.map(|c| c.to_string());
-    Ok(Json(Page::new(items, next_str)))
+    Ok(Json(Page::new(items, next_cursor)))
 }

@@ -76,8 +76,7 @@ pub async fn flag_post(
     if matches!(auth.role.as_str(), "mod" | "admin") {
         return Err(AppError::Forbidden);
     }
-    let trust_level =
-        crate::trust_levels::get_trust_level(state.redis.as_ref(), &state.db, auth.id).await?;
+    let trust_level = crate::trust_levels::get_trust_level(&state.db, auth.id).await?;
     let (bucket, capacity) = if trust_level == 0 { ("flag_tl0", 5) } else { ("flag", 15) };
     shared::ratelimit::check_token_bucket(
         state.redis.as_ref(),

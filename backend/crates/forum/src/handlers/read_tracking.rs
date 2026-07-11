@@ -1,19 +1,19 @@
 //! Read tracking handlers.
 
 use axum::extract::{Path, Query, State};
-use axum::http::HeaderMap;
+use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
 use serde::Deserialize;
 use shared::{AppError, AppResult, AppState};
 
-use crate::dto::ThreadFeedDto;
+use crate::dto::ThreadDto;
 use crate::repo;
+
+use super::{hydrate_thread_tags, thread_to_dto};
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReadTrackingQuery {
-    #[allow(dead_code)]
-    pub feed: Option<String>, // "unread"
     pub cursor: Option<String>,
     #[serde(default = "super::default_limit")]
     pub limit: i64,
@@ -25,7 +25,7 @@ pub async fn report_read(
     Path(id_str): Path<String>,
     headers: HeaderMap,
     Json(body): Json<crate::dto::ReadTrackingInput>,
-) -> AppResult<Json<serde_json::Value>> {
+) -> AppResult<StatusCode> {
     let auth = identity::auth_middleware::authenticate(
         &headers,
         &state.db,
@@ -45,11 +45,19 @@ pub async fn report_read(
     .await?;
 
     let id: i64 = id_str.parse().map_err(|_| AppError::NotFound)?;
-    let last_read = body.last_read_comment_id.and_then(|s| s.parse::<i64>().ok());
+    let last_read = body
+        .last_read_comment_id
+        .as_deref()
+        .map(|comment_id| {
+            comment_id
+                .parse::<i64>()
+                .map_err(|_| AppError::BadRequest("invalid lastReadCommentId".into()))
+        })
+        .transpose()?;
 
     repo::upsert_read_position(&state.db, auth.id, id, last_read).await?;
 
-    Ok(Json(serde_json::json!({"ok": true})))
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// GET /api/v2/forum/threads/unread — list unread threads
@@ -57,7 +65,7 @@ pub async fn list_unread_threads(
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(q): Query<ReadTrackingQuery>,
-) -> AppResult<Json<shared::pagination::Page<ThreadFeedDto>>> {
+) -> AppResult<Json<shared::pagination::Page<ThreadDto>>> {
     let auth = identity::auth_middleware::authenticate(
         &headers,
         &state.db,
@@ -67,27 +75,32 @@ pub async fn list_unread_threads(
     .await
     .map_err(|_| AppError::Unauthorized)?;
 
-    let cursor: Option<i64> = q.cursor.and_then(|c| c.parse().ok());
+    let cursor = q
+        .cursor
+        .as_deref()
+        .map(|cursor| {
+            cursor.parse::<i64>().map_err(|_| AppError::BadRequest("invalid cursor".into()))
+        })
+        .transpose()?;
     let (_rows, next_cursor) =
-        repo::get_unread_thread_ids(&state.db, auth.id, q.limit, cursor).await?;
+        repo::get_unread_thread_ids(&state.db, auth.id, None, None, q.limit, cursor).await?;
 
-    let mut items: Vec<ThreadFeedDto> = Vec::new();
-    for (thread_id, unread_count) in &_rows {
-        if let Ok(Some(row)) = repo::find_thread(&state.db, *thread_id).await {
-            items.push(ThreadFeedDto {
-                id: row.id.to_string(),
-                board_id: row.board_id.to_string(),
-                author_handle: row.author_handle,
-                title: row.title,
-                reply_count: row.reply_count,
-                vote_count: row.vote_count,
-                hot_score: row.hot_score,
-                created_at: row.created_at.timestamp(),
-                last_activity_at: row.last_activity_at.timestamp(),
-                unread_count: *unread_count,
-            });
-        }
-    }
+    let unread_counts = _rows.iter().copied().collect::<std::collections::HashMap<_, _>>();
+    let thread_ids = _rows.iter().map(|(thread_id, _)| *thread_id).collect::<Vec<_>>();
+    let rows = repo::fetch_threads_by_ids(&state.db, &thread_ids, Some(auth.id)).await?;
+    let mut items = rows
+        .iter()
+        .map(thread_to_dto)
+        .map(|mut thread| {
+            thread.unread_count = thread
+                .id
+                .parse::<i64>()
+                .ok()
+                .and_then(|thread_id| unread_counts.get(&thread_id).copied());
+            thread
+        })
+        .collect::<Vec<ThreadDto>>();
+    hydrate_thread_tags(&state.db, &mut items).await?;
     let next_str = next_cursor.map(|c| c.to_string());
 
     Ok(Json(shared::pagination::Page::new(items, next_str)))

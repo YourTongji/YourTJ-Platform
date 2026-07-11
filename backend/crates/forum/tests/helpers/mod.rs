@@ -207,6 +207,9 @@ async fn run_migrations(pool: &PgPool) {
     // Clean test data from previous runs (always run, even if migrations were skipped).
     sqlx::query("DELETE FROM forum.comments").execute(pool).await.ok();
     sqlx::query("DELETE FROM forum.threads").execute(pool).await.ok();
+    sqlx::query("DELETE FROM forum.tags").execute(pool).await.ok();
+    sqlx::query("DELETE FROM forum.watched_words").execute(pool).await.ok();
+    forum::watched_words::reload_watched_words(pool).await.expect("reload empty watched words");
     sqlx::query("DELETE FROM forum.boards").execute(pool).await.ok();
     sqlx::query("DELETE FROM identity.sessions").execute(pool).await.ok();
     sqlx::query("DELETE FROM identity.email_codes").execute(pool).await.ok();

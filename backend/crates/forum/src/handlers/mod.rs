@@ -81,6 +81,8 @@ pub(crate) fn thread_to_detail_dto(row: &crate::models::ThreadRowJoinedFull) -> 
         created_at: row.created_at.timestamp(),
         last_activity_at: row.last_activity_at.timestamp(),
         solved_answer_id: row.solved_answer_id.map(|v| v.to_string()),
+        viewer_vote: None,
+        is_bookmarked: false,
         my_last_read_comment_id: None,
         my_subscription_level: None,
         poll: None,
@@ -100,6 +102,8 @@ pub(crate) fn comment_to_dto(
         author_id: row.author_id.to_string(),
         body: row.body.clone(),
         vote_count: row.vote_count,
+        viewer_vote: None,
+        is_bookmarked: false,
         is_deleted: row.deleted_at.is_some(),
         is_hidden: row.hidden_at.is_some(),
         edited_at: row.edited_at.map(|v| v.timestamp()),
@@ -109,7 +113,11 @@ pub(crate) fn comment_to_dto(
     }
 }
 
-pub(crate) fn board_to_dto(row: &crate::models::BoardRow) -> BoardDto {
+pub(crate) fn board_to_dto(
+    row: &crate::models::BoardRow,
+    actor: Option<crate::repo::boards::BoardPostingActor>,
+) -> BoardDto {
+    let posting_restriction = crate::repo::boards::posting_restriction(row, actor);
     BoardDto {
         id: row.id.to_string(),
         slug: row.slug.clone(),
@@ -121,6 +129,8 @@ pub(crate) fn board_to_dto(row: &crate::models::BoardRow) -> BoardDto {
         min_trust_to_post: row.min_trust_to_post,
         is_qa: row.is_qa,
         thread_count: row.thread_count,
+        can_post: posting_restriction.is_none(),
+        posting_restriction: posting_restriction.map(|restriction| restriction.as_str().to_owned()),
     }
 }
 

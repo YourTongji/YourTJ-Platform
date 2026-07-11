@@ -11,6 +11,26 @@ use crate::repo;
 
 use super::{comment_to_dto, default_limit};
 
+async fn hydrate_comment_viewer_states(
+    pool: &sqlx::PgPool,
+    account_id: i64,
+    comments: &mut [CommentDto],
+) -> AppResult<()> {
+    let comment_ids =
+        comments.iter().filter_map(|comment| comment.id.parse::<i64>().ok()).collect::<Vec<_>>();
+    let states = repo::get_post_viewer_states(pool, account_id, "comment", &comment_ids).await?;
+    for comment in comments {
+        let Some(comment_id) = comment.id.parse::<i64>().ok() else {
+            continue;
+        };
+        if let Some(state) = states.get(&comment_id) {
+            comment.viewer_vote.clone_from(&state.vote);
+            comment.is_bookmarked = state.is_bookmarked;
+        }
+    }
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // query params
 // ---------------------------------------------------------------------------
@@ -67,8 +87,11 @@ pub async fn list_comments(
             .await?
             .flatten();
 
-    let items: Vec<CommentDto> =
+    let mut items: Vec<CommentDto> =
         rows.iter().map(|r| comment_to_dto(r, solved_comment_id)).collect();
+    if let Some(account_id) = current_user_id {
+        hydrate_comment_viewer_states(&state.db, account_id, &mut items).await?;
+    }
     Ok(Json(Page::new(items, next_cursor)))
 }
 
@@ -93,7 +116,7 @@ pub async fn create_comment(
     // Check that the account is not silenced
     crate::sanctions::require_can_post(state.redis.as_ref(), &state.db, auth.id).await?;
 
-    let tl = crate::trust_levels::get_trust_level(state.redis.as_ref(), &state.db, auth.id).await?;
+    let tl = crate::trust_levels::get_trust_level(&state.db, auth.id).await?;
     if tl == 0 {
         shared::ratelimit::check_token_bucket(
             state.redis.as_ref(),
@@ -363,7 +386,9 @@ pub async fn update_comment(
     crate::meili::reconcile_thread_in_background(&state, row.thread_id);
     crate::cache::invalidate_thread_by_id(state.redis.as_ref(), &state.db, row.thread_id).await;
 
-    Ok(Json(comment_to_dto(&row, solved_comment_id)))
+    let mut dto = comment_to_dto(&row, solved_comment_id);
+    hydrate_comment_viewer_states(&state.db, auth.id, std::slice::from_mut(&mut dto)).await?;
+    Ok(Json(dto))
 }
 
 /// DELETE /api/v2/forum/comments/{id} — auth required (author only)

@@ -16,7 +16,10 @@
 ### Current
 
 - 公开资料包含 handle、头像、角色、信任等级、徽章、主题/回复/获赞统计和分页内容列表。
-- board/thread 支持 watching、tracking、muted subscription。
+- board/thread 支持 watching、tracking、muted subscription；thread direct subscription 覆盖 board
+  fallback，删除 direct override 后恢复 board 语义，列表和 feed 使用稳定 cursor。
+- Web 和 OpenAPI 使用 `subscriptions` feed 名称；旧 `following` query value 只作为后端兼容别名，
+  不代表用户关注关系已经存在。
 - `user_ignores` 会从当前用户部分 feed 隐藏对方，并在任意方向存在时禁止私信发送。
 
 ### Partial
@@ -36,7 +39,7 @@
 | mute | 单向私密 | 降低 feed、通知或会话可见性 | 否 |
 | block | 双向安全边界 | 阻止 follow、私信和直接互动，并统一可见规则 | 不主动通知，但操作结果不可伪装 |
 
-现有名为 `following` 的 forum feed 必须在用户关注上线前改成能表达 subscription 的名称。
+用户 following feed 只有在 follow graph 落地后才能新增，不能复用 `subscriptions` 的表或文案。
 
 ## Follow 状态机
 

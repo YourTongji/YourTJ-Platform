@@ -156,6 +156,67 @@ async fn test_create_thread_returns_detail_dto() {
     assert_eq!(board_thread_count(&pool, 1).await, 1);
 }
 
+#[tokio::test]
+async fn board_posting_gates_deny_ordinary_accounts_without_side_effects() {
+    let (pool, app) = create_test_app().await;
+    let (account_id, token) =
+        create_test_account(&pool, "board-gates@tongji.edu.cn", "board-gates").await;
+    sqlx::query("UPDATE forum.boards SET is_locked = true, min_trust_to_post = 2 WHERE id = 1")
+        .execute(&pool)
+        .await
+        .expect("lock trust-gated board");
+
+    let locked =
+        create_thread_request(&app, &token, json!({"boardId": "1", "title": "Must not exist"}))
+            .await;
+    assert_eq!(locked.status(), StatusCode::FORBIDDEN);
+
+    sqlx::query("UPDATE forum.boards SET is_locked = false WHERE id = 1")
+        .execute(&pool)
+        .await
+        .expect("unlock board");
+    sqlx::query("UPDATE identity.accounts SET trust_level = 1 WHERE id = $1")
+        .bind(account_id)
+        .execute(&pool)
+        .await
+        .expect("set insufficient trust");
+    let low_trust = create_thread_request(
+        &app,
+        &token,
+        json!({"boardId": "1", "title": "Still must not exist"}),
+    )
+    .await;
+    assert_eq!(low_trust.status(), StatusCode::FORBIDDEN);
+
+    let thread_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM forum.threads")
+        .fetch_one(&pool)
+        .await
+        .expect("thread count");
+    assert_eq!(thread_count, 0);
+    assert_eq!(board_thread_count(&pool, 1).await, 0);
+}
+
+#[tokio::test]
+async fn content_moderator_bypasses_only_board_posting_gates() {
+    let (pool, app) = create_test_app().await;
+    let (moderator_id, token) =
+        create_test_account(&pool, "board-mod@tongji.edu.cn", "board-mod").await;
+    sqlx::query("UPDATE identity.accounts SET role = 'mod', trust_level = 0 WHERE id = $1")
+        .bind(moderator_id)
+        .execute(&pool)
+        .await
+        .expect("promote content moderator");
+    sqlx::query("UPDATE forum.boards SET is_locked = true, min_trust_to_post = 3 WHERE id = 1")
+        .execute(&pool)
+        .await
+        .expect("lock trust-gated board");
+
+    let response =
+        create_thread_request(&app, &token, json!({"boardId": "1", "title": "Staff notice"})).await;
+    assert_eq!(response.status(), StatusCode::CREATED);
+    assert_eq!(board_thread_count(&pool, 1).await, 1);
+}
+
 /// ── get thread ───────────────────────────────────────────────────────────
 
 #[tokio::test]
@@ -334,6 +395,17 @@ async fn archived_threads_are_excluded_from_every_feed() {
         .execute(&pool)
         .await
         .expect("seed unread replies");
+    sqlx::query(
+        "INSERT INTO forum.comments (thread_id, author_id, body, path) \
+         VALUES ($1, $3, 'visible unread reply', '0001'), \
+                ($2, $3, 'archived unread reply', '0001')",
+    )
+    .bind(visible_id)
+    .bind(archived_id)
+    .bind(author_id)
+    .execute(&pool)
+    .await
+    .expect("seed unread comments");
     sqlx::query(
         "INSERT INTO forum.thread_reads (account_id, thread_id, updated_at) \
          VALUES ($1, $2, now() - interval '1 day'), \

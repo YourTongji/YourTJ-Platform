@@ -59,7 +59,10 @@ pub fn routes(state: AppState) -> Router {
         )
         .route("/api/v2/forum/threads/unread", get(handlers::list_unread_threads))
         .route("/api/v2/forum/threads/{id}/read", post(handlers::report_read))
-        .route("/api/v2/forum/posts/{post_id}/vote", post(handlers::vote_post))
+        .route(
+            "/api/v2/forum/posts/{post_id}/vote",
+            post(handlers::vote_post).delete(handlers::remove_vote),
+        )
         .route("/api/v2/forum/posts/{id}/flag", post(handlers::flag_post))
         .route(
             "/api/v2/forum/posts/{id}/bookmark",
@@ -99,7 +102,10 @@ pub fn routes(state: AppState) -> Router {
         )
         .route("/api/v2/me/ignores", get(handlers::list_ignores_handler))
         // Polls
-        .route("/api/v2/forum/polls/{id}/vote", post(handlers::vote_poll_handler))
+        .route(
+            "/api/v2/forum/polls/{id}/vote",
+            post(handlers::vote_poll_handler).delete(handlers::remove_poll_vote_handler),
+        )
         .route("/api/v2/forum/polls/{id}/results", get(handlers::poll_results_handler))
         // DMs (1:1 private messages)
         .route(

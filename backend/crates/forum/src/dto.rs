@@ -19,6 +19,8 @@ pub struct BoardDto {
     pub min_trust_to_post: i16,
     pub is_qa: bool,
     pub thread_count: i32,
+    pub can_post: bool,
+    pub posting_restriction: Option<String>,
 }
 
 /// Summary view of a thread (list responses).
@@ -65,6 +67,8 @@ pub struct ThreadDetailDto {
     pub created_at: i64,
     pub last_activity_at: i64,
     pub solved_answer_id: Option<String>,
+    pub viewer_vote: Option<String>,
+    pub is_bookmarked: bool,
     pub my_last_read_comment_id: Option<String>,
     pub my_subscription_level: Option<String>,
     pub poll: Option<PollDto>,
@@ -95,6 +99,8 @@ pub struct CommentDto {
     pub author_id: String,
     pub body: String,
     pub vote_count: i32,
+    pub viewer_vote: Option<String>,
+    pub is_bookmarked: bool,
     pub is_deleted: bool,
     pub is_hidden: bool,
     pub edited_at: Option<i64>,
@@ -140,26 +146,11 @@ pub struct ReadTrackingInput {
     pub last_read_comment_id: Option<String>,
 }
 
-/// Feed DTO for unread threads (includes unread count).
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ThreadFeedDto {
-    pub id: String,
-    pub board_id: String,
-    pub author_handle: String,
-    pub title: String,
-    pub reply_count: i32,
-    pub vote_count: i32,
-    pub hot_score: Option<f64>,
-    pub created_at: i64,
-    pub last_activity_at: i64,
-    pub unread_count: i32,
-}
-
 /// Bookmark input — used when (un)setting a bookmark.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BookmarkInput {
+    pub post_type: String,
     pub note: Option<String>,
 }
 
@@ -190,6 +181,14 @@ pub struct SubscriptionInput {
     pub target_type: String,
     pub target_id: String,
     pub level: String,
+}
+
+/// DELETE /api/v2/forum/subscriptions
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UnsubscribeInput {
+    pub target_type: String,
+    pub target_id: String,
 }
 
 /// Subscription DTO for list responses.

@@ -1,5 +1,5 @@
 use shared::AppResult;
-use sqlx::PgPool;
+use sqlx::{PgPool, Postgres, QueryBuilder};
 
 use crate::models::{ThreadRowJoined, ThreadRowJoinedFull};
 
@@ -48,7 +48,7 @@ async fn list_threads_new(
              JOIN identity.accounts a ON a.id = t.author_id \
              WHERE t.board_id = $1 AND t.deleted_at IS NULL AND t.hidden_at IS NULL \
                AND t.archived_at IS NULL \
-               AND t.created_at < (SELECT created_at FROM forum.threads WHERE id = $3) \
+               AND (t.created_at, t.id) < (SELECT created_at, id FROM forum.threads WHERE id = $3) \
                AND ($4::bigint IS NULL OR t.author_id <> ALL( \
                     SELECT ignored_account_id FROM forum.user_ignores WHERE account_id = $4 \
                )) \
@@ -185,6 +185,112 @@ pub async fn list_threads_feed(
     }
 }
 
+/// List visible threads matching an exact tag slug, optionally limited to subscriptions.
+#[allow(clippy::too_many_arguments)] // reason: feed filters and viewer scope are independent bound inputs
+pub async fn list_threads_by_tag(
+    pool: &PgPool,
+    board_id: Option<i64>,
+    tag_slug: &str,
+    sort: &str,
+    cursor: Option<&str>,
+    limit: i64,
+    current_user_id: Option<i64>,
+    subscription_account_id: Option<i64>,
+) -> AppResult<(Vec<ThreadRowJoined>, Option<String>)> {
+    let page_size = limit.clamp(1, 100);
+    let mut query = QueryBuilder::<Postgres>::new(
+        "SELECT thread.id, thread.board_id, thread.author_id, thread.title, thread.body, \
+                thread.reply_count, thread.vote_count, thread.hot_score, thread.status, \
+                thread.created_at, thread.last_activity_at, account.handle AS author_handle \
+         FROM forum.threads thread \
+         JOIN identity.accounts account ON account.id = thread.author_id \
+         WHERE thread.status = 'visible' AND thread.deleted_at IS NULL \
+           AND thread.hidden_at IS NULL AND thread.archived_at IS NULL \
+           AND EXISTS (SELECT 1 FROM forum.thread_tags thread_tag \
+                       JOIN forum.tags tag ON tag.id = thread_tag.tag_id \
+                       WHERE thread_tag.thread_id = thread.id AND tag.slug = ",
+    );
+    query.push_bind(tag_slug).push(")");
+    if let Some(board_id) = board_id {
+        query.push(" AND thread.board_id = ").push_bind(board_id);
+    }
+    if let Some(account_id) = current_user_id {
+        query
+            .push(
+                " AND NOT EXISTS (SELECT 1 FROM forum.user_ignores ignored \
+                   WHERE ignored.account_id = ",
+            )
+            .push_bind(account_id)
+            .push(" AND ignored.ignored_account_id = thread.author_id)");
+    }
+    if let Some(account_id) = subscription_account_id {
+        query
+            .push(
+                " AND COALESCE((SELECT direct.level FROM forum.subscriptions direct \
+                   WHERE direct.account_id = ",
+            )
+            .push_bind(account_id)
+            .push(
+                " AND direct.target_type = 'thread' AND direct.target_id = thread.id), \
+                   (SELECT board.level FROM forum.subscriptions board \
+                    WHERE board.account_id = ",
+            )
+            .push_bind(account_id)
+            .push(
+                " AND board.target_type = 'board' \
+                    AND board.target_id = thread.board_id)) IN ('watching', 'tracking')",
+            );
+    }
+
+    let next_cursor = if sort == "hot" {
+        if let Some(cursor) = cursor {
+            let (hot_score, thread_id) = decode_hot_cursor(cursor)
+                .map_err(|_| shared::AppError::BadRequest("invalid cursor".into()))?;
+            query
+                .push(" AND (COALESCE(thread.hot_score, 0), thread.id) < (")
+                .push_bind(hot_score)
+                .push(", ")
+                .push_bind(thread_id)
+                .push(")");
+        }
+        query.push(" ORDER BY COALESCE(thread.hot_score, 0) DESC, thread.id DESC LIMIT ");
+        query.push_bind(page_size + 1);
+        let mut rows = query.build_query_as::<ThreadRowJoined>().fetch_all(pool).await?;
+        let has_more = rows.len() > page_size as usize;
+        if has_more {
+            rows.truncate(page_size as usize);
+        }
+        let next = has_more.then(|| {
+            rows.last().map(|row| encode_hot_cursor(row.hot_score.unwrap_or(0.0), row.id))
+        });
+        return Ok((rows, next.flatten()));
+    } else {
+        if let Some(cursor) = cursor {
+            let thread_id = base64_decode_i64(cursor)
+                .map_err(|_| shared::AppError::BadRequest("invalid cursor".into()))?;
+            query
+                .push(
+                    " AND (thread.created_at, thread.id) < (SELECT created_at, id \
+                       FROM forum.threads WHERE id = ",
+                )
+                .push_bind(thread_id)
+                .push(")");
+        }
+        query.push(" ORDER BY thread.created_at DESC, thread.id DESC LIMIT ");
+        query.push_bind(page_size + 1);
+        None
+    };
+
+    let mut rows = query.build_query_as::<ThreadRowJoined>().fetch_all(pool).await?;
+    let has_more = rows.len() > page_size as usize;
+    if has_more {
+        rows.truncate(page_size as usize);
+    }
+    let next_cursor = next_cursor
+        .or_else(|| has_more.then(|| rows.last().map(|row| base64_encode_i64(row.id))).flatten());
+    Ok((rows, next_cursor))
+}
+
 async fn list_threads_feed_new(
     pool: &PgPool,
     board_id: Option<i64>,
@@ -207,7 +313,7 @@ async fn list_threads_feed_new(
              JOIN identity.accounts a ON a.id = t.author_id \
              WHERE t.board_id = $1 AND t.deleted_at IS NULL AND t.hidden_at IS NULL \
                AND t.archived_at IS NULL \
-               AND t.created_at < (SELECT created_at FROM forum.threads WHERE id = $3) \
+               AND (t.created_at, t.id) < (SELECT created_at, id FROM forum.threads WHERE id = $3) \
                AND ($4::bigint IS NULL OR t.author_id <> ALL( \
                     SELECT ignored_account_id FROM forum.user_ignores WHERE account_id = $4 \
                )) \
@@ -230,7 +336,7 @@ async fn list_threads_feed_new(
              JOIN identity.accounts a ON a.id = t.author_id \
              WHERE t.deleted_at IS NULL AND t.hidden_at IS NULL \
                AND t.archived_at IS NULL \
-               AND t.created_at < (SELECT created_at FROM forum.threads WHERE id = $2) \
+               AND (t.created_at, t.id) < (SELECT created_at, id FROM forum.threads WHERE id = $2) \
                AND ($3::bigint IS NULL OR t.author_id <> ALL( \
                     SELECT ignored_account_id FROM forum.user_ignores WHERE account_id = $3 \
                )) \
@@ -454,16 +560,46 @@ async fn list_threads_feed_hot(
     Ok((items, next_cursor))
 }
 
-/// List threads that the given account is following (watching/tracking).
+fn encode_subscription_feed_cursor(row: &ThreadRowJoined) -> String {
+    super::base64_encode_str(&format!("{}|{}", row.last_activity_at.timestamp_micros(), row.id))
+}
+
+fn decode_subscription_feed_cursor(
+    cursor: &str,
+) -> AppResult<(chrono::DateTime<chrono::Utc>, i64)> {
+    let decoded = super::base64_decode_str(cursor)
+        .map_err(|_| shared::AppError::BadRequest("invalid cursor".into()))?;
+    let (micros, id) = decoded
+        .split_once('|')
+        .ok_or_else(|| shared::AppError::BadRequest("invalid cursor".into()))?;
+    let last_activity_at = micros
+        .parse::<i64>()
+        .ok()
+        .and_then(chrono::DateTime::from_timestamp_micros)
+        .ok_or_else(|| shared::AppError::BadRequest("invalid cursor".into()))?;
+    let thread_id =
+        id.parse::<i64>().map_err(|_| shared::AppError::BadRequest("invalid cursor".into()))?;
+    Ok((last_activity_at, thread_id))
+}
+
+/// List threads covered by an effective watching/tracking subscription.
 ///
-/// Returns full `ThreadRowJoined` rows ordered by `last_activity_at DESC`.
+/// A thread-level subscription overrides its board-level fallback.
 pub async fn list_threads_feed_following(
     pool: &PgPool,
     account_id: i64,
-    cursor: Option<i64>,
+    board_id: Option<i64>,
+    cursor: Option<&str>,
     limit: i64,
-) -> AppResult<(Vec<ThreadRowJoined>, Option<i64>)> {
-    let since_id = cursor.unwrap_or(0);
+) -> AppResult<(Vec<ThreadRowJoined>, Option<String>)> {
+    let (cursor_at, cursor_id) = match cursor {
+        Some(cursor) => {
+            let (last_activity_at, thread_id) = decode_subscription_feed_cursor(cursor)?;
+            (Some(last_activity_at), Some(thread_id))
+        }
+        None => (None, None),
+    };
+    let page_size = limit.clamp(1, 100);
     let rows = sqlx::query_as::<_, ThreadRowJoined>(
         "SELECT t.id, t.board_id, t.author_id, t.title, t.body, \
                 t.reply_count, t.vote_count, t.hot_score, t.status, \
@@ -471,22 +607,34 @@ pub async fn list_threads_feed_following(
                 a.handle AS author_handle \
          FROM forum.threads t \
          JOIN identity.accounts a ON a.id = t.author_id \
-         JOIN forum.subscriptions s ON s.target_type = 'thread' AND s.target_id = t.id \
-         WHERE s.account_id = $1 AND s.level IN ('watching', 'tracking') \
+         WHERE COALESCE( \
+           (SELECT direct.level FROM forum.subscriptions direct \
+            WHERE direct.account_id = $1 AND direct.target_type = 'thread' \
+              AND direct.target_id = t.id), \
+           (SELECT board.level FROM forum.subscriptions board \
+            WHERE board.account_id = $1 AND board.target_type = 'board' \
+              AND board.target_id = t.board_id) \
+         ) IN ('watching', 'tracking') \
            AND t.deleted_at IS NULL AND t.hidden_at IS NULL AND t.archived_at IS NULL \
-           AND t.id > $2 \
-         ORDER BY t.last_activity_at DESC \
-         LIMIT $3",
+           AND ($2::bigint IS NULL OR t.board_id = $2) \
+           AND NOT EXISTS (SELECT 1 FROM forum.user_ignores ignored \
+                           WHERE ignored.account_id = $1 \
+                             AND ignored.ignored_account_id = t.author_id) \
+           AND ($3::timestamptz IS NULL OR (t.last_activity_at, t.id) < ($3, $4)) \
+         ORDER BY t.last_activity_at DESC, t.id DESC \
+         LIMIT $5",
     )
     .bind(account_id)
-    .bind(since_id)
-    .bind(limit + 1)
+    .bind(board_id)
+    .bind(cursor_at)
+    .bind(cursor_id)
+    .bind(page_size + 1)
     .fetch_all(pool)
     .await?;
 
-    let has_more = rows.len() > limit as usize;
-    let items = if has_more { rows[..limit as usize].to_vec() } else { rows };
-    let next_cursor = items.last().map(|r| r.id);
+    let has_more = rows.len() > page_size as usize;
+    let items = if has_more { rows[..page_size as usize].to_vec() } else { rows };
+    let next_cursor = has_more.then(|| items.last().map(encode_subscription_feed_cursor)).flatten();
 
     Ok((items, next_cursor))
 }
@@ -540,9 +688,10 @@ pub async fn create_thread(
     author_id: i64,
     input: &crate::dto::ThreadInput,
     is_hidden: bool,
+    posting_actor: super::boards::BoardPostingActor,
 ) -> AppResult<ThreadRowJoinedFull> {
     let mut tx = pool.begin().await?;
-    let board_ids = super::boards::lock_boards_for_thread_count(&mut tx, &[board_id]).await?;
+    let board_ids = super::boards::lock_board_for_posting(&mut tx, board_id, posting_actor).await?;
     let tag_ids = match input.tags.as_ref() {
         Some(tag_slugs) => super::tags::resolve_tag_slugs_tx(&mut tx, tag_slugs).await?,
         None => Vec::new(),

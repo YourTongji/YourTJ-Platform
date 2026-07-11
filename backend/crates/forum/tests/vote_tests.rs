@@ -5,7 +5,7 @@ mod helpers;
 
 use axum::body::Body;
 use axum::http::{header, Method, Request, StatusCode};
-use helpers::{create_test_account, create_test_app};
+use helpers::{create_test_account, create_test_app, read_json};
 use serde_json::json;
 use sqlx::PgPool;
 use tower::ServiceExt;
@@ -154,6 +154,77 @@ async fn test_vote_thread_down() {
     .await
     .unwrap();
     assert_eq!(activity_count, 0);
+}
+
+#[tokio::test]
+async fn removing_vote_reverses_counts_stats_activity_and_viewer_state() {
+    let (pool, app) = create_test_app().await;
+    let (author_id, _) =
+        create_test_account(&pool, "remove-vote-author@tongji.edu.cn", "remove-vote-author").await;
+    let (voter_id, token) =
+        create_test_account(&pool, "remove-vote-user@tongji.edu.cn", "remove-vote-user").await;
+    let thread_id = seed_thread(&pool, author_id).await;
+    assert_eq!(vote_request(&app, thread_id, "thread", &token).await.status(), StatusCode::OK);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::DELETE)
+                .uri(format!("/api/v2/forum/posts/{thread_id}/vote?postType=thread"))
+                .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::empty())
+                .expect("remove vote request"),
+        )
+        .await
+        .expect("remove vote response");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = read_json(response).await;
+    assert_eq!(body["voteCount"], 0);
+    assert!(body["viewerVote"].is_null());
+
+    let materialized_count: i32 =
+        sqlx::query_scalar("SELECT vote_count FROM forum.threads WHERE id = $1")
+            .bind(thread_id)
+            .fetch_one(&pool)
+            .await
+            .expect("materialized vote count");
+    assert_eq!(materialized_count, 0);
+    let votes_cast: i32 =
+        sqlx::query_scalar("SELECT votes_cast FROM forum.user_stats WHERE account_id = $1")
+            .bind(voter_id)
+            .fetch_one(&pool)
+            .await
+            .expect("voter stats");
+    let votes_received: i32 =
+        sqlx::query_scalar("SELECT votes_received FROM forum.user_stats WHERE account_id = $1")
+            .bind(author_id)
+            .fetch_one(&pool)
+            .await
+            .expect("author stats");
+    assert_eq!((votes_cast, votes_received), (0, 0));
+    let activity_count: i64 = sqlx::query_scalar(
+        "SELECT COALESCE(SUM(likes_given), 0)::bigint \
+         FROM activity.daily_counts WHERE account_id = $1",
+    )
+    .bind(voter_id)
+    .fetch_one(&pool)
+    .await
+    .expect("vote activity");
+    assert_eq!(activity_count, 0);
+
+    let repeated = app
+        .oneshot(
+            Request::builder()
+                .method(Method::DELETE)
+                .uri(format!("/api/v2/forum/posts/{thread_id}/vote?postType=thread"))
+                .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::empty())
+                .expect("repeat remove vote request"),
+        )
+        .await
+        .expect("repeat remove vote response");
+    assert_eq!(repeated.status(), StatusCode::OK);
 }
 
 /// ── vote on comment ──────────────────────────────────────────────────────

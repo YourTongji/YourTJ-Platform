@@ -48,6 +48,7 @@ pub mod boards;
 pub mod comments;
 pub mod hot_rank;
 pub mod threads;
+pub mod viewer_state;
 pub mod votes;
 
 pub mod bookmarks;
@@ -87,18 +88,18 @@ pub use ignores::{
 pub use notification_prefs::{get_notification_prefs, set_notification_prefs};
 pub use notifications::{list_notifications, mark_all_read, mark_read, NotificationRow};
 pub use polls::{
-    create_poll, get_poll, get_poll_by_id, get_poll_id_by_thread, get_poll_option,
-    get_poll_results, get_voted_option_ids, vote_option, PollWithOptions,
+    create_poll, get_poll, get_poll_by_id, get_poll_results, get_voted_option_ids,
+    remove_option_vote, vote_option, PollVoteOutcome, PollWithOptions,
 };
 pub use reads::{get_last_read_comment_id, get_unread_thread_ids, upsert_read_position};
 pub use revisions::list_revisions;
 pub use subscriptions::{
-    delete_subscription, get_following_thread_ids, get_muted_ids, get_thread_subscription,
-    get_watching_subscriber_ids, list_subscriptions, set_subscription,
+    delete_subscription, get_muted_ids, get_thread_subscription, get_watching_subscriber_ids,
+    list_subscriptions_page, set_subscription,
 };
 pub use tags::{
-    create_tag, delete_tag, find_tag, find_tag_by_slug, get_thread_tag_slugs, list_tags,
-    resolve_tag_slugs, set_thread_tags, update_tag,
+    create_tag, delete_tag, find_tag, find_tag_by_slug, get_thread_tag_slugs,
+    get_thread_tag_slugs_batch, list_tags, resolve_tag_slugs, set_thread_tags, update_tag,
 };
 pub use thread_state::{
     archive_thread, auto_archive_stale, clear_solved_answer, close_thread, hide_thread,
@@ -107,8 +108,10 @@ pub use thread_state::{
 };
 pub use threads::{
     create_thread, fetch_threads_by_ids, find_thread, find_thread_for_moderation, list_threads,
-    list_threads_feed, list_threads_feed_following, update_thread,
+    list_threads_by_tag, list_threads_feed, list_threads_feed_following, update_thread,
 };
+pub use viewer_state::{get_post_viewer_states, PostViewerState};
 pub use votes::{
-    deactivate_target_vote_contributions, reactivate_target_vote_contributions, vote_post,
+    deactivate_target_vote_contributions, reactivate_target_vote_contributions, remove_vote,
+    vote_post,
 };

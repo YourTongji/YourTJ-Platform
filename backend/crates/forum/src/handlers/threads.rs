@@ -14,14 +14,39 @@ use crate::repo::base64_encode_i64;
 
 use super::{default_limit, default_sort, thread_to_detail_dto, thread_to_dto};
 
+pub(crate) async fn hydrate_thread_tags(
+    pool: &sqlx::PgPool,
+    threads: &mut [ThreadDto],
+) -> AppResult<()> {
+    let thread_ids =
+        threads.iter().filter_map(|thread| thread.id.parse::<i64>().ok()).collect::<Vec<_>>();
+    let mut tags = repo::get_thread_tag_slugs_batch(pool, &thread_ids).await?;
+    for thread in threads {
+        if let Ok(thread_id) = thread.id.parse::<i64>() {
+            thread.tags = tags.remove(&thread_id).unwrap_or_default();
+        }
+    }
+    Ok(())
+}
+
 /// Load poll data for a thread and attach it to a `ThreadDetailDto`.
 pub(crate) async fn attach_poll_to_detail(
     pool: &sqlx::PgPool,
     thread_id: i64,
+    account_id: Option<i64>,
     dto: &mut ThreadDetailDto,
-) {
-    let poll_result = repo::get_poll(pool, thread_id).await;
-    if let Ok(Some(poll_with_opts)) = poll_result {
+) -> AppResult<()> {
+    if let Some(poll_with_opts) = repo::get_poll(pool, thread_id).await? {
+        let my_votes = match account_id {
+            Some(account_id) => {
+                repo::get_voted_option_ids(pool, poll_with_opts.poll.id, account_id)
+                    .await?
+                    .into_iter()
+                    .map(|option_id| option_id.to_string())
+                    .collect()
+            }
+            None => Vec::new(),
+        };
         let option_dtos: Vec<PollOptionDto> = poll_with_opts
             .options
             .into_iter()
@@ -38,9 +63,35 @@ pub(crate) async fn attach_poll_to_detail(
             multi_select: poll_with_opts.poll.multi_select,
             closes_at: poll_with_opts.poll.closes_at.map(|v| v.timestamp()),
             options: option_dtos,
-            my_votes: vec![],
+            my_votes,
         });
     }
+    Ok(())
+}
+
+/// Attach canonical tags and optional viewer-specific state to a thread detail.
+pub(crate) async fn hydrate_thread_detail(
+    pool: &sqlx::PgPool,
+    thread_id: i64,
+    account_id: Option<i64>,
+    dto: &mut ThreadDetailDto,
+) -> AppResult<()> {
+    dto.tags = repo::get_thread_tag_slugs(pool, thread_id).await?;
+    attach_poll_to_detail(pool, thread_id, account_id, dto).await?;
+    if let Some(account_id) = account_id {
+        let mut states =
+            repo::get_post_viewer_states(pool, account_id, "thread", &[thread_id]).await?;
+        if let Some(state) = states.remove(&thread_id) {
+            dto.viewer_vote = state.vote;
+            dto.is_bookmarked = state.is_bookmarked;
+        }
+        dto.my_last_read_comment_id = repo::get_last_read_comment_id(pool, account_id, thread_id)
+            .await?
+            .map(|comment_id| comment_id.to_string());
+        dto.my_subscription_level =
+            repo::get_thread_subscription(pool, account_id, thread_id).await?;
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -53,6 +104,7 @@ pub struct ThreadListQuery {
     #[serde(default = "default_sort")]
     sort: String, // "hot" or "new"
     cursor: Option<String>,
+    tag: Option<String>,
     #[serde(default = "default_limit")]
     limit: i64,
 }
@@ -64,6 +116,7 @@ pub struct ThreadFeedQuery {
     #[serde(default = "default_sort")]
     pub sort: String,
     pub cursor: Option<String>,
+    pub tag: Option<String>,
     #[serde(default = "default_limit")]
     pub limit: i64,
 }
@@ -92,6 +145,30 @@ pub async fn list_threads(
     .ok()
     .map(|a| a.id);
 
+    if !matches!(q.sort.as_str(), "hot" | "new") {
+        return Err(AppError::BadRequest("sort must be hot/new".into()));
+    }
+    let tag = q.tag.as_deref().map(str::trim).filter(|tag| !tag.is_empty());
+    if tag.is_some_and(|tag| tag.chars().count() > 64) {
+        return Err(AppError::BadRequest("tag must be 1–64 characters".into()));
+    }
+    if let Some(tag) = tag {
+        let (rows, next_cursor) = repo::list_threads_by_tag(
+            &state.db,
+            Some(board_id),
+            tag,
+            &q.sort,
+            q.cursor.as_deref(),
+            q.limit,
+            current_user_id,
+            None,
+        )
+        .await?;
+        let mut items = rows.iter().map(thread_to_dto).collect::<Vec<_>>();
+        hydrate_thread_tags(&state.db, &mut items).await?;
+        return Ok(Json(Page::new(items, next_cursor)));
+    }
+
     let c = q.cursor.as_deref().unwrap_or("");
     // Only use the cache for unauthenticated requests.
     if current_user_id.is_some() {
@@ -104,7 +181,8 @@ pub async fn list_threads(
             current_user_id,
         )
         .await?;
-        let items: Vec<ThreadDto> = rows.iter().map(thread_to_dto).collect();
+        let mut items: Vec<ThreadDto> = rows.iter().map(thread_to_dto).collect();
+        hydrate_thread_tags(&state.db, &mut items).await?;
         Ok(Json(Page::new(items, next_cursor)))
     } else {
         let generation = crate::cache::board_generation(state.redis.as_ref(), board_id).await;
@@ -120,7 +198,8 @@ pub async fn list_threads(
                     None,
                 )
                 .await?;
-                let items: Vec<ThreadDto> = rows.iter().map(thread_to_dto).collect();
+                let mut items: Vec<ThreadDto> = rows.iter().map(thread_to_dto).collect();
+                hydrate_thread_tags(&state.db, &mut items).await?;
                 Ok::<_, AppError>(Page::new(items, next_cursor))
             })
             .await?;
@@ -134,6 +213,19 @@ pub async fn list_threads_feed(
     headers: HeaderMap,
     Query(q): Query<ThreadFeedQuery>,
 ) -> AppResult<Json<Page<ThreadDto>>> {
+    if !matches!(q.sort.as_str(), "hot" | "new" | "subscriptions" | "following" | "unread") {
+        return Err(AppError::BadRequest("sort must be hot/new/subscriptions/unread".into()));
+    }
+    let board_id = q
+        .board
+        .as_deref()
+        .map(|board| board.parse::<i64>().map_err(|_| AppError::BadRequest("invalid board".into())))
+        .transpose()?;
+    let tag = q.tag.as_deref().map(str::trim).filter(|tag| !tag.is_empty());
+    if tag.is_some_and(|tag| tag.chars().count() > 64) {
+        return Err(AppError::BadRequest("tag must be 1–64 characters".into()));
+    }
+
     if q.sort == "unread" {
         let auth = identity::auth_middleware::authenticate(
             &headers,
@@ -144,33 +236,37 @@ pub async fn list_threads_feed(
         .await
         .map_err(|_r| AppError::Unauthorized)?;
 
-        let cursor: Option<i64> = q.cursor.and_then(|c| c.parse().ok());
+        let cursor = q
+            .cursor
+            .as_deref()
+            .map(|cursor| {
+                cursor.parse::<i64>().map_err(|_| AppError::BadRequest("invalid cursor".into()))
+            })
+            .transpose()?;
         let (_rows, next_cursor) =
-            repo::get_unread_thread_ids(&state.db, auth.id, q.limit, cursor).await?;
+            repo::get_unread_thread_ids(&state.db, auth.id, board_id, tag, q.limit, cursor).await?;
 
-        let mut items: Vec<ThreadDto> = Vec::new();
-        for (thread_id, unread_count) in &_rows {
-            if let Ok(Some(row)) = repo::find_thread(&state.db, *thread_id).await {
-                items.push(ThreadDto {
-                    id: row.id.to_string(),
-                    board_id: row.board_id.to_string(),
-                    author_handle: row.author_handle,
-                    title: row.title,
-                    reply_count: row.reply_count,
-                    vote_count: row.vote_count,
-                    hot_score: row.hot_score,
-                    tags: vec![],
-                    created_at: row.created_at.timestamp(),
-                    last_activity_at: row.last_activity_at.timestamp(),
-                    unread_count: Some(*unread_count),
-                });
-            }
-        }
+        let unread_counts = _rows.iter().copied().collect::<std::collections::HashMap<_, _>>();
+        let thread_ids = _rows.iter().map(|(thread_id, _)| *thread_id).collect::<Vec<_>>();
+        let rows = repo::fetch_threads_by_ids(&state.db, &thread_ids, Some(auth.id)).await?;
+        let mut items = rows
+            .iter()
+            .map(thread_to_dto)
+            .map(|mut thread| {
+                thread.unread_count = thread
+                    .id
+                    .parse::<i64>()
+                    .ok()
+                    .and_then(|thread_id| unread_counts.get(&thread_id).copied());
+                thread
+            })
+            .collect::<Vec<_>>();
+        hydrate_thread_tags(&state.db, &mut items).await?;
         let next_str = next_cursor.map(|c| c.to_string());
         return Ok(Json(Page::new(items, next_str)));
     }
 
-    if q.sort == "hot" && q.board.is_none() && q.cursor.is_none() {
+    if q.sort == "hot" && board_id.is_none() && tag.is_none() && q.cursor.is_none() {
         // G6: Try Redis ZSET first for global hot feed (no board filter, no cursor).
         if let Some(ref redis_pool) = state.redis {
             if let Ok(mut conn) = redis_pool.get().await {
@@ -194,7 +290,8 @@ pub async fn list_threads_feed(
                     .map(|a| a.id);
 
                     let rows = repo::fetch_threads_by_ids(&state.db, &ids, current_user_id).await?;
-                    let items: Vec<ThreadDto> = rows.iter().map(thread_to_dto).collect();
+                    let mut items: Vec<ThreadDto> = rows.iter().map(thread_to_dto).collect();
+                    hydrate_thread_tags(&state.db, &mut items).await?;
                     let next = if ids.len() as i64 >= q.limit {
                         Some(base64_encode_i64(q.limit))
                     } else {
@@ -207,7 +304,7 @@ pub async fn list_threads_feed(
         // Fall through to DB if Redis is unavailable or ZSET is empty
     }
 
-    if q.sort == "following" {
+    if matches!(q.sort.as_str(), "subscriptions" | "following") {
         let auth = identity::auth_middleware::authenticate(
             &headers,
             &state.db,
@@ -217,15 +314,34 @@ pub async fn list_threads_feed(
         .await
         .map_err(|_r| AppError::Unauthorized)?;
 
-        let cursor: Option<i64> = q.cursor.and_then(|c| c.parse().ok());
-        let (rows, next_cursor) =
-            repo::list_threads_feed_following(&state.db, auth.id, cursor, q.limit).await?;
-        let items: Vec<ThreadDto> = rows.iter().map(thread_to_dto).collect();
-        let next_str = next_cursor.map(|c| c.to_string());
-        return Ok(Json(Page::new(items, next_str)));
+        if let Some(tag) = tag {
+            let (rows, next_cursor) = repo::list_threads_by_tag(
+                &state.db,
+                board_id,
+                tag,
+                "new",
+                q.cursor.as_deref(),
+                q.limit,
+                Some(auth.id),
+                Some(auth.id),
+            )
+            .await?;
+            let mut items = rows.iter().map(thread_to_dto).collect::<Vec<_>>();
+            hydrate_thread_tags(&state.db, &mut items).await?;
+            return Ok(Json(Page::new(items, next_cursor)));
+        }
+        let (rows, next_cursor) = repo::list_threads_feed_following(
+            &state.db,
+            auth.id,
+            board_id,
+            q.cursor.as_deref(),
+            q.limit,
+        )
+        .await?;
+        let mut items: Vec<ThreadDto> = rows.iter().map(thread_to_dto).collect();
+        hydrate_thread_tags(&state.db, &mut items).await?;
+        return Ok(Json(Page::new(items, next_cursor)));
     }
-
-    let board_id: Option<i64> = q.board.as_deref().and_then(|b| b.parse::<i64>().ok());
 
     // Try auth — if the user is logged in, filter out ignored authors.
     let current_user_id: Option<i64> = identity::auth_middleware::authenticate(
@@ -238,6 +354,23 @@ pub async fn list_threads_feed(
     .ok()
     .map(|a| a.id);
 
+    if let Some(tag) = tag {
+        let (rows, next_cursor) = repo::list_threads_by_tag(
+            &state.db,
+            board_id,
+            tag,
+            &q.sort,
+            q.cursor.as_deref(),
+            q.limit,
+            current_user_id,
+            None,
+        )
+        .await?;
+        let mut items = rows.iter().map(thread_to_dto).collect::<Vec<_>>();
+        hydrate_thread_tags(&state.db, &mut items).await?;
+        return Ok(Json(Page::new(items, next_cursor)));
+    }
+
     // Only use the cache for unauthenticated requests.
     if current_user_id.is_some() {
         let (rows, next_cursor) = repo::list_threads_feed(
@@ -249,7 +382,8 @@ pub async fn list_threads_feed(
             current_user_id,
         )
         .await?;
-        let items: Vec<ThreadDto> = rows.iter().map(thread_to_dto).collect();
+        let mut items: Vec<ThreadDto> = rows.iter().map(thread_to_dto).collect();
+        hydrate_thread_tags(&state.db, &mut items).await?;
         Ok(Json(Page::new(items, next_cursor)))
     } else {
         let generation = crate::cache::global_feed_generation(state.redis.as_ref()).await;
@@ -270,7 +404,8 @@ pub async fn list_threads_feed(
                     None,
                 )
                 .await?;
-                let items: Vec<ThreadDto> = rows.iter().map(thread_to_dto).collect();
+                let mut items: Vec<ThreadDto> = rows.iter().map(thread_to_dto).collect();
+                hydrate_thread_tags(&state.db, &mut items).await?;
                 Ok::<_, AppError>(Page::new(items, next_cursor))
             })
             .await?;
@@ -301,12 +436,7 @@ pub async fn get_thread(
         // Authenticated — skip the cache since the response is user-specific.
         let row = repo::find_thread(&state.db, id).await?.ok_or(AppError::NotFound)?;
         let mut dto = thread_to_detail_dto(&row);
-        attach_poll_to_detail(&state.db, id, &mut dto).await;
-        dto.my_last_read_comment_id = repo::get_last_read_comment_id(&state.db, user_id, id)
-            .await
-            .ok()
-            .flatten()
-            .map(|v| v.to_string());
+        hydrate_thread_detail(&state.db, id, Some(user_id), &mut dto).await?;
         Ok(Json(dto))
     } else {
         let detail = shared::cache::cached_json(
@@ -317,8 +447,7 @@ pub async fn get_thread(
             async {
                 let row = repo::find_thread(&state.db, id).await?.ok_or(AppError::NotFound)?;
                 let mut dto = thread_to_detail_dto(&row);
-                // Load poll data (best-effort — not all threads have polls).
-                attach_poll_to_detail(&state.db, id, &mut dto).await;
+                hydrate_thread_detail(&state.db, id, None, &mut dto).await?;
                 Ok::<_, AppError>(dto)
             },
         )
@@ -347,7 +476,13 @@ pub async fn create_thread(
     // Check that the account is not silenced
     crate::sanctions::require_can_post(state.redis.as_ref(), &state.db, auth.id).await?;
 
-    let tl = crate::trust_levels::get_trust_level(state.redis.as_ref(), &state.db, auth.id).await?;
+    let board_id: i64 = body.board_id.parse().map_err(|_| AppError::NotFound)?;
+    let tl = crate::trust_levels::get_trust_level(&state.db, auth.id).await?;
+    let posting_actor = crate::repo::boards::BoardPostingActor {
+        trust_level: tl,
+        can_bypass_board_gates: auth.has_capability(shared::auth::Capability::ModerateContent),
+    };
+    crate::repo::boards::authorize_board_posting(&state.db, board_id, posting_actor).await?;
     if tl == 0 {
         shared::ratelimit::check_token_bucket(
             state.redis.as_ref(),
@@ -368,8 +503,8 @@ pub async fn create_thread(
         .await?;
     }
 
-    let board_id: i64 = body.board_id.parse().map_err(|_| AppError::NotFound)?;
-    let row = repo::create_thread(&state.db, board_id, auth.id, &body, is_queued).await?;
+    let row =
+        repo::create_thread(&state.db, board_id, auth.id, &body, is_queued, posting_actor).await?;
 
     if !is_queued {
         let pool = state.db.clone();
@@ -456,11 +591,7 @@ pub async fn create_thread(
     }
 
     let mut dto = thread_to_detail_dto(&row);
-    dto.tags = body.tags.clone().unwrap_or_default();
-
-    if body.poll.is_some() {
-        attach_poll_to_detail(&state.db, row.id, &mut dto).await;
-    }
+    hydrate_thread_detail(&state.db, row.id, Some(auth.id), &mut dto).await?;
 
     crate::cache::invalidate_thread_surfaces(state.redis.as_ref(), row.id, board_id).await;
 
@@ -515,9 +646,7 @@ pub async fn update_thread(
     crate::cache::invalidate_thread_surfaces(state.redis.as_ref(), id, row.board_id).await;
 
     let mut dto = thread_to_detail_dto(&row);
-    if let Some(tags) = body.tags {
-        dto.tags = tags;
-    }
+    hydrate_thread_detail(&state.db, row.id, Some(auth.id), &mut dto).await?;
     Ok(Json(dto))
 }
 

@@ -1,5 +1,7 @@
 //! Tag CRUD and thread-tag association.
 
+use std::collections::HashMap;
+
 use crate::models::TagRow;
 use shared::AppResult;
 use sqlx::{PgConnection, PgPool};
@@ -177,6 +179,31 @@ pub async fn get_thread_tag_slugs(pool: &PgPool, thread_id: i64) -> AppResult<Ve
     .fetch_all(pool)
     .await?;
     Ok(slugs)
+}
+
+/// Batch tag slugs for thread-list responses.
+pub async fn get_thread_tag_slugs_batch(
+    pool: &PgPool,
+    thread_ids: &[i64],
+) -> AppResult<HashMap<i64, Vec<String>>> {
+    if thread_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let rows: Vec<(i64, String)> = sqlx::query_as(
+        "SELECT thread_tag.thread_id, tag.slug \
+         FROM forum.thread_tags thread_tag \
+         JOIN forum.tags tag ON tag.id = thread_tag.tag_id \
+         WHERE thread_tag.thread_id = ANY($1) \
+         ORDER BY thread_tag.thread_id, tag.name, tag.id",
+    )
+    .bind(thread_ids)
+    .fetch_all(pool)
+    .await?;
+    let mut tags = HashMap::new();
+    for (thread_id, slug) in rows {
+        tags.entry(thread_id).or_insert_with(Vec::new).push(slug);
+    }
+    Ok(tags)
 }
 
 /// Resolve a list of tag slugs to their (id, slug) pairs.

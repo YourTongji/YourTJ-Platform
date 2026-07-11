@@ -107,6 +107,9 @@ pub struct VoteOutcome {
     pub vote_count: i32,
     pub post_author_id: Option<i64>,
     pub became_upvote: bool,
+    pub viewer_vote: Option<String>,
+    pub thread_id: i64,
+    pub board_id: i64,
 }
 
 /// Vote on a thread or comment with one-vote-per-user.
@@ -133,9 +136,9 @@ pub async fn vote_post(
     }
 
     let mut tx = pool.begin().await?;
-    let post_author_id: Option<i64> = if post_type == "thread" {
-        sqlx::query_as::<_, (Option<i64>,)>(
-            "SELECT author_id FROM forum.threads \
+    let (post_author_id, thread_id, board_id): (Option<i64>, i64, i64) = if post_type == "thread" {
+        sqlx::query_as(
+            "SELECT author_id, id, board_id FROM forum.threads \
              WHERE id = $1 AND status = 'visible' \
                AND deleted_at IS NULL AND hidden_at IS NULL AND archived_at IS NULL \
              FOR UPDATE",
@@ -144,10 +147,9 @@ pub async fn vote_post(
         .fetch_optional(&mut *tx)
         .await?
         .ok_or(shared::AppError::NotFound)?
-        .0
     } else {
-        sqlx::query_as::<_, (Option<i64>,)>(
-            "SELECT c.author_id FROM forum.comments c \
+        sqlx::query_as(
+            "SELECT c.author_id, c.thread_id, t.board_id FROM forum.comments c \
              JOIN forum.threads t ON t.id = c.thread_id \
              WHERE c.id = $1 \
                AND c.deleted_at IS NULL AND c.hidden_at IS NULL \
@@ -159,7 +161,6 @@ pub async fn vote_post(
         .fetch_optional(&mut *tx)
         .await?
         .ok_or(shared::AppError::NotFound)?
-        .0
     };
     if post_author_id == Some(account_id) {
         return Err(shared::AppError::BadRequest("cannot vote on your own content".into()));
@@ -266,5 +267,122 @@ pub async fn vote_post(
         vote_count: new_vote_count,
         post_author_id,
         became_upvote: delta == 1 && previous_value != Some(1),
+        viewer_vote: Some(value.to_owned()),
+        thread_id,
+        board_id,
+    })
+}
+
+/// Remove the account's vote while keeping materialized counts and activity consistent.
+pub async fn remove_vote(
+    pool: &PgPool,
+    post_type: &str,
+    post_id: i64,
+    account_id: i64,
+) -> AppResult<VoteOutcome> {
+    if !matches!(post_type, "thread" | "comment") {
+        return Err(shared::AppError::BadRequest("postType must be thread/comment".into()));
+    }
+
+    let mut tx = pool.begin().await?;
+    let (post_author_id, thread_id, board_id): (Option<i64>, i64, i64) = if post_type == "thread" {
+        sqlx::query_as(
+            "SELECT author_id, id, board_id FROM forum.threads \
+                 WHERE id = $1 AND status = 'visible' \
+                   AND deleted_at IS NULL AND hidden_at IS NULL AND archived_at IS NULL \
+                 FOR UPDATE",
+        )
+        .bind(post_id)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or(shared::AppError::NotFound)?
+    } else {
+        sqlx::query_as(
+            "SELECT comment.author_id, comment.thread_id, thread.board_id \
+                 FROM forum.comments comment \
+                 JOIN forum.threads thread ON thread.id = comment.thread_id \
+                 WHERE comment.id = $1 \
+                   AND comment.deleted_at IS NULL AND comment.hidden_at IS NULL \
+                   AND thread.status = 'visible' AND thread.deleted_at IS NULL \
+                   AND thread.hidden_at IS NULL AND thread.archived_at IS NULL \
+                 FOR UPDATE OF comment, thread",
+        )
+        .bind(post_id)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or(shared::AppError::NotFound)?
+    };
+
+    let source_key = format!("forum_vote:{post_type}:{post_id}:{account_id}");
+    activity::contributions::lock_contribution_source(&mut tx, &source_key).await?;
+    let previous_value: Option<i16> = sqlx::query_scalar(
+        "SELECT value FROM forum.votes \
+         WHERE post_type = $1 AND post_id = $2 AND account_id = $3 \
+         FOR UPDATE",
+    )
+    .bind(post_type)
+    .bind(post_id)
+    .bind(account_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+
+    if previous_value.is_some() {
+        sqlx::query(
+            "DELETE FROM forum.votes \
+             WHERE post_type = $1 AND post_id = $2 AND account_id = $3",
+        )
+        .bind(post_type)
+        .bind(post_id)
+        .bind(account_id)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "UPDATE forum.user_stats \
+             SET votes_cast = GREATEST(votes_cast - 1, 0), updated_at = now() \
+             WHERE account_id = $1",
+        )
+        .bind(account_id)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    if previous_value == Some(1) {
+        activity::contributions::deactivate_contribution(&mut tx, &source_key, chrono::Utc::now())
+            .await?;
+        if let Some(author_id) = post_author_id {
+            sqlx::query(
+                "UPDATE forum.user_stats \
+                 SET votes_received = GREATEST(votes_received - 1, 0), updated_at = now() \
+                 WHERE account_id = $1",
+            )
+            .bind(author_id)
+            .execute(&mut *tx)
+            .await?;
+        }
+    }
+
+    let vote_count: i32 = sqlx::query_scalar(
+        "SELECT COALESCE(SUM(value), 0)::int FROM forum.votes \
+         WHERE post_type = $1 AND post_id = $2",
+    )
+    .bind(post_type)
+    .bind(post_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    let update_query = if post_type == "thread" {
+        "UPDATE forum.threads SET vote_count = $1 WHERE id = $2"
+    } else {
+        "UPDATE forum.comments SET vote_count = $1 WHERE id = $2"
+    };
+    sqlx::query(update_query).bind(vote_count).bind(post_id).execute(&mut *tx).await?;
+    tx.commit().await?;
+
+    Ok(VoteOutcome {
+        vote_count,
+        post_author_id,
+        became_upvote: false,
+        viewer_vote: None,
+        thread_id,
+        board_id,
     })
 }
