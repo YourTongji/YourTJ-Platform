@@ -29,7 +29,7 @@ async fn test_request_code_creates_record() {
                 .header(header::CONTENT_TYPE, "application/json")
                 .header("x-forwarded-for", &captcha_token)
                 .body(Body::from(
-                    json!({ "email": email, "captchaToken": captcha_token }).to_string(),
+                    json!({ "email": email, "purpose": "login", "captchaToken": captcha_token }).to_string(),
                 ))
                 .unwrap(),
         )
@@ -60,7 +60,7 @@ async fn test_request_code_rate_limited() {
             .uri("/api/v2/auth/email/request-code")
             .header(header::CONTENT_TYPE, "application/json")
             .header("x-forwarded-for", captcha_token)
-            .body(Body::from(json!({ "email": email, "captchaToken": captcha_token }).to_string()))
+            .body(Body::from(json!({ "email": email, "purpose": "login", "captchaToken": captcha_token }).to_string()))
             .unwrap()
     };
 
@@ -93,7 +93,7 @@ async fn request_code_returns_unavailable_and_invalidates_code_when_delivery_fai
                 .header(header::CONTENT_TYPE, "application/json")
                 .header("x-forwarded-for", &captcha_token)
                 .body(Body::from(
-                    json!({ "email": email, "captchaToken": captcha_token }).to_string(),
+                    json!({ "email": email, "purpose": "login", "captchaToken": captcha_token }).to_string(),
                 ))
                 .expect("request code request"),
         )
@@ -127,7 +127,7 @@ async fn test_verify_correct_code_creates_account() {
                 .header(header::CONTENT_TYPE, "application/json")
                 .header("x-forwarded-for", &captcha_token)
                 .body(Body::from(
-                    json!({ "email": email, "captchaToken": captcha_token }).to_string(),
+                    json!({ "email": email, "purpose": "login", "captchaToken": captcha_token }).to_string(),
                 ))
                 .unwrap(),
         )
@@ -196,7 +196,7 @@ async fn test_email_flow_stores_only_encrypted_account_email() {
                 .header(header::CONTENT_TYPE, "application/json")
                 .header("x-forwarded-for", &captcha_token)
                 .body(Body::from(
-                    json!({ "email": email, "captchaToken": captcha_token }).to_string(),
+                    json!({ "email": email, "purpose": "login", "captchaToken": captcha_token }).to_string(),
                 ))
                 .unwrap(),
         )
@@ -262,7 +262,7 @@ async fn test_verify_wrong_code_fails() {
                 .header(header::CONTENT_TYPE, "application/json")
                 .header("x-forwarded-for", &captcha_token)
                 .body(Body::from(
-                    json!({ "email": email, "captchaToken": captcha_token }).to_string(),
+                    json!({ "email": email, "purpose": "login", "captchaToken": captcha_token }).to_string(),
                 ))
                 .unwrap(),
         )
