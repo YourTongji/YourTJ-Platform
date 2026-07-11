@@ -9,7 +9,7 @@ use serde_json::{json, Value};
 use shared::sse::SsePayload;
 use shared::AppState;
 use tokio::sync::broadcast;
-use tower_http::cors::{Any, CorsLayer};
+use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::request_id::{MakeRequestUuid, SetRequestIdLayer};
 use tower_http::set_header::SetResponseHeaderLayer;
@@ -272,7 +272,19 @@ pub async fn run() -> anyhow::Result<()> {
 
 /// Compose the full application router from per-domain routers.
 fn build_router(state: AppState) -> Router {
-    let cors = CorsLayer::new().allow_origin(Any).allow_methods(Any).allow_headers(Any);
+    let origin_str =
+        std::env::var("CORS_ORIGINS").unwrap_or_else(|_| "http://localhost:5173".into());
+    let origins: Vec<HeaderValue> =
+        origin_str.split(',').filter_map(|o| HeaderValue::from_str(o.trim()).ok()).collect();
+    let cors = if origins.is_empty() {
+        CorsLayer::new().allow_origin(Any).allow_methods(Any).allow_headers(Any)
+    } else {
+        CorsLayer::new()
+            .allow_origin(AllowOrigin::list(origins))
+            .allow_methods(Any)
+            .allow_headers(Any)
+            .allow_credentials(true)
+    };
 
     let request_id_layer = SetRequestIdLayer::x_request_id(MakeRequestUuid);
 
