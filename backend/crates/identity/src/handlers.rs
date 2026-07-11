@@ -682,8 +682,10 @@ pub async fn bind_key(
 
 /// POST /auth/password/login
 ///
-/// Logs in with email + password. Returns the same JWT token pair as
-/// email-code login. Rate-limited: 5 attempts per email per 5 minutes.
+/// Logs in with email + password. Returns a uniform "invalid_credentials"
+/// error for all failure modes (account not found, no password set, wrong
+/// password) to prevent email enumeration. Rate-limited: 5 attempts per
+/// email per 5 minutes.
 #[tracing::instrument(skip(state))]
 pub async fn password_login(
     State(state): State<AppState>,
@@ -698,18 +700,23 @@ pub async fn password_login(
     shared::ratelimit::check_token_bucket(state.redis.as_ref(), "password_login", &email, 5, 300)
         .await?;
 
-    // Look up the account.
-    let account = repo::find_account_by_email(&state.db, state.email_encryption.as_ref(), &email)
-        .await?
-        .ok_or(shared::AppError::Unauthorized)?;
-
-    // Verify password.
-    let phc = repo::find_password_hash(&state.db, state.email_encryption.as_ref(), &email)
-        .await?
-        .ok_or(IdentityError::NoPasswordSet)?;
+    // Look up the account and password hash.
+    let (account, phc) = match (
+        repo::find_account_by_email(&state.db, state.email_encryption.as_ref(), &email).await?,
+        repo::find_password_hash(&state.db, state.email_encryption.as_ref(), &email).await?,
+    ) {
+        (Some(acct), Some(hash)) => (acct, hash),
+        _ => {
+            // Dummy Argon2 verification — constant response and timing.
+            let dummy =
+                "$argon2id$v=19$m=19456,t=2,p=1$dummy$j6PJgxYhKuWrkOV+72FYV7k+GMc4PszN7YlPxJ/8rTk";
+            password::verify("dummy-invalid", dummy);
+            return Err(shared::AppError::Unauthorized);
+        }
+    };
 
     if !password::verify(&body.password, &phc) {
-        return Err(IdentityError::WrongPassword.into());
+        return Err(shared::AppError::Unauthorized);
     }
     ensure_login_allowed(&state, &account).await?;
 
@@ -733,8 +740,10 @@ pub async fn password_login(
 
 /// POST /auth/password/forgot
 ///
-/// Sends a 6-digit verification code to the email for password reset.
-/// Rate-limited: 1 request per email per 60 seconds (reuses email_code bucket).
+/// Always returns 204 regardless of whether the account exists or has a
+/// password set, to prevent email enumeration. Only sends a reset code
+/// to accounts that actually have a password. Rate-limited: 1 request
+/// per email per 60 seconds.
 #[tracing::instrument(skip(state))]
 pub async fn password_forgot(
     State(state): State<AppState>,
@@ -752,42 +761,41 @@ pub async fn password_forgot(
     )
     .await?;
 
-    // Must have a password set to reset it.
-    let hash = repo::find_password_hash(&state.db, state.email_encryption.as_ref(), &email).await?;
-    if hash.is_none() {
-        return Err(IdentityError::NoPasswordSet.into());
-    }
-
     // Rate-limit: 1 per 60 seconds per email (same bucket as request_code).
     shared::ratelimit::check_token_bucket(state.redis.as_ref(), "email_code", &email, 1, 60)
         .await?;
 
-    let code = generate_code();
-    let code_hash = hash_code(&code);
-    let expires_at = Utc::now() + chrono::Duration::minutes(10);
-    let request_id = uuid::Uuid::new_v4();
+    // Only send code to accounts that exist and have a password set.
+    let hash = repo::find_password_hash(&state.db, state.email_encryption.as_ref(), &email).await?;
+    if hash.is_some() {
+        let code = generate_code();
+        let code_hash = hash_code(&code);
+        let expires_at = Utc::now() + chrono::Duration::minutes(10);
+        let request_id = uuid::Uuid::new_v4();
 
-    repo::insert_email_code(
-        &state.db,
-        state.email_encryption.as_ref(),
-        &email,
-        &code_hash,
-        expires_at,
-        "password_reset",
-        request_id,
-    )
-    .await?;
+        repo::insert_email_code(
+            &state.db,
+            state.email_encryption.as_ref(),
+            &email,
+            &code_hash,
+            expires_at,
+            "password_reset",
+            request_id,
+        )
+        .await?;
 
-    let email_content = crate::email_templates::password_reset_code(&code);
-    deliver_email_code(&state, &email, &code_hash, &email_content).await?;
+        let email_content = crate::email_templates::password_reset_code(&code);
+        deliver_email_code(&state, &email, &code_hash, &email_content).await?;
+    }
 
     Ok(StatusCode::NO_CONTENT)
 }
 
 /// POST /auth/password/reset
 ///
-/// Verifies the code and updates the password hash. Does NOT automatically
-/// log the user in — they must use /auth/password/login afterwards.
+/// Verifies the code, updates the password hash, and revokes all sessions.
+/// Does NOT automatically log the user in — they must use
+/// /auth/password/login afterwards.
 #[tracing::instrument(skip(state))]
 pub async fn password_reset(
     State(state): State<AppState>,
@@ -802,7 +810,7 @@ pub async fn password_reset(
     let current_hash =
         repo::find_password_hash(&state.db, state.email_encryption.as_ref(), &email).await?;
     if current_hash.is_none() {
-        return Err(IdentityError::NoPasswordSet.into());
+        return Err(shared::AppError::Unauthorized);
     }
 
     // Look up the live code row for password_reset purpose.
@@ -832,6 +840,9 @@ pub async fn password_reset(
         .ok_or(shared::AppError::NotFound)?;
 
     repo::update_password_hash(&state.db, account.id, &new_hash).await?;
+
+    // Revoke all sessions — password changed, old tokens invalid.
+    repo::revoke_all_sessions(&state.db, account.id).await?;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -885,6 +896,9 @@ pub async fn password_change(
     let new_hash = password::hash(&body.new_password)?;
 
     repo::update_password_hash(&state.db, auth.id, &new_hash).await?;
+
+    // Revoke all sessions — password changed, old tokens invalid.
+    repo::revoke_all_sessions(&state.db, auth.id).await?;
 
     Ok(StatusCode::NO_CONTENT)
 }
