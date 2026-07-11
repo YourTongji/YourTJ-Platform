@@ -227,6 +227,50 @@ export interface paths {
         };
         trace?: never;
     };
+    "/me/activity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Current user's daily public activity calendar
+         * @description Returns every Asia/Shanghai calendar day in the requested inclusive range, including zero-count days. The maximum range is 371 days.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    from?: string;
+                    to?: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ActivityCalendar"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/me/drafts": {
         parameters: {
             query?: never;
@@ -470,7 +514,7 @@ export interface paths {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": components["schemas"]["UserProfileWithStats"];
+                        "application/json": components["schemas"]["UserProfile"];
                     };
                 };
             };
@@ -3216,7 +3260,11 @@ export interface paths {
         /** List DM conversations */
         get: {
             parameters: {
-                query?: never;
+                query?: {
+                    /** @description Opaque pagination cursor */
+                    cursor?: components["parameters"]["Cursor"];
+                    limit?: components["parameters"]["Limit"];
+                };
                 header?: never;
                 path?: never;
                 cookie?: never;
@@ -3245,9 +3293,7 @@ export interface paths {
             };
             requestBody: {
                 content: {
-                    "application/json": {
-                        recipientId: string;
-                    };
+                    "application/json": components["schemas"]["DmConversationInput"];
                 };
             };
             responses: {
@@ -3315,9 +3361,7 @@ export interface paths {
             };
             requestBody: {
                 content: {
-                    "application/json": {
-                        body: string;
-                    };
+                    "application/json": components["schemas"]["DmMessageInput"];
                 };
             };
             responses: {
@@ -3330,6 +3374,89 @@ export interface paths {
                         "application/json": components["schemas"]["DmMessage"];
                     };
                 };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/forum/dm/conversations/{id}/read": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Mark a DM conversation read through a message */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": components["schemas"]["DmReadInput"];
+                };
+            };
+            responses: {
+                /** @description read position updated */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                404: components["responses"]["NotFound"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/forum/dm/messages/{id}/report": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Report a private message to moderators */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["DmReportInput"];
+                };
+            };
+            responses: {
+                /** @description queued */
+                202: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                404: components["responses"]["NotFound"];
+                409: components["responses"]["Conflict"];
             };
         };
         delete?: never;
@@ -3905,6 +4032,348 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/overview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Administration dashboard counters */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AdminOverview"];
+                    };
+                };
+                403: components["responses"]["Forbidden"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/audit-events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Cursor-paginated immutable administration audit events */
+        get: {
+            parameters: {
+                query?: {
+                    actorId?: string;
+                    action?: string;
+                    targetType?: string;
+                    /** @description Opaque pagination cursor */
+                    cursor?: components["parameters"]["Cursor"];
+                    limit?: components["parameters"]["Limit"];
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AdminAuditEventPage"];
+                    };
+                };
+                403: components["responses"]["Forbidden"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/activity-policy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Current activity scoring policy */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ActivityPolicy"];
+                    };
+                };
+                403: components["responses"]["Forbidden"];
+            };
+        };
+        /** Publish a new activity scoring policy revision */
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["ActivityPolicyUpdateInput"];
+                };
+            };
+            responses: {
+                /** @description updated */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ActivityPolicy"];
+                    };
+                };
+                403: components["responses"]["Forbidden"];
+                409: components["responses"]["Conflict"];
+            };
+        };
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/activity-policy/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Activity scoring policy revision history */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description Opaque pagination cursor */
+                    cursor?: components["parameters"]["Cursor"];
+                    limit?: components["parameters"]["Limit"];
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ActivityPolicyPage"];
+                    };
+                };
+                403: components["responses"]["Forbidden"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Search and filter the administration user directory */
+        get: {
+            parameters: {
+                query?: {
+                    q?: string;
+                    role?: "user" | "mod" | "admin";
+                    status?: "active" | "suspended" | "deleted";
+                    /** @description Opaque pagination cursor */
+                    cursor?: components["parameters"]["Cursor"];
+                    limit?: components["parameters"]["Limit"];
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AdminUserPage"];
+                    };
+                };
+                403: components["responses"]["Forbidden"];
+            };
+        };
+        put?: never;
+        /** Invite and provision a campus account */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["AdminUserInviteInput"];
+                };
+            };
+            responses: {
+                /** @description invited */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AdminUser"];
+                    };
+                };
+                403: components["responses"]["Forbidden"];
+                409: components["responses"]["Conflict"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/users/{id}/role": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Change a user's platform role */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["AdminUserRoleInput"];
+                };
+            };
+            responses: {
+                /** @description updated */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AdminUser"];
+                    };
+                };
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+                409: components["responses"]["Conflict"];
+            };
+        };
+        trace?: never;
+    };
+    "/admin/users/{id}/sessions/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Revoke every active session for a user */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["AdminReasonInput"];
+                };
+            };
+            responses: {
+                /** @description revoked */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/reviews": {
         parameters: {
             query?: never;
@@ -4258,6 +4727,92 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/dm/reports": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Private-message report queue; unreported conversations are never exposed */
+        get: {
+            parameters: {
+                query?: {
+                    status?: "open" | "upheld" | "rejected";
+                    /** @description Opaque pagination cursor */
+                    cursor?: components["parameters"]["Cursor"];
+                    limit?: components["parameters"]["Limit"];
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["DmReportPage"];
+                    };
+                };
+                403: components["responses"]["Forbidden"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/dm/reports/{id}/resolve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Resolve a private-message report */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["DmReportResolutionInput"];
+                };
+            };
+            responses: {
+                /** @description resolved */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["DmReport"];
+                    };
+                };
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/settings": {
         parameters: {
             query?: never;
@@ -4334,6 +4889,138 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/admin/announcements": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List announcements for administration */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description Opaque pagination cursor */
+                    cursor?: components["parameters"]["Cursor"];
+                    limit?: components["parameters"]["Limit"];
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AnnouncementPage"];
+                    };
+                };
+                403: components["responses"]["Forbidden"];
+            };
+        };
+        put?: never;
+        /** Publish an announcement */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["AnnouncementInput"];
+                };
+            };
+            responses: {
+                /** @description created */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Announcement"];
+                    };
+                };
+                403: components["responses"]["Forbidden"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/announcements/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete an announcement */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description deleted */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+            };
+        };
+        options?: never;
+        head?: never;
+        /** Update an announcement */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["AnnouncementInput"];
+                };
+            };
+            responses: {
+                /** @description updated */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Announcement"];
+                    };
+                };
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+            };
+        };
         trace?: never;
     };
     "/admin/selection/sync": {
@@ -5170,7 +5857,11 @@ export interface paths {
                 };
                 cookie?: never;
             };
-            requestBody?: never;
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["SanctionInput"];
+                };
+            };
             responses: {
                 /** @description silenced */
                 204: {
@@ -5179,6 +5870,8 @@ export interface paths {
                     };
                     content?: never;
                 };
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
             };
         };
         delete?: never;
@@ -5206,7 +5899,11 @@ export interface paths {
                 };
                 cookie?: never;
             };
-            requestBody?: never;
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["SanctionInput"];
+                };
+            };
             responses: {
                 /** @description suspended */
                 204: {
@@ -5215,6 +5912,8 @@ export interface paths {
                     };
                     content?: never;
                 };
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
             };
         };
         delete?: never;
@@ -5242,7 +5941,11 @@ export interface paths {
                 };
                 cookie?: never;
             };
-            requestBody?: never;
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["UnsanctionInput"];
+                };
+            };
             responses: {
                 /** @description revoked */
                 204: {
@@ -5251,6 +5954,8 @@ export interface paths {
                     };
                     content?: never;
                 };
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
             };
         };
         delete?: never;
@@ -5283,8 +5988,12 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["Sanction"][];
+                    };
                 };
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
             };
         };
         put?: never;
@@ -5378,6 +6087,7 @@ export interface components {
             avatarUrl?: string | null;
             /** @enum {string} */
             role?: "user" | "mod" | "admin";
+            capabilities?: string[];
             trustLevel?: number;
             createdAt?: number;
         };
@@ -5801,10 +6511,14 @@ export interface components {
             value?: string;
         };
         Announcement: {
-            id?: string;
-            title?: string;
-            body?: string;
-            createdAt?: number;
+            id: string;
+            title: string;
+            body?: string | null;
+            createdAt: number;
+        };
+        AnnouncementInput: {
+            title: string;
+            body?: string | null;
         };
         CoursePage: components["schemas"]["Page"] & {
             items?: components["schemas"]["Course"][];
@@ -5846,22 +6560,59 @@ export interface components {
             items?: components["schemas"]["ModAction"][];
         };
         DmConversation: {
-            id?: string;
-            otherAccountId?: string;
-            otherHandle?: string;
-            otherAvatarUrl?: string | null;
-            lastMessageBody?: string | null;
+            id: string;
+            participantId: string;
+            participantHandle: string;
+            participantAvatarUrl?: string | null;
+            lastMessageExcerpt?: string | null;
             lastMessageAt?: number | null;
-            unreadCount?: number;
-            createdAt?: number;
+            unreadCount: number;
+            createdAt: number;
+        };
+        DmConversationInput: {
+            recipientHandle: string;
         };
         DmMessage: {
-            id?: string;
-            conversationId?: string;
-            senderId?: string;
+            id: string;
+            conversationId: string;
+            senderId: string;
+            senderHandle: string;
+            body: string;
+            createdAt: number;
+        };
+        DmMessageInput: {
+            body: string;
+        };
+        DmReadInput: {
+            lastReadMessageId?: string | null;
+        };
+        DmReportInput: {
+            /** @enum {string} */
+            reason: "spam" | "abuse" | "harassment" | "fraud" | "illegal" | "other";
+            note?: string;
+        };
+        DmReport: {
+            id: string;
+            messageId: string;
+            conversationId: string;
+            reporterId: string;
+            reporterHandle?: string;
+            senderId: string;
             senderHandle?: string;
-            body?: string;
-            createdAt?: number;
+            messageExcerpt?: string;
+            /** @enum {string} */
+            reason: "spam" | "abuse" | "harassment" | "fraud" | "illegal" | "other";
+            note?: string | null;
+            /** @enum {string} */
+            status: "open" | "upheld" | "rejected";
+            handledBy?: string | null;
+            handledAt?: number | null;
+            createdAt: number;
+        };
+        DmReportResolutionInput: {
+            /** @enum {string} */
+            action: "uphold" | "reject";
+            note?: string;
         };
         PollResult: {
             pollId?: string;
@@ -5888,16 +6639,63 @@ export interface components {
             avatarUrl?: string | null;
             createdAt?: number;
         };
+        UserBadge: {
+            slug: string;
+            name: string;
+        };
         UserProfile: {
-            handle?: string;
+            handle: string;
             avatarUrl?: string | null;
             /** @enum {string} */
-            role?: "user" | "mod" | "admin";
-            createdAt?: number;
+            role: "user" | "mod" | "admin";
+            trustLevel: number;
+            badges: components["schemas"]["UserBadge"][];
+            threadCount: number;
+            commentCount: number;
+            votesReceived: number;
+            createdAt: number;
         };
-        UserProfileWithStats: components["schemas"]["UserProfile"] & {
-            threadCount?: number;
-            commentCount?: number;
+        /** @deprecated */
+        UserProfileWithStats: components["schemas"]["UserProfile"];
+        ActivityWeights: {
+            thread: number;
+            comment: number;
+            like: number;
+        };
+        ActivityDay: {
+            /** Format: date */
+            date: string;
+            threads: number;
+            comments: number;
+            /** @description Positive likes given by the user. */
+            likes: number;
+            score: number;
+        };
+        /** @description A continuous Asia/Shanghai calendar; days without activity are returned with zero counts. */
+        ActivityCalendar: {
+            /** @enum {string} */
+            timezone: "Asia/Shanghai";
+            /** Format: date */
+            from: string;
+            /** Format: date */
+            to: string;
+            policyVersion: number;
+            weights: components["schemas"]["ActivityWeights"];
+            days: components["schemas"]["ActivityDay"][];
+        };
+        ActivityPolicy: {
+            version: number;
+            /** @enum {string} */
+            timezone: "Asia/Shanghai";
+            weights: components["schemas"]["ActivityWeights"];
+            reason: string;
+            changedBy: string;
+            createdAt: number;
+        };
+        ActivityPolicyUpdateInput: {
+            expectedVersion: number;
+            weights: components["schemas"]["ActivityWeights"];
+            reason: string;
         };
         OneboxResult: {
             url?: string;
@@ -5947,6 +6745,64 @@ export interface components {
         UploadPage: components["schemas"]["Page"] & {
             items?: components["schemas"]["Upload"][];
         };
+        AdminUser: {
+            id: string;
+            handle: string;
+            avatarUrl?: string | null;
+            /** @enum {string} */
+            role: "user" | "mod" | "admin";
+            /** @enum {string} */
+            status: "active" | "suspended" | "deleted";
+            trustLevel: number;
+            lastActiveAt?: number | null;
+            createdAt: number;
+        };
+        AdminUserInviteInput: {
+            /** Format: email */
+            email: string;
+            handle: string;
+            /**
+             * @default user
+             * @enum {string}
+             */
+            role: "user" | "mod";
+            reason: string;
+        };
+        AdminReasonInput: {
+            reason: string;
+        };
+        AdminUserRoleInput: {
+            /** @enum {string} */
+            role: "user" | "mod" | "admin";
+            reason: string;
+        };
+        AdminOverview: {
+            totalUsers: number;
+            activeUsers: number;
+            suspendedUsers: number;
+            moderators?: number;
+            administrators?: number;
+            pendingReviewReports: number;
+            pendingForumFlags: number;
+            pendingDmReports: number;
+            pendingMediaUploads: number;
+            threadsToday: number;
+            commentsToday: number;
+            likesToday: number;
+        };
+        AdminAuditEvent: {
+            id: string;
+            /** @enum {string} */
+            actorKind: "account" | "system" | "service";
+            actorId?: string | null;
+            actorHandle?: string | null;
+            action: string;
+            targetType: string;
+            targetId: string;
+            reason?: string | null;
+            metadata?: Record<string, never> | null;
+            createdAt: number;
+        };
         Badge: {
             id?: string;
             name?: string;
@@ -5977,6 +6833,21 @@ export interface components {
         };
         BadgePage: components["schemas"]["Page"] & {
             items?: components["schemas"]["Badge"][];
+        };
+        ActivityPolicyPage: components["schemas"]["Page"] & {
+            items?: components["schemas"]["ActivityPolicy"][];
+        };
+        AdminUserPage: components["schemas"]["Page"] & {
+            items?: components["schemas"]["AdminUser"][];
+        };
+        AdminAuditEventPage: components["schemas"]["Page"] & {
+            items?: components["schemas"]["AdminAuditEvent"][];
+        };
+        DmReportPage: components["schemas"]["Page"] & {
+            items?: components["schemas"]["DmReport"][];
+        };
+        AnnouncementPage: components["schemas"]["Page"] & {
+            items?: components["schemas"]["Announcement"][];
         };
     };
     responses: {
