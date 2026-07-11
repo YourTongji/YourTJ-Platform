@@ -6,7 +6,7 @@
 >
 > 负责人：Forum/Web/Platform maintainers、Community operations、Privacy owner
 >
-> 最近核验：2026-07-11，`origin/main@33584db`
+> 最近核验：2026-07-11，`origin/main@ed8a06c`
 
 通知告诉用户“发生了什么”，公告传达平台级信息，私信承载参与者之间的非公开交流。三者都
 涉及未读、实时、偏好和保留，但必须保持各自的权限和证据边界。
@@ -17,6 +17,8 @@
 
 - 站内通知有类型、payload、`read_at`、unread count 和 aggregation key，多种论坛/互动/DM
   写入点会创建通知；后端有 SSE 基础。
+- 通知列表支持有界 cursor pagination、数据库 unread filter、逐条/批量/全部已读；Web 有全局未读
+  角标、全部/未读筛选、加载更多，以及内容/私信等已知事件的安全站内 target。
 - 后端已有每 7 天调度的 digest worker；它是发送骨架，不代表偏好、投递与运营闭环完成。
 - 公告有管理员 CRUD、理由和审计，首页显示最近标题。
 - 私信有 canonical 1:1 conversation、分页 inbox/messages、单调 read pointer、准确未读、
@@ -24,9 +26,8 @@
 
 ### Partial
 
-- “全部已读”前后端 body 语义不一致，unread query 被忽略。
 - Web 偏好保存 `emailPush/webPush`，后端按事件 key 判断；多数事件不尊重偏好。
-- 通知缺稳定 target URL、逐条已读、完整分页、导航角标和 Web SSE 客户端。
+- 旧 badge、部分治理和 comment vote 通知仍缺可到达 target；Web 尚无 SSE 客户端。
 - SSE 只适合单实例，没有 Redis bridge 或 durable event delivery。
 - Digest 缺稳定 event×channel preference、delivery status/retry 与运营验证，Web 也没有对应设置。
 - 公告缺 publish 状态、排期、严重度、展示方式、受众、revision 和用户 receipt。
@@ -55,6 +56,10 @@
 - Header 和消息导航显示 unread badge；点击 target 后按明确规则标记已读。
 - Web 使用 SSE/EventSource 接收“有新数据”信号，再通过 API 拉取；多实例通过 Redis pub/sub
   或 durable stream 广播并支持断线恢复。
+
+当前 `/notifications/read` 新客户端明确发送 `ids` 或 `all=true`；服务端暂时接受历史空对象作为
+mark-all，以支持滚动升级。列表 cursor 表示上一页最后返回的通知 id，下一页使用严格 `< cursor`，
+lookahead 只判断 `hasMore`，不能把未返回的 row 当 cursor 导致漏项。
 
 ## 偏好与发送渠道
 

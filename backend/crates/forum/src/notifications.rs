@@ -3,34 +3,12 @@
 //! The backing table is `forum.notifications`.
 
 use axum::extract::{Query, State};
-use axum::http::HeaderMap;
+use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
-use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use shared::pagination::Page;
 use shared::{AppError, AppResult, AppState};
-use sqlx::FromRow;
-use sqlx::PgPool;
-
-// ---------------------------------------------------------------------------
-// DB row
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, FromRow)]
-#[allow(dead_code)]
-pub struct NotificationRow {
-    pub id: i64,
-    pub account_id: i64,
-    pub r#type: String,
-    pub payload: Value,
-    pub read_at: Option<DateTime<Utc>>,
-    pub created_at: DateTime<Utc>,
-}
-
-// ---------------------------------------------------------------------------
-// DTOs
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -38,21 +16,33 @@ pub struct NotificationDto {
     pub id: String,
     pub r#type: String,
     pub payload: Value,
+    pub target_url: Option<String>,
     pub read: bool,
     pub read_at: Option<i64>,
     pub created_at: i64,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UnreadCountDto {
+    pub count: i64,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MarkReadInput {
-    pub ids: Vec<String>,
+    #[serde(default)]
+    pub ids: Option<Vec<String>>,
+    #[serde(default)]
+    pub all: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NotificationListQuery {
     pub cursor: Option<String>,
+    #[serde(default)]
+    pub unread: bool,
     #[serde(default = "default_limit")]
     pub limit: i64,
 }
@@ -61,80 +51,38 @@ fn default_limit() -> i64 {
     20
 }
 
-// ---------------------------------------------------------------------------
-// Repo helpers
-// ---------------------------------------------------------------------------
-
-/// List notifications for an account, cursor-paginated by created_at DESC.
-pub async fn list_notifications(
-    pool: &PgPool,
-    account_id: i64,
-    cursor: Option<i64>,
-    limit: i64,
-) -> AppResult<(Vec<NotificationRow>, Option<i64>)> {
-    let rows = if let Some(cursor_id) = cursor {
-        sqlx::query_as::<_, NotificationRow>(
-            "SELECT id, account_id, type, payload, read_at, created_at \
-             FROM forum.notifications \
-             WHERE account_id = $1 AND id < $2 \
-             ORDER BY created_at DESC LIMIT $3",
-        )
-        .bind(account_id)
-        .bind(cursor_id)
-        .bind(limit + 1)
-        .fetch_all(pool)
-        .await?
-    } else {
-        sqlx::query_as::<_, NotificationRow>(
-            "SELECT id, account_id, type, payload, read_at, created_at \
-             FROM forum.notifications \
-             WHERE account_id = $1 \
-             ORDER BY created_at DESC LIMIT $2",
-        )
-        .bind(account_id)
-        .bind(limit + 1)
-        .fetch_all(pool)
-        .await?
-    };
-
-    let has_more = rows.len() > limit as usize;
-    let next_cursor = if has_more { rows.get(limit as usize).map(|r| r.id) } else { None };
-
-    let truncated: Vec<NotificationRow> =
-        if has_more { rows.into_iter().take(limit as usize).collect() } else { rows };
-
-    Ok((truncated, next_cursor))
+fn numeric_payload_id(payload: &Value, field: &str) -> Option<i64> {
+    payload.get(field)?.as_str()?.parse().ok().filter(|id| *id > 0)
 }
 
-/// Mark notifications as read. Only touches notifications belonging to the
-/// given account, silently skipping any `ids` that belong to another account.
-pub async fn mark_read(pool: &PgPool, account_id: i64, notification_ids: &[i64]) -> AppResult<()> {
-    if notification_ids.is_empty() {
-        return Ok(());
+fn notification_target_url(notification_type: &str, payload: &Value) -> Option<String> {
+    let explicit_target = payload.get("targetUrl").and_then(Value::as_str).filter(|target| {
+        target.starts_with('/')
+            && !target.starts_with("//")
+            && !target.contains('\\')
+            && !target.chars().any(char::is_control)
+    });
+    if let Some(target) = explicit_target {
+        return Some(target.to_owned());
     }
 
-    // sqlx does not support array binding natively, so we build IN ($1, $2, ...).
-    let placeholders: Vec<String> =
-        notification_ids.iter().enumerate().map(|(i, _)| format!("${}", i + 2)).collect();
-
-    let sql = format!(
-        "UPDATE forum.notifications SET read_at = now() \
-         WHERE account_id = $1 AND id IN ({}) AND read_at IS NULL",
-        placeholders.join(", ")
-    );
-
-    let mut q = sqlx::query(&sql).bind(account_id);
-    for id in notification_ids {
-        q = q.bind(id);
+    if notification_type == "dm" {
+        return numeric_payload_id(payload, "conversationId")
+            .map(|id| format!("/messages?conversation={id}"));
     }
-    q.execute(pool).await?;
 
-    Ok(())
+    if let Some(thread_id) = numeric_payload_id(payload, "threadId") {
+        return Some(format!("/forum/threads/{thread_id}"));
+    }
+
+    if notification_type == "vote"
+        && payload.get("postType").and_then(Value::as_str) == Some("thread")
+    {
+        return numeric_payload_id(payload, "postId").map(|id| format!("/forum/threads/{id}"));
+    }
+
+    None
 }
-
-// ---------------------------------------------------------------------------
-// Handlers
-// ---------------------------------------------------------------------------
 
 /// GET /api/v2/notifications — auth required
 pub async fn list_notifications_handler(
@@ -157,17 +105,23 @@ pub async fn list_notifications_handler(
         .map(|c| c.parse::<i64>().map_err(|_| AppError::BadRequest("invalid cursor".into())))
         .transpose()?;
 
-    let (rows, next_cursor) = list_notifications(&state.db, auth.id, cursor_id, q.limit).await?;
+    if !(1..=100).contains(&q.limit) {
+        return Err(AppError::BadRequest("limit must be between 1 and 100".into()));
+    }
+
+    let (rows, next_cursor) =
+        crate::repo::list_notifications(&state.db, auth.id, cursor_id, q.unread, q.limit).await?;
 
     let items: Vec<NotificationDto> = rows
         .into_iter()
-        .map(|r| NotificationDto {
-            id: r.id.to_string(),
-            r#type: r.r#type,
-            payload: r.payload,
-            read: r.read_at.is_some(),
-            read_at: r.read_at.map(|t| t.timestamp()),
-            created_at: r.created_at.timestamp(),
+        .map(|row| NotificationDto {
+            id: row.id.to_string(),
+            target_url: notification_target_url(&row.r#type, &row.payload),
+            r#type: row.r#type,
+            payload: row.payload,
+            read: row.read_at.is_some(),
+            read_at: row.read_at.map(|timestamp| timestamp.timestamp()),
+            created_at: row.created_at.timestamp(),
         })
         .collect();
 
@@ -179,7 +133,7 @@ pub async fn list_notifications_handler(
 pub async fn unread_count_handler(
     State(state): State<AppState>,
     headers: HeaderMap,
-) -> AppResult<Json<serde_json::Value>> {
+) -> AppResult<Json<UnreadCountDto>> {
     let auth = identity::auth_middleware::authenticate(
         &headers,
         &state.db,
@@ -196,15 +150,15 @@ pub async fn unread_count_handler(
     .fetch_one(&state.db)
     .await?;
 
-    Ok(Json(serde_json::json!({ "count": count })))
+    Ok(Json(UnreadCountDto { count }))
 }
 
-/// POST /api/v2/notifications/read — auth required
+/// POST /api/v2/notifications/read — auth required.
 pub async fn mark_read_handler(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(body): Json<MarkReadInput>,
-) -> AppResult<Json<serde_json::Value>> {
+) -> AppResult<StatusCode> {
     let auth = identity::auth_middleware::authenticate(
         &headers,
         &state.db,
@@ -214,11 +168,62 @@ pub async fn mark_read_handler(
     .await
     .map_err(|_r| AppError::Unauthorized)?;
 
-    let ids: Result<Vec<i64>, _> = body.ids.iter().map(|s| s.parse::<i64>()).collect();
+    match (body.ids, body.all) {
+        (Some(ids), None) => {
+            if ids.is_empty() || ids.len() > 100 {
+                return Err(AppError::BadRequest(
+                    "ids must contain between 1 and 100 items".into(),
+                ));
+            }
+            let parsed_ids = ids
+                .iter()
+                .map(|id| id.parse::<i64>())
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|_| AppError::BadRequest("invalid notification id".into()))?;
+            if parsed_ids.iter().any(|id| *id <= 0) {
+                return Err(AppError::BadRequest("invalid notification id".into()));
+            }
+            crate::repo::mark_read(&state.db, auth.id, &parsed_ids).await?;
+        }
+        (None, Some(true) | None) => {
+            crate::repo::mark_all_read(&state.db, auth.id).await?;
+        }
+        (None, Some(false)) => return Err(AppError::BadRequest("all must be true".into())),
+        (Some(_), Some(_)) => {
+            return Err(AppError::BadRequest("all and ids cannot be combined".into()));
+        }
+    }
 
-    let ids = ids.map_err(|_| AppError::BadRequest("invalid notification id".into()))?;
+    Ok(StatusCode::NO_CONTENT)
+}
 
-    mark_read(&state.db, auth.id, &ids).await?;
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
 
-    Ok(Json(serde_json::json!({ "ok": true })))
+    use super::notification_target_url;
+
+    #[test]
+    fn builds_only_internal_notification_targets() {
+        assert_eq!(
+            notification_target_url("reply", &json!({ "threadId": "42" })),
+            Some("/forum/threads/42".into())
+        );
+        assert_eq!(
+            notification_target_url("dm", &json!({ "conversationId": "7" })),
+            Some("/messages?conversation=7".into())
+        );
+        assert_eq!(
+            notification_target_url("system", &json!({ "targetUrl": "/settings" })),
+            Some("/settings".into())
+        );
+        assert_eq!(
+            notification_target_url("system", &json!({ "targetUrl": "//attacker.example" })),
+            None
+        );
+        assert_eq!(
+            notification_target_url("system", &json!({ "targetUrl": "/\\attacker.example" })),
+            None
+        );
+    }
 }

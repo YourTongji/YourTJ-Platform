@@ -1,3 +1,4 @@
+import { useQuery } from "@tanstack/react-query";
 import { Bell, LogOut, Menu, Moon, Plus, Search, Settings, Sun, User } from "lucide-react";
 import * as React from "react";
 import { Link, Outlet, useLocation, useNavigate } from "react-router";
@@ -19,6 +20,7 @@ import {
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useAuth } from "@/context/auth-provider";
+import { api } from "@/lib/api/endpoints";
 import { cn } from "@/lib/utils";
 
 function ThemeToggle() {
@@ -52,6 +54,14 @@ export function AppLayout() {
   const navigate = useNavigate();
   const location = useLocation();
   const isHome = location.pathname === "/";
+  const notificationCount = useQuery({
+    queryKey: ["notification-count"],
+    queryFn: api.unreadNotificationCount,
+    enabled: isAuthenticated,
+    staleTime: 30_000,
+    refetchInterval: 60_000,
+  });
+  const unreadCount = notificationCount.data?.count ?? 0;
 
   return (
     <TooltipProvider>
@@ -108,8 +118,17 @@ export function AppLayout() {
                 </Link>
               </Button>
               <Button asChild variant="ghost" size="icon" className="size-9 rounded-full text-[#6b7280]">
-                <Link to="/notifications" aria-label="通知">
+                <Link
+                  to="/notifications"
+                  className="relative"
+                  aria-label={unreadCount > 0 ? `通知，${unreadCount} 条未读` : "通知"}
+                >
                   <Bell className="size-[18px]" />
+                  {unreadCount > 0 ? (
+                    <span className="absolute -right-1 -top-1 min-w-4 rounded-full bg-primary px-1 text-center text-[10px] font-semibold leading-4 text-primary-foreground">
+                      {unreadCount > 99 ? "99+" : unreadCount}
+                    </span>
+                  ) : null}
                 </Link>
               </Button>
               <ThemeToggle />

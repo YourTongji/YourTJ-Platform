@@ -40,7 +40,7 @@
 | 媒体 | `Partial` | 后端 STS、回调和审核已存在；头像、帖子、评论、课评、私信没有 asset binding；缺缩略图、EXIF 清理、配额、孤儿回收和 CDN 访问策略；管理 UI 对 block 是否删除 OSS 的文案与后端相反 |
 | Feed | `Partial` | 首页有固定摘要、按列表位置伪造徽章和无行为的收藏/分享/筛选；缺真实 following feed 和明确 recommended 规则 |
 | 聚合搜索 | `Partial` | 后端/契约/Web 对 courses、reviews、threads 的 shape 和类型过滤不一致；论坛、课程、课评尚未形成稳定 typed federated search |
-| 通知 | `Partial` | 全部已读传空 body 而后端期待 ids；unread 参数被忽略；偏好 key 与事件类型不一致；无 target URL、全局角标和 Web SSE |
+| 通知 | `Partial` | bounded cursor/unread/逐条与全部已读、安全站内 target、Web 全局角标和筛选已接通；偏好 key 与事件类型仍不一致，部分旧事件无 target，也没有 Web SSE/multi-instance delivery |
 | 公告 | `Partial` | 只有 CRUD 和首页标题；无状态、排期、受众、revision、seen/ack receipt 和未读全局弹窗 |
 | 私信 | `Partial` | 核心 1:1 可用；缺 DM policy、消息请求、archive/delete/recover、附件、搜索、会话 mute、实时与全局角标 |
 | 推广位 | `Planned` | 左侧推广卡硬编码；无后台模型、排期、素材、受众、审计和聚合效果指标 |

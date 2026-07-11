@@ -458,7 +458,10 @@ export const api = {
   },
 
   markNotificationsRead(ids?: string[]) {
-    return apiRequest<void>("/notifications/read", { method: "POST", body: { ids } });
+    return apiRequest<void>("/notifications/read", {
+      method: "POST",
+      body: ids ? { ids } : { all: true },
+    });
   },
 
   notificationPrefs() {

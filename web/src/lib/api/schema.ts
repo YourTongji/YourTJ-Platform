@@ -3733,7 +3733,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Mark notifications read */
+        /**
+         * Mark notifications read
+         * @description Send ids to mark selected notifications or all=true to mark every notification. For rolling compatibility, an empty object still means mark all; new clients must send all=true explicitly.
+         */
         post: {
             parameters: {
                 query?: never;
@@ -3741,21 +3744,21 @@ export interface paths {
                 path?: never;
                 cookie?: never;
             };
-            requestBody?: {
+            requestBody: {
                 content: {
-                    "application/json": {
-                        ids?: string[];
-                    };
+                    "application/json": components["schemas"]["NotificationReadInput"];
                 };
             };
             responses: {
-                /** @description ok */
+                /** @description marked */
                 204: {
                     headers: {
                         [name: string]: unknown;
                     };
                     content?: never;
                 };
+                400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
             };
         };
         delete?: never;
@@ -6591,12 +6594,22 @@ export interface components {
             createdAt?: number;
         };
         Notification: {
-            id?: string;
-            type?: string;
-            payload?: Record<string, never>;
-            read?: boolean;
-            readAt?: number | null;
-            createdAt?: number;
+            id: string;
+            type: string;
+            payload: {
+                [key: string]: unknown;
+            };
+            /** @description Safe application-relative destination when this notification has one. */
+            targetUrl: string | null;
+            read: boolean;
+            readAt: number | null;
+            createdAt: number;
+        };
+        NotificationReadInput: {
+            /** @description Mark only these notifications. They must belong to the current account. */
+            ids?: string[];
+            /** @description Mark every notification for the current account. Cannot be combined with ids. */
+            all?: boolean;
         };
         NotificationPrefs: {
             prefs?: Record<string, never>;

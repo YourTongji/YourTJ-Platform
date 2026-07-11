@@ -85,7 +85,7 @@ pub use ignores::{
     list_ignored_users,
 };
 pub use notification_prefs::{get_notification_prefs, set_notification_prefs};
-pub use notifications::{list_notifications, mark_read, NotificationRow};
+pub use notifications::{list_notifications, mark_all_read, mark_read, NotificationRow};
 pub use polls::{
     create_poll, get_poll, get_poll_by_id, get_poll_id_by_thread, get_poll_option,
     get_poll_results, get_voted_option_ids, vote_option, PollWithOptions,
