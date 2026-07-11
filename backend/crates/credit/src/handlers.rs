@@ -204,6 +204,14 @@ pub struct TasksQuery {
     pub limit: i64,
 }
 
+fn task_status_filter(status: Option<&str>) -> AppResult<Option<&str>> {
+    match status {
+        None | Some("all") => Ok(None),
+        Some(status @ ("open" | "in_progress" | "submitted" | "completed")) => Ok(Some(status)),
+        Some(_) => Err(shared::AppError::BadRequest("invalid task status".into())),
+    }
+}
+
 /// GET /api/v2/credit/tasks
 pub async fn list_tasks(
     State(state): State<AppState>,
@@ -215,7 +223,8 @@ pub async fn list_tasks(
         .map_err(map_auth_err)?;
 
     let cursor = params.cursor.as_deref().and_then(|c| c.parse::<i64>().ok());
-    let page = repo::list_tasks(&state.db, params.status.as_deref(), cursor, params.limit).await?;
+    let status = task_status_filter(params.status.as_deref())?;
+    let page = repo::list_tasks(&state.db, status, cursor, params.limit).await?;
 
     let items: Vec<TaskDto> = page
         .items
