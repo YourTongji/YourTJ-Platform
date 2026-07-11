@@ -23,4 +23,3 @@ export function getTwentyWeekActivityRange(now = new Date()) {
     to: formatIsoDate(today),
   };
 }
-

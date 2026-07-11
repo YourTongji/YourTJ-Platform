@@ -25,4 +25,3 @@ CREATE INDEX governance_audit_events_target_idx
 ALTER TABLE identity.accounts
   ADD COLUMN invited_by BIGINT REFERENCES identity.accounts(id),
   ADD COLUMN invited_at TIMESTAMPTZ;
-

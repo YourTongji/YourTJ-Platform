@@ -289,4 +289,3 @@ export function ActivityHeatmap({
 
   return <HeatmapGrid calendar={calendar} />;
 }
-

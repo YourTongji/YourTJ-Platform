@@ -44,4 +44,3 @@ export function capabilitiesForAccount(account: Account | null) {
 export function hasCapability(capabilities: Set<string>, capability: AdminCapability) {
   return capabilities.has(capability);
 }
-
