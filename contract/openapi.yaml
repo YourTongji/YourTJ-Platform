@@ -1070,10 +1070,21 @@ paths:
     post:
       tags: [auth]
       security: []
-      summary: Verify a code and log in / register
+      summary: Verify a login-purpose code and return tokens for an existing account
       requestBody:
         required: true
-        content: { application/json: { schema: { type: object, required: [email, code], properties: { email: { type: string }, code: { type: string }, handle: { type: string } } } } }
+        content: { application/json: { schema: { type: object, required: [email, code], properties: { email: { type: string }, code: { type: string } } } } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/AuthTokens" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+  /auth/register:
+    post:
+      tags: [auth]
+      security: []
+      summary: Register a new account with a registration-purpose code, handle, and optional password
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [email, code, handle], properties: { email: { type: string }, code: { type: string }, handle: { type: string, minLength: 3, maxLength: 30 }, password: { type: string } } } } }
       responses:
         "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/AuthTokens" } } } }
         "400": { $ref: "#/components/responses/BadRequest" }

@@ -17,7 +17,7 @@ use crate::auth::{create_access_token, generate_refresh_token};
 use crate::dto::{
     AccountDto, AuthTokensOutput, BindKeyInput, ClaimChallengeOutput, ClaimInput,
     PasswordChangeInput, PasswordForgotInput, PasswordLoginInput, PasswordResetInput, RefreshInput,
-    RequestCodeInput, UpdateMeInput, VerifyEmailInput, WalletDto,
+    RegisterInput, RequestCodeInput, UpdateMeInput, VerifyEmailInput, WalletDto,
 };
 use crate::email_code::{generate_code, hash_code, verify_code, CodePurpose};
 use crate::error::IdentityError;
@@ -159,8 +159,8 @@ pub async fn request_code(
 
 /// POST /auth/email/verify
 ///
-/// Validates the code, creates or looks up the account, and returns JWT
-/// access + refresh tokens.
+/// Validates a login-purpose code and returns JWT tokens for the existing
+/// account. Registration is handled separately by POST /auth/register.
 pub async fn verify_email(
     State(state): State<AppState>,
     Json(body): Json<VerifyEmailInput>,
@@ -187,53 +187,13 @@ pub async fn verify_email(
         return Err(IdentityError::InvalidCode.into());
     }
 
-    // Find or create the account.
-    let account =
-        match repo::find_account_by_email(&state.db, state.email_encryption.as_ref(), &email)
-            .await?
-        {
-            Some(acct) => {
-                repo::ensure_invitation_valid(&state.db, acct.id).await?;
-                repo::mark_email_verified(&state.db, acct.id).await?;
-                // Existing account: set password if provided and no password is set.
-                if let Some(pw) = body.password.as_deref() {
-                    let current_hash = repo::find_password_hash(
-                        &state.db,
-                        state.email_encryption.as_ref(),
-                        &email,
-                    )
-                    .await?;
-                    if current_hash.is_none() {
-                        password::validate(pw, &email)?;
-                        let hash = password::hash(pw)?;
-                        repo::update_password_hash(&state.db, acct.id, &hash).await?;
-                    }
-                }
-                acct
-            }
-            None => {
-                // First login — auto-provision.
-                let handle_opt = body.handle.as_deref();
-                // Validate handle if supplied.
-                if let Some(h) = handle_opt {
-                    validate_handle(h)?;
-                }
-                let account = repo::insert_account(
-                    &state.db,
-                    state.email_encryption.as_ref(),
-                    &email,
-                    handle_opt,
-                )
-                .await?;
-                // Set password if provided in same registration step.
-                if let Some(pw) = body.password.as_deref() {
-                    password::validate(pw, &email)?;
-                    let hash = password::hash(pw)?;
-                    repo::update_password_hash(&state.db, account.id, &hash).await?;
-                }
-                account
-            }
-        };
+    // Login-only: account must already exist.
+    let account = repo::find_account_by_email(&state.db, state.email_encryption.as_ref(), &email)
+        .await?
+        .ok_or(IdentityError::AccountNotFound)?;
+
+    repo::ensure_invitation_valid(&state.db, account.id).await?;
+    repo::mark_email_verified(&state.db, account.id).await?;
 
     ensure_login_allowed(&state, &account).await?;
 
@@ -247,6 +207,78 @@ pub async fn verify_email(
         repo::insert_session(&state.db, account.id, &refresh_hash, refresh_expires).await?;
 
     // Embed session_id so the refresh handler can look it up efficiently.
+    let combined_refresh = format!("{session_id:x}:{refresh_plain}");
+
+    Ok(Json(AuthTokensOutput {
+        access_token,
+        refresh_token: combined_refresh,
+        account: row_to_dto(&account),
+    }))
+}
+
+/// POST /auth/register
+///
+/// Validates a registration-purpose code, creates the account with the given
+/// handle, optionally sets a password, and returns JWT tokens.
+pub async fn register(
+    State(state): State<AppState>,
+    Json(body): Json<RegisterInput>,
+) -> AppResult<Json<AuthTokensOutput>> {
+    let email = body.email.trim().to_lowercase();
+    if !email.ends_with("@tongji.edu.cn") {
+        return Err(IdentityError::InvalidEmailDomain.into());
+    }
+
+    validate_handle(&body.handle)?;
+
+    // Check email not already registered.
+    if repo::find_account_by_email(&state.db, state.email_encryption.as_ref(), &email)
+        .await?
+        .is_some()
+    {
+        return Err(IdentityError::EmailAlreadyUsed.into());
+    }
+
+    // Look up the live code row for registration purpose.
+    let code_row =
+        repo::find_email_code(&state.db, state.email_encryption.as_ref(), &email, "registration")
+            .await?
+            .ok_or(IdentityError::CodeExpired)?;
+
+    if code_row.attempts >= 5 {
+        return Err(IdentityError::CodeExhausted.into());
+    }
+
+    let is_valid = verify_code(&body.code, &code_row.code_hash);
+    repo::increment_code_attempts(&state.db, state.email_encryption.as_ref(), &email).await?;
+
+    if !is_valid {
+        return Err(IdentityError::InvalidCode.into());
+    }
+
+    // Create the account.
+    let account =
+        repo::insert_account(&state.db, state.email_encryption.as_ref(), &email, &body.handle)
+            .await?;
+
+    // Set password if provided.
+    if let Some(pw) = body.password.as_deref() {
+        password::validate(pw, &email)?;
+        let hash = password::hash(pw)?;
+        repo::update_password_hash(&state.db, account.id, &hash).await?;
+    }
+
+    ensure_login_allowed(&state, &account).await?;
+
+    // Create access + refresh tokens.
+    let access_token = create_access_token(account.id, &state.jwt_secret, state.jwt_ttl)
+        .map_err(|e| shared::AppError::Internal(anyhow::anyhow!(e)))?;
+    let (refresh_plain, refresh_hash) = generate_refresh_token();
+    let refresh_expires = Utc::now() + chrono::Duration::seconds(state.refresh_ttl as i64);
+
+    let session_id =
+        repo::insert_session(&state.db, account.id, &refresh_hash, refresh_expires).await?;
+
     let combined_refresh = format!("{session_id:x}:{refresh_plain}");
 
     Ok(Json(AuthTokensOutput {

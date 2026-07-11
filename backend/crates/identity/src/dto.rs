@@ -20,7 +20,15 @@ pub struct RequestCodeInput {
 pub struct VerifyEmailInput {
     pub email: String,
     pub code: String,
-    pub handle: Option<String>,
+}
+
+/// POST /auth/register
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RegisterInput {
+    pub email: String,
+    pub code: String,
+    pub handle: String,
     pub password: Option<String>,
 }
 

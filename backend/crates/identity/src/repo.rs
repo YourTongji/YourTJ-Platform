@@ -177,65 +177,36 @@ pub async fn increment_code_attempts(
 // accounts
 // ---------------------------------------------------------------------------
 
-/// Insert a new account row.  If `handle` is `None` it is derived from the
-/// email prefix; if the handle collides a random 4-digit suffix is appended
-/// (up to 3 retries).
+/// Insert a new account row with a required handle.
 pub async fn insert_account(
     pool: &PgPool,
     encryption: Option<&EmailEncryption>,
     email: &str,
-    handle: Option<&str>,
+    handle: &str,
 ) -> AppResult<AccountRow> {
-    let base = handle
-        .map(|h| h.to_string())
-        .unwrap_or_else(|| email.split('@').next().unwrap_or("user").to_string());
-
-    let mut attempts = 0;
-    loop {
-        let h = if attempts == 0 {
-            base.clone()
-        } else {
-            let suffix: u16 = {
-                use ring::rand::{SecureRandom, SystemRandom};
-                let rng = SystemRandom::new();
-                let mut buf = [0u8; 2];
-                rng.fill(&mut buf).expect("CSPRNG");
-                u16::from_be_bytes(buf) % 10000
-            };
-            format!("{base}{suffix:04}")
-        };
-
-        let ciphertext = encryption
-            .map(|encryption| encryption.encrypt(email))
-            .transpose()
-            .map_err(AppError::Internal)?;
-        let blind_index = encryption.map(|encryption| encryption.blind_index(email));
-        let result = sqlx::query_as::<_, StoredAccountRow>(
-            "INSERT INTO identity.accounts \
-             (email, email_ciphertext, email_key_version, email_blind_index, \
-              password_email_blind, handle, email_verified_at) \
-             VALUES ($1, $2, $3, $4, $4, $5, now()) \
-             ON CONFLICT (handle) DO NOTHING \
-             RETURNING id, email::text AS email, email_ciphertext, \
-                       handle, avatar_url, role::text, status::text, trust_level, created_at",
-        )
-        .bind(encryption.is_none().then_some(email))
-        .bind(ciphertext)
-        .bind(encryption.map(|encryption| i16::from(encryption.active_version())))
-        .bind(blind_index)
-        .bind(&h)
-        .fetch_optional(pool)
-        .await?;
-
-        if let Some(row) = result {
-            return row.decrypt(encryption);
-        }
-
-        attempts += 1;
-        if attempts > 3 {
-            return Err(crate::error::IdentityError::HandleTaken.into());
-        }
-    }
+    let ciphertext = encryption
+        .map(|encryption| encryption.encrypt(email))
+        .transpose()
+        .map_err(AppError::Internal)?;
+    let blind_index = encryption.map(|encryption| encryption.blind_index(email));
+    let row = sqlx::query_as::<_, StoredAccountRow>(
+        "INSERT INTO identity.accounts \
+         (email, email_ciphertext, email_key_version, email_blind_index, \
+          password_email_blind, handle, email_verified_at) \
+         VALUES ($1, $2, $3, $4, $4, $5, now()) \
+         ON CONFLICT (handle) DO NOTHING \
+         RETURNING id, email::text AS email, email_ciphertext, \
+                   handle, avatar_url, role::text, status::text, trust_level, created_at",
+    )
+    .bind(encryption.is_none().then_some(email))
+    .bind(ciphertext)
+    .bind(encryption.map(|encryption| i16::from(encryption.active_version())))
+    .bind(blind_index)
+    .bind(handle)
+    .fetch_optional(pool)
+    .await?
+    .ok_or_else(|| shared::AppError::Conflict("handle is already taken".into()))?;
+    row.decrypt(encryption)
 }
 
 /// Provision an unverified account that must still prove campus mailbox ownership.

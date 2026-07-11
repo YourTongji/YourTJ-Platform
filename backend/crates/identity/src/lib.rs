@@ -31,6 +31,7 @@ pub fn routes(state: AppState) -> Router {
         // Auth
         .route("/api/v2/auth/email/request-code", post(handlers::request_code))
         .route("/api/v2/auth/email/verify", post(handlers::verify_email))
+        .route("/api/v2/auth/register", post(handlers::register))
         .route("/api/v2/auth/refresh", post(handlers::refresh))
         .route("/api/v2/auth/logout", post(handlers::logout))
         .route("/api/v2/auth/password/login", post(handlers::password_login))

@@ -80,6 +80,9 @@ pub enum IdentityError {
 
     #[error("invalid verification code purpose (expected login, registration, or password_reset)")]
     InvalidPurpose,
+
+    #[error("account not found")]
+    AccountNotFound,
 }
 
 impl From<IdentityError> for AppError {
@@ -110,6 +113,7 @@ impl From<IdentityError> for AppError {
             IdentityError::WrongPassword => AppError::Unauthorized,
             IdentityError::NoPasswordSet => AppError::BadRequest(err.to_string()),
             IdentityError::InvalidPurpose => AppError::BadRequest(err.to_string()),
+            IdentityError::AccountNotFound => AppError::BadRequest(err.to_string()),
         }
     }
 }
