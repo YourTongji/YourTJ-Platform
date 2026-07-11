@@ -528,21 +528,19 @@ pub async fn create_thread(
                 .await
                 .unwrap_or_default();
         if let Some(ref body_text) = body.body {
-            let mention_re = regex::Regex::new(r"@([\p{L}\p{N}_-]+)")
-                .expect("mention regex is statically valid");
-            let handles: Vec<String> = mention_re
-                .captures_iter(body_text)
-                .map(|c| c[1].to_string())
-                .filter(|h| h != &my_handle) // skip self-mentions
-                .take(10)
-                .collect();
+            let handles =
+                crate::content_policy::mention_handles(body_text, body.content_format, &my_handle);
 
             let thread_actor_id = auth.id;
             if !handles.is_empty() {
                 let pool = state.db.clone();
                 let thread_author = row.author_handle.clone();
                 let thread_body = row.body.clone().unwrap_or_default();
-                let thread_body_excerpt = thread_body.chars().take(100).collect::<String>();
+                let thread_body_excerpt = crate::content_policy::plain_text_projection(
+                    &thread_body,
+                    crate::dto::ContentFormat::from_db(&row.content_format),
+                    100,
+                );
                 let thread_id_val = row.id;
                 tokio::spawn(async move {
                     for handle in handles {
@@ -747,6 +745,7 @@ pub async fn list_thread_revisions(
             editor_id: r.editor_id.to_string(),
             old_title: r.old_title,
             old_body: r.old_body,
+            old_content_format: crate::dto::ContentFormat::from_db(&r.old_content_format),
             created_at: r.created_at.timestamp(),
         })
         .collect();

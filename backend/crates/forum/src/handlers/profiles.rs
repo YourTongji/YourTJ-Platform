@@ -141,12 +141,16 @@ pub async fn list_user_comments(
     .await?;
     let items = rows
         .into_iter()
-        .map(|row| UserCommentDto {
-            id: row.id.to_string(),
-            thread_id: row.thread_id.to_string(),
-            thread_title: row.thread_title,
-            body: row.body,
-            created_at: row.created_at.timestamp(),
+        .map(|row| {
+            let source_format = crate::dto::ContentFormat::from_db(&row.content_format);
+            UserCommentDto {
+                id: row.id.to_string(),
+                thread_id: row.thread_id.to_string(),
+                thread_title: row.thread_title,
+                body: crate::content_policy::plain_text_projection(&row.body, source_format, 200),
+                content_format: crate::dto::ContentFormat::PlainV1,
+                created_at: row.created_at.timestamp(),
+            }
         })
         .collect();
     Ok(Json(shared::Page::new(items, next_cursor.map(|cursor| cursor.to_string()))))

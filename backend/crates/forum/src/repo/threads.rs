@@ -611,7 +611,7 @@ pub async fn list_threads_feed_following(
 /// Find a single thread by id, joined with author handle (full columns).
 pub async fn find_thread(pool: &PgPool, id: i64) -> AppResult<Option<ThreadRowJoinedFull>> {
     let row = sqlx::query_as::<_, ThreadRowJoinedFull>(
-        "SELECT t.id, t.board_id, t.author_id, t.title, t.body, \
+        "SELECT t.id, t.board_id, t.author_id, t.title, t.body, t.content_format, \
                 t.reply_count, t.vote_count, t.hot_score, t.status, \
                 t.pinned_at, t.pinned_globally, t.featured_at, t.closed_at, t.archived_at, \
                 t.deleted_at, t.deleted_by, t.edited_at, t.hidden_at, \
@@ -634,7 +634,7 @@ pub async fn find_thread_for_moderation(
     id: i64,
 ) -> AppResult<Option<ThreadRowJoinedFull>> {
     let row = sqlx::query_as::<_, ThreadRowJoinedFull>(
-        "SELECT t.id, t.board_id, t.author_id, t.title, t.body, \
+        "SELECT t.id, t.board_id, t.author_id, t.title, t.body, t.content_format, \
                 t.reply_count, t.vote_count, t.hot_score, t.status, \
                 t.pinned_at, t.pinned_globally, t.featured_at, t.closed_at, t.archived_at, \
                 t.deleted_at, t.deleted_by, t.edited_at, t.hidden_at, \
@@ -667,13 +667,13 @@ pub async fn create_thread(
     };
     let row = sqlx::query_as::<_, ThreadRowJoinedFull>(
         "WITH inserted AS ( \
-            INSERT INTO forum.threads (board_id, author_id, title, body, hidden_at) \
-            VALUES ($1, $2, $3, $4, CASE WHEN $5 THEN now() ELSE NULL END) \
-            RETURNING id, board_id, author_id, title, body, reply_count, vote_count, \
+            INSERT INTO forum.threads (board_id, author_id, title, body, content_format, hidden_at) \
+            VALUES ($1, $2, $3, $4, $5, CASE WHEN $6 THEN now() ELSE NULL END) \
+            RETURNING id, board_id, author_id, title, body, content_format, reply_count, vote_count, \
                       hot_score, status, pinned_at, pinned_globally, featured_at, closed_at, archived_at, \
                       deleted_at, deleted_by, edited_at, hidden_at, solved_answer_id, created_at, last_activity_at \
          ) \
-         SELECT t.id, t.board_id, t.author_id, t.title, t.body, \
+         SELECT t.id, t.board_id, t.author_id, t.title, t.body, t.content_format, \
                 t.reply_count, t.vote_count, t.hot_score, t.status, \
                 t.pinned_at, t.pinned_globally, t.featured_at, t.closed_at, t.archived_at, \
                 t.deleted_at, t.deleted_by, t.edited_at, t.hidden_at, \
@@ -687,6 +687,7 @@ pub async fn create_thread(
     .bind(author_id)
     .bind(&input.title)
     .bind(&input.body)
+    .bind(input.content_format.as_str())
     .bind(is_hidden)
     .fetch_one(&mut *tx)
     .await?;
@@ -752,7 +753,7 @@ pub async fn update_thread(
 ) -> AppResult<ThreadRowJoinedFull> {
     let mut tx = pool.begin().await?;
     let existing = sqlx::query_as::<_, ThreadRowJoinedFull>(
-        "SELECT t.id, t.board_id, t.author_id, t.title, t.body, \
+        "SELECT t.id, t.board_id, t.author_id, t.title, t.body, t.content_format, \
                 t.reply_count, t.vote_count, t.hot_score, t.status, \
                 t.pinned_at, t.pinned_globally, t.featured_at, t.closed_at, t.archived_at, \
                 t.deleted_at, t.deleted_by, t.edited_at, t.hidden_at, t.solved_answer_id, \
@@ -778,7 +779,8 @@ pub async fn update_thread(
         super::boards::lock_boards_for_thread_count(&mut tx, &[existing.board_id]).await?;
 
     let content_changed = input.title.as_ref().is_some_and(|title| title != &existing.title)
-        || input.body.as_ref().is_some_and(|body| Some(body.as_str()) != existing.body.as_deref());
+        || input.body.as_ref().is_some_and(|body| Some(body.as_str()) != existing.body.as_deref())
+        || input.content_format.is_some_and(|format| format.as_str() != existing.content_format);
     let tag_ids = match input.tags.as_ref() {
         Some(tag_slugs) => Some(super::tags::resolve_tag_slugs_tx(&mut tx, tag_slugs).await?),
         None => None,
@@ -792,6 +794,7 @@ pub async fn update_thread(
             author_id,
             Some(&existing.title),
             existing.body.as_deref().unwrap_or(""),
+            &existing.content_format,
         )
         .await?;
     }
@@ -801,14 +804,15 @@ pub async fn update_thread(
          UPDATE forum.threads SET \
          title = COALESCE($1, title), \
          body = COALESCE($2, body), \
-         edited_at = CASE WHEN $3 THEN now() ELSE edited_at END, \
-         hidden_at = CASE WHEN $4 THEN now() ELSE hidden_at END \
-         WHERE id = $5 \
-         RETURNING id, board_id, author_id, title, body, reply_count, vote_count, \
+         content_format = COALESCE($3, content_format), \
+         edited_at = CASE WHEN $4 THEN now() ELSE edited_at END, \
+         hidden_at = CASE WHEN $5 THEN now() ELSE hidden_at END \
+         WHERE id = $6 \
+         RETURNING id, board_id, author_id, title, body, content_format, reply_count, vote_count, \
                    hot_score, status, pinned_at, pinned_globally, featured_at, closed_at, archived_at, \
                    deleted_at, deleted_by, edited_at, hidden_at, solved_answer_id, created_at, last_activity_at \
          ) \
-         SELECT u.id, u.board_id, u.author_id, u.title, u.body, \
+         SELECT u.id, u.board_id, u.author_id, u.title, u.body, u.content_format, \
                 u.reply_count, u.vote_count, u.hot_score, u.status, \
                 u.pinned_at, u.pinned_globally, u.featured_at, u.closed_at, u.archived_at, \
                 u.deleted_at, u.deleted_by, u.edited_at, u.hidden_at, \
@@ -820,6 +824,7 @@ pub async fn update_thread(
     )
     .bind(input.title.as_deref())
     .bind(input.body.as_deref())
+    .bind(input.content_format.map(|format| format.as_str()))
     .bind(content_changed)
     .bind(is_queued)
     .bind(id)

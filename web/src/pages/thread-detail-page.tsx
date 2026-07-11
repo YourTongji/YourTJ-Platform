@@ -6,6 +6,8 @@ import { toast } from "sonner";
 
 import { PageHeader } from "@/components/common/page-header";
 import { EmptyState, ErrorState, LoadingState } from "@/components/common/states";
+import { MarkdownContent } from "@/components/content/markdown-content";
+import { MarkdownEditor } from "@/components/content/markdown-editor";
 import {
   CommentModerationControls,
   ThreadModerationControls,
@@ -14,7 +16,6 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Textarea } from "@/components/ui/textarea";
 import { useAuth } from "@/context/auth-provider";
 import { api } from "@/lib/api/endpoints";
 import type { Comment } from "@/lib/api/types";
@@ -63,7 +64,11 @@ function CommentCard({ comment, threadId }: { comment: Comment; threadId: string
             <CommentModerationControls comment={comment} threadId={threadId} />
           </div>
         </div>
-        <p className="mt-3 whitespace-pre-wrap text-sm leading-relaxed">{comment.body}</p>
+        <MarkdownContent
+          content={comment.body}
+          format={comment.contentFormat}
+          className="mt-3 text-sm"
+        />
         <div className="mt-3 flex gap-2">
           <Button
             size="sm"
@@ -185,7 +190,14 @@ function CommentForm({ threadId }: { threadId: string }) {
         <CardTitle>回复</CardTitle>
       </CardHeader>
       <CardContent className="space-y-3">
-        <Textarea value={body} onChange={(event) => setBody(event.target.value)} placeholder="写下你的回复" />
+        <MarkdownEditor
+          value={body}
+          onChange={setBody}
+          label="回复正文"
+          maxLength={16_000}
+          minHeight={140}
+          placeholder="写下你的回复"
+        />
         <Button onClick={() => mutation.mutate()} disabled={!body.trim() || mutation.isPending}>
           <Send className="h-4 w-4" />
           发布回复
@@ -287,7 +299,7 @@ export function ThreadDetailPage() {
         actions={
           <>
             <Select value={item.mySubscriptionLevel ?? "none"} onValueChange={(value) => subscribe.mutate(value)}>
-              <SelectTrigger className="w-32">
+              <SelectTrigger className="w-32" aria-label="主题订阅级别">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -322,7 +334,11 @@ export function ThreadDetailPage() {
             {item.deletedAt ? <Badge variant="destructive">已删除</Badge> : null}
             {(item.tags ?? []).map((tag) => <Badge key={tag} variant="outline">#{tag}</Badge>)}
           </div>
-          <p className="whitespace-pre-wrap text-sm leading-7">{item.body || "这条帖子没有正文。"}</p>
+          {item.body ? (
+            <MarkdownContent content={item.body} format={item.contentFormat} className="text-sm" />
+          ) : (
+            <p className="text-sm text-muted-foreground">这条帖子没有正文。</p>
+          )}
           <div className="mt-5 flex flex-wrap gap-2">
             <Button
               variant={item.viewerVote === "up" ? "default" : "secondary"}

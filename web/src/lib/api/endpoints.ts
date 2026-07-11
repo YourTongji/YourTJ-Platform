@@ -28,6 +28,7 @@ import type {
   Calendar,
   Campus,
   Comment,
+  ContentFormat,
   Course,
   CourseDetail,
   CourseNature,
@@ -456,6 +457,7 @@ export const api = {
     boardId: string;
     title: string;
     body?: string;
+    contentFormat?: ContentFormat;
     tags?: string[];
     poll?: { question: string; multiSelect?: boolean; options: string[] };
   }) {
@@ -472,10 +474,15 @@ export const api = {
     });
   },
 
-  addComment(threadId: string, body: string, parentId?: string) {
+  addComment(
+    threadId: string,
+    body: string,
+    contentFormat: ContentFormat = "markdown_v1",
+    parentId?: string,
+  ) {
     return apiRequest<Comment>(`/forum/threads/${encodeURIComponent(threadId)}/comments`, {
       method: "POST",
-      body: { body, parentId },
+      body: { body, contentFormat, parentId },
     });
   },
 

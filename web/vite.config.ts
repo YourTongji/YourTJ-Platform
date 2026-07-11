@@ -7,6 +7,8 @@ export default defineConfig({
   base: process.env.VITE_BASE_PATH ?? "/",
   plugins: [react(), tailwindcss()],
   build: {
+    // The CodeMirror core is a lazy editor-only chunk; keep the warning focused on larger regressions.
+    chunkSizeWarningLimit: 650,
     rollupOptions: {
       output: {
         manualChunks(moduleId) {
@@ -33,16 +35,25 @@ export default defineConfig({
           if (moduleId.includes("/ali-oss/")) {
             return "oss-vendor";
           }
+          if (moduleId.includes("/@uiw/react-codemirror/")) {
+            return "codemirror-react-vendor";
+          }
           if (
-            moduleId.includes("/@codemirror/")
-            || moduleId.includes("/@lezer/")
-            || moduleId.includes("/@uiw/react-codemirror/")
-            || moduleId.includes("/react-markdown/")
+            moduleId.includes("/@codemirror/lang-markdown/")
+            || moduleId.includes("/@lezer/markdown/")
+          ) {
+            return "codemirror-language-vendor";
+          }
+          if (moduleId.includes("/@codemirror/") || moduleId.includes("/@lezer/")) {
+            return "codemirror-core-vendor";
+          }
+          if (
+            moduleId.includes("/react-markdown/")
             || moduleId.includes("/remark-")
             || moduleId.includes("/rehype-")
             || moduleId.includes("/unified/")
           ) {
-            return "markdown-vendor";
+            return "markdown-renderer-vendor";
           }
           return undefined;
         },

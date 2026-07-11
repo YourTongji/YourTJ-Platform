@@ -510,6 +510,10 @@ components:
           enum: [login_required, board_locked, trust_level]
           nullable: true
     Tag: { type: object, properties: { id: { type: string }, slug: { type: string }, name: { type: string }, description: { type: string, nullable: true }, threadCount: { type: integer }, createdAt: { type: integer } } }
+    ContentFormat:
+      type: string
+      enum: [plain_v1, markdown_v1]
+      default: plain_v1
     Thread:
       type: object
       properties:
@@ -527,7 +531,7 @@ components:
       allOf: [{ $ref: "#/components/schemas/Thread" }, { type: object, properties: { status: { type: string }, unreadCount: { type: integer, nullable: true } } }]
     ThreadDetail:
       type: object
-      required: [id, boardId, authorHandle, authorId, title, body, replyCount, voteCount, hotScore, tags, status, pinnedAt, pinnedGlobally, featuredAt, closedAt, archivedAt, deletedAt, editedAt, hiddenAt, createdAt, lastActivityAt, solvedAnswerId, viewerVote, isBookmarked, myLastReadCommentId, mySubscriptionLevel, poll]
+      required: [id, boardId, authorHandle, authorId, title, body, contentFormat, replyCount, voteCount, hotScore, tags, status, pinnedAt, pinnedGlobally, featuredAt, closedAt, archivedAt, deletedAt, editedAt, hiddenAt, createdAt, lastActivityAt, solvedAnswerId, viewerVote, isBookmarked, myLastReadCommentId, mySubscriptionLevel, poll]
       properties:
         id: { type: string }
         boardId: { type: string }
@@ -535,6 +539,7 @@ components:
         authorId: { type: string }
         title: { type: string }
         body: { type: string, nullable: true }
+        contentFormat: { $ref: "#/components/schemas/ContentFormat" }
         replyCount: { type: integer }
         voteCount: { type: integer }
         hotScore: { type: number, nullable: true }
@@ -565,6 +570,7 @@ components:
         boardId: { type: string }
         title: { type: string, minLength: 1, maxLength: 200 }
         body: { type: string, nullable: true, maxLength: 50000 }
+        contentFormat: { $ref: "#/components/schemas/ContentFormat" }
         tags: { type: array, items: { type: string, minLength: 1, maxLength: 64 }, maxItems: 3, uniqueItems: true }
         poll: { $ref: "#/components/schemas/PollInput" }
     ThreadUpdateInput:
@@ -572,6 +578,9 @@ components:
       properties:
         title: { type: string, minLength: 1, maxLength: 200 }
         body: { type: string, maxLength: 50000 }
+        contentFormat:
+          allOf: [{ $ref: "#/components/schemas/ContentFormat" }]
+          description: Required whenever body is supplied; legacy omission is treated as plain_v1.
         tags: { type: array, items: { type: string, minLength: 1, maxLength: 64 }, maxItems: 3, uniqueItems: true }
     ThreadPinInput: { type: object, properties: { globally: { type: boolean } } }
     ThreadMoveInput: { type: object, required: [boardId], properties: { boardId: { type: string } } }
@@ -587,10 +596,20 @@ components:
       required: [reason]
       properties:
         reason: { type: string, minLength: 3, maxLength: 500 }
-    PostRevision: { type: object, properties: { id: { type: string }, seq: { type: integer }, editorId: { type: string }, oldTitle: { type: string, nullable: true }, oldBody: { type: string }, createdAt: { type: integer } } }
+    PostRevision:
+      type: object
+      required: [id, seq, editorId, oldTitle, oldBody, oldContentFormat, createdAt]
+      properties:
+        id: { type: string }
+        seq: { type: integer }
+        editorId: { type: string }
+        oldTitle: { type: string, nullable: true }
+        oldBody: { type: string }
+        oldContentFormat: { $ref: "#/components/schemas/ContentFormat" }
+        createdAt: { type: integer }
     Comment:
       type: object
-      required: [id, threadId, parentId, path, authorHandle, authorId, body, voteCount, viewerVote, isBookmarked, isDeleted, isHidden, editedAt, createdAt, quotedCommentId, isSolved]
+      required: [id, threadId, parentId, path, authorHandle, authorId, body, contentFormat, voteCount, viewerVote, isBookmarked, isDeleted, isHidden, editedAt, createdAt, quotedCommentId, isSolved]
       properties:
         id: { type: string }
         threadId: { type: string }
@@ -599,6 +618,7 @@ components:
         authorHandle: { type: string }
         authorId: { type: string }
         body: { type: string }
+        contentFormat: { $ref: "#/components/schemas/ContentFormat" }
         voteCount: { type: integer }
         viewerVote: { type: string, enum: [up, down], nullable: true }
         isBookmarked: { type: boolean }
@@ -614,12 +634,14 @@ components:
       properties:
         parentId: { type: string }
         body: { type: string, minLength: 1, maxLength: 16000 }
+        contentFormat: { $ref: "#/components/schemas/ContentFormat" }
         quotedCommentId: { type: string }
     CommentUpdateInput:
       type: object
       required: [body]
       properties:
         body: { type: string, minLength: 1, maxLength: 16000 }
+        contentFormat: { $ref: "#/components/schemas/ContentFormat" }
     VoteInput:
       type: object
       required: [value, postType]
@@ -1231,12 +1253,13 @@ components:
         createdAt: { type: integer }
     UserComment:
       type: object
-      required: [id, threadId, threadTitle, body, createdAt]
+      required: [id, threadId, threadTitle, body, contentFormat, createdAt]
       properties:
         id: { type: string }
         threadId: { type: string }
         threadTitle: { type: string }
         body: { type: string }
+        contentFormat: { $ref: "#/components/schemas/ContentFormat" }
         createdAt: { type: integer }
     UserProfileWithStats:
       allOf: [{ $ref: "#/components/schemas/UserProfile" }]

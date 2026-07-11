@@ -21,12 +21,19 @@ pub struct CommentCreateOutcome {
     pub quoted_author_id: Option<i64>,
 }
 
+/// Canonical source stored for a comment mutation.
+pub struct CommentSource<'a> {
+    pub body: &'a str,
+    pub content_format: &'a str,
+}
+
 struct NewComment<'a> {
     thread_id: i64,
     parent_id: Option<i64>,
     path: &'a str,
     author_id: i64,
     body: &'a str,
+    content_format: &'a str,
     quoted_comment_id: Option<i64>,
     is_hidden: bool,
 }
@@ -65,7 +72,7 @@ pub async fn list_comments(
     let rows = if let Some(ref cp) = cursor_path {
         sqlx::query_as::<_, CommentRowJoined>(
             "SELECT c.id, c.thread_id, c.parent_id, c.path, c.author_id, \
-                    c.body, c.vote_count, c.deleted_at, c.hidden_at, c.edited_at, c.created_at, \
+                    c.body, c.content_format, c.vote_count, c.deleted_at, c.hidden_at, c.edited_at, c.created_at, \
                     c.quoted_comment_id, \
                     a.handle AS author_handle \
              FROM forum.comments c \
@@ -85,7 +92,7 @@ pub async fn list_comments(
     } else {
         sqlx::query_as::<_, CommentRowJoined>(
             "SELECT c.id, c.thread_id, c.parent_id, c.path, c.author_id, \
-                    c.body, c.vote_count, c.deleted_at, c.hidden_at, c.edited_at, c.created_at, \
+                    c.body, c.content_format, c.vote_count, c.deleted_at, c.hidden_at, c.edited_at, c.created_at, \
                     c.quoted_comment_id, \
                     a.handle AS author_handle \
              FROM forum.comments c \
@@ -122,7 +129,7 @@ pub async fn create_comment(
     pool: &PgPool,
     thread_id: i64,
     author_id: i64,
-    body: &str,
+    source: CommentSource<'_>,
     parent_id: Option<i64>,
     quoted_comment_id: Option<i64>,
     is_hidden: bool,
@@ -232,7 +239,8 @@ pub async fn create_comment(
                 parent_id,
                 path: &path,
                 author_id,
-                body,
+                body: source.body,
+                content_format: source.content_format,
                 quoted_comment_id,
                 is_hidden,
             },
@@ -258,7 +266,8 @@ pub async fn create_comment(
                 parent_id: None,
                 path: &path,
                 author_id,
-                body,
+                body: source.body,
+                content_format: source.content_format,
                 quoted_comment_id,
                 is_hidden,
             },
@@ -276,12 +285,12 @@ async fn insert_comment_tx(
 ) -> AppResult<CommentRowJoined> {
     let row = sqlx::query_as::<_, CommentRowJoined>(
         "WITH inserted AS ( \
-            INSERT INTO forum.comments (thread_id, parent_id, path, author_id, body, quoted_comment_id, hidden_at) \
-            VALUES ($1, $2, $3, $4, $5, $6, CASE WHEN $7 THEN now() ELSE NULL END) \
-            RETURNING id, thread_id, parent_id, path, author_id, body, vote_count, deleted_at, hidden_at, edited_at, created_at, quoted_comment_id \
+            INSERT INTO forum.comments (thread_id, parent_id, path, author_id, body, content_format, quoted_comment_id, hidden_at) \
+            VALUES ($1, $2, $3, $4, $5, $6, $7, CASE WHEN $8 THEN now() ELSE NULL END) \
+            RETURNING id, thread_id, parent_id, path, author_id, body, content_format, vote_count, deleted_at, hidden_at, edited_at, created_at, quoted_comment_id \
          ) \
          SELECT c.id, c.thread_id, c.parent_id, c.path, c.author_id, \
-                c.body, c.vote_count, c.deleted_at, c.hidden_at, c.edited_at, c.created_at, \
+                c.body, c.content_format, c.vote_count, c.deleted_at, c.hidden_at, c.edited_at, c.created_at, \
                 c.quoted_comment_id, \
                 a.handle AS author_handle \
          FROM inserted c \
@@ -292,6 +301,7 @@ async fn insert_comment_tx(
     .bind(comment.path)
     .bind(comment.author_id)
     .bind(comment.body)
+    .bind(comment.content_format)
     .bind(comment.quoted_comment_id)
     .bind(comment.is_hidden)
     .fetch_one(&mut *tx)
@@ -358,7 +368,7 @@ pub fn next_sibling_index(max_child_path: &str, parent_path: &str) -> u32 {
 pub async fn find_comment(pool: &PgPool, id: i64) -> AppResult<Option<CommentRowJoined>> {
     let row = sqlx::query_as::<_, CommentRowJoined>(
         "SELECT c.id, c.thread_id, c.parent_id, c.path, c.author_id, \
-                c.body, c.vote_count, c.deleted_at, c.hidden_at, c.edited_at, c.created_at, \
+                c.body, c.content_format, c.vote_count, c.deleted_at, c.hidden_at, c.edited_at, c.created_at, \
                 c.quoted_comment_id, \
                 a.handle AS author_handle \
          FROM forum.comments c \
@@ -378,7 +388,7 @@ pub async fn find_comment_for_moderation(
 ) -> AppResult<Option<CommentRowJoined>> {
     let row = sqlx::query_as::<_, CommentRowJoined>(
         "SELECT c.id, c.thread_id, c.parent_id, c.path, c.author_id, \
-                c.body, c.vote_count, c.deleted_at, c.hidden_at, c.edited_at, c.created_at, \
+                c.body, c.content_format, c.vote_count, c.deleted_at, c.hidden_at, c.edited_at, c.created_at, \
                 c.quoted_comment_id, a.handle AS author_handle \
          FROM forum.comments c \
          JOIN identity.accounts a ON a.id = c.author_id \
@@ -396,6 +406,7 @@ pub async fn update_comment(
     id: i64,
     author_id: i64,
     body: &str,
+    content_format: &str,
     is_queued: bool,
 ) -> AppResult<CommentRowJoined> {
     let mut tx = pool.begin().await?;
@@ -421,7 +432,7 @@ pub async fn update_comment(
 
     let existing = sqlx::query_as::<_, CommentRowJoined>(
         "SELECT c.id, c.thread_id, c.parent_id, c.path, c.author_id, \
-                c.body, c.vote_count, c.deleted_at, c.hidden_at, c.edited_at, c.created_at, \
+                c.body, c.content_format, c.vote_count, c.deleted_at, c.hidden_at, c.edited_at, c.created_at, \
                 c.quoted_comment_id, a.handle AS author_handle \
          FROM forum.comments c \
          JOIN identity.accounts a ON a.id = c.author_id \
@@ -439,7 +450,7 @@ pub async fn update_comment(
         return Err(shared::AppError::NotFound);
     }
 
-    let body_changed = existing.body != body;
+    let body_changed = existing.body != body || existing.content_format != content_format;
     let within_grace = existing.created_at > chrono::Utc::now() - chrono::Duration::minutes(5);
     if body_changed && !within_grace {
         super::revisions::create_revision_tx(
@@ -449,6 +460,7 @@ pub async fn update_comment(
             author_id,
             None,
             &existing.body,
+            &existing.content_format,
         )
         .await?;
     }
@@ -457,20 +469,22 @@ pub async fn update_comment(
         "WITH updated AS ( \
          UPDATE forum.comments SET \
            body = $1, \
-           edited_at = CASE WHEN $2 THEN now() ELSE edited_at END, \
-           hidden_at = CASE WHEN $3 THEN now() ELSE hidden_at END \
-         WHERE id = $4 \
-         RETURNING id, thread_id, parent_id, path, author_id, body, vote_count, \
+           content_format = $2, \
+           edited_at = CASE WHEN $3 THEN now() ELSE edited_at END, \
+           hidden_at = CASE WHEN $4 THEN now() ELSE hidden_at END \
+         WHERE id = $5 \
+         RETURNING id, thread_id, parent_id, path, author_id, body, content_format, vote_count, \
                    deleted_at, hidden_at, edited_at, created_at, quoted_comment_id \
          ) \
          SELECT u.id, u.thread_id, u.parent_id, u.path, u.author_id, \
-                u.body, u.vote_count, u.deleted_at, u.hidden_at, u.edited_at, u.created_at, \
+                u.body, u.content_format, u.vote_count, u.deleted_at, u.hidden_at, u.edited_at, u.created_at, \
                 u.quoted_comment_id, \
                 a.handle AS author_handle \
          FROM updated u \
          JOIN identity.accounts a ON a.id = u.author_id",
     )
     .bind(body)
+    .bind(content_format)
     .bind(body_changed)
     .bind(is_queued)
     .bind(id)

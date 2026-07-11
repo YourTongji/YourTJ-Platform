@@ -61,6 +61,7 @@ export type AnnouncementRevision = Schema["AnnouncementRevision"];
 export type AnnouncementUpdateInput = Schema["AnnouncementUpdateInput"];
 export type Board = Schema["Board"];
 export type Comment = Schema["Comment"];
+export type ContentFormat = Schema["ContentFormat"];
 export type Course = Schema["Course"];
 export type CourseDetail = Schema["CourseDetail"];
 export type Department = Schema["Department"];

@@ -159,6 +159,61 @@ async fn test_create_comment_requires_auth() {
 }
 
 #[tokio::test]
+async fn markdown_comment_format_is_explicit_and_rejects_raw_html() {
+    let (pool, app) = create_test_app().await;
+    let (author_id, token) =
+        create_test_account(&pool, "markdown-comment@tongji.edu.cn", "markdown-comment").await;
+    let thread_id = seed_thread(&pool, author_id).await;
+
+    let created = create_comment_request(
+        &app,
+        thread_id,
+        &token,
+        json!({ "body": "**useful** reply", "contentFormat": "markdown_v1" }),
+    )
+    .await;
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let created = read_json(created).await;
+    assert_eq!(created["contentFormat"], "markdown_v1");
+    let comment_id = created["id"].as_str().expect("comment id").parse::<i64>().unwrap();
+
+    let rejected = create_comment_request(
+        &app,
+        thread_id,
+        &token,
+        json!({ "body": "<iframe src='https://example.com'>", "contentFormat": "markdown_v1" }),
+    )
+    .await;
+    assert_eq!(rejected.status(), StatusCode::BAD_REQUEST);
+
+    sqlx::query(
+        "UPDATE forum.comments SET created_at = now() - interval '10 minutes' WHERE id = $1",
+    )
+    .bind(comment_id)
+    .execute(&pool)
+    .await
+    .expect("age comment beyond revision grace");
+    let updated = update_comment_request(
+        &app,
+        comment_id,
+        &token,
+        json!({ "body": "plain reply", "contentFormat": "plain_v1" }),
+    )
+    .await;
+    assert_eq!(updated.status(), StatusCode::OK);
+    assert_eq!(read_json(updated).await["contentFormat"], "plain_v1");
+    let revision_format: String = sqlx::query_scalar(
+        "SELECT old_content_format FROM forum.post_revisions \
+         WHERE post_type = 'comment' AND post_id = $1 ORDER BY seq DESC LIMIT 1",
+    )
+    .bind(comment_id)
+    .fetch_one(&pool)
+    .await
+    .expect("comment revision format");
+    assert_eq!(revision_format, "markdown_v1");
+}
+
+#[tokio::test]
 async fn test_create_top_level_comment() {
     let (pool, app) = create_test_app().await;
     let (author_id, token) = create_test_account(&pool, "eve@tongji.edu.cn", "eve").await;

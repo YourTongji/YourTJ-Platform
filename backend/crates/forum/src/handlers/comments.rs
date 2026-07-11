@@ -157,7 +157,10 @@ pub async fn create_comment(
         &state.db,
         thread_id,
         auth.id,
-        &body.body,
+        repo::comments::CommentSource {
+            body: &body.body,
+            content_format: body.content_format.as_str(),
+        },
         parent_id,
         quoted_comment_id,
         is_queued,
@@ -193,7 +196,11 @@ pub async fn create_comment(
             "threadId": thread_id.to_string(),
             "commentId": row.id.to_string(),
             "authorHandle": row.author_handle,
-            "bodyExcerpt": row.body.chars().take(100).collect::<String>(),
+            "bodyExcerpt": crate::content_policy::plain_text_projection(
+                &row.body,
+                crate::dto::ContentFormat::from_db(&row.content_format),
+                100,
+            ),
         });
         tokio::spawn(async move {
             crate::notification_hooks::create_notification(
@@ -219,7 +226,11 @@ pub async fn create_comment(
             "threadId": thread_id.to_string(),
             "commentId": row.id.to_string(),
             "authorHandle": row.author_handle,
-            "bodyExcerpt": row.body.chars().take(100).collect::<String>(),
+            "bodyExcerpt": crate::content_policy::plain_text_projection(
+                &row.body,
+                crate::dto::ContentFormat::from_db(&row.content_format),
+                100,
+            ),
         });
         let comment_actor_id = auth.id;
         tokio::spawn(async move {
@@ -297,20 +308,18 @@ pub async fn create_comment(
                 .fetch_one(&state.db)
                 .await
                 .unwrap_or_default();
-        let mention_re =
-            regex::Regex::new(r"@([\p{L}\p{N}_-]+)").expect("mention regex is statically valid");
-        let handles: Vec<String> = mention_re
-            .captures_iter(&body.body)
-            .map(|capture| capture[1].to_string())
-            .filter(|handle| handle != &my_handle)
-            .take(10)
-            .collect();
+        let handles =
+            crate::content_policy::mention_handles(&body.body, body.content_format, &my_handle);
 
         let comment_actor_id = auth.id;
         if !handles.is_empty() {
             let pool = state.db.clone();
             let comment_author = row.author_handle.clone();
-            let comment_body = row.body.chars().take(100).collect::<String>();
+            let comment_body = crate::content_policy::plain_text_projection(
+                &row.body,
+                crate::dto::ContentFormat::from_db(&row.content_format),
+                100,
+            );
             let thread_id_val = thread_id;
             let comment_id_val = row.id;
             tokio::spawn(async move {
@@ -371,9 +380,15 @@ pub async fn update_comment(
 
     let id: i64 = id_str.parse().map_err(|_| AppError::NotFound)?;
 
-    let row =
-        repo::update_comment(&state.db, id, auth.id, &prepared.input.body, prepared.is_queued)
-            .await?;
+    let row = repo::update_comment(
+        &state.db,
+        id,
+        auth.id,
+        &prepared.input.body,
+        prepared.input.content_format.as_str(),
+        prepared.is_queued,
+    )
+    .await?;
 
     // Fetch solved_answer_id for Q&A solved-answer marking
     let solved_comment_id: Option<i64> =
@@ -476,6 +491,7 @@ pub async fn list_comment_revisions(
             editor_id: r.editor_id.to_string(),
             old_title: r.old_title,
             old_body: r.old_body,
+            old_content_format: crate::dto::ContentFormat::from_db(&r.old_content_format),
             created_at: r.created_at.timestamp(),
         })
         .collect();

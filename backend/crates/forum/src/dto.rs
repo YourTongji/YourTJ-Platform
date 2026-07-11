@@ -5,6 +5,31 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Canonical source format for persisted community content.
+#[derive(Debug, Clone, Copy, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ContentFormat {
+    #[default]
+    PlainV1,
+    MarkdownV1,
+}
+
+impl ContentFormat {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::PlainV1 => "plain_v1",
+            Self::MarkdownV1 => "markdown_v1",
+        }
+    }
+
+    pub(crate) fn from_db(value: &str) -> Self {
+        match value {
+            "markdown_v1" => Self::MarkdownV1,
+            _ => Self::PlainV1,
+        }
+    }
+}
+
 /// Public-facing board DTO.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -51,6 +76,7 @@ pub struct ThreadDetailDto {
     pub author_id: String,
     pub title: String,
     pub body: Option<String>,
+    pub content_format: ContentFormat,
     pub reply_count: i32,
     pub vote_count: i32,
     pub hot_score: Option<f64>,
@@ -82,6 +108,8 @@ pub struct ThreadInput {
     pub title: String,
     pub body: Option<String>,
     #[serde(default)]
+    pub content_format: ContentFormat,
+    #[serde(default)]
     pub tags: Option<Vec<String>>,
     #[serde(default)]
     pub poll: Option<PollInput>,
@@ -98,6 +126,7 @@ pub struct CommentDto {
     pub author_handle: String,
     pub author_id: String,
     pub body: String,
+    pub content_format: ContentFormat,
     pub vote_count: i32,
     pub viewer_vote: Option<String>,
     pub is_bookmarked: bool,
@@ -115,6 +144,8 @@ pub struct CommentDto {
 pub struct CommentInput {
     pub parent_id: Option<String>,
     pub body: String,
+    #[serde(default)]
+    pub content_format: ContentFormat,
     pub quoted_comment_id: Option<String>,
 }
 
@@ -301,6 +332,7 @@ pub struct DraftPayloadDto {
 pub struct ThreadUpdateInput {
     pub title: Option<String>,
     pub body: Option<String>,
+    pub content_format: Option<ContentFormat>,
     #[allow(dead_code)]
     pub tags: Option<Vec<String>>,
 }
@@ -310,6 +342,8 @@ pub struct ThreadUpdateInput {
 #[serde(rename_all = "camelCase")]
 pub struct CommentUpdateInput {
     pub body: String,
+    #[serde(default)]
+    pub content_format: ContentFormat,
 }
 
 /// Revision history entry.
@@ -321,6 +355,7 @@ pub struct RevisionDto {
     pub editor_id: String,
     pub old_title: Option<String>,
     pub old_body: String,
+    pub old_content_format: ContentFormat,
     pub created_at: i64,
 }
 
@@ -534,5 +569,6 @@ pub struct UserCommentDto {
     pub thread_id: String,
     pub thread_title: String,
     pub body: String,
+    pub content_format: ContentFormat,
     pub created_at: i64,
 }

@@ -171,6 +171,23 @@ async fn run_migrations(pool: &PgPool) {
             .expect("migration 0036 failed");
     }
 
+    let has_content_formats: bool = sqlx::query_scalar(
+        "SELECT EXISTS( \
+           SELECT 1 FROM information_schema.columns \
+           WHERE table_schema = 'forum' AND table_name = 'threads' \
+             AND column_name = 'content_format' \
+         )",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or(false);
+    if !has_content_formats {
+        sqlx::raw_sql(include_str!("../../../../migrations/0039_forum_content_formats.sql"))
+            .execute(pool)
+            .await
+            .expect("migration 0039 failed");
+    }
+
     let has_governance_schema: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM information_schema.schemata WHERE schema_name = 'governance')",
     )

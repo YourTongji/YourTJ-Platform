@@ -84,6 +84,7 @@ struct ForumThreadDocumentRow {
     id: i64,
     title: String,
     body: Option<String>,
+    content_format: String,
     board: String,
     tags: Vec<String>,
     author_handle: String,
@@ -98,7 +99,11 @@ impl From<ForumThreadDocumentRow> for ForumThreadDoc {
         Self {
             id: row.id.to_string(),
             title: row.title,
-            body_excerpt: row.body.unwrap_or_default().chars().take(2048).collect(),
+            body_excerpt: crate::content_policy::plain_text_projection(
+                row.body.as_deref().unwrap_or_default(),
+                crate::dto::ContentFormat::from_db(&row.content_format),
+                2048,
+            ),
             board: row.board,
             tags: row.tags,
             author_handle: row.author_handle,
@@ -123,7 +128,7 @@ pub async fn load_public_thread_documents(
     }
 
     let rows = sqlx::query_as::<_, ForumThreadDocumentRow>(
-        "SELECT thread.id, thread.title, thread.body, board.slug AS board, \
+        "SELECT thread.id, thread.title, thread.body, thread.content_format, board.slug AS board, \
                 ARRAY(SELECT tag.slug FROM forum.thread_tags thread_tag \
                       JOIN forum.tags tag ON tag.id = thread_tag.tag_id \
                       WHERE thread_tag.thread_id = thread.id ORDER BY tag.name) AS tags, \
@@ -146,7 +151,7 @@ pub async fn load_public_thread_documents(
 
 async fn load_all_public_thread_documents(pool: &PgPool) -> AppResult<Vec<ForumThreadDoc>> {
     let rows = sqlx::query_as::<_, ForumThreadDocumentRow>(
-        "SELECT thread.id, thread.title, thread.body, board.slug AS board, \
+        "SELECT thread.id, thread.title, thread.body, thread.content_format, board.slug AS board, \
                 ARRAY(SELECT tag.slug FROM forum.thread_tags thread_tag \
                       JOIN forum.tags tag ON tag.id = thread_tag.tag_id \
                       WHERE thread_tag.thread_id = thread.id ORDER BY tag.name) AS tags, \

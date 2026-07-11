@@ -7927,6 +7927,11 @@ export interface components {
             threadCount?: number;
             createdAt?: number;
         };
+        /**
+         * @default plain_v1
+         * @enum {string}
+         */
+        ContentFormat: "plain_v1" | "markdown_v1";
         Thread: {
             id?: string;
             boardId?: string;
@@ -7950,6 +7955,7 @@ export interface components {
             authorId: string;
             title: string;
             body: string | null;
+            contentFormat: components["schemas"]["ContentFormat"];
             replyCount: number;
             voteCount: number;
             hotScore: number | null;
@@ -7978,12 +7984,15 @@ export interface components {
             boardId: string;
             title: string;
             body?: string | null;
+            contentFormat?: components["schemas"]["ContentFormat"];
             tags?: string[];
             poll?: components["schemas"]["PollInput"];
         };
         ThreadUpdateInput: {
             title?: string;
             body?: string;
+            /** @description Required whenever body is supplied; legacy omission is treated as plain_v1. */
+            contentFormat?: components["schemas"]["ContentFormat"];
             tags?: string[];
         };
         ThreadPinInput: {
@@ -8001,12 +8010,13 @@ export interface components {
             reason: string;
         };
         PostRevision: {
-            id?: string;
-            seq?: number;
-            editorId?: string;
-            oldTitle?: string | null;
-            oldBody?: string;
-            createdAt?: number;
+            id: string;
+            seq: number;
+            editorId: string;
+            oldTitle: string | null;
+            oldBody: string;
+            oldContentFormat: components["schemas"]["ContentFormat"];
+            createdAt: number;
         };
         Comment: {
             id: string;
@@ -8016,6 +8026,7 @@ export interface components {
             authorHandle: string;
             authorId: string;
             body: string;
+            contentFormat: components["schemas"]["ContentFormat"];
             voteCount: number;
             /** @enum {string|null} */
             viewerVote: "up" | "down" | null;
@@ -8030,10 +8041,12 @@ export interface components {
         CommentInput: {
             parentId?: string;
             body: string;
+            contentFormat?: components["schemas"]["ContentFormat"];
             quotedCommentId?: string;
         };
         CommentUpdateInput: {
             body: string;
+            contentFormat?: components["schemas"]["ContentFormat"];
         };
         VoteInput: {
             /** @enum {string} */
@@ -8590,6 +8603,7 @@ export interface components {
             threadId: string;
             threadTitle: string;
             body: string;
+            contentFormat: components["schemas"]["ContentFormat"];
             createdAt: number;
         };
         /** @deprecated */

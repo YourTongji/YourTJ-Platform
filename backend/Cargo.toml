@@ -30,6 +30,7 @@ meilisearch-sdk = "0.27"
 once_cell = "1"
 openssl = "0.10"
 pinyin = { version = "0.11", features = ["plain"] }
+pulldown-cmark = "0.13.4"
 redis = { version = "0.28", features = ["aio", "tokio-comp"] }
 deadpool-redis = "0.19"
 regex = "1"

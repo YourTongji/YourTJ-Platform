@@ -85,7 +85,11 @@ Fresh database 必须只通过 sqlx migration ledger 建立。普通启动、CI 
 ## 内容与媒体契约
 
 - 内容携带 `contentFormat`；legacy `plain_v1` 不自动解释为 `markdown_v1`。
-- 服务端验证 canonical source，客户端 preview 不构成安全边界。
+- Forum 主题/评论的 canonical row 与 revision 同时保存 source format；create/update 省略格式的 legacy
+  请求按 `plain_v1`，不能根据正文猜测。格式和正文只能一起修改。
+- 服务端通过 pulldown-cmark event stream 验证 canonical source，限制结构/链接，拒绝 raw HTML、
+  非安全 URL 和未绑定图片；mention/search/notification projection 从解析事件生成。客户端 preview
+  不构成安全边界。
 - Media credential 只允许 account-bound exact object key；callback 原子消费 intent。
 - Web 只把服务端返回的短期 STS 凭证交给官方 OSS Browser SDK，不自行扩展 prefix/object key；客户端
   SHA-256 作为 callback custom value，业务后续只保存 signed callback 返回的 upload id。

@@ -20,6 +20,12 @@ import { api } from "@/lib/api/endpoints";
 import type { Board, ThreadFeed } from "@/lib/api/types";
 import { formatNumber, formatUnixTime } from "@/lib/format";
 
+const MarkdownEditor = React.lazy(() =>
+  import("@/components/content/markdown-editor").then((module) => ({
+    default: module.MarkdownEditor,
+  })),
+);
+
 function ThreadCard({ thread, boards }: { thread: ThreadFeed; boards: Board[] }) {
   const board = boards.find((item) => item.id === thread.boardId);
   return (
@@ -75,6 +81,7 @@ function CreateThreadDialog({ boards }: { boards: Board[] }) {
         boardId,
         title,
         body: body || undefined,
+        contentFormat: "markdown_v1",
         tags: tags
           .split(/[,\s，、]+/)
           .map((tag) => tag.trim())
@@ -116,7 +123,7 @@ function CreateThreadDialog({ boards }: { boards: Board[] }) {
           发帖
         </Button>
       </DialogTrigger>
-      <DialogContent>
+      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-3xl">
         <DialogHeader>
           <DialogTitle>发布新帖</DialogTitle>
         </DialogHeader>
@@ -155,7 +162,15 @@ function CreateThreadDialog({ boards }: { boards: Board[] }) {
             </div>
             <div className="space-y-2">
               <Label>正文</Label>
-              <Textarea value={body} onChange={(event) => setBody(event.target.value)} />
+              <React.Suspense fallback={<p role="status" className="text-sm text-muted-foreground">正在加载编辑器</p>}>
+                <MarkdownEditor
+                  value={body}
+                  onChange={setBody}
+                  label="帖子正文"
+                  maxLength={50_000}
+                  minHeight={240}
+                />
+              </React.Suspense>
             </div>
             <div className="space-y-2">
               <Label>标签</Label>

@@ -16,6 +16,7 @@ pub(crate) async fn create_revision_tx(
     editor_id: i64,
     old_title: Option<&str>,
     old_body: &str,
+    old_content_format: &str,
 ) -> AppResult<PostRevisionRow> {
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
         .bind(format!("forum:revision:{post_type}:{post_id}"))
@@ -31,9 +32,9 @@ pub(crate) async fn create_revision_tx(
     .await?;
 
     let row = sqlx::query_as::<_, PostRevisionRow>(
-        "INSERT INTO forum.post_revisions (post_type, post_id, seq, editor_id, old_title, old_body) \
-         VALUES ($1, $2, $3, $4, $5, $6) \
-         RETURNING id, post_type, post_id, seq, editor_id, old_title, old_body, created_at",
+        "INSERT INTO forum.post_revisions (post_type, post_id, seq, editor_id, old_title, old_body, old_content_format) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7) \
+         RETURNING id, post_type, post_id, seq, editor_id, old_title, old_body, old_content_format, created_at",
     )
     .bind(post_type)
     .bind(post_id)
@@ -41,6 +42,7 @@ pub(crate) async fn create_revision_tx(
     .bind(editor_id)
     .bind(old_title)
     .bind(old_body)
+    .bind(old_content_format)
     .fetch_one(&mut *connection)
     .await?;
 
@@ -54,7 +56,7 @@ pub async fn list_revisions(
     post_id: i64,
 ) -> AppResult<Vec<PostRevisionRow>> {
     let rows = sqlx::query_as::<_, PostRevisionRow>(
-        "SELECT id, post_type, post_id, seq, editor_id, old_title, old_body, created_at \
+        "SELECT id, post_type, post_id, seq, editor_id, old_title, old_body, old_content_format, created_at \
          FROM forum.post_revisions \
          WHERE post_type = $1 AND post_id = $2 \
          ORDER BY seq DESC",

@@ -28,6 +28,7 @@ governance.workspace = true
 regex.workspace = true
 meilisearch-sdk.workspace = true
 once_cell.workspace = true
+pulldown-cmark.workspace = true
 futures.workspace = true
 tokio-stream.workspace = true
 

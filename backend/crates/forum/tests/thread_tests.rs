@@ -157,6 +157,81 @@ async fn test_create_thread_returns_detail_dto() {
 }
 
 #[tokio::test]
+async fn markdown_thread_format_is_explicit_validated_and_revisioned() {
+    let (pool, app) = create_test_app().await;
+    let (_, token) =
+        create_test_account(&pool, "markdown-thread@tongji.edu.cn", "markdown-thread").await;
+
+    let created = create_thread_request(
+        &app,
+        &token,
+        json!({
+            "boardId": "1",
+            "title": "Markdown source",
+            "body": "# Hello\n\n**world** [课程](/courses)",
+            "contentFormat": "markdown_v1"
+        }),
+    )
+    .await;
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let created = read_json(created).await;
+    assert_eq!(created["contentFormat"], "markdown_v1");
+    let thread_id = created["id"].as_str().expect("thread id").parse::<i64>().unwrap();
+    let stored_format: String =
+        sqlx::query_scalar("SELECT content_format FROM forum.threads WHERE id = $1")
+            .bind(thread_id)
+            .fetch_one(&pool)
+            .await
+            .expect("stored thread format");
+    assert_eq!(stored_format, "markdown_v1");
+
+    sqlx::query(
+        "UPDATE forum.threads SET created_at = now() - interval '10 minutes' WHERE id = $1",
+    )
+    .bind(thread_id)
+    .execute(&pool)
+    .await
+    .expect("age thread beyond revision grace");
+    let updated = update_thread_request(
+        &app,
+        thread_id,
+        &token,
+        json!({ "body": "plain replacement", "contentFormat": "plain_v1" }),
+    )
+    .await;
+    assert_eq!(updated.status(), StatusCode::OK);
+    assert_eq!(read_json(updated).await["contentFormat"], "plain_v1");
+    let revision_format: String = sqlx::query_scalar(
+        "SELECT old_content_format FROM forum.post_revisions \
+         WHERE post_type = 'thread' AND post_id = $1 ORDER BY seq DESC LIMIT 1",
+    )
+    .bind(thread_id)
+    .fetch_one(&pool)
+    .await
+    .expect("thread revision format");
+    assert_eq!(revision_format, "markdown_v1");
+
+    for unsafe_body in [
+        "<script>alert(1)</script>",
+        "![remote](https://example.com/image.png)",
+        "[unsafe](javascript:alert(1))",
+    ] {
+        let rejected = create_thread_request(
+            &app,
+            &token,
+            json!({
+                "boardId": "1",
+                "title": "Rejected Markdown",
+                "body": unsafe_body,
+                "contentFormat": "markdown_v1"
+            }),
+        )
+        .await;
+        assert_eq!(rejected.status(), StatusCode::BAD_REQUEST);
+    }
+}
+
+#[tokio::test]
 async fn board_posting_gates_deny_ordinary_accounts_without_side_effects() {
     let (pool, app) = create_test_app().await;
     let (account_id, token) =

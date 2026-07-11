@@ -74,6 +74,7 @@ pub struct ThreadRowJoinedFull {
     pub author_id: i64,
     pub title: String,
     pub body: Option<String>,
+    pub content_format: String,
     pub reply_count: i32,
     pub vote_count: i32,
     pub hot_score: Option<f64>,
@@ -102,6 +103,7 @@ pub struct CommentRowJoined {
     pub path: Option<String>,
     pub author_id: i64,
     pub body: String,
+    pub content_format: String,
     pub vote_count: i32,
     pub deleted_at: Option<DateTime<Utc>>,
     pub hidden_at: Option<DateTime<Utc>>,
@@ -219,6 +221,7 @@ pub struct PostRevisionRow {
     pub editor_id: i64,
     pub old_title: Option<String>,
     pub old_body: String,
+    pub old_content_format: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
