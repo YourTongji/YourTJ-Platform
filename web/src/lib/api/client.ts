@@ -28,7 +28,7 @@ interface RequestOptions {
   query?: Record<string, string | number | boolean | null | undefined>;
   body?: unknown;
   headers?: HeadersInit;
-  auth?: boolean;
+  auth?: boolean | "optional";
   signal?: AbortSignal;
 }
 
@@ -129,6 +129,9 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}) 
       const refreshed = await refreshTokens();
       if (refreshed) {
         return fetchOnce<T>(path, options);
+      }
+      if (options.auth === "optional") {
+        return fetchOnce<T>(path, { ...options, auth: false });
       }
     }
     throw error;

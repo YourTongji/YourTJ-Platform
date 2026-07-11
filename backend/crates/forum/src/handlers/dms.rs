@@ -115,15 +115,27 @@ pub async fn create_or_get_conversation_handler(
         return Err(AppError::BadRequest("recipientHandle must contain 3 to 30 characters".into()));
     }
 
-    let (recipient_id, _, _) =
-        repo::dms::find_available_recipient_by_handle(&state.db, recipient_handle)
+    let recipient =
+        identity::public_accounts::find_public_account_by_handle(&state.db, recipient_handle)
             .await?
             .ok_or(AppError::NotFound)?;
+    let recipient_id = recipient.id;
     if recipient_id == auth.id {
         return Err(AppError::BadRequest("cannot start a conversation with yourself".into()));
     }
 
-    if repo::dms::pair_is_blocked(&state.db, auth.id, recipient_id).await? {
+    if repo::relationships::pair_is_blocked(&state.db, auth.id, recipient_id).await? {
+        return Err(AppError::Forbidden);
+    }
+    let can_start_conversation = match recipient.dm_policy.as_str() {
+        "everyone" => true,
+        "following" => {
+            crate::repo::relationships::is_following(&state.db, recipient_id, auth.id).await?
+        }
+        "nobody" => false,
+        _ => false,
+    };
+    if !can_start_conversation {
         return Err(AppError::Forbidden);
     }
 
@@ -299,7 +311,7 @@ pub async fn send_message_handler(
         repo::dms::find_available_other_participant(&state.db, conversation_id, auth.id)
             .await?
             .ok_or(AppError::Forbidden)?;
-    if repo::dms::pair_is_blocked(&state.db, auth.id, recipient_id).await? {
+    if repo::relationships::pair_is_blocked(&state.db, auth.id, recipient_id).await? {
         return Err(AppError::Forbidden);
     }
     let recipient_is_muted =

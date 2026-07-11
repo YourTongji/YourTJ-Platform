@@ -115,9 +115,7 @@ pub async fn get_unread_thread_ids(
              JOIN forum.tags tag ON tag.id = thread_tag.tag_id \
              WHERE thread_tag.thread_id = thread.id AND tag.slug = $4 \
            )) \
-           AND NOT EXISTS (SELECT 1 FROM forum.user_ignores ignored \
-             WHERE ignored.account_id = $1 \
-               AND ignored.ignored_account_id = thread.author_id) \
+           AND NOT forum.user_content_hidden($1, thread.author_id) \
            AND EXISTS (SELECT 1 FROM forum.comments unread_comment \
              WHERE unread_comment.thread_id = thread.id \
                AND unread_comment.deleted_at IS NULL AND unread_comment.hidden_at IS NULL \

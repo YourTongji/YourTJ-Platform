@@ -194,3 +194,124 @@ async fn failed_object_quarantine_leaves_upload_pending() {
         .await
         .ok();
 }
+
+#[tokio::test]
+async fn profile_images_require_an_owned_clean_oss_asset() {
+    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL for media integration");
+    let pool = PgPool::connect(&database_url).await.expect("media test database");
+    MIGRATOR.run(&pool).await.expect("media test migrations");
+    let suffix = uuid::Uuid::new_v4().simple().to_string();
+    let owner_id: i64 = sqlx::query_scalar(
+        "INSERT INTO identity.accounts (email, handle) VALUES ($1, $2) RETURNING id",
+    )
+    .bind(format!("profile-media-owner-{suffix}@tongji.edu.cn"))
+    .bind(format!("profile-media-owner-{suffix}"))
+    .fetch_one(&pool)
+    .await
+    .expect("seed profile media owner");
+    let other_id: i64 = sqlx::query_scalar(
+        "INSERT INTO identity.accounts (email, handle) VALUES ($1, $2) RETURNING id",
+    )
+    .bind(format!("profile-media-other-{suffix}@tongji.edu.cn"))
+    .bind(format!("profile-media-other-{suffix}"))
+    .fetch_one(&pool)
+    .await
+    .expect("seed other media owner");
+    let clean_upload_id: i64 = sqlx::query_scalar(
+        "INSERT INTO media.uploads \
+         (account_id, kind, oss_key, url, bytes, mime, sha256, status) \
+         VALUES ($1, 'image', $2, $3, 20, 'image/png', $4, 'clean') RETURNING id",
+    )
+    .bind(owner_id)
+    .bind(format!("uploads/{owner_id}/image/{suffix}-clean.png"))
+    .bind(format!("https://cdn.example.test/{suffix}-clean.png"))
+    .bind("b".repeat(64))
+    .fetch_one(&pool)
+    .await
+    .expect("seed clean profile image");
+    let pending_upload_id: i64 = sqlx::query_scalar(
+        "INSERT INTO media.uploads \
+         (account_id, kind, oss_key, url, bytes, mime, sha256) \
+         VALUES ($1, 'image', $2, $3, 20, 'image/png', $4) RETURNING id",
+    )
+    .bind(owner_id)
+    .bind(format!("uploads/{owner_id}/image/{suffix}-pending.png"))
+    .bind(format!("https://cdn.example.test/{suffix}-pending.png"))
+    .bind("c".repeat(64))
+    .fetch_one(&pool)
+    .await
+    .expect("seed pending profile image");
+    let other_upload_id: i64 = sqlx::query_scalar(
+        "INSERT INTO media.uploads \
+         (account_id, kind, oss_key, url, bytes, mime, sha256, status) \
+         VALUES ($1, 'image', $2, $3, 20, 'image/png', $4, 'clean') RETURNING id",
+    )
+    .bind(other_id)
+    .bind(format!("uploads/{other_id}/image/{suffix}-other.png"))
+    .bind(format!("https://cdn.example.test/{suffix}-other.png"))
+    .bind("d".repeat(64))
+    .fetch_one(&pool)
+    .await
+    .expect("seed other profile image");
+    let state = test_state(pool.clone());
+    let token = identity::auth::create_access_token(owner_id, &state.jwt_secret, 3600)
+        .expect("profile media token");
+    let app = routes_with_object_store(state, Arc::new(SuccessfulObjectStore));
+
+    for rejected_id in [pending_upload_id, other_upload_id] {
+        let response = app
+            .clone()
+            .oneshot(request(
+                Method::PUT,
+                "/api/v2/me/profile/avatar".into(),
+                &token,
+                Body::from(format!(r#"{{"assetId":"{rejected_id}"}}"#)),
+            ))
+            .await
+            .expect("rejected profile bind response");
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    let bind_response = app
+        .clone()
+        .oneshot(request(
+            Method::PUT,
+            "/api/v2/me/profile/avatar".into(),
+            &token,
+            Body::from(format!(r#"{{"assetId":"{clean_upload_id}"}}"#)),
+        ))
+        .await
+        .expect("profile bind response");
+    assert_eq!(bind_response.status(), StatusCode::NO_CONTENT);
+    let stored_asset_id: Option<i64> =
+        sqlx::query_scalar("SELECT avatar_asset_id FROM identity.profiles WHERE account_id = $1")
+            .bind(owner_id)
+            .fetch_one(&pool)
+            .await
+            .expect("stored avatar asset");
+    assert_eq!(stored_asset_id, Some(clean_upload_id));
+
+    let clear_response = app
+        .oneshot(request(Method::DELETE, "/api/v2/me/profile/avatar".into(), &token, Body::empty()))
+        .await
+        .expect("profile clear response");
+    assert_eq!(clear_response.status(), StatusCode::NO_CONTENT);
+    let cleared_asset_id: Option<i64> =
+        sqlx::query_scalar("SELECT avatar_asset_id FROM identity.profiles WHERE account_id = $1")
+            .bind(owner_id)
+            .fetch_one(&pool)
+            .await
+            .expect("cleared avatar asset");
+    assert!(cleared_asset_id.is_none());
+
+    sqlx::query("DELETE FROM media.uploads WHERE id = ANY($1)")
+        .bind(vec![clean_upload_id, pending_upload_id, other_upload_id])
+        .execute(&pool)
+        .await
+        .ok();
+    sqlx::query("DELETE FROM identity.accounts WHERE id = ANY($1)")
+        .bind(vec![owner_id, other_id])
+        .execute(&pool)
+        .await
+        .ok();
+}

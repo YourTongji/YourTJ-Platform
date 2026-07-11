@@ -12,6 +12,10 @@ import {
 import { PageHeader } from "@/components/common/page-header";
 import { ErrorState, LoadingState } from "@/components/common/states";
 import { ProfileActivitySection } from "@/components/profile/profile-activity-section";
+import {
+  ProfileRelationshipListDialog,
+  type ProfileRelationshipListKind,
+} from "@/components/profile/profile-relationship-list-dialog";
 import { ProfileSummary } from "@/components/profile/profile-summary";
 import { Badge } from "@/components/ui/badge";
 import { useAuth } from "@/context/auth-provider";
@@ -25,6 +29,7 @@ export function ProfilePage() {
   const queryClient = useQueryClient();
   const { account, isAuthenticated } = useAuth();
   const [confirmBlockOpen, setConfirmBlockOpen] = React.useState(false);
+  const [relationshipList, setRelationshipList] = React.useState<ProfileRelationshipListKind | null>(null);
   const capabilities = React.useMemo(() => capabilitiesForAccount(account), [account]);
 
   const profile = useQuery({
@@ -52,46 +57,54 @@ export function ProfilePage() {
       || profile.data.handle.toLowerCase() === account.handle?.toLowerCase()
     ),
   );
-  const ignoredUsers = useInfiniteQuery({
-    queryKey: ["ignores"],
-    queryFn: ({ pageParam }) => api.ignoredUsers(pageParam),
-    initialPageParam: null as string | null,
-    getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
+  const socialRelationship = useQuery({
+    queryKey: ["profile", name, "relationship"],
+    queryFn: () => api.userRelationship(profile.data?.handle ?? name),
     enabled: isAuthenticated && Boolean(profile.data) && !isSelf,
   });
-  const fetchNextIgnoredPage = ignoredUsers.fetchNextPage;
-  const hasNextIgnoredPage = ignoredUsers.hasNextPage;
-  const isFetchingNextIgnoredPage = ignoredUsers.isFetchingNextPage;
 
-  React.useEffect(() => {
-    if (hasNextIgnoredPage && !isFetchingNextIgnoredPage) {
-      void fetchNextIgnoredPage();
-    }
-  }, [fetchNextIgnoredPage, hasNextIgnoredPage, isFetchingNextIgnoredPage]);
-
-  const isIgnored = Boolean(
-    profile.data
-    && ignoredUsers.data?.pages.some((page) =>
-      (page.items ?? []).some((item) => item.accountId === profile.data.id)),
-  );
-  const relationship = useMutation({
+  const followRelationship = useMutation({
     mutationFn: async () => {
       if (!profile.data) return;
-      if (isIgnored) {
-        await api.unignoreUser(profile.data.id);
+      if (socialRelationship.data?.following) {
+        await api.unfollowUser(profile.data.handle);
       } else {
-        await api.ignoreUser(profile.data.id);
+        await api.followUser(profile.data.handle);
       }
     },
     onSuccess: async () => {
-      setConfirmBlockOpen(false);
-      toast.success(isIgnored ? "已解除屏蔽" : "已屏蔽该用户");
+      toast.success(socialRelationship.data?.following ? "已取消关注" : "已关注");
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["ignores"] }),
+        queryClient.invalidateQueries({ queryKey: ["profile", name] }),
+        queryClient.invalidateQueries({ queryKey: ["profile", name, "relationship"] }),
+      ]);
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : "关注设置失败"),
+  });
+  const muteRelationship = useMutation({
+    mutationFn: () => socialRelationship.data?.muted
+      ? api.unmuteUser(profile.data?.handle ?? name)
+      : api.muteUser(profile.data?.handle ?? name),
+    onSuccess: async () => {
+      toast.success(socialRelationship.data?.muted ? "已取消静音" : "已静音");
+      await queryClient.invalidateQueries({ queryKey: ["profile", name, "relationship"] });
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : "静音设置失败"),
+  });
+  const blockRelationship = useMutation({
+    mutationFn: () => socialRelationship.data?.blockedByMe
+      ? api.unblockUser(profile.data?.handle ?? name)
+      : api.blockUser(profile.data?.handle ?? name),
+    onSuccess: async () => {
+      setConfirmBlockOpen(false);
+      toast.success(socialRelationship.data?.blockedByMe ? "已解除屏蔽" : "已屏蔽该用户");
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["profile", name] }),
+        queryClient.invalidateQueries({ queryKey: ["profile", name, "relationship"] }),
         queryClient.invalidateQueries({ queryKey: ["dm", "conversations"] }),
       ]);
     },
-    onError: (error) => toast.error(error instanceof Error ? error.message : "关系设置失败"),
+    onError: (error) => toast.error(error instanceof Error ? error.message : "屏蔽设置失败"),
   });
   const startConversation = useMutation({
     mutationFn: () => api.createDmConversation(profile.data?.handle ?? name),
@@ -114,35 +127,41 @@ export function ProfilePage() {
     || hasCapability(capabilities, ADMIN_CAPABILITIES.changeRoles)
     || hasCapability(capabilities, ADMIN_CAPABILITIES.silenceUsers)
     || hasCapability(capabilities, ADMIN_CAPABILITIES.suspendUsers);
-  const relationshipLoading = ignoredUsers.isLoading
-    || ignoredUsers.isFetchingNextPage
-    || Boolean(ignoredUsers.hasNextPage);
+  const relationshipPending = followRelationship.isPending
+    || muteRelationship.isPending
+    || blockRelationship.isPending;
+  const contentHidden = Boolean(
+    socialRelationship.data?.blockedByMe || socialRelationship.data?.blockedMe,
+  );
 
   return (
     <div className="space-y-5">
       <PageHeader
         eyebrow="Community Profile"
-        title={profile.data.handle}
+        title={profile.data.displayName || profile.data.handle}
         description="公开社区身份、贡献与最近参与；校园邮箱等身份信息始终不会显示在这里。"
       />
 
       <ProfileSummary
         profile={profile.data}
+        relationship={socialRelationship.data}
         isAuthenticated={isAuthenticated}
         isSelf={isSelf}
-        isIgnored={isIgnored}
-        relationshipLoading={relationshipLoading}
-        relationshipPending={relationship.isPending}
+        relationshipLoading={socialRelationship.isLoading}
+        relationshipPending={relationshipPending}
         messagePending={startConversation.isPending}
-        canStartConversation={(account?.trustLevel ?? 0) >= 1}
+        canStartConversation={(account?.trustLevel ?? 0) >= 1 && Boolean(socialRelationship.data?.canStartConversation)}
         canManageUser={canManageUser}
         confirmBlockOpen={confirmBlockOpen}
         onConfirmBlockOpenChange={setConfirmBlockOpen}
         onStartConversation={() => startConversation.mutate()}
-        onToggleIgnore={() => relationship.mutate()}
+        onToggleFollow={() => followRelationship.mutate()}
+        onToggleMute={() => muteRelationship.mutate()}
+        onToggleBlock={() => blockRelationship.mutate()}
+        onOpenRelationshipList={setRelationshipList}
       />
 
-      <div className="grid items-start gap-5 lg:grid-cols-2">
+      {!contentHidden ? <div className="grid items-start gap-5 lg:grid-cols-2">
         <ProfileActivitySection
           title="主题"
           icon={MessageSquare}
@@ -200,7 +219,14 @@ export function ProfilePage() {
           onRetry={() => void comments.refetch()}
           onLoadMore={() => void comments.fetchNextPage()}
         />
-      </div>
+      </div> : null}
+
+      <ProfileRelationshipListDialog
+        handle={profile.data.handle}
+        kind={relationshipList ?? "followers"}
+        open={relationshipList !== null}
+        onOpenChange={(open) => !open && setRelationshipList(null)}
+      />
     </div>
   );
 }

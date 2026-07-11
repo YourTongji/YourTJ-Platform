@@ -165,6 +165,9 @@ pub async fn vote_post(
     if post_author_id == Some(account_id) {
         return Err(shared::AppError::BadRequest("cannot vote on your own content".into()));
     }
+    if let Some(post_author_id) = post_author_id {
+        super::relationships::lock_pair_unblocked(&mut tx, account_id, post_author_id).await?;
+    }
 
     let source_key = format!("forum_vote:{post_type}:{post_id}:{account_id}");
     activity::contributions::lock_contribution_source(&mut tx, &source_key).await?;

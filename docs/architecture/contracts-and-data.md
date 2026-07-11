@@ -77,6 +77,8 @@ Fresh database 必须只通过 sqlx migration ledger 建立。普通启动、CI 
   `course-<id>` / `review-<id>`，HTTP DTO 始终去掉前缀。改变前缀必须配套 full reindex。
 - Full reindex 等待 clear task 成功后再 add，并观察 add 结果。
 - Hot/search counter 使用增量/投影，读路径避免全表聚合；定期 reconciliation 纠偏。
+- `forum.user_follows` 是关系事实；`forum.user_social_stats` 是 trigger 同事务维护的可重建计数投影。
+  Follow 与 block 对同一账号对使用相同 transaction advisory lock，防止 block 与并发 follow 双写穿透。
 - Redis cache key 版本化或短 TTL，mutation 精确 bump 相关 version；缓存故障不改变业务写入事实。
 - 不使用 `LIKE %q%` 作为热点中文聚合搜索降级，除非产品/性能测试定义了严格有界范围。
 
@@ -89,6 +91,8 @@ Fresh database 必须只通过 sqlx migration ledger 建立。普通启动、CI 
   SHA-256 作为 callback custom value，业务后续只保存 signed callback 返回的 upload id。
 - 业务保存 asset/reference，不保存任意 URL；访问 URL 是带权限和到期的派生值。
 - asset status、binding、owner、target、alt、variants 与 retention 由 media/domain API 协作维护。
+- Profile text/reference 由 Identity 持有；Media 在事务内验证本人 clean image，再调用 Identity 受限
+  binding API。Forum 取得已授权 profile projection 后才批量解析 clean image URL，不跨域直查 upload 表。
 
 ## 身份、隐私与审计
 
@@ -97,6 +101,11 @@ Fresh database 必须只通过 sqlx migration ledger 建立。普通启动、CI 
   login/registration purpose，绝不根据验证时的账号状态重新推断，也不能触及 password-reset code。
 - Access JWT 的 session id/auth version 是 revocation binding，不是客户端授权事实；每次受保护请求仍
   查询账号状态和 session。滚动窗口内的 legacy JWT 受账号级 revoked-before timestamp 约束。
+- Identity 的 public account API 只返回 active、未 suspended 且无邮箱的 profile/privacy projection；
+  新增 profile/list/new-DM target 解析通过该 API 与 Forum 的 follow/mute/block policy 组合。旧 Forum
+  projection 中仍有直接 identity join，需按 owner public API 逐步迁移，不能作为新代码模式复制。
+- 第一阶段 follow 只有 `not_following/following`，没有 private-account pending；mute 不授权也不阻断，
+  block 在任意方向阻止 follow/DM/回复/投票并删除双方 follow，解除时不恢复。
 - 新 PII migration 同时更新[隐私与数据生命周期](../security/privacy-and-data-lifecycle.md)。
 - Staff write 记录 actor kind/id/role、action、target、reason、result 和 correlation；metadata 最小化。
 - Secrets、code、token、signature-as-credential、raw email、完整请求 body 和任意 DM 不进入日志/审计。

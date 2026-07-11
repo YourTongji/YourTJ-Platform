@@ -1,0 +1,136 @@
+//! Handler-to-database coverage for owner profile and privacy controls.
+
+#[path = "helpers/mod.rs"]
+mod helpers;
+
+use axum::body::Body;
+use axum::http::{header, Method, Request, StatusCode};
+use serde_json::{json, Value};
+use tower::ServiceExt;
+
+fn request(method: Method, uri: &str, token: &str, body: Option<Value>) -> Request<Body> {
+    let mut builder = Request::builder()
+        .method(method)
+        .uri(uri)
+        .header(header::AUTHORIZATION, format!("Bearer {token}"));
+    if body.is_some() {
+        builder = builder.header(header::CONTENT_TYPE, "application/json");
+    }
+    builder
+        .body(body.map_or_else(Body::empty, |value| Body::from(value.to_string())))
+        .expect("profile request")
+}
+
+#[tokio::test]
+async fn profile_and_privacy_are_validated_and_persisted() {
+    let (pool, _) = helpers::create_test_app().await;
+    let email = "profile-privacy@tongji.edu.cn";
+    sqlx::query("INSERT INTO identity.accounts (email, handle) VALUES ($1, 'profile-privacy')")
+        .bind(email)
+        .execute(&pool)
+        .await
+        .expect("seed profile account");
+    let (token, account_id) = helpers::create_access_token_for(email, &pool).await;
+    let app = helpers::create_test_app_with_pool(pool.clone()).await;
+
+    let default_response = app
+        .clone()
+        .oneshot(request(Method::GET, "/api/v2/me/privacy", &token, None))
+        .await
+        .expect("default privacy response");
+    assert_eq!(default_response.status(), StatusCode::OK);
+    let defaults = helpers::read_json(default_response).await;
+    assert_eq!(defaults["profileVisibility"], "campus");
+    assert_eq!(defaults["followersVisibility"], "followers");
+    assert_eq!(defaults["followingVisibility"], "followers");
+    assert_eq!(defaults["dmPolicy"], "following");
+    assert_eq!(defaults["discoverable"], true);
+
+    let profile_response = app
+        .clone()
+        .oneshot(request(
+            Method::PUT,
+            "/api/v2/me/profile",
+            &token,
+            Some(json!({
+                "displayName": "  Campus Builder  ",
+                "bio": "Shipping a safer community.",
+                "website": "https://example.test/about"
+            })),
+        ))
+        .await
+        .expect("profile update response");
+    assert_eq!(profile_response.status(), StatusCode::OK);
+    let profile = helpers::read_json(profile_response).await;
+    assert_eq!(profile["accountId"], account_id.to_string());
+    assert_eq!(profile["displayName"], "Campus Builder");
+    assert_eq!(profile["website"], "https://example.test/about");
+    assert!(profile.get("email").is_none());
+
+    let invalid_website = app
+        .clone()
+        .oneshot(request(
+            Method::PUT,
+            "/api/v2/me/profile",
+            &token,
+            Some(json!({
+                "displayName": null,
+                "bio": null,
+                "website": "http://tracking.example.test/avatar"
+            })),
+        ))
+        .await
+        .expect("invalid website response");
+    assert_eq!(invalid_website.status(), StatusCode::BAD_REQUEST);
+    let stored_website: Option<String> =
+        sqlx::query_scalar("SELECT website FROM identity.profiles WHERE account_id = $1")
+            .bind(account_id)
+            .fetch_one(&pool)
+            .await
+            .expect("stored profile website");
+    assert_eq!(stored_website.as_deref(), Some("https://example.test/about"));
+
+    let privacy_response = app
+        .clone()
+        .oneshot(request(
+            Method::PUT,
+            "/api/v2/me/privacy",
+            &token,
+            Some(json!({
+                "profileVisibility": "only_me",
+                "followersVisibility": "only_me",
+                "followingVisibility": "campus",
+                "discoverable": false,
+                "dmPolicy": "nobody"
+            })),
+        ))
+        .await
+        .expect("privacy update response");
+    assert_eq!(privacy_response.status(), StatusCode::OK);
+
+    let invalid_privacy = app
+        .oneshot(request(
+            Method::PUT,
+            "/api/v2/me/privacy",
+            &token,
+            Some(json!({
+                "profileVisibility": "friends",
+                "followersVisibility": "campus",
+                "followingVisibility": "campus",
+                "discoverable": true,
+                "dmPolicy": "everyone"
+            })),
+        ))
+        .await
+        .expect("invalid privacy response");
+    assert_eq!(invalid_privacy.status(), StatusCode::BAD_REQUEST);
+    let stored_policy: (String, bool, String) = sqlx::query_as(
+        "SELECT profile_visibility, discoverable, dm_policy \
+         FROM identity.profile_privacy WHERE account_id = $1",
+    )
+    .bind(account_id)
+    .fetch_one(&pool)
+    .await
+    .expect("stored privacy policy");
+    assert_eq!(stored_policy, ("only_me".into(), false, "nobody".into()));
+}

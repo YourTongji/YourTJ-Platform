@@ -6,7 +6,7 @@
 >
 > 负责人：Privacy owner、Security owner、Domain maintainers
 >
-> 最近核验：2026-07-11，`origin/main@33584db`
+> 最近核验：2026-07-11，migration `0034_social_identity_privacy.sql`
 
 本规范将数据最小化、可见性、导出、删除和保留作为产品前置条件。它不是法律意见；涉及 PIPL、
 未成年人、广告或跨境处理的最终政策需要合格法律与隐私负责人确认。
@@ -20,11 +20,18 @@
 - 设备 session 只向账号本人展示 bounded user-agent label 和必要时间；新认证流程不持久化精确 IP。
 - Staff 无通用 DM 浏览接口，只能访问 participant 报告的最小证据。
 - Governance audit 和制裁保留 actor/reason 历史，credit ledger append-only。
+- Profile 默认仅校园登录用户可见；followers/following 默认仅关注者可见，新 DM 默认只允许接收方
+  已关注的人发起。匿名只有在 owner 显式选择 `public` 后才能访问资料。
+- Follow、mute、block 是独立事实；mute/block 不向对方提供列表接口。Block 删除双方 follow，
+  suspended/deleted 账号不进入公开资料与关系列表。
+- Display name、bio、HTTPS website 与 privacy setting 可由 owner 替换；avatar/banner 只保存本人
+  clean OSS asset id，公开 URL 是状态校验后的派生值。
 
 ### Partial
 
-- profile、内容和列表对匿名访客的默认公开范围尚未形成统一政策。
-- 无 profile/activity/follow-list/DM/discoverability privacy settings。
+- Activity/mention privacy、user search discoverability 和 public profile 搜索引擎索引政策尚未完成。
+- 第一阶段 discoverability 只控制第三方关系列表并作为未来账号搜索事实源；精确 handle 直达仍由
+  profile visibility 决定。
 - `deleted` 数据库状态不等于跨域匿名化、purge 或备份过期。
 - 无自助 export、deactivate、delete、recover 或 retention worker。
 - OSS、搜索索引、缓存、日志、备份、审计与积分的删除语义没有完整编排。
@@ -52,10 +59,30 @@
 ## 可见性与默认值
 
 - Board 声明 `public/campus/staff` 等访问级别；公共讨论不由作者 follow 关系临时改变。
-- Profile、activity、follower/following、DM、mention 和 discoverability 使用独立设置。
+- Profile、follower/following、new-DM 和 discoverability 已使用独立设置；activity/mention 仍待实现。
 - Block/mute 是关系 policy，不通过前端隐藏代替服务端授权。
 - 搜索、feed、cache、CDN 与 notification 在输出时应用同一可见性规则。
-- 匿名与 campus 默认范围是 `Decision needed`；确认前不得宣称“校园内可见”或“全网公开”。
+- 第一阶段默认：profile=`campus`、followers/following=`followers`、DM=`following`、discoverable=on；
+  owner 可将 profile/list 改为 public/campus/only_me 等 OpenAPI 声明的值。
+
+## Profile 与社交关系数据生命周期
+
+`identity.profiles` 的目的仅为用户选择公开展示的校园社区身份；`identity.profile_privacy` 仅用于
+服务端授权。`forum.user_follows` 用于用户关系和准确计数，`forum.user_mutes` 与保留旧物理名但
+语义已固定为 block 的 `forum.user_ignores` 用于本人过滤与安全边界。可见者和生命周期如下：
+
+- display name/bio/website/asset id：owner 可编辑，viewer 仅在 profile policy 允许时读取；账号导出
+  应包含原值，账号 purge 时随 account cascade 删除，公共内容不因此改写。
+- privacy policy：仅 owner 写，服务端读取；导出应包含，删除时 cascade，不进入公开 DTO 或日志。
+- follow：关系列表按 owner policy 和 discoverability 输出；账号导出包含自己的 incoming/outgoing
+  关系，账号删除时 cascade，计数是可重建 projection。
+- mute/block：仅发起者的安全设置与服务端 policy 可读；不得在通知、分析或公开 profile 暗示具体
+  名单。账号导出可包含自己创建的关系，删除时 cascade。
+- OSS asset：profile 只持有引用；blocked/pending asset 不派生 URL。解绑后的 object retention、
+  scanner、orphan GC 和 legal hold 仍按 OSS runbook 的后续阶段执行。
+
+Profile 字段与社交关系不进入普通请求日志、metrics label 或 governance audit body。未来推荐/广告若要
+使用关系数据，必须另行说明目的、opt-out、保留和公平性，不能因字段已存在而默认获权。
 
 ## 账号删除编排
 
@@ -109,7 +136,7 @@ Legal hold 有合法目的、授权者、范围、到期和审计，不得成为
 
 ## Decision needed
 
-- 匿名/public/campus 默认范围和搜索引擎索引政策。
+- Public profile 的搜索引擎索引政策。
 - 删除恢复窗、匿名化显示名、handle 释放期。
 - 各类治理证据、DM、query log、audit 与 backup 的具体保留期。
 - 毕业账号的校园资格、恢复和邮箱换绑。

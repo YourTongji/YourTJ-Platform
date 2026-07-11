@@ -134,6 +134,55 @@ pub async fn find_upload(pool: &PgPool, id: i64) -> AppResult<Option<UploadRow>>
     Ok(row)
 }
 
+/// Verify an owned clean image while holding it stable for profile binding.
+pub async fn owned_clean_image_exists(
+    tx: &mut Transaction<'_, Postgres>,
+    account_id: i64,
+    upload_id: i64,
+) -> AppResult<bool> {
+    let exists = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS( \
+           SELECT 1 FROM media.uploads \
+           WHERE id = $1 AND account_id = $2 AND kind = 'image' AND status = 'clean' \
+           FOR SHARE \
+         )",
+    )
+    .bind(upload_id)
+    .bind(account_id)
+    .fetch_one(&mut **tx)
+    .await?;
+    Ok(exists)
+}
+
+/// Resolve only a clean image URL for an already-authorized public projection.
+pub async fn find_clean_image_url(pool: &PgPool, upload_id: i64) -> AppResult<Option<String>> {
+    let url = sqlx::query_scalar(
+        "SELECT url FROM media.uploads WHERE id = $1 AND kind = 'image' AND status = 'clean'",
+    )
+    .bind(upload_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(url)
+}
+
+/// Batch-resolve clean image URLs without exposing pending or blocked objects.
+pub async fn find_clean_image_urls(
+    pool: &PgPool,
+    upload_ids: &[i64],
+) -> AppResult<Vec<(i64, String)>> {
+    if upload_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let urls = sqlx::query_as(
+        "SELECT id, url FROM media.uploads \
+         WHERE id = ANY($1) AND kind = 'image' AND status = 'clean'",
+    )
+    .bind(upload_ids)
+    .fetch_all(pool)
+    .await?;
+    Ok(urls)
+}
+
 /// List pending uploads with cursor-based pagination.
 ///
 /// The cursor is the opaque base64-encoded `(created_at_timestamp, id)` pair.

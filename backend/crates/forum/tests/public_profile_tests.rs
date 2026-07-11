@@ -93,6 +93,15 @@ async fn profile_routes_preserve_contract_and_exclude_unavailable_content() {
     let (account_id, _) =
         create_test_account(&pool, "profile-boundary@tongji.edu.cn", "profile-boundary").await;
     sqlx::query(
+        "INSERT INTO identity.profile_privacy (account_id, profile_visibility) \
+         VALUES ($1, 'public') ON CONFLICT (account_id) DO UPDATE \
+         SET profile_visibility = 'public'",
+    )
+    .bind(account_id)
+    .execute(&pool)
+    .await
+    .expect("make profile public");
+    sqlx::query(
         "INSERT INTO forum.user_stats \
          (account_id, threads_created, comments_created, votes_received) \
          VALUES ($1, 8, 13, 21)",

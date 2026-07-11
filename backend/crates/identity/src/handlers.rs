@@ -15,9 +15,10 @@ use shared::{AppResult, AppState, Page};
 
 use crate::auth::{create_session_access_token, generate_refresh_token};
 use crate::dto::{
-    AccountDto, AuthTokensOutput, BindKeyInput, ClaimChallengeOutput, ClaimInput,
-    PasswordChangeInput, PasswordForgotInput, PasswordLoginInput, PasswordResetInput, RefreshInput,
-    RequestCodeInput, SessionDto, UpdateMeInput, VerifyEmailInput, WalletDto,
+    AccountDto, AuthTokensOutput, BindKeyInput, ClaimChallengeOutput, ClaimInput, MyProfileDto,
+    PasswordChangeInput, PasswordForgotInput, PasswordLoginInput, PasswordResetInput,
+    ProfilePrivacyDto, ProfileUpdateInput, RefreshInput, RequestCodeInput, SessionDto,
+    UpdateMeInput, VerifyEmailInput, WalletDto,
 };
 use crate::email_code::{generate_code, hash_code, CodePurpose};
 use crate::error::IdentityError;
@@ -59,6 +60,84 @@ fn validate_handle(handle: &str) -> Result<(), IdentityError> {
         .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '.' || c == '_' || c == '-')
     {
         return Err(IdentityError::InvalidHandle);
+    }
+    Ok(())
+}
+
+fn normalize_profile_text(
+    value: Option<&str>,
+    field_name: &str,
+    max_chars: usize,
+    allows_line_breaks: bool,
+) -> AppResult<Option<String>> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let value = value.trim();
+    if value.is_empty() {
+        return Ok(None);
+    }
+    if value.chars().count() > max_chars
+        || value.chars().any(|character| {
+            character.is_control()
+                && !(allows_line_breaks && matches!(character, '\n' | '\t' | '\r'))
+        })
+    {
+        return Err(shared::AppError::BadRequest(format!("invalid {field_name}")));
+    }
+    Ok(Some(value.to_string()))
+}
+
+fn normalize_website(value: Option<&str>) -> AppResult<Option<String>> {
+    let website = normalize_profile_text(value, "website", 2048, false)?;
+    let Some(website) = website else {
+        return Ok(None);
+    };
+    let authority = website
+        .strip_prefix("https://")
+        .and_then(|remainder| remainder.split(['/', '?', '#']).next())
+        .filter(|authority| !authority.is_empty() && !authority.contains('@'))
+        .ok_or_else(|| shared::AppError::BadRequest("website must be an HTTPS URL".into()))?;
+    if authority.starts_with('.') || authority.ends_with('.') {
+        return Err(shared::AppError::BadRequest("website must be an HTTPS URL".into()));
+    }
+    Ok(Some(website))
+}
+
+fn profile_to_dto(profile: crate::profiles::ProfileRecord) -> MyProfileDto {
+    MyProfileDto {
+        account_id: profile.account_id.to_string(),
+        display_name: profile.display_name,
+        bio: profile.bio,
+        website: profile.website,
+        avatar_asset_id: profile.avatar_asset_id.map(|id| id.to_string()),
+        banner_asset_id: profile.banner_asset_id.map(|id| id.to_string()),
+    }
+}
+
+fn privacy_to_dto(privacy: crate::profiles::ProfilePrivacyRecord) -> ProfilePrivacyDto {
+    ProfilePrivacyDto {
+        profile_visibility: privacy.profile_visibility,
+        followers_visibility: privacy.followers_visibility,
+        following_visibility: privacy.following_visibility,
+        discoverable: privacy.discoverable,
+        dm_policy: privacy.dm_policy,
+    }
+}
+
+fn validate_privacy(input: &ProfilePrivacyDto) -> AppResult<()> {
+    if !matches!(input.profile_visibility.as_str(), "public" | "campus" | "only_me")
+        || !matches!(
+            input.followers_visibility.as_str(),
+            "public" | "campus" | "followers" | "only_me"
+        )
+        || !matches!(
+            input.following_visibility.as_str(),
+            "public" | "campus" | "followers" | "only_me"
+        )
+        || !matches!(input.dm_policy.as_str(), "everyone" | "following" | "nobody")
+    {
+        return Err(shared::AppError::BadRequest("invalid profile privacy policy".into()));
     }
     Ok(())
 }
@@ -533,11 +612,101 @@ pub async fn update_me(
         state.email_encryption.as_ref(),
         auth.id,
         body.handle.as_deref(),
-        body.avatar_url.as_deref(),
     )
     .await?;
 
     Ok(Json(row_to_dto(&row)))
+}
+
+/// GET /api/v2/me/profile
+pub async fn get_my_profile(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> AppResult<Json<MyProfileDto>> {
+    let auth = crate::auth_middleware::authenticate(
+        &headers,
+        &state.db,
+        &state.jwt_secret,
+        state.redis.as_ref(),
+    )
+    .await
+    .map_err(|_| shared::AppError::Unauthorized)?;
+    let profile = crate::profiles::get_or_create_profile(&state.db, auth.id).await?;
+    Ok(Json(profile_to_dto(profile)))
+}
+
+/// PUT /api/v2/me/profile
+pub async fn replace_my_profile(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<ProfileUpdateInput>,
+) -> AppResult<Json<MyProfileDto>> {
+    let auth = crate::auth_middleware::authenticate(
+        &headers,
+        &state.db,
+        &state.jwt_secret,
+        state.redis.as_ref(),
+    )
+    .await
+    .map_err(|_| shared::AppError::Unauthorized)?;
+    let display_name =
+        normalize_profile_text(body.display_name.as_deref(), "displayName", 50, false)?;
+    let bio = normalize_profile_text(body.bio.as_deref(), "bio", 500, true)?;
+    let website = normalize_website(body.website.as_deref())?;
+    let profile = crate::profiles::replace_profile_text(
+        &state.db,
+        auth.id,
+        display_name.as_deref(),
+        bio.as_deref(),
+        website.as_deref(),
+    )
+    .await?;
+    Ok(Json(profile_to_dto(profile)))
+}
+
+/// GET /api/v2/me/privacy
+pub async fn get_my_privacy(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> AppResult<Json<ProfilePrivacyDto>> {
+    let auth = crate::auth_middleware::authenticate(
+        &headers,
+        &state.db,
+        &state.jwt_secret,
+        state.redis.as_ref(),
+    )
+    .await
+    .map_err(|_| shared::AppError::Unauthorized)?;
+    let privacy = crate::profiles::get_or_create_privacy(&state.db, auth.id).await?;
+    Ok(Json(privacy_to_dto(privacy)))
+}
+
+/// PUT /api/v2/me/privacy
+pub async fn replace_my_privacy(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<ProfilePrivacyDto>,
+) -> AppResult<Json<ProfilePrivacyDto>> {
+    let auth = crate::auth_middleware::authenticate(
+        &headers,
+        &state.db,
+        &state.jwt_secret,
+        state.redis.as_ref(),
+    )
+    .await
+    .map_err(|_| shared::AppError::Unauthorized)?;
+    validate_privacy(&body)?;
+    let privacy = crate::profiles::replace_privacy(
+        &state.db,
+        auth.id,
+        &body.profile_visibility,
+        &body.followers_visibility,
+        &body.following_visibility,
+        body.discoverable,
+        &body.dm_policy,
+    )
+    .await?;
+    Ok(Json(privacy_to_dto(privacy)))
 }
 
 /// GET /wallet/claim-challenge

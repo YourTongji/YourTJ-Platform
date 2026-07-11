@@ -42,6 +42,19 @@ pub async fn authenticate(
     authenticate_context(headers, db, jwt_secret, redis).await.map(|context| context.account)
 }
 
+/// Authenticate when a bearer header is present, preserving invalid-token failures.
+pub async fn authenticate_optional(
+    headers: &HeaderMap,
+    db: &PgPool,
+    jwt_secret: &str,
+    redis: Option<&deadpool_redis::Pool>,
+) -> Result<Option<AuthAccount>, axum::response::Response> {
+    if !headers.contains_key(AUTHORIZATION) {
+        return Ok(None);
+    }
+    authenticate(headers, db, jwt_secret, redis).await.map(Some)
+}
+
 /// Resolve the account and expose the current server-side session to identity handlers.
 #[tracing::instrument(skip(headers, db, jwt_secret, redis))]
 pub async fn authenticate_context(

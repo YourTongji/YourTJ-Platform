@@ -65,7 +65,7 @@ async fn test_update_handle_rejects_invalid_chars() {
         .unwrap();
 
     let (token, _) = helpers::create_access_token_for("pat@tongji.edu.cn", &pool).await;
-    let app = create_test_app_with_pool(pool).await;
+    let app = create_test_app_with_pool(pool.clone()).await;
 
     let resp = app
         .oneshot(
@@ -119,10 +119,10 @@ async fn test_update_handle_rejects_duplicate() {
     assert_eq!(resp.status(), StatusCode::CONFLICT);
 }
 
-/// ── update avatar ──────────────────────────────────────────────────────
+/// ── controlled profile media ───────────────────────────────────────────
 
 #[tokio::test]
-async fn test_update_avatar_url_succeeds() {
+async fn arbitrary_avatar_url_is_not_persisted() {
     let (pool, _) = create_test_app().await;
 
     sqlx::query("INSERT INTO identity.accounts (email, handle) VALUES ($1, $2)")
@@ -133,7 +133,7 @@ async fn test_update_avatar_url_succeeds() {
         .unwrap();
 
     let (token, _) = helpers::create_access_token_for("rose@tongji.edu.cn", &pool).await;
-    let app = create_test_app_with_pool(pool).await;
+    let app = create_test_app_with_pool(pool.clone()).await;
 
     let resp = app
         .oneshot(
@@ -152,7 +152,20 @@ async fn test_update_avatar_url_succeeds() {
 
     assert_eq!(resp.status(), StatusCode::OK);
     let body: Value = helpers::read_json(resp).await;
-    assert_eq!(body["avatarUrl"], "https://example.com/avatar.png");
+    assert!(body["avatarUrl"].is_null());
+    sqlx::query(
+        "UPDATE identity.accounts SET avatar_url = 'https://legacy.example/avatar.png' \
+         WHERE handle = 'rose'",
+    )
+    .execute(&pool)
+    .await
+    .expect("rolling legacy avatar write is safely retired");
+    let stored_avatar: Option<String> =
+        sqlx::query_scalar("SELECT avatar_url FROM identity.accounts WHERE handle = 'rose'")
+            .fetch_one(&pool)
+            .await
+            .expect("read retired avatar URL");
+    assert!(stored_avatar.is_none());
 }
 
 // ── get wallet ─────────────────────────────────────────────────────────

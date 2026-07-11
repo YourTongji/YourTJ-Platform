@@ -25,17 +25,12 @@ pub async fn create_notification(
 
     // Check ignore: if the recipient has ignored the actor, drop the notification.
     if let Some(aid) = actor_id {
-        let ignored: bool = sqlx::query_scalar(
-            "SELECT EXISTS( \
-             SELECT 1 FROM forum.user_ignores \
-             WHERE account_id = $1 AND ignored_account_id = $2 \
-             )",
-        )
-        .bind(account_id)
-        .bind(aid)
-        .fetch_one(pool)
-        .await
-        .unwrap_or(false);
+        let ignored: bool = sqlx::query_scalar("SELECT forum.user_content_hidden($1, $2)")
+            .bind(account_id)
+            .bind(aid)
+            .fetch_one(pool)
+            .await
+            .unwrap_or(false);
 
         if ignored {
             return;
@@ -85,17 +80,12 @@ pub async fn create_notification_aggregated(
 
     // Check ignore: if the recipient has ignored the actor, drop the notification.
     if let Some(aid) = actor_id {
-        let ignored: bool = sqlx::query_scalar(
-            "SELECT EXISTS( \
-             SELECT 1 FROM forum.user_ignores \
-             WHERE account_id = $1 AND ignored_account_id = $2 \
-             )",
-        )
-        .bind(account_id)
-        .bind(aid)
-        .fetch_one(pool)
-        .await
-        .unwrap_or(false);
+        let ignored: bool = sqlx::query_scalar("SELECT forum.user_content_hidden($1, $2)")
+            .bind(account_id)
+            .bind(aid)
+            .fetch_one(pool)
+            .await
+            .unwrap_or(false);
 
         if ignored {
             return;

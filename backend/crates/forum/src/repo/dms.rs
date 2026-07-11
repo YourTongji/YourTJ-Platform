@@ -13,52 +13,6 @@ pub struct InsertedMessage {
     pub created_at: DateTime<Utc>,
 }
 
-/// Look up an active, non-suspended recipient by public handle.
-pub async fn find_available_recipient_by_handle(
-    pool: &PgPool,
-    handle: &str,
-) -> AppResult<Option<(i64, String, Option<String>)>> {
-    let row = sqlx::query_as(
-        "SELECT account.id, account.handle::text, account.avatar_url \
-         FROM identity.accounts AS account \
-         WHERE account.handle = $1 \
-           AND account.status = 'active'::identity.account_status \
-           AND NOT EXISTS ( \
-             SELECT 1 FROM identity.sanctions AS sanction \
-             WHERE sanction.account_id = account.id \
-               AND sanction.kind = 'suspend' \
-               AND sanction.revoked_at IS NULL \
-               AND sanction.starts_at <= now() \
-               AND (sanction.ends_at IS NULL OR sanction.ends_at > now()) \
-           )",
-    )
-    .bind(handle)
-    .fetch_optional(pool)
-    .await?;
-
-    Ok(row)
-}
-
-/// Return whether either account has blocked the other.
-pub async fn pair_is_blocked(
-    pool: &PgPool,
-    account_id_a: i64,
-    account_id_b: i64,
-) -> AppResult<bool> {
-    let blocked = sqlx::query_scalar(
-        "SELECT EXISTS ( \
-           SELECT 1 FROM forum.user_ignores \
-           WHERE (account_id = $1 AND ignored_account_id = $2) \
-              OR (account_id = $2 AND ignored_account_id = $1) \
-         )",
-    )
-    .bind(account_id_a)
-    .bind(account_id_b)
-    .fetch_one(pool)
-    .await?;
-    Ok(blocked)
-}
-
 /// Find or atomically create the canonical conversation for an unordered pair.
 pub async fn find_or_create_conversation(
     pool: &PgPool,

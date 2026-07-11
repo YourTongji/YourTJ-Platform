@@ -16,7 +16,7 @@ mod oss;
 mod quarantine;
 mod repo;
 
-use axum::routing::{get, post};
+use axum::routing::{get, post, put};
 use axum::{Extension, Router};
 use shared::{AppResult, AppState};
 use sqlx::PgPool;
@@ -57,10 +57,38 @@ pub fn routes_with_object_store(
         .route("/api/v2/media/upload-credentials", post(handlers::upload_credentials))
         .route("/api/v2/media/callback", post(handlers::callback))
         .route("/api/v2/media/{id}/url", get(handlers::get_url))
+        .route(
+            "/api/v2/me/profile/avatar",
+            put(handlers::bind_profile_avatar).delete(handlers::clear_profile_avatar),
+        )
+        .route(
+            "/api/v2/me/profile/banner",
+            put(handlers::bind_profile_banner).delete(handlers::clear_profile_banner),
+        )
         // Admin moderation endpoints
         .route("/api/v2/admin/media/uploads", get(handlers::list_uploads))
         .route("/api/v2/admin/media/uploads/{id}/approve", post(handlers::approve_upload))
         .route("/api/v2/admin/media/uploads/{id}/block", post(handlers::block_upload))
         .layer(Extension(object_store))
         .with_state(state)
+}
+
+/// Resolve a clean platform-controlled image after the owning domain authorizes disclosure.
+pub async fn resolve_clean_profile_image(
+    pool: &sqlx::PgPool,
+    asset_id: Option<i64>,
+) -> shared::AppResult<Option<String>> {
+    let Some(asset_id) = asset_id else {
+        return Ok(None);
+    };
+    repo::find_clean_image_url(pool, asset_id).await
+}
+
+/// Batch-resolve clean platform-controlled images for an authorized projection.
+pub async fn resolve_clean_profile_images(
+    pool: &sqlx::PgPool,
+    asset_ids: &[i64],
+) -> shared::AppResult<std::collections::HashMap<i64, String>> {
+    let urls = repo::find_clean_image_urls(pool, asset_ids).await?;
+    Ok(urls.into_iter().collect())
 }

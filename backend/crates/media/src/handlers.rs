@@ -7,13 +7,15 @@
 use std::sync::Arc;
 
 use axum::extract::{OriginalUri, Path, Query, State};
-use axum::http::{HeaderMap, Uri};
+use axum::http::{HeaderMap, StatusCode, Uri};
 use axum::{Extension, Json};
 use serde::Deserialize;
 use shared::pagination::Page;
 use shared::{AppError, AppResult, AppState};
 
-use crate::dto::{UploadCredentialsDto, UploadDto, UploadIntentInput, UploadUrlDto};
+use crate::dto::{
+    ProfileAssetInput, UploadCredentialsDto, UploadDto, UploadIntentInput, UploadUrlDto,
+};
 use crate::oss::{self, AliyunStsProvider, OssConfig};
 use crate::quarantine::{quarantine_upload, require_independent_moderator, UploadObjectStore};
 use crate::repo;
@@ -313,6 +315,83 @@ pub async fn get_url(
     let url = oss::generate_url(&oss_config, &row.oss_key);
 
     Ok(Json(UploadUrlDto { url }))
+}
+
+async fn bind_profile_asset(
+    state: &AppState,
+    headers: &HeaderMap,
+    input: ProfileAssetInput,
+    kind: identity::profiles::ProfileAssetKind,
+) -> AppResult<StatusCode> {
+    let auth = identity::auth_middleware::authenticate(
+        headers,
+        &state.db,
+        &state.jwt_secret,
+        state.redis.as_ref(),
+    )
+    .await
+    .map_err(|_| AppError::Unauthorized)?;
+    let asset_id = input.asset_id.parse::<i64>().map_err(|_| AppError::NotFound)?;
+    let mut tx = state.db.begin().await?;
+    if !repo::owned_clean_image_exists(&mut tx, auth.id, asset_id).await? {
+        return Err(AppError::NotFound);
+    }
+    identity::profiles::set_profile_asset(&mut tx, auth.id, kind, Some(asset_id)).await?;
+    tx.commit().await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn clear_profile_asset(
+    state: &AppState,
+    headers: &HeaderMap,
+    kind: identity::profiles::ProfileAssetKind,
+) -> AppResult<StatusCode> {
+    let auth = identity::auth_middleware::authenticate(
+        headers,
+        &state.db,
+        &state.jwt_secret,
+        state.redis.as_ref(),
+    )
+    .await
+    .map_err(|_| AppError::Unauthorized)?;
+    let mut tx = state.db.begin().await?;
+    identity::profiles::set_profile_asset(&mut tx, auth.id, kind, None).await?;
+    tx.commit().await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// PUT /api/v2/me/profile/avatar
+pub async fn bind_profile_avatar(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(input): Json<ProfileAssetInput>,
+) -> AppResult<StatusCode> {
+    bind_profile_asset(&state, &headers, input, identity::profiles::ProfileAssetKind::Avatar).await
+}
+
+/// DELETE /api/v2/me/profile/avatar
+pub async fn clear_profile_avatar(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> AppResult<StatusCode> {
+    clear_profile_asset(&state, &headers, identity::profiles::ProfileAssetKind::Avatar).await
+}
+
+/// PUT /api/v2/me/profile/banner
+pub async fn bind_profile_banner(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(input): Json<ProfileAssetInput>,
+) -> AppResult<StatusCode> {
+    bind_profile_asset(&state, &headers, input, identity::profiles::ProfileAssetKind::Banner).await
+}
+
+/// DELETE /api/v2/me/profile/banner
+pub async fn clear_profile_banner(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> AppResult<StatusCode> {
+    clear_profile_asset(&state, &headers, identity::profiles::ProfileAssetKind::Banner).await
 }
 
 // ---------------------------------------------------------------------------

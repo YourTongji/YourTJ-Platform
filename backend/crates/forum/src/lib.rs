@@ -32,6 +32,21 @@ pub fn routes(state: AppState) -> Router {
         .route("/api/v2/users/{handle}", get(handlers::get_user_profile))
         .route("/api/v2/users/{handle}/threads", get(handlers::list_user_threads))
         .route("/api/v2/users/{handle}/comments", get(handlers::list_user_comments))
+        .route("/api/v2/users/{handle}/relationship", get(handlers::get_relationship_handler))
+        .route(
+            "/api/v2/users/{handle}/follow",
+            put(handlers::follow_user_handler).delete(handlers::unfollow_user_handler),
+        )
+        .route("/api/v2/users/{handle}/followers", get(handlers::list_followers_handler))
+        .route("/api/v2/users/{handle}/following", get(handlers::list_following_handler))
+        .route(
+            "/api/v2/users/{handle}/mute",
+            put(handlers::mute_user_handler).delete(handlers::unmute_user_handler),
+        )
+        .route(
+            "/api/v2/users/{handle}/block",
+            put(handlers::block_user_handler).delete(handlers::unblock_user_handler),
+        )
         .route("/api/v2/forum/tags", get(handlers::list_tags_handler))
         .route("/api/v2/forum/boards", get(handlers::list_boards))
         .route("/api/v2/forum/boards/{board_id}/threads", get(handlers::list_threads))

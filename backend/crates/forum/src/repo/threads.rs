@@ -49,9 +49,7 @@ async fn list_threads_new(
              WHERE t.board_id = $1 AND t.deleted_at IS NULL AND t.hidden_at IS NULL \
                AND t.archived_at IS NULL \
                AND (t.created_at, t.id) < (SELECT created_at, id FROM forum.threads WHERE id = $3) \
-               AND ($4::bigint IS NULL OR t.author_id <> ALL( \
-                    SELECT ignored_account_id FROM forum.user_ignores WHERE account_id = $4 \
-               )) \
+               AND ($4::bigint IS NULL OR NOT forum.user_content_hidden($4, t.author_id)) \
              ORDER BY t.created_at DESC, t.id DESC \
              LIMIT $2",
         )
@@ -71,9 +69,7 @@ async fn list_threads_new(
              JOIN identity.accounts a ON a.id = t.author_id \
              WHERE t.board_id = $1 AND t.deleted_at IS NULL AND t.hidden_at IS NULL \
                AND t.archived_at IS NULL \
-               AND ($3::bigint IS NULL OR t.author_id <> ALL( \
-                    SELECT ignored_account_id FROM forum.user_ignores WHERE account_id = $3 \
-               )) \
+               AND ($3::bigint IS NULL OR NOT forum.user_content_hidden($3, t.author_id)) \
              ORDER BY t.created_at DESC, t.id DESC \
              LIMIT $2",
         )
@@ -119,9 +115,7 @@ async fn list_threads_hot(
                AND t.archived_at IS NULL \
                AND (COALESCE(t.hot_score, 0) < $3 \
                     OR (COALESCE(t.hot_score, 0) = $3 AND t.id < $4)) \
-               AND ($5::bigint IS NULL OR t.author_id <> ALL( \
-                    SELECT ignored_account_id FROM forum.user_ignores WHERE account_id = $5 \
-               )) \
+               AND ($5::bigint IS NULL OR NOT forum.user_content_hidden($5, t.author_id)) \
              ORDER BY COALESCE(t.hot_score, 0) DESC, t.id DESC \
              LIMIT $2",
         )
@@ -142,9 +136,7 @@ async fn list_threads_hot(
              JOIN identity.accounts a ON a.id = t.author_id \
              WHERE t.board_id = $1 AND t.deleted_at IS NULL AND t.hidden_at IS NULL \
                AND t.archived_at IS NULL \
-               AND ($3::bigint IS NULL OR t.author_id <> ALL( \
-                    SELECT ignored_account_id FROM forum.user_ignores WHERE account_id = $3 \
-               )) \
+               AND ($3::bigint IS NULL OR NOT forum.user_content_hidden($3, t.author_id)) \
              ORDER BY COALESCE(t.hot_score, 0) DESC, t.id DESC \
              LIMIT $2",
         )
@@ -216,12 +208,9 @@ pub async fn list_threads_by_tag(
     }
     if let Some(account_id) = current_user_id {
         query
-            .push(
-                " AND NOT EXISTS (SELECT 1 FROM forum.user_ignores ignored \
-                   WHERE ignored.account_id = ",
-            )
+            .push(" AND NOT forum.user_content_hidden(")
             .push_bind(account_id)
-            .push(" AND ignored.ignored_account_id = thread.author_id)");
+            .push(", thread.author_id)");
     }
     if let Some(account_id) = subscription_account_id {
         query
@@ -314,9 +303,7 @@ async fn list_threads_feed_new(
              WHERE t.board_id = $1 AND t.deleted_at IS NULL AND t.hidden_at IS NULL \
                AND t.archived_at IS NULL \
                AND (t.created_at, t.id) < (SELECT created_at, id FROM forum.threads WHERE id = $3) \
-               AND ($4::bigint IS NULL OR t.author_id <> ALL( \
-                    SELECT ignored_account_id FROM forum.user_ignores WHERE account_id = $4 \
-               )) \
+               AND ($4::bigint IS NULL OR NOT forum.user_content_hidden($4, t.author_id)) \
              ORDER BY t.created_at DESC, t.id DESC \
              LIMIT $2",
         )
@@ -337,9 +324,7 @@ async fn list_threads_feed_new(
              WHERE t.deleted_at IS NULL AND t.hidden_at IS NULL \
                AND t.archived_at IS NULL \
                AND (t.created_at, t.id) < (SELECT created_at, id FROM forum.threads WHERE id = $2) \
-               AND ($3::bigint IS NULL OR t.author_id <> ALL( \
-                    SELECT ignored_account_id FROM forum.user_ignores WHERE account_id = $3 \
-               )) \
+               AND ($3::bigint IS NULL OR NOT forum.user_content_hidden($3, t.author_id)) \
              ORDER BY t.created_at DESC, t.id DESC \
              LIMIT $1",
         )
@@ -358,9 +343,7 @@ async fn list_threads_feed_new(
              JOIN identity.accounts a ON a.id = t.author_id \
              WHERE t.board_id = $1 AND t.deleted_at IS NULL AND t.hidden_at IS NULL \
                AND t.archived_at IS NULL \
-               AND ($3::bigint IS NULL OR t.author_id <> ALL( \
-                    SELECT ignored_account_id FROM forum.user_ignores WHERE account_id = $3 \
-               )) \
+               AND ($3::bigint IS NULL OR NOT forum.user_content_hidden($3, t.author_id)) \
              ORDER BY t.created_at DESC, t.id DESC \
              LIMIT $2",
         )
@@ -379,9 +362,7 @@ async fn list_threads_feed_new(
              JOIN identity.accounts a ON a.id = t.author_id \
              WHERE t.deleted_at IS NULL AND t.hidden_at IS NULL \
                AND t.archived_at IS NULL \
-               AND ($2::bigint IS NULL OR t.author_id <> ALL( \
-                    SELECT ignored_account_id FROM forum.user_ignores WHERE account_id = $2 \
-               )) \
+               AND ($2::bigint IS NULL OR NOT forum.user_content_hidden($2, t.author_id)) \
              ORDER BY t.created_at DESC, t.id DESC \
              LIMIT $1",
         )
@@ -416,9 +397,7 @@ pub async fn fetch_threads_by_ids(
          JOIN identity.accounts a ON a.id = t.author_id \
          WHERE t.id = ANY($1) AND t.deleted_at IS NULL AND t.hidden_at IS NULL \
            AND t.archived_at IS NULL \
-           AND ($2::bigint IS NULL OR t.author_id <> ALL( \
-                SELECT ignored_account_id FROM forum.user_ignores WHERE account_id = $2 \
-           ))",
+           AND ($2::bigint IS NULL OR NOT forum.user_content_hidden($2, t.author_id))",
     )
     .bind(ids)
     .bind(current_user_id)
@@ -465,9 +444,7 @@ async fn list_threads_feed_hot(
                    AND t.archived_at IS NULL \
                    AND (COALESCE(t.hot_score, 0) < $3 \
                         OR (COALESCE(t.hot_score, 0) = $3 AND t.id < $4)) \
-                   AND ($5::bigint IS NULL OR t.author_id <> ALL( \
-                        SELECT ignored_account_id FROM forum.user_ignores WHERE account_id = $5 \
-                   )) \
+                   AND ($5::bigint IS NULL OR NOT forum.user_content_hidden($5, t.author_id)) \
                  ORDER BY COALESCE(t.hot_score, 0) DESC, t.id DESC \
                  LIMIT $2",
             )
@@ -491,9 +468,7 @@ async fn list_threads_feed_hot(
                    AND t.archived_at IS NULL \
                    AND (COALESCE(t.hot_score, 0) < $2 \
                         OR (COALESCE(t.hot_score, 0) = $2 AND t.id < $3)) \
-                   AND ($4::bigint IS NULL OR t.author_id <> ALL( \
-                        SELECT ignored_account_id FROM forum.user_ignores WHERE account_id = $4 \
-                   )) \
+                   AND ($4::bigint IS NULL OR NOT forum.user_content_hidden($4, t.author_id)) \
                  ORDER BY COALESCE(t.hot_score, 0) DESC, t.id DESC \
                  LIMIT $1",
             )
@@ -514,9 +489,7 @@ async fn list_threads_feed_hot(
                  JOIN identity.accounts a ON a.id = t.author_id \
                  WHERE t.board_id = $1 AND t.deleted_at IS NULL AND t.hidden_at IS NULL \
                    AND t.archived_at IS NULL \
-                   AND ($3::bigint IS NULL OR t.author_id <> ALL( \
-                        SELECT ignored_account_id FROM forum.user_ignores WHERE account_id = $3 \
-                   )) \
+                   AND ($3::bigint IS NULL OR NOT forum.user_content_hidden($3, t.author_id)) \
                  ORDER BY COALESCE(t.hot_score, 0) DESC, t.id DESC \
                  LIMIT $2",
             )
@@ -536,9 +509,7 @@ async fn list_threads_feed_hot(
                  JOIN identity.accounts a ON a.id = t.author_id \
                  WHERE t.deleted_at IS NULL AND t.hidden_at IS NULL \
                    AND t.archived_at IS NULL \
-                   AND ($2::bigint IS NULL OR t.author_id <> ALL( \
-                        SELECT ignored_account_id FROM forum.user_ignores WHERE account_id = $2 \
-                   )) \
+                   AND ($2::bigint IS NULL OR NOT forum.user_content_hidden($2, t.author_id)) \
                  ORDER BY COALESCE(t.hot_score, 0) DESC, t.id DESC \
                  LIMIT $1",
             )
@@ -617,9 +588,7 @@ pub async fn list_threads_feed_following(
          ) IN ('watching', 'tracking') \
            AND t.deleted_at IS NULL AND t.hidden_at IS NULL AND t.archived_at IS NULL \
            AND ($2::bigint IS NULL OR t.board_id = $2) \
-           AND NOT EXISTS (SELECT 1 FROM forum.user_ignores ignored \
-                           WHERE ignored.account_id = $1 \
-                             AND ignored.ignored_account_id = t.author_id) \
+           AND NOT forum.user_content_hidden($1, t.author_id) \
            AND ($3::timestamptz IS NULL OR (t.last_activity_at, t.id) < ($3, $4)) \
          ORDER BY t.last_activity_at DESC, t.id DESC \
          LIMIT $5",

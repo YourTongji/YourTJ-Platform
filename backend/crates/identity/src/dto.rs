@@ -121,7 +121,38 @@ pub struct SessionDto {
 #[serde(rename_all = "camelCase")]
 pub struct UpdateMeInput {
     pub handle: Option<String>,
-    pub avatar_url: Option<String>,
+}
+
+/// Profile text and controlled media references visible to the account owner.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MyProfileDto {
+    pub account_id: String,
+    pub display_name: Option<String>,
+    pub bio: Option<String>,
+    pub website: Option<String>,
+    pub avatar_asset_id: Option<String>,
+    pub banner_asset_id: Option<String>,
+}
+
+/// PUT /me/profile replaces every owner-editable text field.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileUpdateInput {
+    pub display_name: Option<String>,
+    pub bio: Option<String>,
+    pub website: Option<String>,
+}
+
+/// Profile and relationship privacy settings owned by the account.
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfilePrivacyDto {
+    pub profile_visibility: String,
+    pub followers_visibility: String,
+    pub following_visibility: String,
+    pub discoverable: bool,
+    pub dm_policy: String,
 }
 
 /// POST /wallet/bind

@@ -110,6 +110,20 @@ async fn run_migrations(pool: &PgPool) {
             .expect("migration 0033 failed");
     }
 
+    let has_social_privacy: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM information_schema.tables \
+         WHERE table_schema = 'forum' AND table_name = 'user_follows')",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or(false);
+    if !has_social_privacy {
+        sqlx::raw_sql(include_str!("../../../../migrations/0034_social_identity_privacy.sql"))
+            .execute(pool)
+            .await
+            .expect("migration 0034 failed");
+    }
+
     let has_activity_schema: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM information_schema.schemata WHERE schema_name = 'activity')",
     )

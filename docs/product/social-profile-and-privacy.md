@@ -6,7 +6,7 @@
 >
 > 负责人：Forum/Identity/Web maintainers、Privacy owner、Product owner
 >
-> 最近核验：2026-07-11，`origin/main@33584db`
+> 最近核验：2026-07-11，migration `0034_social_identity_privacy.sql`
 
 本规范定义公开资料、用户关注、板块/主题订阅、block、mute、资料隐私和徽章语义。目标是
 建立可解释的社交关系，而不是把所有关系都命名为 “following” 或 “屏蔽”。
@@ -15,46 +15,57 @@
 
 ### Current
 
-- 公开资料包含 handle、头像、角色、信任等级、徽章、主题/回复/获赞统计和分页内容列表。
+- Identity 持有 display name、bio、HTTPS website、clean OSS avatar/banner asset reference 和独立
+  profile/list/discoverability/DM policy；任意头像 URL 已停止写入并在 migration 中清除。
+- 资料响应包含受控媒体派生 URL、角色、信任等级、徽章、主题/回复/获赞与准确 followers/following 计数。
+- Forum 持有公开单向 follow、私密单向 mute 和双向安全边界 block；follow/unfollow/mute/block 都幂等，
+  relationship API 一次返回页面操作所需状态。
+- followers/following 使用稳定游标，读取时过滤 suspended/deleted、viewer block 和第三方
+  `discoverable=false` 账号。
+- 创建 block 与同一用户对的 follow 串行化，在同一事务移除双方 follow；数据库 trigger 维护计数，
+  解除 block 不恢复关系。
+- Profile、资料内容列表、feed、通知、新 DM、评论/引用回复和投票使用统一 block/mute 规则；mute
+  不改变资料访问、follow 或直接互动权限。
 - board/thread 支持 watching、tracking、muted subscription；thread direct subscription 覆盖 board
   fallback，删除 direct override 后恢复 board 语义，列表和 feed 使用稳定 cursor。
-- Web 和 OpenAPI 使用 `subscriptions` feed 名称；旧 `following` query value 只作为后端兼容别名，
-  不代表用户关注关系已经存在。
-- `user_ignores` 会从当前用户部分 feed 隐藏对方，并在任意方向存在时禁止私信发送。
 
 ### Partial
 
-- 没有用户 follow、粉丝/关注列表、计数或 relationship API。
-- UI 把 `ignore` 称为 block，但资料、搜索、回复、提及和投票没有完整 block 语义。
-- 资料缺 display name、bio、banner、受控链接、关系统计和 activity/media/likes tabs。
-- 头像仍可写任意 URL；handle 无历史、冷却和旧链接跳转。
-- profile、activity、关系列表、DM 和 discoverability 没有用户隐私设置。
+- 暂无 remove-follower、handle history/cooldown/redirect、公开 activity/media/likes tabs。
+- activity/mention 隐私和 user search 尚未实现；`discoverable` 目前用于第三方关系列表并为未来账号搜索
+  提供相同的服务端事实源。
+- 第一阶段不做私密账号与 pending request；若未来引入，必须增加显式状态机和通知/反滥用策略。
+- Avatar/banner 已有 owner+clean binding，但图片 scanner、变体、EXIF 清理、前端上传器和 orphan GC
+  仍是媒体链路缺口；Web 不再提供任意 URL 输入。
+- 旧 `/me/ignores` 作为 block-by-id 兼容 alias 保留，新客户端只使用 handle-based block API。
 
 ## 四种关系不得混用
 
 | 关系 | 方向 | 主要作用 | 是否通知对方 |
 |---|---|---|---|
-| follow | 单向，可有 pending | 用户 following feed、关系计数、DM/mention policy | 接受或建立时按偏好通知 |
+| follow | 单向、第一阶段无 pending | 用户关系、关系计数、DM policy；不等于内容订阅 | 建立时按偏好通知 |
 | subscription | 用户到 board/thread | 内容更新通知和订阅 feed | 不通知内容作者 |
 | mute | 单向私密 | 降低 feed、通知或会话可见性 | 否 |
 | block | 双向安全边界 | 阻止 follow、私信和直接互动，并统一可见规则 | 不主动通知，但操作结果不可伪装 |
 
-用户 following feed 只有在 follow graph 落地后才能新增，不能复用 `subscriptions` 的表或文案。
+Forum 订阅在用户界面统一显示为“订阅”；内部保留的 `following` wire value 仅用于旧客户端兼容，
+不得再解释成用户 follow。
 
 ## Follow 状态机
 
-公开资料的基本状态为 `not_following -> following -> not_following`。如果未来支持需要审批的
-资料，则增加 `pending -> accepted | rejected | cancelled`。规则包括：
+公开资料第一阶段状态为 `not_following -> following -> not_following`，不创建 pending 或隐式请求。
+如果未来支持需要审批的资料，再增加 `pending -> accepted | rejected | cancelled`。当前规则包括：
 
 - 不能关注自己；block 任意方向存在时不能关注或批准请求。
 - 并发重复 follow/unfollow 幂等，计数在同一事务中更新或从关系事实可靠投影。
 - 列表使用稳定游标并在读取时应用 block、账号状态和可见性规则。
-- 删除/停用账号解除待处理请求；已接受关系的保留/删除由账号生命周期策略处理。
-- 用户可以 remove follower；它删除对方→本人的关系但不自动 block，对方能否再次 follow 取决于
-  profile/request policy。
+- suspended/deleted 账号不出现在 profile、relationship 或列表，也不能成为新 follow target；用户仍可
+  对 suspended 账号建立 block/mute，并可清理自己对生命周期关闭账号的既有关系。
+- remove follower 尚未实现；落地时只删除对方→本人的关系，不得自动 block。
 
-relationship 读取应一次返回：`following`、`followedBy`、`requestState`、`blocked`、`muted`、
-`canDm`、`canMention` 与相关操作能力，避免页面下载整张关系列表来推断单个用户状态。
+relationship 一次返回 `following`、`followedBy`、`blockedByMe`、`blockedMe`、`muted`、
+`canFollow`、`canStartConversation`，Web 不再下载整张 block 列表推断单个用户状态。第一阶段没有
+`requestState`；`canMention` 随 mention policy 一起后续增加。
 
 ## Block 与 mute
 
@@ -64,8 +75,8 @@ relationship 读取应一次返回：`following`、`followedBy`、`requestState`
 - block 在任意方向存在时阻止 follow、DM、回复到对方内容、直接 mention 和对对方内容的反应。
 - 创建 block 在同一 transaction 删除双方 accepted follow 和 pending request，并校正关系计数；解除
   block 不恢复这些关系。
-- 公共板块原讨论仍由板块可见性决定；block 对历史公开串采用“折叠/提示/不主动推荐”的方式，
-  不伪造不存在，也不破坏其他参与者的回复上下文。
+- 公共板块原讨论仍由板块可见性决定；block 会从双方个性化 feed 隐藏内容、阻止 profile 内容聚合
+  与直接互动，但不删除或改写历史公共讨论，不破坏其他参与者的回复上下文。
 - profile、搜索、通知、feed、DM 和互动端点共享同一 relationship policy，不各自解释。
 - 解除 block 不自动恢复 follow 或订阅关系。
 
@@ -92,8 +103,8 @@ relationship 读取应一次返回：`following`、`followedBy`、`requestState`
 |---|---|---|
 | profile visibility | public / campus / only_me | campus，待最终确认 |
 | activity visibility | public / campus / only_me | only_me |
-| follower list visibility | public / campus / followers / only_me | campus |
-| following list visibility | public / campus / followers / only_me | campus |
+| follower list visibility | public / campus / followers / only_me | followers |
+| following list visibility | public / campus / followers / only_me | followers |
 | DM policy | everyone / following / nobody | following |
 | mention policy | everyone / following / nobody | everyone，受 block 限制 |
 | discoverability | on / off | on for campus |
@@ -114,23 +125,24 @@ followers-only 内容，应建立独立内容类型和授权模型。
 
 ## API 与数据所有权
 
-用户关系、block/mute、privacy 和公开资料投影由明确的 domain owner 持有；当前推荐 forum 拥有
-关系，identity 拥有账号与 owner-editable profile 核心字段。HTTP 至少需要 follow/unfollow、
-followers/following、relationship 和 privacy settings，具体 shape 以 OpenAPI 为准。
+Forum 拥有 follow/block/mute 与计数投影；Identity 拥有账号、owner-editable profile 和 privacy policy；
+Media 验证 owner+clean image 后调用 Identity 的受限 asset binding API。HTTP shape 以 OpenAPI 为准。
 
 头像和 banner 只保存 clean media asset reference。服务端生成可用 URL，客户端不得提交任意
 第三方 URL 作为权威字段。
 
-## Decision needed
+## 已决策与后续决策
 
-- public/campus 的全站默认范围，以及搜索引擎是否索引公开 profile。
-- block 对历史公开内容和资料直链的具体呈现。
-- 是否需要私密账号请求；公共论坛第一阶段建议不做。
-- 关系列表默认可见性、handle 释放期和认证账号改名流程。
+- 第一阶段 profile 默认 `campus`，followers/following 默认 `followers`，DM 默认 `following`，
+  discoverability 默认 on；公开 profile 是否允许搜索引擎索引仍待决定。
+- 第一阶段不做私密账号请求；若未来需要，不复用 follow boolean 偷渡 pending 状态。
+- Block 对精确资料直链：block 发起方保留最小资料以便解除，对方 block 当前 viewer 时返回 not found；
+  公共讨论本身不删除。更细的历史串折叠体验仍需浏览器 E2E 验收。
+- Handle 释放期、改名冷却和认证账号改名流程仍待决定。
 
 ## 验收基线
 
-- follow/unfollow/request 并发安全，计数、列表和 relationship 结果一致。
+- follow/unfollow 与 block 并发安全，计数、列表和 relationship 结果一致。
 - follow、subscription、mute、block 的文案、API 与行为不混用。
 - block/mute 在 profile、feed、search、notification、DM 和互动中使用同一 policy。
 - 隐私设置对匿名、校园成员、关系用户、本人和 staff 有矩阵化授权测试。

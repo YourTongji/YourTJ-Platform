@@ -436,45 +436,25 @@ pub async fn find_account_by_id(
     row.map(|row| row.decrypt(encryption)).transpose()
 }
 
-/// Partial update: handle and/or avatar_url. Returns the updated row.
+/// Update the public handle while profile images remain media-owned assets.
 pub async fn update_account(
     pool: &PgPool,
     encryption: Option<&EmailEncryption>,
     id: i64,
     handle: Option<&str>,
-    avatar_url: Option<&str>,
 ) -> AppResult<AccountRow> {
-    // We build a minimal dynamic UPDATE so unused fields stay untouched.
-    let mut set = Vec::new();
-    let mut idx = 0u32;
-
-    if let Some(h) = handle {
-        idx += 1;
-        set.push((format!("handle = ${idx}"), h.to_string()));
-    }
-    if let Some(a) = avatar_url {
-        idx += 1;
-        set.push((format!("avatar_url = ${idx}"), a.to_string()));
-    }
-    if set.is_empty() {
+    let Some(handle) = handle else {
         return find_account_by_id(pool, encryption, id).await?.ok_or(shared::AppError::NotFound);
-    }
-
-    // Positional: parameters come from set, then id as last. `updated_at` is set
-    // to the SQL `now()` function directly — it must not be a bound parameter,
-    // as the text "now()" is not a valid timestamptz literal.
-    let mut sql = String::from("UPDATE identity.accounts SET ");
-    let parts: Vec<&str> = set.iter().map(|(c, _)| c.as_str()).collect();
-    sql.push_str(&parts.join(", "));
-    sql.push_str(", updated_at = now()");
-    idx += 1;
-    sql.push_str(&format!(" WHERE id = ${idx} RETURNING id, email::text AS email, email_ciphertext, handle, avatar_url, role::text, status::text, trust_level, created_at"));
-
-    let mut q = sqlx::query_as::<_, StoredAccountRow>(&sql);
-    for (_, val) in &set {
-        q = q.bind(val);
-    }
-    let row = q.bind(id).fetch_one(pool).await?;
+    };
+    let row = sqlx::query_as::<_, StoredAccountRow>(
+        "UPDATE identity.accounts SET handle = $1, updated_at = now() WHERE id = $2 \
+         RETURNING id, email::text AS email, email_ciphertext, handle, avatar_url, \
+                   role::text, status::text, trust_level, created_at",
+    )
+    .bind(handle)
+    .bind(id)
+    .fetch_one(pool)
+    .await?;
     row.decrypt(encryption)
 }
 

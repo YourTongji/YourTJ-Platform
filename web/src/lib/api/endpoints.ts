@@ -69,8 +69,13 @@ import type {
   UploadCredentials,
   UploadUrl,
   IgnoreUser,
+  MyProfile,
+  ProfilePrivacy,
+  ProfileUpdateInput,
   UserComment,
   UserProfile,
+  UserRelationship,
+  UserSummary,
   UserThread,
   WatchedWord,
   WatchedWordInput,
@@ -166,8 +171,24 @@ export const api = {
     return apiRequest<Account>("/me");
   },
 
-  updateMe(input: { handle?: string; avatarUrl?: string }) {
+  updateMe(input: { handle?: string }) {
     return apiRequest<Account>("/me", { method: "PATCH", body: input });
+  },
+
+  myProfile() {
+    return apiRequest<MyProfile>("/me/profile");
+  },
+
+  updateMyProfile(input: ProfileUpdateInput) {
+    return apiRequest<MyProfile>("/me/profile", { method: "PUT", body: input });
+  },
+
+  myPrivacy() {
+    return apiRequest<ProfilePrivacy>("/me/privacy");
+  },
+
+  updateMyPrivacy(input: ProfilePrivacy) {
+    return apiRequest<ProfilePrivacy>("/me/privacy", { method: "PUT", body: input });
   },
 
   myActivity(from?: string, to?: string) {
@@ -175,21 +196,63 @@ export const api = {
   },
 
   publicUser(handle: string) {
-    return apiRequest<UserProfile>(`/users/${encodeURIComponent(handle)}`, { auth: false });
+    return apiRequest<UserProfile>(`/users/${encodeURIComponent(handle)}`, { auth: "optional" });
   },
 
   userThreads(handle: string, cursor?: string | null) {
     return apiRequest<Page<UserThread>>(`/users/${encodeURIComponent(handle)}/threads`, {
       query: { cursor, limit: 20 },
-      auth: false,
+      auth: "optional",
     });
   },
 
   userComments(handle: string, cursor?: string | null) {
     return apiRequest<Page<UserComment>>(`/users/${encodeURIComponent(handle)}/comments`, {
       query: { cursor, limit: 20 },
-      auth: false,
+      auth: "optional",
     });
+  },
+
+  userRelationship(handle: string) {
+    return apiRequest<UserRelationship>(`/users/${encodeURIComponent(handle)}/relationship`);
+  },
+
+  followUser(handle: string) {
+    return apiRequest<void>(`/users/${encodeURIComponent(handle)}/follow`, { method: "PUT" });
+  },
+
+  unfollowUser(handle: string) {
+    return apiRequest<void>(`/users/${encodeURIComponent(handle)}/follow`, { method: "DELETE" });
+  },
+
+  userFollowers(handle: string, cursor?: string | null) {
+    return apiRequest<Page<UserSummary>>(`/users/${encodeURIComponent(handle)}/followers`, {
+      query: { cursor, limit: 30 },
+      auth: "optional",
+    });
+  },
+
+  userFollowing(handle: string, cursor?: string | null) {
+    return apiRequest<Page<UserSummary>>(`/users/${encodeURIComponent(handle)}/following`, {
+      query: { cursor, limit: 30 },
+      auth: "optional",
+    });
+  },
+
+  muteUser(handle: string) {
+    return apiRequest<void>(`/users/${encodeURIComponent(handle)}/mute`, { method: "PUT" });
+  },
+
+  unmuteUser(handle: string) {
+    return apiRequest<void>(`/users/${encodeURIComponent(handle)}/mute`, { method: "DELETE" });
+  },
+
+  blockUser(handle: string) {
+    return apiRequest<void>(`/users/${encodeURIComponent(handle)}/block`, { method: "PUT" });
+  },
+
+  unblockUser(handle: string) {
+    return apiRequest<void>(`/users/${encodeURIComponent(handle)}/block`, { method: "DELETE" });
   },
 
   announcements() {

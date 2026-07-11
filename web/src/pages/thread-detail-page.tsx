@@ -292,7 +292,7 @@ export function ThreadDetailPage() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="none">不订阅</SelectItem>
-                <SelectItem value="watching">关注</SelectItem>
+                <SelectItem value="watching">订阅通知</SelectItem>
                 <SelectItem value="tracking">跟踪</SelectItem>
                 <SelectItem value="muted">静音</SelectItem>
               </SelectContent>

@@ -62,6 +62,7 @@ pub mod notifications;
 pub mod polls;
 pub mod profiles;
 pub mod reads;
+pub mod relationships;
 pub mod revisions;
 pub mod subscriptions;
 pub mod tags;

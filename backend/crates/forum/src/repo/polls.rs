@@ -117,6 +117,16 @@ pub async fn vote_option(
 ) -> AppResult<PollVoteOutcome> {
     let mut tx = pool.begin().await?;
     let multi_select = lock_open_poll_option(&mut tx, poll_id, poll_option_id).await?;
+    let thread_author_id: Option<i64> = sqlx::query_scalar(
+        "SELECT thread.author_id FROM forum.polls AS poll \
+         JOIN forum.threads AS thread ON thread.id = poll.thread_id \
+         WHERE poll.id = $1 FOR KEY SHARE OF poll, thread",
+    )
+    .bind(poll_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let thread_author_id = thread_author_id.ok_or(shared::AppError::NotFound)?;
+    super::relationships::lock_pair_unblocked(&mut tx, account_id, thread_author_id).await?;
 
     if !multi_select {
         sqlx::query(

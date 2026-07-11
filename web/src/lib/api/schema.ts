@@ -234,7 +234,7 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        /** Update handle / avatar */
+        /** Update the stable public handle */
         patch: {
             parameters: {
                 query?: never;
@@ -246,7 +246,6 @@ export interface paths {
                 content: {
                     "application/json": {
                         handle?: string;
-                        avatarUrl?: string;
                     };
                 };
             };
@@ -262,6 +261,132 @@ export interface paths {
                 };
             };
         };
+        trace?: never;
+    };
+    "/me/profile": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get owner-editable public profile fields */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["MyProfile"];
+                    };
+                };
+                401: components["responses"]["Unauthorized"];
+            };
+        };
+        /** Replace owner-editable text profile fields */
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["ProfileUpdateInput"];
+                };
+            };
+            responses: {
+                /** @description saved */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["MyProfile"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
+            };
+        };
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/me/privacy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get profile, relationship-list, discovery, and new-DM privacy settings */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ProfilePrivacy"];
+                    };
+                };
+                401: components["responses"]["Unauthorized"];
+            };
+        };
+        /** Replace profile privacy settings */
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["ProfilePrivacy"];
+                };
+            };
+            responses: {
+                /** @description saved */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ProfilePrivacy"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
+            };
+        };
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/me/sessions": {
@@ -552,7 +677,10 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        /** Ignore a user */
+        /**
+         * Compatibility alias for blocking a user by account id
+         * @deprecated
+         */
         put: {
             parameters: {
                 query?: never;
@@ -574,7 +702,10 @@ export interface paths {
             };
         };
         post?: never;
-        /** Unignore a user */
+        /**
+         * Compatibility alias for unblocking a user by account id
+         * @deprecated
+         */
         delete: {
             parameters: {
                 query?: never;
@@ -607,7 +738,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List ignored users */
+        /**
+         * Compatibility alias for the current account's block list
+         * @deprecated
+         */
         get: {
             parameters: {
                 query?: {
@@ -647,7 +781,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Public user profile */
+        /** User profile subject to the account's visibility policy */
         get: {
             parameters: {
                 query?: never;
@@ -668,6 +802,7 @@ export interface paths {
                         "application/json": components["schemas"]["UserProfile"];
                     };
                 };
+                404: components["responses"]["NotFound"];
             };
         };
         put?: never;
@@ -685,7 +820,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** User's threads */
+        /** User's visible threads subject to profile visibility and block rules */
         get: {
             parameters: {
                 query?: {
@@ -727,7 +862,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** User's comments */
+        /** User's visible comments subject to profile visibility and block rules */
         get: {
             parameters: {
                 query?: {
@@ -757,6 +892,307 @@ export interface paths {
         put?: never;
         post?: never;
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/users/{handle}/relationship": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Current account's social relationship with an active user */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    handle: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["UserRelationship"];
+                    };
+                };
+                401: components["responses"]["Unauthorized"];
+                404: components["responses"]["NotFound"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/users/{handle}/follow": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Follow a public account; no approval state is created */
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    handle: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description following */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+            };
+        };
+        post?: never;
+        /** Unfollow an account idempotently */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    handle: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description not following */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                404: components["responses"]["NotFound"];
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/users/{handle}/followers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Followers subject to the owner's list visibility and member discoverability */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description Opaque pagination cursor */
+                    cursor?: components["parameters"]["Cursor"];
+                    limit?: components["parameters"]["Limit"];
+                };
+                header?: never;
+                path: {
+                    handle: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["UserSummaryPage"];
+                    };
+                };
+                404: components["responses"]["NotFound"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/users/{handle}/following": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Followed accounts subject to the owner's list visibility and member discoverability */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description Opaque pagination cursor */
+                    cursor?: components["parameters"]["Cursor"];
+                    limit?: components["parameters"]["Limit"];
+                };
+                header?: never;
+                path: {
+                    handle: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["UserSummaryPage"];
+                    };
+                };
+                404: components["responses"]["NotFound"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/users/{handle}/mute": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Privately hide an account's content without changing access or follow state */
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    handle: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description muted */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                404: components["responses"]["NotFound"];
+            };
+        };
+        post?: never;
+        /** Unmute an account idempotently */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    handle: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description not muted */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                404: components["responses"]["NotFound"];
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/users/{handle}/block": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Create a bilateral safety boundary and remove follows in both directions */
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    handle: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description blocked */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                404: components["responses"]["NotFound"];
+            };
+        };
+        post?: never;
+        /** Unblock without restoring prior follows */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    handle: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description not blocked */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                404: components["responses"]["NotFound"];
+            };
+        };
         options?: never;
         head?: never;
         patch?: never;
@@ -4168,6 +4604,126 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/me/profile/avatar": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Bind an owned clean OSS image as the current account's avatar */
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["ProfileAssetInput"];
+                };
+            };
+            responses: {
+                /** @description bound */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
+                404: components["responses"]["NotFound"];
+            };
+        };
+        post?: never;
+        /** Remove the current account's avatar binding */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description removed */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                401: components["responses"]["Unauthorized"];
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/me/profile/banner": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Bind an owned clean OSS image as the current account's profile banner */
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["ProfileAssetInput"];
+                };
+            };
+            responses: {
+                /** @description bound */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
+                404: components["responses"]["NotFound"];
+            };
+        };
+        post?: never;
+        /** Remove the current account's profile banner binding */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description removed */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                401: components["responses"]["Unauthorized"];
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/notifications": {
         parameters: {
             query?: never;
@@ -7008,12 +7564,54 @@ export interface components {
         Account: {
             id?: string;
             handle?: string;
+            /**
+             * @deprecated
+             * @description Legacy compatibility field; profile images are controlled media assets.
+             */
             avatarUrl?: string | null;
             /** @enum {string} */
             role?: "user" | "mod" | "admin";
             capabilities?: string[];
             trustLevel?: number;
             createdAt?: number;
+        };
+        /** @enum {string} */
+        ProfileVisibility: "public" | "campus" | "only_me";
+        /** @enum {string} */
+        RelationshipListVisibility: "public" | "campus" | "followers" | "only_me";
+        /**
+         * @description following means accounts the recipient follows may start a new conversation.
+         * @enum {string}
+         */
+        DmPolicy: "everyone" | "following" | "nobody";
+        MyProfile: {
+            accountId: string;
+            displayName: string | null;
+            bio: string | null;
+            /** Format: uri */
+            website: string | null;
+            avatarAssetId: string | null;
+            bannerAssetId: string | null;
+        };
+        ProfileUpdateInput: {
+            displayName: string | null;
+            bio: string | null;
+            /**
+             * Format: uri
+             * @description HTTPS URLs only.
+             */
+            website: string | null;
+        };
+        ProfilePrivacy: {
+            profileVisibility: components["schemas"]["ProfileVisibility"];
+            followersVisibility: components["schemas"]["RelationshipListVisibility"];
+            followingVisibility: components["schemas"]["RelationshipListVisibility"];
+            /** @description Controls third-party relationship-list discovery and future account search, not exact-handle navigation. */
+            discoverable: boolean;
+            dmPolicy: components["schemas"]["DmPolicy"];
+        };
+        ProfileAssetInput: {
+            assetId: string;
         };
         AuthTokens: {
             accessToken: string;
@@ -7827,6 +8425,9 @@ export interface components {
         UserCommentPage: components["schemas"]["Page"] & {
             items?: components["schemas"]["UserComment"][];
         };
+        UserSummaryPage: components["schemas"]["Page"] & {
+            items?: components["schemas"]["UserSummary"][];
+        };
         RevisionPage: components["schemas"]["Page"] & {
             items?: components["schemas"]["PostRevision"][];
         };
@@ -7925,11 +8526,32 @@ export interface components {
             draftKey: string;
             payload: Record<string, never>;
         };
+        /** @deprecated */
         IgnoreUser: {
             accountId?: string;
             handle?: string;
             avatarUrl?: string | null;
             createdAt?: number;
+        };
+        UserSummary: {
+            id: string;
+            handle: string;
+            displayName: string | null;
+            avatarUrl: string | null;
+            /** @enum {string} */
+            role: "user" | "mod" | "admin";
+            followedAt: number;
+        };
+        UserRelationship: {
+            isSelf: boolean;
+            following: boolean;
+            followedBy: boolean;
+            muted: boolean;
+            blockedByMe: boolean;
+            blockedMe: boolean;
+            canFollow: boolean;
+            /** @description Whether the current account may start a new conversation under block and recipient DM policy. */
+            canStartConversation: boolean;
         };
         UserBadge: {
             slug: string;
@@ -7938,7 +8560,12 @@ export interface components {
         UserProfile: {
             id: string;
             handle: string;
-            avatarUrl?: string | null;
+            displayName: string | null;
+            bio: string | null;
+            /** Format: uri */
+            website: string | null;
+            avatarUrl: string | null;
+            bannerUrl: string | null;
             /** @enum {string} */
             role: "user" | "mod" | "admin";
             trustLevel: number;
@@ -7946,6 +8573,8 @@ export interface components {
             threadCount: number;
             commentCount: number;
             votesReceived: number;
+            followerCount: number;
+            followingCount: number;
             createdAt: number;
         };
         UserThread: {

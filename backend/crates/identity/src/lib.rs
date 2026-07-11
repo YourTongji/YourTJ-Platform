@@ -14,6 +14,7 @@ mod email_templates;
 mod handlers;
 mod ledger;
 mod password;
+pub mod profiles;
 pub mod public_accounts;
 mod repo;
 pub mod sanctions;
@@ -40,6 +41,14 @@ pub fn routes(state: AppState) -> Router {
         .route("/api/v2/auth/password/change", post(handlers::password_change))
         // Profile
         .route("/api/v2/me", get(handlers::get_me).patch(handlers::update_me))
+        .route(
+            "/api/v2/me/profile",
+            get(handlers::get_my_profile).put(handlers::replace_my_profile),
+        )
+        .route(
+            "/api/v2/me/privacy",
+            get(handlers::get_my_privacy).put(handlers::replace_my_privacy),
+        )
         .route("/api/v2/me/sessions", get(handlers::list_sessions))
         .route("/api/v2/me/sessions/revoke-others", post(handlers::revoke_other_sessions))
         .route("/api/v2/me/sessions/{id}", delete(handlers::revoke_named_session))

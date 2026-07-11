@@ -24,6 +24,10 @@
   `pending -> blocked` 与 governance audit；删除失败时 row 保持 pending。
 - Platform promotion 保存可空 `asset_id`，创建或替换时只接受当前管理员拥有的 clean image；公开卡片
   不保存或接受任意图片 URL。登录用户仍通过 media URL authorization 读取，匿名素材交付尚未开放。
+- Avatar/banner binding endpoint 只接受当前账号拥有、`kind=image`、`status=clean` 的 asset id；验证与
+  Identity reference update 在同一事务，pending/blocked/他人 asset 返回 not found。解绑不会接受 URL。
+- Profile disclosure 每次只为仍为 clean 的 asset 派生 URL；后续被 block 的 object 即使旧 reference
+  尚未清理，也不会继续出现在 profile DTO。
 
 管理 UI 必须如实说明 block 会永久删除 object，不能继续显示“不会自动删除”。
 
@@ -63,12 +67,13 @@ Private/public、CDN signing 和原图保留仍为 `Decision needed`；在决定
 2. Client 直传 OSS，展示进度和可重试失败，不自行认为业务发布成功。
 3. OSS callback 创建 pending upload；client 轮询/查询 upload status。
 4. Scanner 验证 magic bytes、MIME、尺寸/像素、病毒/恶意 PDF，图片移除 EXIF/GPS 并生成 variants。
-5. Clean 后业务 mutation 用 `assetId` 绑定 avatar/thread/comment/review/DM；owner、状态和 target type
-   在服务端验证。
+5. Clean 后业务 mutation 用 `assetId` 绑定 avatar/thread/comment/review/DM；avatar/banner 已执行
+   owner+image+clean 校验，其余业务类型仍待实现。
 6. 替换/删除解除 binding；无引用 asset 进入 grace period，GC worker 最终删除 object 和派生 variants。
 
-第 4–6 步当前未完整实现，状态为 `Planned/P1`。现有 callback 的 MIME/SHA 是 metadata 形状检查，
-不是可信内容扫描；不得在没有 magic-byte/decoder/scanner 的情况下自动 clean。
+第 4–6 步当前未完整实现，状态为 `Partial/P1`。Profile reference 是第一条受控 binding，但现有 callback
+的 MIME/SHA 仍只是 metadata 形状检查，不是可信内容扫描；不得在没有 magic-byte/decoder/scanner 的
+情况下自动 clean。
 
 Binding 使用显式 `asset_usages(asset_id, target_type, target_id, slot/position)` 事实表；同一 clean asset
 可以有多个经过 owner/visibility policy 允许的 usage，refcount 只是可重建 cache。Private DM asset
@@ -80,6 +85,7 @@ Binding 使用显式 `asset_usages(asset_id, target_type, target_id, slot/positi
 - PR preview 不注入生产 OSS key/bucket，也不写生产 object。
 - Protocol tests 使用 fake STS/OSS HTTP 或 alternate object-store boundary，覆盖 policy、callback canonical
   signature、redirect rejection、intent replay、key/MIME/size mismatch 和 delete-before-block ordering。
+- Handler→DB test 覆盖 profile image 对 pending、他人 clean、本人 clean asset 的拒绝/接受与解绑。
 - End-to-end test bucket 若存在，使用独立 account/prefix、最短 lifecycle 和合成无 PII asset。
 - Test 完成自动清理；cleanup failure 进入告警，不靠人工记住 object key。
 

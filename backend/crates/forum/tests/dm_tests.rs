@@ -42,16 +42,17 @@ async fn dm_lifecycle_is_canonical_private_readable_and_moderated() {
     sqlx::query(
         "UPDATE identity.accounts \
          SET trust_level = 1, \
-             avatar_url = CASE WHEN id = $2 THEN 'https://example.test/bob.png' ELSE avatar_url END, \
-             role = CASE WHEN id = $3 THEN 'mod'::identity.account_role ELSE role END \
+             role = CASE WHEN id = $2 THEN 'mod'::identity.account_role ELSE role END \
          WHERE id = ANY($1)",
     )
     .bind(vec![alice_id, bob_id, moderator_id])
-    .bind(bob_id)
     .bind(moderator_id)
     .execute(&pool)
     .await
     .expect("prepare DM accounts");
+    forum::repo::relationships::follow(&pool, bob_id, alice_id)
+        .await
+        .expect("recipient permits followed sender to start DM");
 
     let (first_id, second_id) = tokio::join!(
         forum::repo::dms::find_or_create_conversation(&pool, alice_id, bob_id),
@@ -82,7 +83,7 @@ async fn dm_lifecycle_is_canonical_private_readable_and_moderated() {
     let conversation_id = conversation["id"].as_str().unwrap();
     assert_eq!(conversation["participantId"], bob_id.to_string());
     assert_eq!(conversation["participantHandle"], "dm-bob");
-    assert_eq!(conversation["participantAvatarUrl"], "https://example.test/bob.png");
+    assert!(conversation["participantAvatarUrl"].is_null());
     assert_eq!(conversation["unreadCount"], 0);
     assert_eq!(conversation["isArchived"], false);
     assert_eq!(conversation["isMuted"], false);
@@ -328,12 +329,7 @@ async fn dm_lifecycle_is_canonical_private_readable_and_moderated() {
             .await;
     assert_eq!(invalid_view.status(), StatusCode::BAD_REQUEST);
 
-    sqlx::query("INSERT INTO forum.user_ignores (account_id, ignored_account_id) VALUES ($1, $2)")
-        .bind(bob_id)
-        .bind(alice_id)
-        .execute(&pool)
-        .await
-        .unwrap();
+    forum::repo::relationships::block(&pool, bob_id, alice_id).await.expect("block DM sender");
     let blocked_send = request(
         &app,
         Method::POST,

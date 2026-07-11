@@ -775,6 +775,7 @@ dependencies = [
  "governance",
  "hex",
  "identity",
+ "media",
  "meilisearch-sdk",
  "once_cell",
  "redis",

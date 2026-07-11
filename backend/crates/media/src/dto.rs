@@ -64,3 +64,10 @@ pub struct UploadDto {
 pub struct UploadUrlDto {
     pub url: String,
 }
+
+/// Owned clean image to bind to one controlled profile slot.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileAssetInput {
+    pub asset_id: String,
+}

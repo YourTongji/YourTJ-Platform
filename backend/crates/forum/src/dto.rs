@@ -464,14 +464,46 @@ pub struct DmMessageReportDto {
 pub struct UserProfileDto {
     pub id: String,
     pub handle: String,
+    pub display_name: Option<String>,
+    pub bio: Option<String>,
+    pub website: Option<String>,
     pub avatar_url: Option<String>,
+    pub banner_url: Option<String>,
     pub role: String,
     pub trust_level: i16,
     pub badges: Vec<UserBadgeDto>,
     pub thread_count: i32,
     pub comment_count: i32,
     pub votes_received: i32,
+    pub follower_count: i32,
+    pub following_count: i32,
     pub created_at: i64,
+}
+
+/// One active account shown in a followers or following page.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserSummaryDto {
+    pub id: String,
+    pub handle: String,
+    pub display_name: Option<String>,
+    pub avatar_url: Option<String>,
+    pub role: String,
+    pub followed_at: i64,
+}
+
+/// Current account's complete first-phase relationship with one target.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserRelationshipDto {
+    pub is_self: bool,
+    pub following: bool,
+    pub followed_by: bool,
+    pub muted: bool,
+    pub blocked_by_me: bool,
+    pub blocked_me: bool,
+    pub can_follow: bool,
+    pub can_start_conversation: bool,
 }
 
 /// A badge displayed on a public community profile.

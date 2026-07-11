@@ -25,6 +25,8 @@
   session，已认证 change 保留当前 session 并撤销其他 session。
 - 账号状态、角色、禁言/封禁会参与受保护请求判断。
 - 校园邮箱不进入公开 profile DTO；支持加密和 blind index 配置。
+- Identity 已持有 owner-editable profile text、受控 avatar/banner asset reference 和 profile/list/new-DM
+  privacy policy；任意头像 URL 不再可写。
 
 ### Partial
 
@@ -116,7 +118,8 @@ active + suspend = 登录、refresh 和受保护请求被拒绝
 
 ## 数据与接口所有权
 
-Identity crate 拥有 accounts、email codes、password hash、sessions、account keys 和 handle history。
+Identity crate 拥有 accounts、email codes、password hash、sessions、account keys、profile/privacy 和未来
+handle history。
 其他域通过 identity 的公开 API 获取最小身份/角色视图，不直接查询或返回校园邮箱。HTTP 结构以
 `contract/openapi.yaml` 为准，本文不复制字段清单。
 

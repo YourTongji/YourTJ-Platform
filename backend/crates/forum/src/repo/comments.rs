@@ -72,9 +72,7 @@ pub async fn list_comments(
              JOIN identity.accounts a ON a.id = c.author_id \
              WHERE c.thread_id = $1 AND c.deleted_at IS NULL AND c.hidden_at IS NULL \
                AND c.path > $3 \
-               AND ($4::bigint IS NULL OR c.author_id <> ALL( \
-                    SELECT ignored_account_id FROM forum.user_ignores WHERE account_id = $4 \
-               )) \
+               AND ($4::bigint IS NULL OR NOT forum.user_pair_blocked($4, c.author_id)) \
              ORDER BY c.path ASC \
              LIMIT $2",
         )
@@ -93,9 +91,7 @@ pub async fn list_comments(
              FROM forum.comments c \
              JOIN identity.accounts a ON a.id = c.author_id \
              WHERE c.thread_id = $1 AND c.deleted_at IS NULL AND c.hidden_at IS NULL \
-               AND ($3::bigint IS NULL OR c.author_id <> ALL( \
-                    SELECT ignored_account_id FROM forum.user_ignores WHERE account_id = $3 \
-               )) \
+               AND ($3::bigint IS NULL OR NOT forum.user_pair_blocked($3, c.author_id)) \
              ORDER BY c.path ASC \
              LIMIT $2",
         )
@@ -172,6 +168,32 @@ pub async fn create_comment(
     } else {
         None
     };
+
+    let parent_author_id = if let Some(parent_id) = parent_id {
+        sqlx::query_scalar(
+            "SELECT author_id FROM forum.comments \
+             WHERE id = $1 AND thread_id = $2 \
+               AND deleted_at IS NULL AND hidden_at IS NULL",
+        )
+        .bind(parent_id)
+        .bind(thread_id)
+        .fetch_optional(&mut *tx)
+        .await?
+        .flatten()
+    } else {
+        None
+    };
+    let mut direct_account_ids: Vec<i64> =
+        [thread_state.author_id, quoted_author_id, parent_author_id]
+            .into_iter()
+            .flatten()
+            .filter(|target_id| *target_id != author_id)
+            .collect();
+    direct_account_ids.sort_unstable();
+    direct_account_ids.dedup();
+    for target_id in direct_account_ids {
+        super::relationships::lock_pair_unblocked(&mut tx, author_id, target_id).await?;
+    }
 
     let row = if let Some(pid) = parent_id {
         // Lock the parent comment row to prevent concurrent sibling inserts.

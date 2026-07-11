@@ -108,13 +108,65 @@ components:
       properties:
         id: { type: string }
         handle: { type: string }
-        avatarUrl: { type: string, nullable: true }
+        avatarUrl:
+          type: string
+          nullable: true
+          deprecated: true
+          description: Legacy compatibility field; profile images are controlled media assets.
         role: { type: string, enum: [user, mod, admin] }
         capabilities:
           type: array
           items: { type: string }
         trustLevel: { type: integer }
         createdAt: { type: integer }
+    ProfileVisibility:
+      type: string
+      enum: [public, campus, only_me]
+    RelationshipListVisibility:
+      type: string
+      enum: [public, campus, followers, only_me]
+    DmPolicy:
+      type: string
+      description: "following means accounts the recipient follows may start a new conversation."
+      enum: [everyone, following, nobody]
+    MyProfile:
+      type: object
+      required: [accountId, displayName, bio, website, avatarAssetId, bannerAssetId]
+      properties:
+        accountId: { type: string }
+        displayName: { type: string, nullable: true, minLength: 1, maxLength: 50 }
+        bio: { type: string, nullable: true, maxLength: 500 }
+        website: { type: string, format: uri, nullable: true, maxLength: 2048 }
+        avatarAssetId: { type: string, nullable: true }
+        bannerAssetId: { type: string, nullable: true }
+    ProfileUpdateInput:
+      type: object
+      required: [displayName, bio, website]
+      properties:
+        displayName: { type: string, nullable: true, minLength: 1, maxLength: 50 }
+        bio: { type: string, nullable: true, maxLength: 500 }
+        website:
+          type: string
+          format: uri
+          nullable: true
+          maxLength: 2048
+          description: HTTPS URLs only.
+    ProfilePrivacy:
+      type: object
+      required: [profileVisibility, followersVisibility, followingVisibility, discoverable, dmPolicy]
+      properties:
+        profileVisibility: { $ref: "#/components/schemas/ProfileVisibility" }
+        followersVisibility: { $ref: "#/components/schemas/RelationshipListVisibility" }
+        followingVisibility: { $ref: "#/components/schemas/RelationshipListVisibility" }
+        discoverable:
+          type: boolean
+          description: Controls third-party relationship-list discovery and future account search, not exact-handle navigation.
+        dmPolicy: { $ref: "#/components/schemas/DmPolicy" }
+    ProfileAssetInput:
+      type: object
+      required: [assetId]
+      properties:
+        assetId: { type: string }
     AuthTokens:
       type: object
       required: [accessToken, refreshToken, account]
@@ -971,6 +1023,10 @@ components:
       allOf:
         - $ref: "#/components/schemas/Page"
         - { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/UserComment" } } } }
+    UserSummaryPage:
+      allOf:
+        - $ref: "#/components/schemas/Page"
+        - { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/UserSummary" } } } }
     RevisionPage:
       allOf:
         - $ref: "#/components/schemas/Page"
@@ -1103,15 +1159,40 @@ components:
       properties:
         draftKey: { type: string }
         payload: { type: object }
-    # ---- identity: ignores ----
+    # ---- social identity ----
     IgnoreUser:
       type: object
+      deprecated: true
       properties:
         accountId: { type: string }
         handle: { type: string }
         avatarUrl: { type: string, nullable: true }
         createdAt: { type: integer }
-    # ---- identity: public profile ----
+    UserSummary:
+      type: object
+      required: [id, handle, displayName, avatarUrl, role, followedAt]
+      properties:
+        id: { type: string }
+        handle: { type: string }
+        displayName: { type: string, nullable: true }
+        avatarUrl: { type: string, nullable: true }
+        role: { type: string, enum: [user, mod, admin] }
+        followedAt: { type: integer }
+    UserRelationship:
+      type: object
+      required: [isSelf, following, followedBy, muted, blockedByMe, blockedMe, canFollow, canStartConversation]
+      properties:
+        isSelf: { type: boolean }
+        following: { type: boolean }
+        followedBy: { type: boolean }
+        muted: { type: boolean }
+        blockedByMe: { type: boolean }
+        blockedMe: { type: boolean }
+        canFollow: { type: boolean }
+        canStartConversation:
+          type: boolean
+          description: Whether the current account may start a new conversation under block and recipient DM policy.
+    # ---- public profile ----
     UserBadge:
       type: object
       required: [slug, name]
@@ -1120,17 +1201,23 @@ components:
         name: { type: string }
     UserProfile:
       type: object
-      required: [id, handle, role, trustLevel, badges, threadCount, commentCount, votesReceived, createdAt]
+      required: [id, handle, displayName, bio, website, avatarUrl, bannerUrl, role, trustLevel, badges, threadCount, commentCount, votesReceived, followerCount, followingCount, createdAt]
       properties:
         id: { type: string }
         handle: { type: string }
+        displayName: { type: string, nullable: true }
+        bio: { type: string, nullable: true }
+        website: { type: string, format: uri, nullable: true }
         avatarUrl: { type: string, nullable: true }
+        bannerUrl: { type: string, nullable: true }
         role: { type: string, enum: [user, mod, admin] }
         trustLevel: { type: integer, minimum: 0 }
         badges: { type: array, items: { $ref: "#/components/schemas/UserBadge" } }
         threadCount: { type: integer, minimum: 0 }
         commentCount: { type: integer, minimum: 0 }
         votesReceived: { type: integer, minimum: 0 }
+        followerCount: { type: integer, minimum: 0 }
+        followingCount: { type: integer, minimum: 0 }
         createdAt: { type: integer }
     UserThread:
       type: object
@@ -1476,11 +1563,45 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
     patch:
       tags: [identity]
-      summary: Update handle / avatar
+      summary: Update the stable public handle
       requestBody:
-        content: { application/json: { schema: { type: object, properties: { handle: { type: string }, avatarUrl: { type: string } } } } }
+        content: { application/json: { schema: { type: object, properties: { handle: { type: string } } } } }
       responses:
         "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Account" } } } }
+  /me/profile:
+    get:
+      tags: [identity]
+      summary: Get owner-editable public profile fields
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/MyProfile" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    put:
+      tags: [identity]
+      summary: Replace owner-editable text profile fields
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/ProfileUpdateInput" } } }
+      responses:
+        "200": { description: saved, content: { application/json: { schema: { $ref: "#/components/schemas/MyProfile" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /me/privacy:
+    get:
+      tags: [identity]
+      summary: Get profile, relationship-list, discovery, and new-DM privacy settings
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/ProfilePrivacy" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    put:
+      tags: [identity]
+      summary: Replace profile privacy settings
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/ProfilePrivacy" } } }
+      responses:
+        "200": { description: saved, content: { application/json: { schema: { $ref: "#/components/schemas/ProfilePrivacy" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
   /me/sessions:
     get:
       tags: [identity]
@@ -1542,41 +1663,100 @@ paths:
   /me/ignores/{account_id}:
     put:
       tags: [identity]
-      summary: Ignore a user
+      deprecated: true
+      summary: Compatibility alias for blocking a user by account id
       parameters: [{ name: account_id, in: path, required: true, schema: { type: string } }]
       responses: { "204": { description: ok } }
     delete:
       tags: [identity]
-      summary: Unignore a user
+      deprecated: true
+      summary: Compatibility alias for unblocking a user by account id
       parameters: [{ name: account_id, in: path, required: true, schema: { type: string } }]
       responses: { "204": { description: ok } }
   /me/ignores:
     get:
       tags: [identity]
-      summary: List ignored users
+      deprecated: true
+      summary: Compatibility alias for the current account's block list
       parameters: [{ $ref: "#/components/parameters/Cursor" }, { $ref: "#/components/parameters/Limit" }]
       responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/IgnorePage" } } } } }
   /users/{handle}:
     get:
       tags: [identity]
-      security: []
-      summary: Public user profile
+      security: [{ bearer: [] }, {}]
+      summary: User profile subject to the account's visibility policy
       parameters: [{ name: handle, in: path, required: true, schema: { type: string } }]
-      responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/UserProfile" } } } } }
+      responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/UserProfile" } } } }, "404": { $ref: "#/components/responses/NotFound" } }
   /users/{handle}/threads:
     get:
       tags: [identity]
-      security: []
-      summary: User's threads
+      security: [{ bearer: [] }, {}]
+      summary: User's visible threads subject to profile visibility and block rules
       parameters: [{ name: handle, in: path, required: true, schema: { type: string } }, { $ref: "#/components/parameters/Cursor" }, { $ref: "#/components/parameters/Limit" }]
       responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/UserThreadPage" } } } } }
   /users/{handle}/comments:
     get:
       tags: [identity]
-      security: []
-      summary: User's comments
+      security: [{ bearer: [] }, {}]
+      summary: User's visible comments subject to profile visibility and block rules
       parameters: [{ name: handle, in: path, required: true, schema: { type: string } }, { $ref: "#/components/parameters/Cursor" }, { $ref: "#/components/parameters/Limit" }]
       responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/UserCommentPage" } } } } }
+  /users/{handle}/relationship:
+    get:
+      tags: [identity]
+      summary: Current account's social relationship with an active user
+      parameters: [{ name: handle, in: path, required: true, schema: { type: string } }]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/UserRelationship" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /users/{handle}/follow:
+    put:
+      tags: [identity]
+      summary: Follow a public account; no approval state is created
+      parameters: [{ name: handle, in: path, required: true, schema: { type: string } }]
+      responses: { "204": { description: following }, "403": { $ref: "#/components/responses/Forbidden" }, "404": { $ref: "#/components/responses/NotFound" } }
+    delete:
+      tags: [identity]
+      summary: Unfollow an account idempotently
+      parameters: [{ name: handle, in: path, required: true, schema: { type: string } }]
+      responses: { "204": { description: not following }, "404": { $ref: "#/components/responses/NotFound" } }
+  /users/{handle}/followers:
+    get:
+      tags: [identity]
+      security: [{ bearer: [] }, {}]
+      summary: Followers subject to the owner's list visibility and member discoverability
+      parameters: [{ name: handle, in: path, required: true, schema: { type: string } }, { $ref: "#/components/parameters/Cursor" }, { $ref: "#/components/parameters/Limit" }]
+      responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/UserSummaryPage" } } } }, "404": { $ref: "#/components/responses/NotFound" } }
+  /users/{handle}/following:
+    get:
+      tags: [identity]
+      security: [{ bearer: [] }, {}]
+      summary: Followed accounts subject to the owner's list visibility and member discoverability
+      parameters: [{ name: handle, in: path, required: true, schema: { type: string } }, { $ref: "#/components/parameters/Cursor" }, { $ref: "#/components/parameters/Limit" }]
+      responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/UserSummaryPage" } } } }, "404": { $ref: "#/components/responses/NotFound" } }
+  /users/{handle}/mute:
+    put:
+      tags: [identity]
+      summary: Privately hide an account's content without changing access or follow state
+      parameters: [{ name: handle, in: path, required: true, schema: { type: string } }]
+      responses: { "204": { description: muted }, "404": { $ref: "#/components/responses/NotFound" } }
+    delete:
+      tags: [identity]
+      summary: Unmute an account idempotently
+      parameters: [{ name: handle, in: path, required: true, schema: { type: string } }]
+      responses: { "204": { description: not muted }, "404": { $ref: "#/components/responses/NotFound" } }
+  /users/{handle}/block:
+    put:
+      tags: [identity]
+      summary: Create a bilateral safety boundary and remove follows in both directions
+      parameters: [{ name: handle, in: path, required: true, schema: { type: string } }]
+      responses: { "204": { description: blocked }, "404": { $ref: "#/components/responses/NotFound" } }
+    delete:
+      tags: [identity]
+      summary: Unblock without restoring prior follows
+      parameters: [{ name: handle, in: path, required: true, schema: { type: string } }]
+      responses: { "204": { description: not blocked }, "404": { $ref: "#/components/responses/NotFound" } }
 
   # ============ wallet (bind / claim / ledger) ============
   /wallet:
@@ -2171,6 +2351,34 @@ paths:
         "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/UploadUrl" } } } }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
+  /me/profile/avatar:
+    put:
+      tags: [media]
+      summary: Bind an owned clean OSS image as the current account's avatar
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/ProfileAssetInput" } } } }
+      responses:
+        "204": { description: bound }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [media]
+      summary: Remove the current account's avatar binding
+      responses: { "204": { description: removed }, "401": { $ref: "#/components/responses/Unauthorized" } }
+  /me/profile/banner:
+    put:
+      tags: [media]
+      summary: Bind an owned clean OSS image as the current account's profile banner
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/ProfileAssetInput" } } } }
+      responses:
+        "204": { description: bound }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [media]
+      summary: Remove the current account's profile banner binding
+      responses: { "204": { description: removed }, "401": { $ref: "#/components/responses/Unauthorized" } }
 
   # ============ notifications ============
   /notifications:
