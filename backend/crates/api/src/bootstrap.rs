@@ -283,6 +283,7 @@ fn build_router(state: AppState) -> Router {
 
     Router::new()
         .route("/health", get(health))
+        .route("/api/v2/health", get(health))
         .merge(crate::platform::routes(state.clone()))
         .merge(crate::admin::routes(state.clone()))
         .merge(identity::routes(state.clone()))
@@ -414,7 +415,44 @@ fn derive_system_key(hex_key: &str) -> anyhow::Result<(Vec<u8>, String)> {
 
 #[cfg(test)]
 mod tests {
-    use super::legacy_marker_query;
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use shared::AppState;
+    use tower::ServiceExt as _;
+
+    use super::{build_router, legacy_marker_query};
+
+    #[tokio::test]
+    async fn health_is_available_under_versioned_api_path() {
+        let state = AppState {
+            db: sqlx::PgPool::connect_lazy("postgres://user:password@localhost/test")
+                .expect("valid lazy postgres URL"),
+            config: shared::Config::from_env().expect("test Config::from_env"),
+            jwt_secret: "integration-test-secret-32bytes!".into(),
+            jwt_ttl: 900,
+            refresh_ttl: 604800,
+            meili_url: String::new(),
+            meili_master_key: String::new(),
+            redis: None,
+            system_private_key: vec![0u8; 32],
+            system_public_key_b64: String::new(),
+            email_encryption: None,
+            captcha_verifier: None,
+            sse_tx: None,
+        };
+
+        let response = build_router(state)
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v2/health")
+                    .body(Body::empty())
+                    .expect("request builds"),
+            )
+            .await
+            .expect("request succeeds");
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
 
     #[test]
     fn legacy_marker_query_only_baselines_pre_migrator_schema() {
