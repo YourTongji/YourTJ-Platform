@@ -60,12 +60,16 @@ describe("media upload boundary", () => {
   it("uploads only the exact authorized key with STS and signed callback metadata", async () => {
     const file = new File(["image"], "photo.png", { type: "image/png" });
 
-    await expect(uploadMedia(file, "image")).resolves.toEqual({
+    await expect(uploadMedia(file, "image", "profile_avatar")).resolves.toEqual({
       uploadId: "42",
       ossKey: "uploads/1/image/intent.png",
       status: "pending",
     });
-    expect(apiMocks.mediaUploadCredentials).toHaveBeenCalledWith("image", "image/png");
+    expect(apiMocks.mediaUploadCredentials).toHaveBeenCalledWith(
+      "image",
+      "image/png",
+      "profile_avatar",
+    );
     expect(ossMocks.constructor).toHaveBeenCalledWith(expect.objectContaining({
       accessKeyId: "temporary-id",
       stsToken: "temporary-token",

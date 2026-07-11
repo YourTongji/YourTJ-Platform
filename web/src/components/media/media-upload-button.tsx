@@ -8,17 +8,20 @@ import {
   type MediaKind,
   uploadMedia,
 } from "@/lib/media-upload";
+import type { MediaUsage } from "@/lib/api/types";
 
 export function MediaUploadButton({
   kind,
   onUploaded,
   disabled,
   label,
+  usage,
 }: {
   kind: MediaKind;
   onUploaded: (upload: CompletedMediaUpload) => void;
   disabled?: boolean;
   label?: string;
+  usage?: MediaUsage;
 }) {
   const inputRef = React.useRef<HTMLInputElement>(null);
   const [isUploading, setIsUploading] = React.useState(false);
@@ -26,7 +29,7 @@ export function MediaUploadButton({
   async function handleFile(file: File) {
     setIsUploading(true);
     try {
-      const upload = await uploadMedia(file, kind);
+      const upload = await uploadMedia(file, kind, usage);
       onUploaded(upload);
       toast.success("文件已上传，审核通过后才会公开显示");
     } catch (error) {
@@ -57,7 +60,7 @@ export function MediaUploadButton({
         onClick={() => inputRef.current?.click()}
         disabled={disabled || isUploading}
       >
-        {isUploading ? <Loader2 className="size-4 animate-spin" /> : kind === "image" ? <ImagePlus className="size-4" /> : <Paperclip className="size-4" />}
+        {isUploading ? <Loader2 className="size-4 motion-safe:animate-spin" aria-hidden="true" /> : kind === "image" ? <ImagePlus className="size-4" aria-hidden="true" /> : <Paperclip className="size-4" aria-hidden="true" />}
         {isUploading ? "正在上传" : label ?? (kind === "image" ? "上传图片" : "上传文件")}
       </Button>
     </>

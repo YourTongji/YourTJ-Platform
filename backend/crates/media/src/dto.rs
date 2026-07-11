@@ -5,12 +5,30 @@
 
 use serde::{Deserialize, Serialize};
 
+/// A resumable intended profile slot for an upload.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MediaUsage {
+    ProfileAvatar,
+    ProfileBanner,
+}
+
+impl MediaUsage {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ProfileAvatar => "profile_avatar",
+            Self::ProfileBanner => "profile_banner",
+        }
+    }
+}
+
 /// Upload intent request for direct OSS upload.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UploadIntentInput {
     pub kind: String,
     pub content_type: String,
+    pub usage: Option<MediaUsage>,
 }
 
 /// STS credentials and callback fields returned for direct OSS upload.
@@ -54,6 +72,20 @@ pub struct UploadDto {
     pub bytes: i64,
     pub mime: String,
     pub sha256: String,
+    pub status: String,
+    pub usage: Option<String>,
+    pub created_at: i64,
+}
+
+/// Owner-safe upload state without storage identifiers or object URLs.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MyUploadDto {
+    pub id: String,
+    pub kind: String,
+    pub usage: Option<String>,
+    pub bytes: i64,
+    pub mime: String,
     pub status: String,
     pub created_at: i64,
 }

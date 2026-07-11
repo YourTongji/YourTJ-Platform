@@ -80,6 +80,8 @@
   名单。账号导出可包含自己创建的关系，删除时 cascade。
 - OSS asset：profile 只持有引用；blocked/pending asset 不派生 URL。解绑后的 object retention、
   scanner、orphan GC 和 legal hold 仍按 OSS runbook 的后续阶段执行。
+- Profile upload usage 只表达 owner 选择的头像/封面槽位，用于刷新后恢复审核状态；owner status API 不
+  返回 object key、hash、account id 或持久 URL，账号 purge 时与 upload/intent 一起进入 media 清理编排。
 
 Profile 字段与社交关系不进入普通请求日志、metrics label 或 governance audit body。未来推荐/广告若要
 使用关系数据，必须另行说明目的、opt-out、保留和公平性，不能因字段已存在而默认获权。

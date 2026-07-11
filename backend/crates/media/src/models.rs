@@ -15,5 +15,6 @@ pub struct UploadRow {
     pub mime: String,
     pub sha256: String,
     pub status: String,
+    pub usage: Option<String>,
     pub created_at: DateTime<Utc>,
 }

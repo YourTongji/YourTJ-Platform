@@ -57,6 +57,8 @@ pub fn routes_with_object_store(
         .route("/api/v2/media/upload-credentials", post(handlers::upload_credentials))
         .route("/api/v2/media/callback", post(handlers::callback))
         .route("/api/v2/media/{id}/url", get(handlers::get_url))
+        .route("/api/v2/me/media/uploads", get(handlers::list_my_uploads))
+        .route("/api/v2/me/media/uploads/{id}", get(handlers::get_my_upload))
         .route(
             "/api/v2/me/profile/avatar",
             put(handlers::bind_profile_avatar).delete(handlers::clear_profile_avatar),

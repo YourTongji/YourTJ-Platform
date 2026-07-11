@@ -26,6 +26,9 @@
   不保存或接受任意图片 URL。登录用户仍通过 media URL authorization 读取，匿名素材交付尚未开放。
 - Avatar/banner binding endpoint 只接受当前账号拥有、`kind=image`、`status=clean` 的 asset id；验证与
   Identity reference update 在同一事务，pending/blocked/他人 asset 返回 not found。解绑不会接受 URL。
+- Profile 上传 intent/asset 保存可选 intended usage；owner-only recent list/单项 status API 只返回最小
+  moderation metadata，不返回 object key、hash、account id 或 object URL。Web 在存在 pending 项时有界
+  轮询，只有 clean 项出现绑定操作，blocked 项提示重新上传。
 - Profile disclosure 每次只为仍为 clean 的 asset 派生 URL；后续被 block 的 object 即使旧 reference
   尚未清理，也不会继续出现在 profile DTO。
 
@@ -65,10 +68,11 @@ Private/public、CDN signing 和原图保留仍为 `Decision needed`；在决定
 
 1. Client 请求 intent，声明 kind/content type；服务端授权 exact key。
 2. Client 直传 OSS，展示进度和可重试失败，不自行认为业务发布成功。
-3. OSS callback 创建 pending upload；client 轮询/查询 upload status。
+3. OSS callback 创建 pending upload；profile client 按持久化 usage 恢复列表并轮询 owner-only status，
+   因刷新或换设备不会把 pending 当失败，也不会自行绑定。
 4. Scanner 验证 magic bytes、MIME、尺寸/像素、病毒/恶意 PDF，图片移除 EXIF/GPS 并生成 variants。
-5. Clean 后业务 mutation 用 `assetId` 绑定 avatar/thread/comment/review/DM；avatar/banner 已执行
-   owner+image+clean 校验，其余业务类型仍待实现。
+5. Clean 后业务 mutation 用 `assetId` 绑定 avatar/thread/comment/review/DM；avatar/banner Web 已执行
+   owner+image+clean 绑定与解除，其余业务类型仍待实现。
 6. 替换/删除解除 binding；无引用 asset 进入 grace period，GC worker 最终删除 object 和派生 variants。
 
 第 4–6 步当前未完整实现，状态为 `Partial/P1`。Profile reference 是第一条受控 binding，但现有 callback
@@ -86,6 +90,8 @@ Binding 使用显式 `asset_usages(asset_id, target_type, target_id, slot/positi
 - Protocol tests 使用 fake STS/OSS HTTP 或 alternate object-store boundary，覆盖 policy、callback canonical
   signature、redirect rejection、intent replay、key/MIME/size mismatch 和 delete-before-block ordering。
 - Handler→DB test 覆盖 profile image 对 pending、他人 clean、本人 clean asset 的拒绝/接受与解绑。
+- Owner status test 覆盖 usage filter、pending/clean 恢复、他人 asset 不可枚举和响应不泄露 OSS metadata；
+  Web component/axe test 覆盖 pending/blocked 不可绑定、clean 可绑定与当前图片可移除。
 - End-to-end test bucket 若存在，使用独立 account/prefix、最短 lifecycle 和合成无 PII asset。
 - Test 完成自动清理；cleanup failure 进入告警，不靠人工记住 object key。
 

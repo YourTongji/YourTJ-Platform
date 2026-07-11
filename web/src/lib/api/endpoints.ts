@@ -46,6 +46,7 @@ import type {
   LedgerEntry,
   LedgerVerify,
   Major,
+  MediaUsage,
   Notification,
   NotificationPreferences,
   Page,
@@ -73,6 +74,7 @@ import type {
   UploadUrl,
   IgnoreUser,
   MyProfile,
+  MyUpload,
   ProfilePrivacy,
   ProfileUpdateInput,
   UserComment,
@@ -299,15 +301,33 @@ export const api = {
     return apiRequest<Setting[]>("/settings", { auth: false });
   },
 
-  mediaUploadCredentials(kind: "image" | "file", contentType: string) {
+  mediaUploadCredentials(kind: "image" | "file", contentType: string, usage?: MediaUsage) {
     return apiRequest<UploadCredentials>("/media/upload-credentials", {
       method: "POST",
-      body: { kind, contentType },
+      body: { kind, contentType, usage },
     });
   },
 
   mediaUrl(id: string) {
     return apiRequest<UploadUrl>(`/media/${encodeURIComponent(id)}/url`);
+  },
+
+  myMediaUploads(usage?: MediaUsage, cursor?: string | null) {
+    return apiRequest<Page<MyUpload>>("/me/media/uploads", {
+      query: { usage, cursor, limit: 12 },
+    });
+  },
+
+  myMediaUpload(id: string) {
+    return apiRequest<MyUpload>(`/me/media/uploads/${encodeURIComponent(id)}`);
+  },
+
+  bindMyProfileMedia(slot: "avatar" | "banner", assetId: string) {
+    return apiRequest<void>(`/me/profile/${slot}`, { method: "PUT", body: { assetId } });
+  },
+
+  clearMyProfileMedia(slot: "avatar" | "banner") {
+    return apiRequest<void>(`/me/profile/${slot}`, { method: "DELETE" });
   },
 
   departments() {

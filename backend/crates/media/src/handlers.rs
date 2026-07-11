@@ -14,7 +14,8 @@ use shared::pagination::Page;
 use shared::{AppError, AppResult, AppState};
 
 use crate::dto::{
-    ProfileAssetInput, UploadCredentialsDto, UploadDto, UploadIntentInput, UploadUrlDto,
+    MediaUsage, MyUploadDto, ProfileAssetInput, UploadCredentialsDto, UploadDto, UploadIntentInput,
+    UploadUrlDto,
 };
 use crate::oss::{self, AliyunStsProvider, OssConfig};
 use crate::quarantine::{quarantine_upload, require_independent_moderator, UploadObjectStore};
@@ -37,6 +38,15 @@ pub struct UploadListQuery {
     cursor: Option<String>,
     #[serde(default = "default_limit")]
     limit: i64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MyUploadListQuery {
+    cursor: Option<String>,
+    #[serde(default = "default_limit")]
+    limit: i64,
+    usage: Option<MediaUsage>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -64,6 +74,19 @@ fn upload_to_dto(row: &UploadRow) -> UploadDto {
         mime: row.mime.clone(),
         sha256: row.sha256.clone(),
         status: row.status.clone(),
+        usage: row.usage.clone(),
+        created_at: row.created_at.timestamp(),
+    }
+}
+
+fn upload_to_owner_dto(row: &UploadRow) -> MyUploadDto {
+    MyUploadDto {
+        id: row.id.to_string(),
+        kind: row.kind.clone(),
+        usage: row.usage.clone(),
+        bytes: row.bytes,
+        mime: row.mime.clone(),
+        status: row.status.clone(),
         created_at: row.created_at.timestamp(),
     }
 }
@@ -78,6 +101,24 @@ fn validate_upload_kind(kind: &str) -> AppResult<()> {
         Ok(())
     } else {
         Err(MediaError::BadRequest("invalid upload kind".into()).into())
+    }
+}
+
+fn validate_upload_usage(kind: &str, usage: Option<MediaUsage>) -> AppResult<Option<&'static str>> {
+    match usage {
+        Some(_) if kind != "image" => {
+            Err(MediaError::BadRequest("profile media usage requires an image".into()).into())
+        }
+        Some(usage) => Ok(Some(usage.as_str())),
+        None => Ok(None),
+    }
+}
+
+fn validate_page_limit(limit: i64) -> AppResult<i64> {
+    if (1..=100).contains(&limit) {
+        Ok(limit)
+    } else {
+        Err(AppError::BadRequest("limit must be between 1 and 100".into()))
     }
 }
 
@@ -161,6 +202,7 @@ pub async fn upload_credentials(
     .map_err(|_r| AppError::Unauthorized)?;
 
     validate_upload_kind(&input.kind)?;
+    let usage = validate_upload_usage(&input.kind, input.usage)?;
     let content_type = oss::validate_content_type(&input.kind, &input.content_type)?;
     let oss_config = require_oss_config(&state)?;
     let expires_at = oss::upload_intent_expires_at();
@@ -174,6 +216,7 @@ pub async fn upload_credentials(
         &input.kind,
         &oss_key,
         content_type,
+        usage,
         oss::OSS_UPLOAD_MAX_BYTES,
         &callback_token,
         expires_at,
@@ -271,6 +314,7 @@ pub async fn callback(
         input.bytes,
         &intent.content_type,
         &input.sha256,
+        intent.usage.as_deref(),
     )
     .await?;
     repo::consume_upload_intent(&mut tx, intent.id, row.id).await?;
@@ -315,6 +359,48 @@ pub async fn get_url(
     let url = oss::generate_url(&oss_config, &row.oss_key);
 
     Ok(Json(UploadUrlDto { url }))
+}
+
+/// GET /api/v2/me/media/uploads — list the current account's resumable upload states.
+pub async fn list_my_uploads(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<MyUploadListQuery>,
+) -> AppResult<Json<Page<MyUploadDto>>> {
+    let auth = identity::auth_middleware::authenticate(
+        &headers,
+        &state.db,
+        &state.jwt_secret,
+        state.redis.as_ref(),
+    )
+    .await
+    .map_err(|_| AppError::Unauthorized)?;
+    let limit = validate_page_limit(query.limit)?;
+    let usage = query.usage.map(MediaUsage::as_str);
+    let (rows, next_cursor) =
+        repo::list_owned(&state.db, auth.id, usage, query.cursor.as_deref(), limit).await?;
+    Ok(Json(Page::new(rows.iter().map(upload_to_owner_dto).collect(), next_cursor)))
+}
+
+/// GET /api/v2/me/media/uploads/{id} — poll one owned upload's moderation state.
+pub async fn get_my_upload(
+    State(state): State<AppState>,
+    Path(id_str): Path<String>,
+    headers: HeaderMap,
+) -> AppResult<Json<MyUploadDto>> {
+    let auth = identity::auth_middleware::authenticate(
+        &headers,
+        &state.db,
+        &state.jwt_secret,
+        state.redis.as_ref(),
+    )
+    .await
+    .map_err(|_| AppError::Unauthorized)?;
+    let upload_id = id_str.parse::<i64>().map_err(|_| AppError::NotFound)?;
+    let upload = repo::find_owned_upload(&state.db, auth.id, upload_id)
+        .await?
+        .ok_or(MediaError::NotFound)?;
+    Ok(Json(upload_to_owner_dto(&upload)))
 }
 
 async fn bind_profile_asset(
@@ -415,7 +501,8 @@ pub async fn list_uploads(
     auth.require_capability(shared::auth::Capability::ModerateContent)
         .map_err(|_| AppError::Forbidden)?;
 
-    let (rows, next_cursor) = repo::list_pending(&state.db, q.cursor.as_deref(), q.limit).await?;
+    let limit = validate_page_limit(q.limit)?;
+    let (rows, next_cursor) = repo::list_pending(&state.db, q.cursor.as_deref(), limit).await?;
 
     let items: Vec<UploadDto> = rows.iter().map(upload_to_dto).collect();
     Ok(Json(Page::new(items, next_cursor)))
@@ -479,7 +566,7 @@ mod tests {
     use chrono::Utc;
     use shared::AuthAccount;
 
-    use super::{can_read_upload_url, UploadRow};
+    use super::{can_read_upload_url, validate_upload_usage, MediaUsage, UploadRow};
     use crate::quarantine::require_independent_moderator;
 
     fn account(id: i64, role: &str) -> AuthAccount {
@@ -497,6 +584,7 @@ mod tests {
             mime: "image/png".into(),
             sha256: "a".repeat(64),
             status: status.into(),
+            usage: None,
             created_at: Utc::now(),
         }
     }
@@ -520,6 +608,12 @@ mod tests {
     fn clean_url_is_available_to_authenticated_accounts() {
         let clean = upload(10, "clean");
         assert!(can_read_upload_url(&account(11, "user"), &clean));
+    }
+
+    #[test]
+    fn profile_usage_is_restricted_to_images() {
+        assert!(validate_upload_usage("image", Some(MediaUsage::ProfileAvatar)).is_ok());
+        assert!(validate_upload_usage("file", Some(MediaUsage::ProfileBanner)).is_err());
     }
 
     #[test]

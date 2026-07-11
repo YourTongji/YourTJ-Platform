@@ -4607,6 +4607,89 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/me/media/uploads": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the current account's recent uploads for review-status recovery */
+        get: {
+            parameters: {
+                query?: {
+                    usage?: components["schemas"]["MediaUsage"];
+                    /** @description Opaque pagination cursor */
+                    cursor?: components["parameters"]["Cursor"];
+                    limit?: components["parameters"]["Limit"];
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["MyUploadPage"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/me/media/uploads/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Poll one owned upload's moderation status */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["MyUpload"];
+                    };
+                };
+                401: components["responses"]["Unauthorized"];
+                404: components["responses"]["NotFound"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/me/profile/avatar": {
         parameters: {
             query?: never;
@@ -8688,10 +8771,17 @@ export interface components {
             image?: string | null;
             siteName?: string | null;
         };
+        /**
+         * @description Optional intended profile slot persisted across moderation and page reloads.
+         * @enum {string}
+         */
+        MediaUsage: "profile_avatar" | "profile_banner";
         UploadIntentInput: {
             /** @enum {string} */
             kind: "image" | "file";
             contentType: string;
+            /** @description Profile usages require kind=image. Omit for unbound generic uploads. */
+            usage?: components["schemas"]["MediaUsage"];
         };
         UploadCredentials: {
             /** Format: uuid */
@@ -8721,13 +8811,29 @@ export interface components {
             sha256?: string;
             /** @enum {string} */
             status?: "pending" | "clean" | "blocked";
+            usage?: components["schemas"]["MediaUsage"] | null;
             createdAt?: number;
+        };
+        /** @description Owner-safe upload status; storage keys, hashes, and object URLs are intentionally omitted. */
+        MyUpload: {
+            id: string;
+            /** @enum {string} */
+            kind: "image" | "file";
+            usage: components["schemas"]["MediaUsage"] | null;
+            bytes: number;
+            mime: string;
+            /** @enum {string} */
+            status: "pending" | "clean" | "blocked";
+            createdAt: number;
         };
         UploadUrl: {
             url: string;
         };
         UploadPage: components["schemas"]["Page"] & {
             items?: components["schemas"]["Upload"][];
+        };
+        MyUploadPage: components["schemas"]["Page"] & {
+            items?: components["schemas"]["MyUpload"][];
         };
         AdminForumFlagPage: components["schemas"]["Page"] & {
             items?: components["schemas"]["AdminForumFlag"][];

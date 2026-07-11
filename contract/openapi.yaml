@@ -1364,12 +1364,19 @@ components:
         image: { type: string, nullable: true }
         siteName: { type: string, nullable: true }
     # ---- media ----
+    MediaUsage:
+      type: string
+      description: Optional intended profile slot persisted across moderation and page reloads.
+      enum: [profile_avatar, profile_banner]
     UploadIntentInput:
       type: object
       required: [kind, contentType]
       properties:
         kind: { type: string, enum: [image, file] }
         contentType: { type: string }
+        usage:
+          allOf: [{ $ref: "#/components/schemas/MediaUsage" }]
+          description: Profile usages require kind=image. Omit for unbound generic uploads.
     UploadCredentials:
       type: object
       required: [uploadIntentId, accessKeyId, accessKeySecret, securityToken, region, bucket, prefix, ossKey, callbackUrl, callbackBody, expiration]
@@ -1397,6 +1404,23 @@ components:
         mime: { type: string }
         sha256: { type: string }
         status: { type: string, enum: [pending, clean, blocked] }
+        usage:
+          allOf: [{ $ref: "#/components/schemas/MediaUsage" }]
+          nullable: true
+        createdAt: { type: integer }
+    MyUpload:
+      type: object
+      required: [id, kind, usage, bytes, mime, status, createdAt]
+      description: Owner-safe upload status; storage keys, hashes, and object URLs are intentionally omitted.
+      properties:
+        id: { type: string }
+        kind: { type: string, enum: [image, file] }
+        usage:
+          allOf: [{ $ref: "#/components/schemas/MediaUsage" }]
+          nullable: true
+        bytes: { type: integer, minimum: 1 }
+        mime: { type: string }
+        status: { type: string, enum: [pending, clean, blocked] }
         createdAt: { type: integer }
     UploadUrl:
       type: object
@@ -1407,6 +1431,10 @@ components:
       allOf:
         - $ref: "#/components/schemas/Page"
         - { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/Upload" } } } }
+    MyUploadPage:
+      allOf:
+        - $ref: "#/components/schemas/Page"
+        - { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/MyUpload" } } } }
     AdminForumFlagPage:
       allOf:
         - $ref: "#/components/schemas/Page"
@@ -2427,6 +2455,29 @@ paths:
       parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
       responses:
         "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/UploadUrl" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /me/media/uploads:
+    get:
+      tags: [media]
+      summary: List the current account's recent uploads for review-status recovery
+      parameters:
+        - name: usage
+          in: query
+          schema: { $ref: "#/components/schemas/MediaUsage" }
+        - { $ref: "#/components/parameters/Cursor" }
+        - { $ref: "#/components/parameters/Limit" }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/MyUploadPage" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /me/media/uploads/{id}:
+    get:
+      tags: [media]
+      summary: Poll one owned upload's moderation status
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/MyUpload" } } } }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
   /me/profile/avatar:

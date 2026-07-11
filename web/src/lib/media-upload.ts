@@ -1,4 +1,5 @@
 import { api } from "@/lib/api/endpoints";
+import type { MediaUsage } from "@/lib/api/types";
 
 export type MediaKind = "image" | "file";
 
@@ -47,10 +48,14 @@ async function sha256Hex(file: File) {
 }
 
 /// Upload directly to the exact account-bound OSS object authorized by the backend.
-export async function uploadMedia(file: File, kind: MediaKind): Promise<CompletedMediaUpload> {
+export async function uploadMedia(
+  file: File,
+  kind: MediaKind,
+  usage?: MediaUsage,
+): Promise<CompletedMediaUpload> {
   validateMediaFile(file, kind);
   const [credentials, sha256] = await Promise.all([
-    api.mediaUploadCredentials(kind, file.type.toLowerCase()),
+    api.mediaUploadCredentials(kind, file.type.toLowerCase(), usage),
     sha256Hex(file),
   ]);
   if (credentials.expiration * 1_000 <= Date.now()) {

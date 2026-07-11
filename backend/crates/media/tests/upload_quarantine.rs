@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use axum::body::Body;
+use axum::body::{to_bytes, Body};
 use axum::http::{header, Method, Request, StatusCode};
 use media::{routes_with_object_store, UploadObjectStore};
 use shared::{AppResult, AppState};
@@ -62,6 +62,11 @@ fn request(method: Method, uri: String, token: &str, body: Body) -> Request<Body
         .header(header::CONTENT_TYPE, "application/json")
         .body(body)
         .expect("media request")
+}
+
+async fn response_json(response: axum::response::Response) -> serde_json::Value {
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.expect("media response body");
+    serde_json::from_slice(&bytes).expect("media response JSON")
 }
 
 #[tokio::test]
@@ -219,8 +224,9 @@ async fn profile_images_require_an_owned_clean_oss_asset() {
     .expect("seed other media owner");
     let clean_upload_id: i64 = sqlx::query_scalar(
         "INSERT INTO media.uploads \
-         (account_id, kind, oss_key, url, bytes, mime, sha256, status) \
-         VALUES ($1, 'image', $2, $3, 20, 'image/png', $4, 'clean') RETURNING id",
+         (account_id, kind, oss_key, url, bytes, mime, sha256, status, usage) \
+         VALUES ($1, 'image', $2, $3, 20, 'image/png', $4, 'clean', 'profile_avatar') \
+         RETURNING id",
     )
     .bind(owner_id)
     .bind(format!("uploads/{owner_id}/image/{suffix}-clean.png"))
@@ -231,8 +237,8 @@ async fn profile_images_require_an_owned_clean_oss_asset() {
     .expect("seed clean profile image");
     let pending_upload_id: i64 = sqlx::query_scalar(
         "INSERT INTO media.uploads \
-         (account_id, kind, oss_key, url, bytes, mime, sha256) \
-         VALUES ($1, 'image', $2, $3, 20, 'image/png', $4) RETURNING id",
+         (account_id, kind, oss_key, url, bytes, mime, sha256, usage) \
+         VALUES ($1, 'image', $2, $3, 20, 'image/png', $4, 'profile_avatar') RETURNING id",
     )
     .bind(owner_id)
     .bind(format!("uploads/{owner_id}/image/{suffix}-pending.png"))
@@ -243,8 +249,9 @@ async fn profile_images_require_an_owned_clean_oss_asset() {
     .expect("seed pending profile image");
     let other_upload_id: i64 = sqlx::query_scalar(
         "INSERT INTO media.uploads \
-         (account_id, kind, oss_key, url, bytes, mime, sha256, status) \
-         VALUES ($1, 'image', $2, $3, 20, 'image/png', $4, 'clean') RETURNING id",
+         (account_id, kind, oss_key, url, bytes, mime, sha256, status, usage) \
+         VALUES ($1, 'image', $2, $3, 20, 'image/png', $4, 'clean', 'profile_avatar') \
+         RETURNING id",
     )
     .bind(other_id)
     .bind(format!("uploads/{other_id}/image/{suffix}-other.png"))
@@ -257,6 +264,52 @@ async fn profile_images_require_an_owned_clean_oss_asset() {
     let token = identity::auth::create_access_token(owner_id, &state.jwt_secret, 3600)
         .expect("profile media token");
     let app = routes_with_object_store(state, Arc::new(SuccessfulObjectStore));
+
+    let list_response = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            "/api/v2/me/media/uploads?usage=profile_avatar&limit=10".into(),
+            &token,
+            Body::empty(),
+        ))
+        .await
+        .expect("owned upload list response");
+    assert_eq!(list_response.status(), StatusCode::OK);
+    let list_json = response_json(list_response).await;
+    let items = list_json["items"].as_array().expect("owned upload items");
+    assert_eq!(items.len(), 2);
+    assert_eq!(items[0]["id"], pending_upload_id.to_string());
+    assert_eq!(items[0]["status"], "pending");
+    assert_eq!(items[0]["usage"], "profile_avatar");
+    for sensitive_field in ["accountId", "ossKey", "url", "sha256"] {
+        assert!(items[0].get(sensitive_field).is_none());
+    }
+
+    let status_response = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            format!("/api/v2/me/media/uploads/{pending_upload_id}"),
+            &token,
+            Body::empty(),
+        ))
+        .await
+        .expect("owned upload status response");
+    assert_eq!(status_response.status(), StatusCode::OK);
+    assert_eq!(response_json(status_response).await["status"], "pending");
+
+    let foreign_status_response = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            format!("/api/v2/me/media/uploads/{other_upload_id}"),
+            &token,
+            Body::empty(),
+        ))
+        .await
+        .expect("foreign upload status response");
+    assert_eq!(foreign_status_response.status(), StatusCode::NOT_FOUND);
 
     for rejected_id in [pending_upload_id, other_upload_id] {
         let response = app

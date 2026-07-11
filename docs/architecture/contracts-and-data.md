@@ -98,6 +98,8 @@ Fresh database 必须只通过 sqlx migration ledger 建立。普通启动、CI 
   SHA-256 作为 callback custom value，业务后续只保存 signed callback 返回的 upload id。
 - 业务保存 asset/reference，不保存任意 URL；访问 URL 是带权限和到期的派生值。
 - asset status、binding、owner、target、alt、variants 与 retention 由 media/domain API 协作维护。
+- Profile upload 的 intended usage 是 media-owned 恢复提示，不是授权事实；owner status DTO 使用最小字段，
+  业务绑定仍在同一事务重新验证 owner、kind 与 clean 状态，避免 pending-to-public race。
 - Profile text/reference 由 Identity 持有；Media 在事务内验证本人 clean image，再调用 Identity 受限
   binding API。Forum 取得已授权 profile projection 后才批量解析 clean image URL，不跨域直查 upload 表。
 

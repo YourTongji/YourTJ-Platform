@@ -17,6 +17,8 @@
 
 - Identity 持有 display name、bio、HTTPS website、clean OSS avatar/banner asset reference 和独立
   profile/list/discoverability/DM policy；任意头像 URL 已停止写入并在 migration 中清除。
+- Web 资料设置已接 profile-specific OSS 上传、owner-only 状态恢复与轮询；待审和未通过资产只向 owner
+  展示状态，通过审核后才出现绑定操作，当前头像/封面可解除绑定。
 - 资料响应包含受控媒体派生 URL、角色、信任等级、徽章、主题/回复/获赞与准确 followers/following 计数。
 - Forum 持有公开单向 follow、私密单向 mute 和双向安全边界 block；follow/unfollow/mute/block 都幂等，
   relationship API 一次返回页面操作所需状态。
@@ -35,8 +37,8 @@
 - activity/mention 隐私和 user search 尚未实现；`discoverable` 目前用于第三方关系列表并为未来账号搜索
   提供相同的服务端事实源。
 - 第一阶段不做私密账号与 pending request；若未来引入，必须增加显式状态机和通知/反滥用策略。
-- Avatar/banner 已有 owner+clean binding，但图片 scanner、变体、EXIF 清理、前端上传器和 orphan GC
-  仍是媒体链路缺口；Web 不再提供任意 URL 输入。
+- Avatar/banner 已有 owner+clean binding 和上传状态 UI，但图片 scanner、变体、EXIF 清理和 orphan GC
+  仍是媒体链路缺口；当前依赖独立 staff 人工审核，Web 不再提供任意 URL 输入。
 - 旧 `/me/ignores` 作为 block-by-id 兼容 alias 保留，新客户端只使用 handle-based block API。
 
 ## 四种关系不得混用
@@ -129,7 +131,8 @@ Forum 拥有 follow/block/mute 与计数投影；Identity 拥有账号、owner-e
 Media 验证 owner+clean image 后调用 Identity 的受限 asset binding API。HTTP shape 以 OpenAPI 为准。
 
 头像和 banner 只保存 clean media asset reference。服务端生成可用 URL，客户端不得提交任意
-第三方 URL 作为权威字段。
+第三方 URL 作为权威字段。上传 intent 会持久化可选的 `profile_avatar/profile_banner` usage，使待审
+状态可在刷新后恢复；usage 不是放宽授权的凭证，最终绑定仍重新验证 owner、image kind 和 clean 状态。
 
 ## 已决策与后续决策
 
@@ -147,4 +150,5 @@ Media 验证 owner+clean image 后调用 Identity 的受限 asset binding API。
 - block/mute 在 profile、feed、search、notification、DM 和互动中使用同一 policy。
 - 隐私设置对匿名、校园成员、关系用户、本人和 staff 有矩阵化授权测试。
 - 所有公开 profile 响应不含邮箱或内部治理字段，媒体来自平台 asset。
+- profile 上传刷新后仍能恢复待审/通过/未通过状态；待审或未通过资产没有可用绑定按钮，服务端也拒绝绑定。
 - 成就、认证和角色标识可以独立授予/撤销并留下审计。
