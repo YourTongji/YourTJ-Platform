@@ -261,7 +261,7 @@ pub async fn find_account_id_by_handle_for_relationship_cleanup(
     Ok(account_id)
 }
 
-/// Resolve an exact non-deleted handle for owner-initiated mute or block safety actions.
+/// Resolve an exact active or suspended handle for owner-initiated mute or block safety actions.
 ///
 /// Suspended accounts remain valid targets so a temporary sanction cannot prevent an owner
 /// from establishing a durable personal safety boundary.
@@ -271,7 +271,7 @@ pub async fn find_account_id_by_handle_for_safety_action(
 ) -> AppResult<Option<i64>> {
     let account_id = sqlx::query_scalar(
         "SELECT id FROM identity.accounts \
-         WHERE handle = $1::citext AND status <> 'deleted'::identity.account_status",
+         WHERE handle = $1::citext AND status IN ('active', 'suspended')",
     )
     .bind(handle)
     .fetch_optional(pool)

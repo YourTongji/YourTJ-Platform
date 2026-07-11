@@ -40,6 +40,7 @@ struct AccountAuthRow {
     status: String,
     auth_version: i64,
     legacy_access_revoked_before: chrono::DateTime<chrono::Utc>,
+    onboarding_complete: bool,
 }
 
 /// Resolve the authenticated account from the request headers.
@@ -81,6 +82,30 @@ pub async fn authenticate_context(
     jwt_secret: &str,
     redis: Option<&deadpool_redis::Pool>,
 ) -> Result<AuthenticatedContext, axum::response::Response> {
+    authenticate_context_inner(headers, db, jwt_secret, redis, false).await
+}
+
+/// Resolve an active account for onboarding, owner security, or logout routes.
+///
+/// Ordinary domain authentication remains closed until onboarding has accepted the current
+/// required choices; this narrower entry point must not be used by community interactions.
+#[tracing::instrument(skip(headers, db, jwt_secret, redis))]
+pub async fn authenticate_context_allow_incomplete_onboarding(
+    headers: &HeaderMap,
+    db: &PgPool,
+    jwt_secret: &str,
+    redis: Option<&deadpool_redis::Pool>,
+) -> Result<AuthenticatedContext, axum::response::Response> {
+    authenticate_context_inner(headers, db, jwt_secret, redis, true).await
+}
+
+async fn authenticate_context_inner(
+    headers: &HeaderMap,
+    db: &PgPool,
+    jwt_secret: &str,
+    redis: Option<&deadpool_redis::Pool>,
+    allow_incomplete_onboarding: bool,
+) -> Result<AuthenticatedContext, axum::response::Response> {
     let header = headers
         .get(AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
@@ -95,8 +120,12 @@ pub async fn authenticate_context(
     let account_id: i64 = claims.sub.parse().map_err(|_| shared::auth::unauthorized())?;
 
     let account = sqlx::query_as::<_, AccountAuthRow>(
-        "SELECT role::text, status::text, auth_version, legacy_access_revoked_before \
-         FROM identity.accounts WHERE id = $1",
+        "SELECT account.role::text, account.status::text, account.auth_version, \
+                account.legacy_access_revoked_before, \
+                COALESCE(onboarding.completed_at IS NOT NULL, FALSE) AS onboarding_complete \
+         FROM identity.accounts account \
+         LEFT JOIN identity.account_onboarding onboarding ON onboarding.account_id = account.id \
+         WHERE account.id = $1",
     )
     .bind(account_id)
     .fetch_optional(db)
@@ -105,6 +134,9 @@ pub async fn authenticate_context(
     .ok_or_else(shared::auth::unauthorized)?;
 
     if account.status != "active" {
+        return Err(shared::auth::forbidden());
+    }
+    if !allow_incomplete_onboarding && !account.onboarding_complete {
         return Err(shared::auth::forbidden());
     }
 
@@ -178,12 +210,16 @@ pub async fn recent_auth_state(
     };
     let state: Option<(Option<chrono::DateTime<chrono::Utc>>, Option<String>, bool)> =
         sqlx::query_as(
-            "SELECT recent_authenticated_at, recent_auth_method, \
-                COALESCE(recent_authenticated_at <= now() + interval '1 minute' \
-                  AND recent_authenticated_at > now() - ($3::bigint * interval '1 second'), false) \
+            "SELECT session.recent_authenticated_at, session.recent_auth_method, \
+                COALESCE(session.recent_authenticated_at <= now() + interval '1 minute' \
+                  AND session.recent_authenticated_at > now() - ($3::bigint * interval '1 second') \
+                  AND (session.recent_auth_method <> 'password' \
+                    OR session.recent_auth_credential_version = account.credential_version), false) \
                   AS is_fresh \
-         FROM identity.sessions \
-         WHERE id = $1 AND account_id = $2 AND revoked_at IS NULL AND expires_at > now()",
+         FROM identity.sessions session \
+         JOIN identity.accounts account ON account.id = session.account_id \
+         WHERE session.id = $1 AND session.account_id = $2 \
+           AND session.revoked_at IS NULL AND session.expires_at > now()",
         )
         .bind(session_id)
         .bind(context.account.id)
@@ -209,9 +245,18 @@ pub async fn require_recent_auth_tx(
     let Some(session_id) = context.session_id else {
         return Err(shared::AppError::RecentAuthRequired);
     };
+    let credential_version: Option<i64> = sqlx::query_scalar(
+        "SELECT credential_version FROM identity.accounts WHERE id = $1 FOR SHARE",
+    )
+    .bind(context.account.id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let credential_version = credential_version.ok_or(shared::AppError::RecentAuthRequired)?;
     let is_fresh: Option<bool> = sqlx::query_scalar(
         "SELECT COALESCE(recent_authenticated_at <= now() + interval '1 minute' \
-                  AND recent_authenticated_at > now() - ($3::bigint * interval '1 second'), false) \
+                  AND recent_authenticated_at > now() - ($3::bigint * interval '1 second') \
+                  AND (recent_auth_method <> 'password' \
+                    OR recent_auth_credential_version = $4), false) \
          FROM identity.sessions \
          WHERE id = $1 AND account_id = $2 AND revoked_at IS NULL AND expires_at > now() \
          FOR SHARE",
@@ -219,6 +264,7 @@ pub async fn require_recent_auth_tx(
     .bind(session_id)
     .bind(context.account.id)
     .bind(RECENT_AUTH_WINDOW_SECONDS)
+    .bind(credential_version)
     .fetch_optional(tx)
     .await?;
     if is_fresh == Some(true) {
@@ -258,7 +304,7 @@ pub async fn authenticate_appeal_subject(
             .await
             .map_err(|_| shared::auth::internal_error())?;
     let (role, status) = account.ok_or_else(shared::auth::unauthorized)?;
-    if status == "deleted" {
+    if status != "active" && status != "suspended" {
         return Err(shared::auth::forbidden());
     }
     Ok(AuthAccount { id: account_id, role, status })

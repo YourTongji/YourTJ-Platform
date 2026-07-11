@@ -46,6 +46,7 @@ pub struct SessionRow {
     pub last_used_at: DateTime<Utc>,
     pub recent_authenticated_at: Option<DateTime<Utc>>,
     pub recent_auth_method: Option<String>,
+    pub recent_auth_credential_version: Option<i64>,
 }
 
 /// A row from `identity.account_keys`.

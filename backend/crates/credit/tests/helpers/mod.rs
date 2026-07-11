@@ -201,6 +201,34 @@ async fn run_migrations(pool: &PgPool) {
 }
 
 async fn retire_test_accounts(pool: &PgPool) {
+    let has_account_lifecycle: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM information_schema.columns \
+         WHERE table_schema = 'identity' AND table_name = 'accounts' \
+           AND column_name = 'lifecycle_version')",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or(false);
+    if has_account_lifecycle {
+        sqlx::query(
+            "UPDATE identity.accounts SET \
+               status = 'purged', \
+               email = ('retired-' || id || '@test.invalid')::citext, \
+               handle = ('retired-' || id)::citext, \
+               email_ciphertext = NULL, email_key_version = NULL, \
+               email_blind_index = NULL, password_hash = NULL, password_email_blind = NULL, \
+               deactivated_at = NULL, deletion_requested_at = now() - interval '31 days', \
+               deletion_recover_until = now() - interval '1 day', \
+               deleted_at = now() - interval '1 day', purge_started_at = now(), \
+               purged_at = now(), tombstone_id = COALESCE(tombstone_id, gen_random_uuid()), \
+               lifecycle_version = lifecycle_version + 1, \
+               credential_version = credential_version + 1, auth_version = auth_version + 1",
+        )
+        .execute(pool)
+        .await
+        .expect("retire lifecycle-aware test accounts");
+        return;
+    }
     sqlx::query(
         "UPDATE identity.accounts SET \
            status = 'deleted', \

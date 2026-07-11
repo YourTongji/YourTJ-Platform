@@ -855,11 +855,16 @@ async fn thread_mentions_apply_recipient_policy_without_rejecting_literal_text()
     .execute(&pool)
     .await
     .expect("suspend mention target");
-    sqlx::query("UPDATE identity.accounts SET status = 'deleted' WHERE id = $1")
-        .bind(inactive_id)
-        .execute(&pool)
-        .await
-        .expect("close mention target");
+    sqlx::query(
+        "UPDATE identity.accounts SET status = 'deleted', \
+             deletion_requested_at = now() - interval '31 days', \
+             deletion_recover_until = now() - interval '1 day', deleted_at = now() \
+         WHERE id = $1",
+    )
+    .bind(inactive_id)
+    .execute(&pool)
+    .await
+    .expect("close mention target");
 
     let literal_body = "@mention-everyone @mention-following @mention-not-following \
                         @mention-nobody @mention-blocked @mention-suspended \

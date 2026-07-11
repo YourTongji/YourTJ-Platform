@@ -34,7 +34,14 @@ import type { Account, AdminUser, AdminUserInviteInput, Sanction } from "@/lib/a
 import { formatUnixTime } from "@/lib/format";
 
 type RoleFilter = "all" | "user" | "mod" | "admin";
-type StatusFilter = "all" | "active" | "suspended" | "deleted";
+type StatusFilter =
+  | "all"
+  | "active"
+  | "suspended"
+  | "deactivated"
+  | "deletion_requested"
+  | "deleted"
+  | "purged";
 type UserAction =
   | { kind: "role"; user: AdminUser; role: "user" | "mod" }
   | { kind: "silence" | "suspend" | "sessions"; user: AdminUser };
@@ -356,7 +363,10 @@ export function UsersPanel({ capabilities, initialQuery = "" }: { capabilities: 
                 <SelectItem value="all">全部状态</SelectItem>
                 <SelectItem value="active">正常</SelectItem>
                 <SelectItem value="suspended">已封禁</SelectItem>
-                <SelectItem value="deleted">已删除</SelectItem>
+                <SelectItem value="deactivated">已停用</SelectItem>
+                <SelectItem value="deletion_requested">删除恢复期</SelectItem>
+                <SelectItem value="deleted">等待清除</SelectItem>
+                <SelectItem value="purged">已清除</SelectItem>
               </SelectContent>
             </Select>
           </div>

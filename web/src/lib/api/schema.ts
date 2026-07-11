@@ -181,6 +181,170 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/auth/recovery/password": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Prove control of a recoverable closed account with its password
+         * @description Returns only a short-lived recovery credential; no access session or refresh token is created. Ineligible accounts and wrong credentials share the same unauthorized response.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** Format: email */
+                        email: string;
+                        /** Format: password */
+                        password: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description recovery credential */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["RecoveryCredential"];
+                    };
+                };
+                401: components["responses"]["Unauthorized"];
+                403: components["responses"]["Forbidden"];
+                429: components["responses"]["RateLimited"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/recovery/email/verify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Consume a recovery-purpose email code without opening a normal session */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** Format: email */
+                        email: string;
+                        code: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description recovery credential */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["RecoveryCredential"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                403: components["responses"]["Forbidden"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/recovery": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Inspect a purpose-bound recovery credential */
+        get: {
+            parameters: {
+                query?: never;
+                header: {
+                    "X-Recovery-Token": string;
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description current recoverable lifecycle */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AccountLifecycle"];
+                    };
+                };
+                401: components["responses"]["Unauthorized"];
+                403: components["responses"]["Forbidden"];
+            };
+        };
+        put?: never;
+        /**
+         * Reactivate a deactivated or not-yet-purged account
+         * @description Atomically consumes the recovery credential, revokes all old sessions, and returns the account to active without creating a session. The user must then sign in normally.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header: {
+                    "X-Recovery-Token": string;
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description reactivated lifecycle */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AccountLifecycle"];
+                    };
+                };
+                401: components["responses"]["Unauthorized"];
+                403: components["responses"]["Forbidden"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/auth/refresh": {
         parameters: {
             query?: never;
@@ -481,6 +645,397 @@ export interface paths {
                 };
             };
         };
+        trace?: never;
+    };
+    "/me/onboarding": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read resumable first-run onboarding state */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description onboarding state */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["OnboardingState"];
+                    };
+                };
+                401: components["responses"]["Unauthorized"];
+            };
+        };
+        /** Complete required handle, profile, privacy and current-terms choices atomically */
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["OnboardingCompleteInput"];
+                };
+            };
+            responses: {
+                /** @description completed onboarding state */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["OnboardingState"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
+                409: components["responses"]["Conflict"];
+            };
+        };
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/me/lifecycle": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read the authenticated account lifecycle state */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description lifecycle */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AccountLifecycle"];
+                    };
+                };
+                401: components["responses"]["Unauthorized"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/me/lifecycle/deactivate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Deactivate the current account and revoke every session
+         * @description Requires server-side recent authentication. The response contains a purpose-bound recovery credential so a lost response is not the only recovery path; password/email recovery remains available.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header: {
+                    "Idempotency-Key": components["parameters"]["ReconciliationIdempotencyKey"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["DeactivateAccountInput"];
+                };
+            };
+            responses: {
+                /** @description deactivated */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AccountLifecycleMutation"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
+                409: components["responses"]["Conflict"];
+                428: components["responses"]["RecentAuthRequired"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/me/lifecycle/delete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Request account deletion with a 30-day recovery window
+         * @description Requires server-side recent authentication, immediately closes public/new-interaction access, revokes every session, and enqueues durable deletion and purge stages.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header: {
+                    "Idempotency-Key": components["parameters"]["ReconciliationIdempotencyKey"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["DeleteAccountInput"];
+                };
+            };
+            responses: {
+                /** @description deletion requested */
+                202: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AccountLifecycleMutation"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
+                409: components["responses"]["Conflict"];
+                428: components["responses"]["RecentAuthRequired"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/me/data-exports": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List up to 20 recent owner-data export jobs */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description recent export jobs, newest first */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["DataExportJob"][];
+                    };
+                };
+                401: components["responses"]["Unauthorized"];
+            };
+        };
+        put?: never;
+        /**
+         * Create or return an idempotent owner-data export job
+         * @description Requires server-side recent authentication. The durable job is assembled through owner-domain projections and expires after 24 hours.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header: {
+                    "Idempotency-Key": components["parameters"]["ReconciliationIdempotencyKey"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description export queued or existing */
+                202: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["DataExportJob"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
+                428: components["responses"]["RecentAuthRequired"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/me/data-exports/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read an owner data-export job status */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description export status */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["DataExportJob"];
+                    };
+                };
+                401: components["responses"]["Unauthorized"];
+                404: components["responses"]["NotFound"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/me/data-exports/{id}/download-grant": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Issue a five-minute one-time download grant for a ready owner export
+         * @description Requires server-side recent authentication so a later session compromise cannot fetch an earlier export artifact.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description download grant */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["DataExportDownloadGrant"];
+                    };
+                };
+                401: components["responses"]["Unauthorized"];
+                404: components["responses"]["NotFound"];
+                409: components["responses"]["Conflict"];
+                428: components["responses"]["RecentAuthRequired"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/me/data-exports/{id}/download": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Consume a one-time grant and download the machine-readable owner export */
+        get: {
+            parameters: {
+                query?: never;
+                header: {
+                    "X-Export-Token": string;
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description JSON export */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AccountDataExport"];
+                    };
+                };
+                401: components["responses"]["Unauthorized"];
+                404: components["responses"]["NotFound"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/me/profile": {
@@ -6700,7 +7255,7 @@ export interface paths {
                 query?: {
                     q?: string;
                     role?: "user" | "mod" | "admin";
-                    status?: "active" | "suspended" | "deleted";
+                    status?: "active" | "suspended" | "deactivated" | "deletion_requested" | "deleted" | "purged";
                     /** @description Opaque pagination cursor */
                     cursor?: components["parameters"]["Cursor"];
                     limit?: components["parameters"]["Limit"];
@@ -6749,6 +7304,96 @@ export interface paths {
                 };
                 403: components["responses"]["Forbidden"];
                 409: components["responses"]["Conflict"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/account-lifecycle/jobs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Inspect durable account lifecycle jobs, including exhausted dead letters */
+        get: {
+            parameters: {
+                query?: {
+                    accountId?: string;
+                    jobType?: "mark_deleted" | "purge";
+                    status?: "queued" | "running" | "succeeded" | "failed";
+                    /** @description Opaque pagination cursor */
+                    cursor?: components["parameters"]["Cursor"];
+                    limit?: components["parameters"]["Limit"];
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description lifecycle job page */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AdminLifecycleJobPage"];
+                    };
+                };
+                403: components["responses"]["Forbidden"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/account-lifecycle/jobs/{id}/requeue": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Requeue one failed account lifecycle job without reopening account recovery */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["AdminReasonInput"];
+                };
+            };
+            responses: {
+                /** @description requeued lifecycle job */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AdminLifecycleJob"];
+                    };
+                };
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+                409: components["responses"]["Conflict"];
+                428: components["responses"]["RecentAuthRequired"];
             };
         };
         delete?: never;
@@ -9488,18 +10133,102 @@ export interface components {
             hasMore?: boolean;
         };
         Account: {
-            id?: string;
-            handle?: string;
+            id: string;
+            handle: string;
             /**
              * @deprecated
              * @description Legacy compatibility field; profile images are controlled media assets.
              */
-            avatarUrl?: string | null;
+            avatarUrl: string | null;
             /** @enum {string} */
-            role?: "user" | "mod" | "admin";
-            capabilities?: string[];
-            trustLevel?: number;
-            createdAt?: number;
+            role: "user" | "mod" | "admin";
+            capabilities: string[];
+            trustLevel: number;
+            /** @description True until the current terms version and required profile/privacy choices are accepted. */
+            onboardingRequired: boolean;
+            createdAt: number;
+        };
+        /** @enum {string} */
+        AccountLifecycleState: "active" | "deactivated" | "deletion_requested" | "deleted" | "purged";
+        AccountLifecycle: {
+            state: components["schemas"]["AccountLifecycleState"];
+            deactivatedAt: number | null;
+            deletionRequestedAt: number | null;
+            recoverUntil: number | null;
+            deletedAt: number | null;
+            purgedAt: number | null;
+            lifecycleVersion: number;
+        };
+        /** @description Purpose-bound credential accepted only by account-recovery routes. It never creates a session or refresh token. */
+        RecoveryCredential: {
+            recoveryToken: string;
+            expiresAt: number;
+            lifecycle: components["schemas"]["AccountLifecycle"];
+        };
+        OnboardingState: {
+            required: boolean;
+            currentTermsVersion: string;
+            acceptedTermsVersion: string | null;
+            handle: string;
+            displayName: string | null;
+            bio: string | null;
+            profileVisibility: components["schemas"]["ProfileVisibility"];
+            activityVisibility: components["schemas"]["ActivityVisibility"];
+            discoverable: boolean;
+            completedAt: number | null;
+        };
+        OnboardingCompleteInput: {
+            handle: string;
+            displayName: string | null;
+            bio: string | null;
+            profileVisibility: components["schemas"]["ProfileVisibility"];
+            activityVisibility: components["schemas"]["ActivityVisibility"];
+            discoverable: boolean;
+            acceptedTermsVersion: string;
+        };
+        AccountLifecycleMutationInput: {
+            /** @enum {string} */
+            confirmation: "DEACTIVATE" | "DELETE";
+        };
+        DeactivateAccountInput: {
+            /** @enum {string} */
+            confirmation: "DEACTIVATE";
+        };
+        DeleteAccountInput: {
+            /** @enum {string} */
+            confirmation: "DELETE";
+        };
+        AccountLifecycleMutation: {
+            lifecycle: components["schemas"]["AccountLifecycle"];
+            recovery: components["schemas"]["RecoveryCredential"];
+        };
+        /** @enum {string} */
+        DataExportStatus: "queued" | "running" | "ready" | "failed" | "expired";
+        DataExportJob: {
+            id: string;
+            status: components["schemas"]["DataExportStatus"];
+            createdAt: number;
+            updatedAt: number;
+            expiresAt: number;
+            errorCode: string | null;
+        };
+        DataExportDownloadGrant: {
+            token: string;
+            expiresAt: number;
+        };
+        /** @description Machine-readable owner export assembled through domain-owned projections. Internal evidence, reporter/staff identity, inbound private-message bodies, secrets, and provider metadata are excluded. */
+        AccountDataExport: {
+            schemaVersion: string;
+            generatedAt: number;
+            includedSections: string[];
+            identity: Record<string, never>;
+            forum: Record<string, never>;
+            reviews: Record<string, never>;
+            governance: Record<string, never>;
+            credit: Record<string, never>;
+            activity: Record<string, never>[];
+            platform: Record<string, never>;
+            media: Record<string, never>[];
         };
         /** @enum {string} */
         ProfileVisibility: "public" | "campus" | "only_me";
@@ -9567,19 +10296,19 @@ export interface components {
             account: components["schemas"]["Account"];
         };
         /** @enum {string} */
-        EmailCodePurpose: "login" | "registration" | "appeal";
+        EmailCodePurpose: "login" | "registration" | "appeal" | "recovery";
         EmailCodeRequest: {
             /** Format: email */
             email: string;
             captchaToken: string;
-            /** @description Optional only for rolling compatibility. Appeal codes are consumed only by /auth/appeal/email/verify. */
+            /** @description Optional only for rolling compatibility. Appeal and recovery codes are consumed only by their purpose-bound routes. */
             purpose?: components["schemas"]["EmailCodePurpose"];
         };
         EmailCodeVerification: {
             /** Format: email */
             email: string;
             code: string;
-            /** @description Optional only for rolling compatibility. This full-login endpoint rejects appeal-purpose codes. */
+            /** @description Optional only for rolling compatibility. This full-login endpoint rejects appeal- and recovery-purpose codes. */
             purpose?: components["schemas"]["EmailCodePurpose"];
             handle?: string;
             /** Format: password */
@@ -11112,10 +11841,27 @@ export interface components {
             /** @enum {string} */
             role: "user" | "mod" | "admin";
             /** @enum {string} */
-            status: "active" | "suspended" | "deleted";
+            status: "active" | "suspended" | "deactivated" | "deletion_requested" | "deleted" | "purged";
             trustLevel: number;
             lastActiveAt?: number | null;
             createdAt: number;
+        };
+        AdminLifecycleJob: {
+            id: string;
+            accountId: string;
+            accountHandle: string;
+            accountState: components["schemas"]["AccountLifecycleState"];
+            /** @enum {string} */
+            jobType: "mark_deleted" | "purge";
+            /** @enum {string} */
+            status: "queued" | "running" | "succeeded" | "failed";
+            attempts: number;
+            nextAttemptAt: number;
+            lockedAt?: number | null;
+            lastErrorCode?: string | null;
+            purgeStartedAt?: number | null;
+            createdAt: number;
+            updatedAt: number;
         };
         AdminUserInviteInput: {
             /** Format: email */
@@ -11365,6 +12111,9 @@ export interface components {
         };
         AdminUserPage: components["schemas"]["Page"] & {
             items?: components["schemas"]["AdminUser"][];
+        };
+        AdminLifecycleJobPage: components["schemas"]["Page"] & {
+            items?: components["schemas"]["AdminLifecycleJob"][];
         };
         AdminAuditEventPage: components["schemas"]["Page"] & {
             items?: components["schemas"]["AdminAuditEvent"][];

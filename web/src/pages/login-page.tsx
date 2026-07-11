@@ -1,7 +1,7 @@
 import { useMutation } from "@tanstack/react-query";
 import { Eye, EyeOff, KeyRound, Mail, ShieldCheck, UserPlus } from "lucide-react";
 import * as React from "react";
-import { useNavigate, useSearchParams } from "react-router";
+import { Link, useNavigate, useSearchParams } from "react-router";
 import { toast } from "sonner";
 
 import { PageHeader } from "@/components/common/page-header";
@@ -507,11 +507,17 @@ export function LoginPage() {
                   {register.isPending ? "正在创建账号" : "验证并注册"}
                 </Button>
                 <p className="text-xs leading-5 text-muted-foreground">
-                  注册即表示你将遵守社区规则；邮箱仅用于校园资格、风控和账号恢复。
+                  注册后会先引导你选择隐私范围并明确接受当前社区规则与隐私说明；邮箱仅用于校园资格、风控和账号恢复。
                 </p>
               </form>
             </TabsContent>
           </Tabs>
+          <div className="mt-5 border-t pt-4 text-center text-sm text-muted-foreground">
+            主动停用或正在删除恢复期？
+            <Button asChild variant="link" className="h-auto px-1">
+              <Link to="/recover-account">恢复账号</Link>
+            </Button>
+          </div>
         </CardContent>
       </Card>
       <YourTJCaptcha

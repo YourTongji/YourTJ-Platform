@@ -13,6 +13,9 @@ import "@/styles/index.css";
 const AdminPage = React.lazy(async () => ({
   default: (await import("@/pages/admin-page")).AdminPage,
 }));
+const AccountRecoveryPage = React.lazy(async () => ({
+  default: (await import("@/pages/account-recovery-page")).AccountRecoveryPage,
+}));
 const AnnouncementsPage = React.lazy(async () => ({
   default: (await import("@/pages/announcements-page")).AnnouncementsPage,
 }));
@@ -42,6 +45,9 @@ const MessagesPage = React.lazy(async () => ({
 }));
 const NotificationsPage = React.lazy(async () => ({
   default: (await import("@/pages/notifications-page")).NotificationsPage,
+}));
+const OnboardingPage = React.lazy(async () => ({
+  default: (await import("@/pages/onboarding-page")).OnboardingPage,
 }));
 const ProfilePage = React.lazy(async () => ({
   default: (await import("@/pages/profile-page")).ProfilePage,
@@ -76,6 +82,8 @@ const router = createBrowserRouter(
       children: [
         { index: true, element: <HomePage /> },
         { path: "login", element: <LoginPage /> },
+        { path: "recover-account", element: <AccountRecoveryPage /> },
+        { path: "onboarding", element: <OnboardingPage /> },
         { path: "forum", element: <ForumPage /> },
         { path: "forum/threads/:id", element: <ThreadDetailPage /> },
         { path: "courses", element: <CoursesPage /> },

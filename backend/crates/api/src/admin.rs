@@ -95,7 +95,8 @@ pub async fn overview_handler(
 
     let overview = sqlx::query_as::<_, AdminOverviewDto>(
         "SELECT \
-           (SELECT COUNT(*) FROM identity.accounts WHERE status != 'deleted') AS total_users, \
+           (SELECT COUNT(*) FROM identity.accounts \
+              WHERE status IN ('active', 'suspended', 'deactivated')) AS total_users, \
            (SELECT COUNT(*) FROM identity.accounts accounts \
               WHERE accounts.status = 'active' \
                 AND NOT EXISTS (SELECT 1 FROM identity.sanctions sanctions \

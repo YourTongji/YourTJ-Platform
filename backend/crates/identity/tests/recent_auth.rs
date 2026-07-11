@@ -46,10 +46,12 @@ async fn create_session_token(
     let session_id: i64 = sqlx::query_scalar(
         "INSERT INTO identity.sessions \
          (account_id, refresh_hash, family_id, user_agent, expires_at, \
-          recent_authenticated_at, recent_auth_method) \
+          recent_authenticated_at, recent_auth_method, recent_auth_credential_version) \
          VALUES ($1, $2, $3, 'recent-auth-test', now() + interval '1 day', \
                  CASE WHEN $4 THEN now() ELSE NULL END, \
-                 CASE WHEN $4 THEN 'password' ELSE NULL END) RETURNING id",
+                 CASE WHEN $4 THEN 'password' ELSE NULL END, \
+                 CASE WHEN $4 THEN (SELECT credential_version FROM identity.accounts WHERE id = $1) \
+                      ELSE NULL END) RETURNING id",
     )
     .bind(account_id)
     .bind(uuid::Uuid::new_v4().simple().to_string())
@@ -570,6 +572,65 @@ async fn concurrent_session_revocation_wins_before_a_high_risk_mutation_commits(
             .await
             .expect("target role after revocation race");
     assert_eq!(persisted_role, "user");
+}
+
+#[tokio::test]
+async fn stale_password_proof_cannot_raise_freshness_after_concurrent_credential_change() {
+    let (pool, _) = helpers::create_test_app().await;
+    let old_password = "old-concurrent-password!42";
+    let (account_id, _) = insert_account(&pool, "admin", Some(old_password)).await;
+    let (session_id, _) = create_session_token(&pool, account_id, false).await;
+    let credential_version: i64 =
+        sqlx::query_scalar("SELECT credential_version FROM identity.accounts WHERE id = $1")
+            .bind(account_id)
+            .fetch_one(&pool)
+            .await
+            .expect("credential version");
+    let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(3));
+    let change_pool = pool.clone();
+    let change_barrier = barrier.clone();
+    let new_hash = password_hash("new-concurrent-password!84");
+    let change = tokio::spawn(async move {
+        change_barrier.wait().await;
+        identity::credential_state::replace_password_if_current(
+            &change_pool,
+            account_id,
+            Some(session_id),
+            credential_version,
+            &new_hash,
+        )
+        .await
+    });
+    let mark_pool = pool.clone();
+    let mark_barrier = barrier.clone();
+    let mark = tokio::spawn(async move {
+        mark_barrier.wait().await;
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        identity::credential_state::mark_password_recent_auth_if_current(
+            &mark_pool,
+            account_id,
+            session_id,
+            credential_version,
+        )
+        .await
+    });
+    barrier.wait().await;
+
+    change.await.expect("password change task").expect("password change wins");
+    assert!(mark.await.expect("recent-auth task").is_err());
+    let is_fresh: bool = sqlx::query_scalar(
+        "SELECT COALESCE( \
+           session.recent_authenticated_at IS NOT NULL \
+           AND session.recent_auth_credential_version = account.credential_version, FALSE) \
+         FROM identity.sessions session \
+         JOIN identity.accounts account ON account.id = session.account_id \
+         WHERE session.id = $1",
+    )
+    .bind(session_id)
+    .fetch_one(&pool)
+    .await
+    .expect("final recent-auth state");
+    assert!(!is_fresh, "old password proof must never survive a credential epoch change");
 }
 
 #[tokio::test]

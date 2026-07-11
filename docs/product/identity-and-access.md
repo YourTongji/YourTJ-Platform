@@ -6,7 +6,7 @@
 >
 > 负责人：Identity maintainers、Security owner、Product owner
 >
-> 最近核验：2026-07-12，migration `0048` 与 identity recent-auth tests
+> 最近核验：2026-07-12，migration `0053`、identity lifecycle/recent-auth tests 与 Web account journeys
 
 身份域证明“谁在使用平台”和“是否具备校园资格”，但不把校园邮箱变成公开身份。本规范定义
 登录、注册、密码、会话、onboarding、handle 与账号生命周期的目标语义。
@@ -26,20 +26,36 @@
 - 账号状态、角色、禁言/封禁会参与受保护请求判断。
 - recent-auth 只读取当前可撤销 session 的服务端时间和方法，10 分钟后过期；有密码账号
   可验证当前密码，所有当前 session 可请求 `recent_auth` purpose 的校园邮箱 code。
+- Password recent-auth 同时绑定账号 `credential_version`；修改、设置或重置密码都会推进版本。已验证旧
+  密码的并发请求不能在新密码提交后把当前 session 重新标为 fresh。
 - recent-auth 邮件路径不接受客户端 email；code 仍保持 hash、到期、尝试上限、provider-accepted
   和锁行一次消费。成功消费与当前 session 标记在同一事务提交。
 - 校园邮箱不进入公开 profile DTO；支持加密和 blind index 配置。
 - Identity 已持有 owner-editable profile text、受控 avatar/banner asset reference 和 profile/list/new-DM
   privacy policy；任意头像 URL 不再可写。
+- 新账号有 resumable onboarding row。普通社区 API 在当前条款、handle、资料和基础 privacy 选择原子
+  完成前 fail closed；`/me`、onboarding、设备/密码、导出和关闭账号等必要安全路径仍可访问。
+- 自助 lifecycle 已实现 `active -> deactivated` 与 `active -> deletion_requested -> deleted -> purged`；
+  停用/删除立即撤销全部 session，删除有固定 30 天恢复窗，purge 以 durable job 重试并写不可反查
+  原邮箱的 tombstone。Purge worker 在任何 owner-domain 清理前先锁行重验 deadline，并在 claim transaction
+  写入不可逆 `purge_started_at`；此后即使部分领域已清理而后续领域失败，账号也不能恢复为 active。
+- 账号恢复只接受 password、`recovery` purpose 邮箱 code 或关闭响应中的 15 分钟 recovery credential。
+  recovery credential 不创建 access/refresh/session；成功恢复后旧会话仍失效，用户必须正常登录。
+- Owner data export 使用 durable 24 小时 job；创建 job 和签发 5 分钟一次性 download grant 都要求
+  recent-auth，并记录下载时间。Artifact 由各领域的公开 owner projection 组成，不由 gateway 跨域读取
+  私有表。
 
 ### Partial
 
-- Web 已拆分密码登录、验证码登录、注册和忘记/重置密码，明确发送用途、重发倒计时、密码可见性、
-  中性找回提示和登录后安全返回路径；注册 UI 强制用户主动选择公开 handle。
+- Web 已拆分密码登录、验证码登录、注册、忘记/重置密码和账号恢复，明确发送用途、重发倒计时、
+  密码可见性、中性找回提示和登录后安全返回路径；注册 UI 强制用户主动选择公开 handle。
 - Web 已提供设备中心、单设备/其他设备/全部设备撤销和修改密码；验证码登录允许无密码账号首次
   设置密码，已有密码不会被验证码覆盖。
+- Web 已提供 focused onboarding、明确条款勾选、profile/activity privacy 默认值，以及 recent-auth
+  保护的数据导出、停用和删除确认。关闭响应中的 recovery credential 只放 sessionStorage。
 - access 与 refresh token 都保存在 localStorage；富文本上线前必须重新评估 XSS 后果。
-- Web 尚无跨标签页 refresh 协调；没有条款版本确认、onboarding、导出或自助删除。
+- Web 尚无跨标签页 refresh 协调；条款内容仍由应用常量版本驱动，尚无 policy publish/历史阅读界面，
+  onboarding 也还没有兴趣板块、头像上传和通知偏好的可恢复分步体验。
 
 ## 登录与注册体验
 
@@ -95,13 +111,23 @@ code 不可使用。
 
 ## Onboarding
 
-首次注册完成后按可跳过、可恢复的步骤引导：
+当前首次注册后进入 server-enforced、可恢复的 focused 页面，并原子完成：
 
-1. 选择 handle，说明其公开性、修改冷却和受保护名称。
-2. 上传平台 OSS 头像；允许跳过，不能要求填写外部 URL。
-3. 选择兴趣板块和通知基础偏好。
-4. 阅读并确认当前社区规则、隐私政策和积分边界版本。
-5. 解释 follow 与板块 subscription 的差异；在 follow graph 完成后提供建议关注。
+1. 显式确认公开 handle，可选 display name 与 bio。
+2. 分别选择 profile/activity visibility 和 discoverability。
+3. 阅读当前社区规则、隐私说明与积分边界摘要，以明确 checkbox 接受服务端要求的精确版本。
+
+除 `/me`、onboarding、设备/密码、导出、停用、删除和 logout 外，普通业务鉴权在 onboarding 未完成时
+拒绝请求。Web route guard 只开放 onboarding 与“账号与安全”设置，不能把必要的安全/数据权利动作绑到
+条款接受上。已存在账号由 migration 以 `legacy-v1` 完成状态回填；rolling window 中旧 writer 的 trigger
+也先标记为 legacy complete，新 registration/invitation writer 再显式重置为 incomplete。
+
+后续增强按可跳过、可恢复的步骤增加：
+
+1. 上传平台 OSS 头像；允许跳过，不能要求填写外部 URL。
+2. 选择兴趣板块和通知基础偏好。
+3. 解释 follow 与板块 subscription 的差异并提供透明的建议关注。
+4. 条款/隐私/规则从 versioned policy publish surface 读取完整文本，而不是长期依赖应用常量摘要。
 
 Onboarding 进度不应阻止必要的账号安全操作，也不能把营销同意与服务必要条款捆绑。
 
@@ -115,26 +141,38 @@ Onboarding 进度不应阻止必要的账号安全操作，也不能把营销同
 
 ## 账号生命周期
 
-目标状态机：
+当前状态机：
 
 ```text
-active -> deactivated -> deleted -> mutable identity purged
-   ^           |
-   +-----------+ 允许在恢复窗内重新激活
+active -> deactivated -----------------------> active
+   |
+   +-> deletion_requested -> deleted -> purged/tombstone
+              |                |
+              +------ 30 天内 -+-----------> active
 
 active + silence = 可认证和读取，但受保护社区写入被拒绝
 active + suspend = 登录、refresh 和受保护请求被拒绝
 ```
 
 - `deactivated` 是用户可恢复停用，不等同于处罚。
-- `deleted` 开始跨域删除/匿名化编排；恢复窗内仍可撤回。
-- `purged` 移除可变 PII，但保留法律/安全允许的最小审计和不可改写积分账本 tombstone。
+- `deletion_requested` 立即撤销所有 session、停止公开展示和新互动，同时排入 `mark_deleted` 与
+  deadline-based `purge` durable job；`deleted` 仍处于同一 30 天恢复窗。
+- `purged` 删除可变 Identity PII、password/session/recovery/export artifact，清理各域 owner-private
+  projection，但保留并撤销验证历史 ledger 所必需的 Ed25519 public key，以及政策要求的公共内容、
+  治理历史和不可改写积分账本。账号行只剩随机 tombstone handle/id 与必要外键锚点，不能反查原邮箱。
+- Lifecycle/export worker 使用 `FOR UPDATE SKIP LOCKED`、lease expiry、attempt/backoff 和 bounded error
+  code。恢复 transaction 锁定 purge job；job 为 running/failed 或账号已有 `purge_started_at` 时一律
+  fail closed。达到 20 次上限的 lifecycle dead letter 可由具备 `operations.jobs` capability 且完成
+  recent-auth 的管理员通过审计 requeue API 重置 worker attempts；该动作不清除 purge marker，也不重新
+  开放账号恢复。
 - 毕业或校园邮箱失效不应自动抹除社区历史；恢复政策仍为 `Decision needed`。
 
 ## 数据与接口所有权
 
-Identity crate 拥有 accounts、email codes、password hash、sessions、account keys、profile/privacy 和未来
-handle history。
+Identity crate 拥有 accounts、email codes、password hash、sessions、account keys、onboarding、recovery
+credentials、lifecycle/export jobs、profile/privacy 和未来 handle history。Forum、Reviews、Governance、
+Credit、Activity、Platform 与 Media 各自公开 owner export/purge API；gateway 只组合这些 typed API，
+不跨域编写私有 SQL。
 其他域通过 identity 的公开 API 获取最小身份/角色视图，不直接查询或返回校园邮箱。HTTP 结构以
 `contract/openapi.yaml` 为准，本文不复制字段清单。
 
@@ -150,6 +188,8 @@ handle history。
 
 - 密码与验证码两种登录都能从 Web 完成，注册和找回路径互不混淆。
 - 注册 UI 不从邮箱、学号或姓名自动生成公开 handle；用户必须显式选择满足规则的 handle。
+- 后端持久化 exactly the selected handle；已占用时在消费 registration code 前返回冲突，不能自动追加
+  随机后缀或静默替换公开身份。
 - 设备中心区分当前设备，支持撤销单个其他设备、其他全部设备和包括当前设备在内的全部会话。
 - code 跨 purpose、并发重放、过期、超尝试次数均失败且无状态竞争。
 - 外部响应不能可靠区分不存在账号、无密码和错误密码。
@@ -158,3 +198,12 @@ handle history。
   过期时间、撤销 session、错误/跨 purpose/replay code 和并发验证都有负向覆盖。
 - 公共 API、日志、通知和审计不泄露邮箱、code、password hash 或 refresh secret。
 - handler→repo→PostgreSQL 集成测试覆盖上述正向与负向旅程。
+- Onboarding 未完成时普通社区 API fail closed，但 owner 安全、导出、关闭和 logout 仍可用；条款版本
+  mismatch 不能静默接受。
+- Deactivate/delete 必须 recent-auth、幂等并立即撤销全部会话；recovery credential 不能访问普通 route
+  或创建 session，purge 后 password/email/recovery 都不能恢复。
+- Purge claim 必须在账号行锁内重验 recovery deadline 并原子写不可逆 marker 后才可调用 owner cleanup；
+  partial cleanup + failed/dead-letter 状态不能恢复账号，exhausted job 对 operator 可见且 requeue 有
+  capability、recent-auth、append-only audit 和重试到 tombstone 的数据库回归。
+- Owner export 跨域 projection 不泄露 inbound DM、举报人、reviewer、staff/evidence 或 provider secret；
+  job 可从过期 worker lease 恢复，download grant account-bound、短期且只消费一次。

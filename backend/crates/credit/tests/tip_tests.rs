@@ -390,11 +390,16 @@ async fn tip_rejects_suspended_or_deleted_recipient_account() {
     .execute(&pool)
     .await
     .unwrap();
-    sqlx::query("UPDATE identity.accounts SET status = 'deleted' WHERE id = $1")
-        .bind(deleted)
-        .execute(&pool)
-        .await
-        .unwrap();
+    sqlx::query(
+        "UPDATE identity.accounts SET status = 'deleted', \
+             deletion_requested_at = now() - interval '31 days', \
+             deletion_recover_until = now() - interval '1 day', deleted_at = now() \
+         WHERE id = $1",
+    )
+    .bind(deleted)
+    .execute(&pool)
+    .await
+    .unwrap();
     let token = create_token(&pool, "eligibilitytipper@tongji.edu.cn").await;
 
     assert_eq!(

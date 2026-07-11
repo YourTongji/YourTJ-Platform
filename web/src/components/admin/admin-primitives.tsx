@@ -38,7 +38,10 @@ export function AdminStatusBadge({ value }: { value?: string | null }) {
   const labels: Record<string, string> = {
     active: "正常",
     suspended: "已封禁",
-    deleted: "已删除",
+    deactivated: "已停用",
+    deletion_requested: "删除恢复期",
+    deleted: "等待清除",
+    purged: "已清除",
     open: "待处理",
     pending: "待审核",
     visible: "公开",
@@ -67,7 +70,19 @@ export function AdminStatusBadge({ value }: { value?: string | null }) {
     cancelled: "已取消",
   };
   const normalized = value ?? "unknown";
-  const isRisk = ["suspended", "deleted", "hidden", "upheld", "suspend", "blocked", "block", "failed", "dead"].includes(normalized);
+  const isRisk = [
+    "suspended",
+    "deletion_requested",
+    "deleted",
+    "purged",
+    "hidden",
+    "upheld",
+    "suspend",
+    "blocked",
+    "block",
+    "failed",
+    "dead",
+  ].includes(normalized);
   return (
     <Badge variant={isRisk ? "destructive" : normalized === "active" || normalized === "visible" ? "secondary" : "outline"}>
       {labels[normalized] ?? normalized}

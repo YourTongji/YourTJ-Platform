@@ -111,7 +111,7 @@ async function fetchOnce<T>(path: string, options: RequestOptions) {
     keepalive: options.keepalive,
   });
 
-  if (response.status === 204 || response.status === 202) {
+  if (response.status === 204) {
     return undefined as T;
   }
   if (!response.ok) {

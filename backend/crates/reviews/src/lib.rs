@@ -7,6 +7,7 @@
 
 mod admin_handlers;
 pub mod appeals;
+pub mod data_export;
 pub(crate) mod dto;
 pub(crate) mod error;
 mod handlers;

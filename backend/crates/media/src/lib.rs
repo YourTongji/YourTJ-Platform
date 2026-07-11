@@ -8,6 +8,7 @@
 
 use std::sync::Arc;
 
+pub mod data_export;
 mod deletion;
 mod dto;
 mod error;

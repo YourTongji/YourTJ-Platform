@@ -149,17 +149,24 @@ async fn fifty_concurrent_verifications_consume_code_once() {
     let (pool, app) = helpers::create_test_app().await;
     let suffix = uuid::Uuid::new_v4().simple().to_string();
     let email = format!("concurrent-code-{suffix}@tongji.edu.cn");
+    let handle = format!("concurrent-{}", &suffix[..16]);
     helpers::insert_valid_code_for_purpose(&pool, &email, "444444", "registration").await;
 
     let mut requests = tokio::task::JoinSet::new();
     for _ in 0..50 {
         let app = app.clone();
         let email = email.clone();
+        let handle = handle.clone();
         requests.spawn(async move {
             app.oneshot(json_request(
                 Method::POST,
                 "/api/v2/auth/email/verify",
-                json!({ "email": email, "code": "444444", "purpose": "registration" }),
+                json!({
+                    "email": email,
+                    "code": "444444",
+                    "purpose": "registration",
+                    "handle": handle
+                }),
             ))
             .await
             .expect("verification response")
@@ -257,13 +264,19 @@ async fn refresh_rotation_creates_one_successor_and_replay_revokes_family() {
     let (pool, app) = helpers::create_test_app().await;
     let suffix = uuid::Uuid::new_v4().simple().to_string();
     let email = format!("refresh-{suffix}@tongji.edu.cn");
+    let handle = format!("refresh-{}", &suffix[..16]);
     helpers::insert_valid_code_for_purpose(&pool, &email, "555555", "registration").await;
     let login = app
         .clone()
         .oneshot(json_request(
             Method::POST,
             "/api/v2/auth/email/verify",
-            json!({ "email": email, "code": "555555", "purpose": "registration" }),
+            json!({
+                "email": email,
+                "code": "555555",
+                "purpose": "registration",
+                "handle": handle
+            }),
         ))
         .await
         .expect("login response");

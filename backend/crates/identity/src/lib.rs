@@ -9,10 +9,14 @@
 use shared::AppState;
 pub mod auth;
 pub mod auth_middleware;
+pub mod credential_state;
+pub mod data_export;
 mod email_code;
 mod email_templates;
 mod handlers;
 mod ledger;
+pub mod lifecycle;
+pub mod onboarding;
 mod password;
 pub mod profiles;
 pub mod public_accounts;
@@ -39,6 +43,12 @@ pub fn routes(state: AppState) -> Router {
         .route("/api/v2/auth/password/login", post(handlers::password_login))
         .route("/api/v2/auth/appeal/password", post(handlers::appeal_password_login))
         .route("/api/v2/auth/appeal/email/verify", post(handlers::appeal_email_verify))
+        .route("/api/v2/auth/recovery/password", post(handlers::recovery_password))
+        .route("/api/v2/auth/recovery/email/verify", post(handlers::recovery_email_verify))
+        .route(
+            "/api/v2/auth/recovery",
+            get(handlers::inspect_recovery).post(handlers::reactivate_account),
+        )
         .route("/api/v2/auth/password/forgot", post(handlers::password_forgot))
         .route("/api/v2/auth/password/reset", post(handlers::password_reset))
         .route("/api/v2/auth/password/change", post(handlers::password_change))
@@ -50,6 +60,13 @@ pub fn routes(state: AppState) -> Router {
         .route("/api/v2/auth/recent-auth/verify", post(handlers::verify_recent_auth))
         // Profile
         .route("/api/v2/me", get(handlers::get_me).patch(handlers::update_me))
+        .route(
+            "/api/v2/me/onboarding",
+            get(handlers::get_onboarding).put(handlers::complete_onboarding),
+        )
+        .route("/api/v2/me/lifecycle", get(handlers::get_lifecycle))
+        .route("/api/v2/me/lifecycle/deactivate", post(handlers::deactivate_account))
+        .route("/api/v2/me/lifecycle/delete", post(handlers::delete_account))
         .route(
             "/api/v2/me/profile",
             get(handlers::get_my_profile).put(handlers::replace_my_profile),
@@ -76,6 +93,11 @@ pub fn routes(state: AppState) -> Router {
         .route("/api/v2/admin/users/{id}/suspend", post(handlers::admin::suspend_user))
         .route("/api/v2/admin/users/{id}/unsanction", post(handlers::admin::unsanction_user))
         .route("/api/v2/admin/users/{id}/sanctions", get(handlers::admin::list_user_sanctions))
+        .route("/api/v2/admin/account-lifecycle/jobs", get(handlers::admin::list_lifecycle_jobs))
+        .route(
+            "/api/v2/admin/account-lifecycle/jobs/{id}/requeue",
+            post(handlers::admin::requeue_lifecycle_job),
+        )
         .with_state(state)
 }
 

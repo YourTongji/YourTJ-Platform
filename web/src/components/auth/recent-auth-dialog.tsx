@@ -24,10 +24,12 @@ export function RecentAuthDialog({
   open,
   onOpenChange,
   onVerified,
+  description = "导出数据、修改安全设置或关闭账号等高风险操作，需要当前设备在最近 10 分钟内重新验证。",
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onVerified: () => void;
+  description?: string;
 }) {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
@@ -107,7 +109,7 @@ export function RecentAuthDialog({
             确认是你本人
           </DialogTitle>
           <DialogDescription>
-            角色、封禁和强制注销等高风险操作需要当前设备在最近 10 分钟内重新验证。
+            {description}
           </DialogDescription>
         </DialogHeader>
 

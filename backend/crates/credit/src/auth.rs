@@ -16,6 +16,7 @@ struct AccountAuthRow {
     status: String,
     auth_version: i64,
     legacy_access_revoked_before: chrono::DateTime<chrono::Utc>,
+    onboarding_complete: bool,
 }
 
 /// Resolve the authenticated account from request headers.
@@ -40,8 +41,12 @@ pub async fn authenticate(
     let account_id: i64 = claims.sub.parse().map_err(|_| auth::unauthorized())?;
 
     let account = sqlx::query_as::<_, AccountAuthRow>(
-        "SELECT role::text, status::text, auth_version, legacy_access_revoked_before \
-         FROM identity.accounts WHERE id = $1",
+        "SELECT account.role::text, account.status::text, account.auth_version, \
+                account.legacy_access_revoked_before, \
+                COALESCE(onboarding.completed_at IS NOT NULL, FALSE) AS onboarding_complete \
+         FROM identity.accounts account \
+         LEFT JOIN identity.account_onboarding onboarding ON onboarding.account_id = account.id \
+         WHERE account.id = $1",
     )
     .bind(account_id)
     .fetch_optional(db)
@@ -50,6 +55,9 @@ pub async fn authenticate(
     .ok_or_else(auth::unauthorized)?;
 
     if account.status != "active" {
+        return Err(auth::forbidden());
+    }
+    if !account.onboarding_complete {
         return Err(auth::forbidden());
     }
     match (claims.sid.as_deref(), claims.ver) {

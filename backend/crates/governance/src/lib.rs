@@ -10,6 +10,7 @@ use shared::{AppResult, Page};
 use sqlx::{FromRow, PgConnection, PgPool};
 
 pub mod appeals;
+pub mod data_export;
 pub mod notices;
 
 #[derive(Debug, Clone, FromRow)]

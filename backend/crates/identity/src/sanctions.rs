@@ -32,7 +32,7 @@ pub async fn issue_system_silence_tx(
 
     let role: String = sqlx::query_scalar(
         "SELECT role::text FROM identity.accounts \
-         WHERE id = $1 AND status <> 'deleted'::identity.account_status FOR UPDATE",
+         WHERE id = $1 AND status = 'active'::identity.account_status FOR UPDATE",
     )
     .bind(account_id)
     .fetch_optional(&mut *connection)

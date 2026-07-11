@@ -53,14 +53,24 @@ function ThemeToggle() {
 export function AppLayout() {
   const [searchOpen, setSearchOpen] = React.useState(false);
   const [mobileOpen, setMobileOpen] = React.useState(false);
-  const { account, isAuthenticated, logout } = useAuth();
+  const { account, isAuthenticated, isLoading, logout } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const isHome = location.pathname === "/";
+  const isOnboarding = location.pathname === "/onboarding";
+  const isOnboardingSecurity = Boolean(account?.onboardingRequired) && location.pathname === "/settings";
+  const isFocusedAccountSetup = isOnboarding || isOnboardingSecurity;
+  const canUseCommunity = isAuthenticated && !isLoading && !account?.onboardingRequired;
+
+  React.useEffect(() => {
+    if (!isLoading && account?.onboardingRequired && !isOnboarding && !isOnboardingSecurity) {
+      navigate("/onboarding", { replace: true });
+    }
+  }, [account?.onboardingRequired, isLoading, isOnboarding, isOnboardingSecurity, navigate]);
   const notificationCount = useQuery({
     queryKey: accountQueryKeys.notificationCount(account?.id),
     queryFn: api.unreadNotificationCount,
-    enabled: isAuthenticated,
+    enabled: canUseCommunity,
     staleTime: 30_000,
     refetchInterval: 60_000,
   });
@@ -68,7 +78,7 @@ export function AppLayout() {
   const governanceNotificationCount = useQuery({
     queryKey: accountQueryKeys.governanceNoticeCount(account?.id),
     queryFn: () => api.governanceNoticeUnreadCount(),
-    enabled: isAuthenticated,
+    enabled: canUseCommunity,
     staleTime: 30_000,
     refetchInterval: 60_000,
   });
@@ -76,7 +86,7 @@ export function AppLayout() {
   const dmCount = useQuery({
     queryKey: accountQueryKeys.directMessageCount(account?.id),
     queryFn: api.dmUnreadCount,
-    enabled: isAuthenticated,
+    enabled: canUseCommunity,
     staleTime: 30_000,
     refetchInterval: 60_000,
   });
@@ -86,7 +96,7 @@ export function AppLayout() {
 
   return (
     <TooltipProvider>
-      <RealtimeRefresh accountId={account?.id} isAuthenticated={isAuthenticated} />
+      <RealtimeRefresh accountId={account?.id} isAuthenticated={canUseCommunity} />
       <div className="min-h-screen bg-background">
         <header className="sticky top-0 z-40 h-16 border-b border-border/60 bg-white/95 backdrop-blur dark:bg-card/95">
           <div className="relative mx-auto flex h-full max-w-[1280px] items-center gap-3 px-4 sm:px-6">
@@ -133,12 +143,14 @@ export function AppLayout() {
               >
                 <Search className="size-[18px]" />
               </Button>
-              <Button asChild size="sm" className="hidden rounded-full px-4 lg:inline-flex">
-                <Link to="/forum">
-                  <Plus className="size-3.5" />
-                  快速发帖
-                </Link>
-              </Button>
+              {canUseCommunity ? (
+                <Button asChild size="sm" className="hidden rounded-full px-4 lg:inline-flex">
+                  <Link to="/forum">
+                    <Plus className="size-3.5" />
+                    快速发帖
+                  </Link>
+                </Button>
+              ) : null}
               <Button asChild variant="ghost" size="icon" className="size-9 rounded-full text-[#6b7280]">
                 <Link
                   to="/notifications"
@@ -153,7 +165,7 @@ export function AppLayout() {
                   ) : null}
                 </Link>
               </Button>
-              {isAuthenticated ? (
+              {canUseCommunity ? (
                 <Button asChild variant="ghost" size="icon" className="size-9 rounded-full text-[#6b7280]">
                   <Link
                     to="/messages"
@@ -217,10 +229,12 @@ export function AppLayout() {
         </header>
 
         <div className="mx-auto max-w-[1280px] px-4 sm:px-6 min-[1360px]:!px-8">
-          <div className="min-[1240px]:grid min-[1240px]:grid-cols-[256px_minmax(0,1fr)]">
-            <aside className="scrollbar-none sticky top-16 hidden h-[calc(100vh-4rem)] overflow-y-auto border-r min-[1240px]:block">
-              <SiteSidebar />
-            </aside>
+          <div className={cn(!isFocusedAccountSetup && "min-[1240px]:grid min-[1240px]:grid-cols-[256px_minmax(0,1fr)]")}>
+            {!isFocusedAccountSetup ? (
+              <aside className="scrollbar-none sticky top-16 hidden h-[calc(100vh-4rem)] overflow-y-auto border-r min-[1240px]:block">
+                <SiteSidebar />
+              </aside>
+            ) : null}
             <main className={cn("min-w-0", !isHome && "px-1 py-6 sm:px-4 lg:px-8")}>
               <React.Suspense fallback={<RouteLoadingState />}>
                 <PageTransition>
@@ -232,7 +246,7 @@ export function AppLayout() {
         </div>
       </div>
       <SearchDialog open={searchOpen} onOpenChange={setSearchOpen} />
-      <AnnouncementModalQueue />
+      {canUseCommunity ? <AnnouncementModalQueue /> : null}
     </TooltipProvider>
   );
 }

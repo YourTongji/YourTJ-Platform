@@ -17,11 +17,13 @@ use crate::auth::{
     create_appeal_access_token, create_session_access_token, generate_refresh_token,
 };
 use crate::dto::{
-    AccountDto, AppealAccessTokenOutput, AppealEmailVerificationInput, AuthTokensOutput,
-    BindKeyInput, ClaimChallengeOutput, ClaimInput, MyProfileDto, PasswordChangeInput,
-    PasswordForgotInput, PasswordLoginInput, PasswordResetInput, ProfilePrivacyDto,
-    ProfilePrivacyUpdateInput, ProfileUpdateInput, RecentAuthMethod, RecentAuthStatusDto,
-    RecentAuthVerifyInput, RefreshInput, RequestCodeInput, SessionDto, UpdateMeInput,
+    AccountDto, AccountLifecycleDto, AccountLifecycleMutationDto, AccountLifecycleMutationInput,
+    AppealAccessTokenOutput, AppealEmailVerificationInput, AuthTokensOutput, BindKeyInput,
+    ClaimChallengeOutput, ClaimInput, MyProfileDto, OnboardingCompleteInput, OnboardingStateDto,
+    PasswordChangeInput, PasswordForgotInput, PasswordLoginInput, PasswordResetInput,
+    ProfilePrivacyDto, ProfilePrivacyUpdateInput, ProfileUpdateInput, RecentAuthMethod,
+    RecentAuthStatusDto, RecentAuthVerifyInput, RecoveryCredentialDto,
+    RecoveryEmailVerificationInput, RefreshInput, RequestCodeInput, SessionDto, UpdateMeInput,
     VerifyEmailInput, WalletDto,
 };
 use crate::email_code::{generate_code, hash_code, CodePurpose};
@@ -43,15 +45,53 @@ pub struct SessionQuery {
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn row_to_dto(row: &crate::models::AccountRow) -> AccountDto {
-    AccountDto {
+async fn row_to_dto(state: &AppState, row: &crate::models::AccountRow) -> AppResult<AccountDto> {
+    Ok(AccountDto {
         id: row.id.to_string(),
         handle: row.handle.clone(),
         avatar_url: row.avatar_url.clone(),
         role: row.role.clone(),
         capabilities: shared::auth::capability_names_for_role(&row.role),
         trust_level: row.trust_level,
+        onboarding_required: crate::onboarding::is_required(&state.db, row.id).await?,
         created_at: row.created_at.timestamp(),
+    })
+}
+
+fn lifecycle_to_dto(lifecycle: crate::lifecycle::LifecycleRecord) -> AccountLifecycleDto {
+    AccountLifecycleDto {
+        state: lifecycle.state,
+        deactivated_at: lifecycle.deactivated_at.map(|value| value.timestamp()),
+        deletion_requested_at: lifecycle.deletion_requested_at.map(|value| value.timestamp()),
+        recover_until: lifecycle.recover_until.map(|value| value.timestamp()),
+        deleted_at: lifecycle.deleted_at.map(|value| value.timestamp()),
+        purged_at: lifecycle.purged_at.map(|value| value.timestamp()),
+        lifecycle_version: lifecycle.lifecycle_version,
+    }
+}
+
+fn recovery_to_dto(
+    credential: crate::lifecycle::IssuedRecoveryCredential,
+) -> RecoveryCredentialDto {
+    RecoveryCredentialDto {
+        recovery_token: credential.token,
+        expires_at: credential.expires_at.timestamp(),
+        lifecycle: lifecycle_to_dto(credential.lifecycle),
+    }
+}
+
+fn onboarding_to_dto(state: crate::onboarding::OnboardingState) -> OnboardingStateDto {
+    OnboardingStateDto {
+        required: state.required,
+        current_terms_version: state.current_terms_version,
+        accepted_terms_version: state.accepted_terms_version,
+        handle: state.handle,
+        display_name: state.display_name,
+        bio: state.bio,
+        profile_visibility: state.profile_visibility,
+        activity_visibility: state.activity_visibility,
+        discoverable: state.discoverable,
+        completed_at: state.completed_at.map(|value| value.timestamp()),
     }
 }
 
@@ -249,7 +289,7 @@ async fn issue_tokens(
     Ok(AuthTokensOutput {
         access_token,
         refresh_token: format!("{session_id:x}:{refresh_plain}"),
-        account: row_to_dto(account),
+        account: row_to_dto(state, account).await?,
     })
 }
 
@@ -257,7 +297,7 @@ fn issue_appeal_access(
     state: &AppState,
     account: &crate::models::AccountRow,
 ) -> AppResult<AppealAccessTokenOutput> {
-    if account.status == "deleted" {
+    if !matches!(account.status.as_str(), "active" | "suspended") {
         return Err(shared::AppError::Forbidden);
     }
     let ttl = 60 * 60;
@@ -300,15 +340,22 @@ pub async fn request_code(
         .unwrap_or_else(|| "unknown".into());
     shared::ratelimit::check_token_bucket(state.redis.as_ref(), "ip_code", &ip, 5, 600).await?;
 
-    let account_exists =
-        repo::find_account_by_email(&state.db, state.email_encryption.as_ref(), &email)
-            .await?
-            .is_some();
-    let purpose = body.purpose.map(Into::into).unwrap_or(if account_exists {
+    let account =
+        repo::find_account_by_email(&state.db, state.email_encryption.as_ref(), &email).await?;
+    let purpose = body.purpose.map(Into::into).unwrap_or(if account.is_some() {
         CodePurpose::Login
     } else {
         CodePurpose::Registration
     });
+    if purpose == CodePurpose::Recovery {
+        let can_recover = match account.as_ref() {
+            Some(account) => crate::lifecycle::can_recover(&state.db, account.id).await?,
+            None => false,
+        };
+        if !can_recover {
+            return Ok(StatusCode::NO_CONTENT);
+        }
+    }
     let code = generate_code();
     let code_hash = hash_code(&code);
     let expires_at = Utc::now() + chrono::Duration::minutes(10);
@@ -325,6 +372,7 @@ pub async fn request_code(
 
     let email_content = match purpose {
         CodePurpose::Appeal => crate::email_templates::appeal_code(&code),
+        CodePurpose::Recovery => crate::email_templates::account_recovery_code(&code),
         CodePurpose::Login | CodePurpose::Registration => crate::email_templates::login_code(&code),
         CodePurpose::PasswordReset | CodePurpose::RecentAuth => {
             return Err(shared::AppError::BadRequest("invalid code purpose".into()))
@@ -348,58 +396,75 @@ pub async fn verify_email(
     let email = normalize_campus_email(&body.email)?;
     validate_email_code(&body.code)?;
 
-    let code_purpose = repo::consume_email_code(
-        &state.db,
-        state.email_encryption.as_ref(),
-        &email,
-        body.purpose.map(Into::into),
-        &body.code,
-    )
-    .await?;
-
     let existing =
         repo::find_account_by_email(&state.db, state.email_encryption.as_ref(), &email).await?;
-    let account = match (code_purpose, existing) {
-        (CodePurpose::Login, Some(acct)) => {
-            repo::ensure_invitation_valid(&state.db, acct.id).await?;
-            repo::mark_email_verified(&state.db, acct.id).await?;
-            if let Some(pw) = body.password.as_deref() {
-                if acct.password_hash.is_none() {
-                    password::validate(pw, &email)?;
-                    let hash = password::hash(pw).await?;
-                    repo::update_password_hash(&state.db, acct.id, &hash).await?;
+    if existing.is_none() {
+        let handle = body.handle.as_deref().ok_or_else(|| {
+            shared::AppError::BadRequest("registration requires an explicit handle".into())
+        })?;
+        validate_handle(handle)?;
+        let handle_exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM identity.accounts WHERE handle = $1::citext)",
+        )
+        .bind(handle)
+        .fetch_one(&state.db)
+        .await?;
+        if handle_exists {
+            return Err(IdentityError::HandleTaken.into());
+        }
+    }
+
+    let account = if let Some(acct) = existing {
+        let code_purpose = repo::consume_email_code(
+            &state.db,
+            state.email_encryption.as_ref(),
+            &email,
+            body.purpose.map(Into::into),
+            &body.code,
+        )
+        .await?;
+        match code_purpose {
+            CodePurpose::Login => {
+                repo::ensure_invitation_valid(&state.db, acct.id).await?;
+                repo::mark_email_verified(&state.db, acct.id).await?;
+                if let Some(pw) = body.password.as_deref() {
+                    if acct.password_hash.is_none() {
+                        password::validate(pw, &email)?;
+                        let hash = password::hash(pw).await?;
+                        repo::update_password_hash(&state.db, acct.id, &hash).await?;
+                    }
                 }
+                acct
             }
-            acct
-        }
-        (CodePurpose::Registration, None) => {
-            let handle_opt = body.handle.as_deref();
-            if let Some(h) = handle_opt {
-                validate_handle(h)?;
+            CodePurpose::PasswordReset | CodePurpose::Appeal | CodePurpose::Recovery => {
+                return Err(IdentityError::InvalidCode.into());
             }
-            let account = repo::insert_account(
-                &state.db,
-                state.email_encryption.as_ref(),
-                &email,
-                handle_opt,
-            )
-            .await?;
-            // Set password if provided in same registration step.
-            if let Some(pw) = body.password.as_deref() {
-                password::validate(pw, &email)?;
-                let hash = password::hash(pw).await?;
-                repo::update_password_hash(&state.db, account.id, &hash).await?;
+            CodePurpose::Registration | CodePurpose::RecentAuth => {
+                return Err(shared::AppError::Conflict(
+                    "account state changed; request a new code".into(),
+                ));
             }
-            account
         }
-        (CodePurpose::PasswordReset | CodePurpose::Appeal, _) => {
-            return Err(IdentityError::InvalidCode.into())
-        }
-        _ => {
-            return Err(shared::AppError::Conflict(
-                "account state changed; request a new code".into(),
-            ))
-        }
+    } else {
+        let handle = body.handle.as_deref().ok_or_else(|| {
+            shared::AppError::Internal(anyhow::anyhow!("validated registration lost handle"))
+        })?;
+        let password_hash = if let Some(password) = body.password.as_deref() {
+            password::validate(password, &email)?;
+            Some(password::hash(password).await?)
+        } else {
+            None
+        };
+        repo::register_account_with_code(
+            &state.db,
+            state.email_encryption.as_ref(),
+            &email,
+            body.purpose.map(Into::into),
+            &body.code,
+            handle,
+            password_hash.as_deref(),
+        )
+        .await?
     };
 
     ensure_login_allowed(&state, &account).await?;
@@ -470,7 +535,7 @@ pub async fn refresh(
     Ok(Json(AuthTokensOutput {
         access_token,
         refresh_token: format!("{:x}:{new_refresh_plain}", rotation.session_id),
-        account: row_to_dto(&account),
+        account: row_to_dto(&state, &account).await?,
     }))
 }
 
@@ -478,7 +543,7 @@ async fn authenticated_context(
     state: &AppState,
     headers: &HeaderMap,
 ) -> AppResult<crate::auth_middleware::AuthenticatedContext> {
-    crate::auth_middleware::authenticate_context(
+    crate::auth_middleware::authenticate_context_allow_incomplete_onboarding(
         headers,
         &state.db,
         &state.jwt_secret,
@@ -599,15 +664,26 @@ pub async fn verify_recent_auth(
                     "password verification requires only password".into(),
                 ));
             }
+            let password_state =
+                repo::find_password_state_by_account_id(&state.db, account.id).await?;
             let password_matches = password::verify_or_dummy(
                 body.password.as_deref().unwrap_or_default(),
-                account.password_hash.as_deref(),
+                password_state.as_ref().map(|(hash, _)| hash.as_str()),
             )
             .await?;
             if !password_matches {
                 return Err(IdentityError::RecentAuthFailed.into());
             }
-            repo::mark_recent_auth_password(&state.db, account.id, session_id).await?;
+            let expected_credential_version = password_state
+                .map(|(_, version)| version)
+                .ok_or(IdentityError::RecentAuthFailed)?;
+            repo::mark_recent_auth_password(
+                &state.db,
+                account.id,
+                session_id,
+                expected_credential_version,
+            )
+            .await?;
         }
         RecentAuthMethod::EmailCode => {
             let has_valid_code =
@@ -636,14 +712,7 @@ pub async fn verify_recent_auth(
 /// Revokes the authenticated device session.
 #[tracing::instrument(skip_all)]
 pub async fn logout(State(state): State<AppState>, headers: HeaderMap) -> AppResult<StatusCode> {
-    let auth = crate::auth_middleware::authenticate_context(
-        &headers,
-        &state.db,
-        &state.jwt_secret,
-        state.redis.as_ref(),
-    )
-    .await
-    .map_err(|_r| shared::AppError::Unauthorized)?;
+    let auth = authenticated_context(&state, &headers).await?;
     if let Some(session_id) = auth.session_id {
         repo::revoke_account_session(&state.db, auth.account.id, session_id).await?;
     } else {
@@ -658,15 +727,8 @@ pub async fn logout_all(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> AppResult<StatusCode> {
-    let auth = crate::auth_middleware::authenticate(
-        &headers,
-        &state.db,
-        &state.jwt_secret,
-        state.redis.as_ref(),
-    )
-    .await
-    .map_err(|_| shared::AppError::Unauthorized)?;
-    repo::revoke_all_sessions(&state.db, auth.id).await?;
+    let auth = authenticated_context(&state, &headers).await?;
+    repo::revoke_all_sessions(&state.db, auth.account.id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -676,14 +738,7 @@ pub async fn list_sessions(
     headers: HeaderMap,
     Query(query): Query<SessionQuery>,
 ) -> AppResult<Json<Page<SessionDto>>> {
-    let auth = crate::auth_middleware::authenticate_context(
-        &headers,
-        &state.db,
-        &state.jwt_secret,
-        state.redis.as_ref(),
-    )
-    .await
-    .map_err(|_| shared::AppError::Unauthorized)?;
+    let auth = authenticated_context(&state, &headers).await?;
     let cursor = query
         .cursor
         .as_deref()
@@ -715,14 +770,7 @@ pub async fn revoke_named_session(
     headers: HeaderMap,
     axum::extract::Path(session_id): axum::extract::Path<String>,
 ) -> AppResult<StatusCode> {
-    let auth = crate::auth_middleware::authenticate(
-        &headers,
-        &state.db,
-        &state.jwt_secret,
-        state.redis.as_ref(),
-    )
-    .await
-    .map_err(|_| shared::AppError::Unauthorized)?;
+    let auth = authenticated_context(&state, &headers).await?.account;
     let session_id = session_id
         .parse::<i64>()
         .map_err(|_| shared::AppError::BadRequest("invalid session id".into()))?;
@@ -737,14 +785,7 @@ pub async fn revoke_other_sessions(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> AppResult<StatusCode> {
-    let auth = crate::auth_middleware::authenticate_context(
-        &headers,
-        &state.db,
-        &state.jwt_secret,
-        state.redis.as_ref(),
-    )
-    .await
-    .map_err(|_| shared::AppError::Unauthorized)?;
+    let auth = authenticated_context(&state, &headers).await?;
     let session_id = auth.session_id.ok_or(shared::AppError::Unauthorized)?;
     repo::revoke_other_sessions(&state.db, auth.account.id, session_id).await?;
     Ok(StatusCode::NO_CONTENT)
@@ -755,18 +796,11 @@ pub async fn get_me(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> AppResult<Json<AccountDto>> {
-    let auth = crate::auth_middleware::authenticate(
-        &headers,
-        &state.db,
-        &state.jwt_secret,
-        state.redis.as_ref(),
-    )
-    .await
-    .map_err(|_r| shared::AppError::Unauthorized)?;
+    let auth = authenticated_context(&state, &headers).await?.account;
     let account = repo::find_account_by_id(&state.db, state.email_encryption.as_ref(), auth.id)
         .await?
         .ok_or(shared::AppError::NotFound)?;
-    Ok(Json(row_to_dto(&account)))
+    Ok(Json(row_to_dto(&state, &account).await?))
 }
 
 /// PATCH /me
@@ -809,7 +843,103 @@ pub async fn update_me(
     .await?;
     crate::public_search::reconcile_user_in_background(&state, auth.id);
 
-    Ok(Json(row_to_dto(&row)))
+    Ok(Json(row_to_dto(&state, &row).await?))
+}
+
+/// GET /api/v2/me/onboarding
+pub async fn get_onboarding(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> AppResult<Json<OnboardingStateDto>> {
+    let auth = authenticated_context(&state, &headers).await?;
+    let onboarding = crate::onboarding::get(&state.db, auth.account.id).await?;
+    Ok(Json(onboarding_to_dto(onboarding)))
+}
+
+/// PUT /api/v2/me/onboarding
+pub async fn complete_onboarding(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<OnboardingCompleteInput>,
+) -> AppResult<Json<OnboardingStateDto>> {
+    let auth = authenticated_context(&state, &headers).await?;
+    validate_handle(&body.handle)?;
+    let display_name =
+        normalize_profile_text(body.display_name.as_deref(), "displayName", 50, false)?;
+    let bio = normalize_profile_text(body.bio.as_deref(), "bio", 500, true)?;
+    if !matches!(body.profile_visibility.as_str(), "public" | "campus" | "only_me")
+        || !matches!(body.activity_visibility.as_str(), "public" | "campus" | "only_me")
+    {
+        return Err(shared::AppError::BadRequest("invalid onboarding privacy policy".into()));
+    }
+    let onboarding = crate::onboarding::complete(
+        &state.db,
+        auth.account.id,
+        crate::onboarding::OnboardingChoices {
+            handle: &body.handle,
+            display_name: display_name.as_deref(),
+            bio: bio.as_deref(),
+            profile_visibility: &body.profile_visibility,
+            activity_visibility: &body.activity_visibility,
+            discoverable: body.discoverable,
+            accepted_terms_version: &body.accepted_terms_version,
+        },
+    )
+    .await?;
+    crate::public_search::reconcile_user_in_background(&state, auth.account.id);
+    Ok(Json(onboarding_to_dto(onboarding)))
+}
+
+/// GET /api/v2/me/lifecycle
+pub async fn get_lifecycle(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> AppResult<Json<AccountLifecycleDto>> {
+    let auth = authenticated_context(&state, &headers).await?;
+    Ok(Json(lifecycle_to_dto(crate::lifecycle::get(&state.db, auth.account.id).await?)))
+}
+
+/// POST /api/v2/me/lifecycle/deactivate
+pub async fn deactivate_account(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<AccountLifecycleMutationInput>,
+) -> AppResult<Json<AccountLifecycleMutationDto>> {
+    if body.confirmation != "DEACTIVATE" {
+        return Err(shared::AppError::BadRequest("confirmation must be DEACTIVATE".into()));
+    }
+    let auth = authenticated_context(&state, &headers).await?;
+    let idempotency_key = headers
+        .get("Idempotency-Key")
+        .and_then(|value| value.to_str().ok())
+        .ok_or_else(|| shared::AppError::BadRequest("Idempotency-Key is required".into()))?;
+    let credential = crate::lifecycle::deactivate(&state.db, &auth, idempotency_key).await?;
+    crate::public_search::reconcile_user_in_background(&state, auth.account.id);
+    let lifecycle = lifecycle_to_dto(credential.lifecycle.clone());
+    Ok(Json(AccountLifecycleMutationDto { lifecycle, recovery: recovery_to_dto(credential) }))
+}
+
+/// POST /api/v2/me/lifecycle/delete
+pub async fn delete_account(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<AccountLifecycleMutationInput>,
+) -> AppResult<(StatusCode, Json<AccountLifecycleMutationDto>)> {
+    if body.confirmation != "DELETE" {
+        return Err(shared::AppError::BadRequest("confirmation must be DELETE".into()));
+    }
+    let auth = authenticated_context(&state, &headers).await?;
+    let idempotency_key = headers
+        .get("Idempotency-Key")
+        .and_then(|value| value.to_str().ok())
+        .ok_or_else(|| shared::AppError::BadRequest("Idempotency-Key is required".into()))?;
+    let credential = crate::lifecycle::request_deletion(&state.db, &auth, idempotency_key).await?;
+    crate::public_search::reconcile_user_in_background(&state, auth.account.id);
+    let lifecycle = lifecycle_to_dto(credential.lifecycle.clone());
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(AccountLifecycleMutationDto { lifecycle, recovery: recovery_to_dto(credential) }),
+    ))
 }
 
 /// GET /api/v2/me/profile
@@ -1258,6 +1388,98 @@ pub async fn appeal_email_verify(
     Ok(Json(issue_appeal_access(&state, &account)?))
 }
 
+/// POST /auth/recovery/password — prove account control without creating a session.
+#[tracing::instrument(skip_all)]
+pub async fn recovery_password(
+    State(state): State<AppState>,
+    Json(body): Json<PasswordLoginInput>,
+) -> AppResult<Json<RecoveryCredentialDto>> {
+    let email = normalize_campus_email(&body.email)?;
+    shared::ratelimit::check_token_bucket(
+        state.redis.as_ref(),
+        "account_recovery_password",
+        &email,
+        5,
+        300,
+    )
+    .await?;
+    let account =
+        repo::find_account_by_email(&state.db, state.email_encryption.as_ref(), &email).await?;
+    let password_hash = account.as_ref().and_then(|account| account.password_hash.as_deref());
+    let valid_length = (1..=128).contains(&body.password.len());
+    let candidate = if valid_length { body.password.as_str() } else { "invalid-password-input" };
+    let matches = password::verify_or_dummy(candidate, password_hash).await?;
+    if !valid_length || !matches || password_hash.is_none() || account.is_none() {
+        return Err(IdentityError::WrongPassword.into());
+    }
+    let account = account.ok_or(shared::AppError::Unauthorized)?;
+    if !crate::lifecycle::can_recover(&state.db, account.id).await? {
+        return Err(shared::AppError::Unauthorized);
+    }
+    let credential =
+        crate::lifecycle::issue_recovery_credential(&state.db, account.id, "password").await?;
+    Ok(Json(recovery_to_dto(credential)))
+}
+
+/// POST /auth/recovery/email/verify — consume only a recovery-purpose code.
+#[tracing::instrument(skip_all)]
+pub async fn recovery_email_verify(
+    State(state): State<AppState>,
+    Json(body): Json<RecoveryEmailVerificationInput>,
+) -> AppResult<Json<RecoveryCredentialDto>> {
+    let email = normalize_campus_email(&body.email)?;
+    validate_email_code(&body.code)?;
+    repo::consume_email_code(
+        &state.db,
+        state.email_encryption.as_ref(),
+        &email,
+        Some(CodePurpose::Recovery),
+        &body.code,
+    )
+    .await?;
+    let account = repo::find_account_by_email(&state.db, state.email_encryption.as_ref(), &email)
+        .await?
+        .ok_or(IdentityError::InvalidCode)?;
+    let credential =
+        crate::lifecycle::issue_recovery_credential(&state.db, account.id, "email_code").await?;
+    Ok(Json(recovery_to_dto(credential)))
+}
+
+fn recovery_token(headers: &HeaderMap) -> AppResult<&str> {
+    headers
+        .get("X-Recovery-Token")
+        .and_then(|value| value.to_str().ok())
+        .ok_or(shared::AppError::Unauthorized)
+}
+
+/// GET /auth/recovery
+pub async fn inspect_recovery(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> AppResult<Json<AccountLifecycleDto>> {
+    let lifecycle =
+        crate::lifecycle::inspect_recovery(&state.db, recovery_token(&headers)?).await?;
+    Ok(Json(lifecycle_to_dto(lifecycle)))
+}
+
+/// POST /auth/recovery — consume the recovery credential and require a normal login next.
+pub async fn reactivate_account(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> AppResult<Json<AccountLifecycleDto>> {
+    let token = recovery_token(&headers)?;
+    let lifecycle = crate::lifecycle::reactivate(&state.db, token).await?;
+    let account_id: i64 = sqlx::query_scalar(
+        "SELECT credential.account_id FROM identity.account_recovery_credentials credential \
+         WHERE credential.token_hash = $1",
+    )
+    .bind(hex::encode(sha2::Sha256::digest(token.as_bytes())))
+    .fetch_one(&state.db)
+    .await?;
+    crate::public_search::reconcile_user_in_background(&state, account_id);
+    Ok(Json(lifecycle_to_dto(lifecycle)))
+}
+
 /// POST /auth/password/forgot
 ///
 /// Sends a 6-digit verification code to the email for password reset.
@@ -1352,14 +1574,7 @@ pub async fn password_change(
     headers: HeaderMap,
     Json(body): Json<PasswordChangeInput>,
 ) -> AppResult<StatusCode> {
-    let auth = crate::auth_middleware::authenticate_context(
-        &headers,
-        &state.db,
-        &state.jwt_secret,
-        state.redis.as_ref(),
-    )
-    .await
-    .map_err(|_r| shared::AppError::Unauthorized)?;
+    let auth = authenticated_context(&state, &headers).await?;
 
     // Rate-limit: 3 changes per account per minute.
     shared::ratelimit::check_token_bucket(
@@ -1377,9 +1592,10 @@ pub async fn password_change(
             .await?
             .ok_or(shared::AppError::NotFound)?;
 
-    let phc = repo::find_password_hash_by_account_id(&state.db, auth.account.id)
-        .await?
-        .ok_or(IdentityError::NoPasswordSet)?;
+    let (phc, expected_credential_version) =
+        repo::find_password_state_by_account_id(&state.db, auth.account.id)
+            .await?
+            .ok_or(IdentityError::NoPasswordSet)?;
 
     // Verify current password.
     if !password::verify(&body.current_password, &phc).await? {
@@ -1394,6 +1610,7 @@ pub async fn password_change(
         &state.db,
         auth.account.id,
         auth.session_id,
+        expected_credential_version,
         &new_hash,
     )
     .await?;

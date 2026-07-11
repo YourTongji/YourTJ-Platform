@@ -32,6 +32,7 @@ interface AuthContextValue {
   loginWithPassword: (input: { email: string; password: string }) => Promise<void>;
   refreshMe: () => Promise<void>;
   updateProfile: (input: { handle?: string; avatarUrl?: string }) => Promise<void>;
+  clearSession: () => void;
   logout: () => Promise<void>;
   logoutAll: () => Promise<void>;
 }
@@ -135,6 +136,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         activeAccountId.current = updated.id;
         setAccount(updated);
         toast.success("资料已更新");
+      },
+      clearSession: () => {
+        clearAuth();
+        setAccount(null);
       },
       logout: async () => {
         try {

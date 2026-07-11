@@ -1,6 +1,10 @@
 import { apiBlobRequest, apiRequest } from "./client";
 import type {
   Account,
+  AccountDataExport,
+  AccountLifecycle,
+  AccountLifecycleMutation,
+  AccountLifecycleMutationInput,
   Achievement,
   AchievementCreateInput,
   AchievementEvent,
@@ -46,6 +50,8 @@ import type {
   CreditReconciliationStats,
   CreditReconciliationWallet,
   Department,
+  DataExportDownloadGrant,
+  DataExportJob,
   DeviceSessionPage,
   DmConversation,
   DmCounts,
@@ -97,12 +103,15 @@ import type {
   VerificationTypeInput,
   IgnoreUser,
   MyProfile,
+  OnboardingCompleteInput,
+  OnboardingState,
   MyUpload,
   ProfilePrivacy,
   ProfilePrivacyUpdateInput,
   ProfileUpdateInput,
   RecentAuthStatus,
   RecentAuthVerifyInput,
+  RecoveryCredential,
   UserComment,
   UserProfile,
   UserRelationship,
@@ -155,6 +164,37 @@ export const api = {
       method: "POST",
       body: input,
       auth: false,
+    });
+  },
+
+  recoveryPassword(input: { email: string; password: string }) {
+    return apiRequest<RecoveryCredential>("/auth/recovery/password", {
+      method: "POST",
+      body: input,
+      auth: false,
+    });
+  },
+
+  recoveryEmailVerify(input: { email: string; code: string }) {
+    return apiRequest<RecoveryCredential>("/auth/recovery/email/verify", {
+      method: "POST",
+      body: input,
+      auth: false,
+    });
+  },
+
+  inspectRecovery(recoveryToken: string) {
+    return apiRequest<AccountLifecycle>("/auth/recovery", {
+      auth: false,
+      headers: { "X-Recovery-Token": recoveryToken },
+    });
+  },
+
+  reactivateAccount(recoveryToken: string) {
+    return apiRequest<AccountLifecycle>("/auth/recovery", {
+      method: "POST",
+      auth: false,
+      headers: { "X-Recovery-Token": recoveryToken },
     });
   },
 
@@ -235,6 +275,63 @@ export const api = {
 
   updateMe(input: { handle?: string }) {
     return apiRequest<Account>("/me", { method: "PATCH", body: input });
+  },
+
+  onboarding() {
+    return apiRequest<OnboardingState>("/me/onboarding");
+  },
+
+  completeOnboarding(input: OnboardingCompleteInput) {
+    return apiRequest<OnboardingState>("/me/onboarding", { method: "PUT", body: input });
+  },
+
+  accountLifecycle() {
+    return apiRequest<AccountLifecycle>("/me/lifecycle");
+  },
+
+  deactivateAccount(input: AccountLifecycleMutationInput, idempotencyKey: string) {
+    return apiRequest<AccountLifecycleMutation>("/me/lifecycle/deactivate", {
+      method: "POST",
+      headers: { "Idempotency-Key": idempotencyKey },
+      body: input,
+    });
+  },
+
+  deleteAccount(input: AccountLifecycleMutationInput, idempotencyKey: string) {
+    return apiRequest<AccountLifecycleMutation>("/me/lifecycle/delete", {
+      method: "POST",
+      headers: { "Idempotency-Key": idempotencyKey },
+      body: input,
+    });
+  },
+
+  createDataExport(idempotencyKey: string) {
+    return apiRequest<DataExportJob>("/me/data-exports", {
+      method: "POST",
+      headers: { "Idempotency-Key": idempotencyKey },
+    });
+  },
+
+  dataExports() {
+    return apiRequest<DataExportJob[]>("/me/data-exports");
+  },
+
+  dataExport(exportId: string) {
+    return apiRequest<DataExportJob>(`/me/data-exports/${encodeURIComponent(exportId)}`);
+  },
+
+  createDataExportDownloadGrant(exportId: string) {
+    return apiRequest<DataExportDownloadGrant>(
+      `/me/data-exports/${encodeURIComponent(exportId)}/download-grant`,
+      { method: "POST" },
+    );
+  },
+
+  downloadDataExport(exportId: string, token: string) {
+    return apiRequest<AccountDataExport>(
+      `/me/data-exports/${encodeURIComponent(exportId)}/download`,
+      { headers: { "X-Export-Token": token } },
+    );
   },
 
   myProfile() {
@@ -1176,7 +1273,7 @@ export const api = {
   adminUsers(query: {
     q?: string;
     role?: "user" | "mod" | "admin";
-    status?: "active" | "suspended" | "deleted";
+    status?: "active" | "suspended" | "deactivated" | "deletion_requested" | "deleted" | "purged";
     cursor?: string | null;
   }) {
     return apiRequest<Page<AdminUser>>("/admin/users", { query: { ...query, limit: 30 } });

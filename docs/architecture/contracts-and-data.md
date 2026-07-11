@@ -44,6 +44,24 @@
 - `governance` 拥有跨域 audit、appeal、append-only appeal transition 和 account-private governance
   notice；identity/forum/reviews 继续拥有原处置状态及 reversal 规则。API composition 只能调用这些
   owner public functions，不能把制裁/内容恢复 SQL 搬进 gateway。
+- Account export/lifecycle composition 遵循同一边界：Identity 拥有 job、recovery credential 和最终
+  tombstone；Forum、Reviews、Governance、Credit、Activity、Platform、Media 各自实现 typed
+  `snapshot`/private purge API。Gateway 可以并行组合 owner API，但不得复制任何 owner-private SQL。
+
+Migration `0053` 的 rolling 顺序是：先在维护窗口执行 migration，再部署同时理解 onboarding/lifecycle
+状态与第六类 `recovery` email purpose 的应用，最后开放 Web route。它有三项特殊兼容约束：
+
+- `identity.account_status` 通过 rename/create/cast 替换以便同一 transaction 可写新值；这会取得表锁，
+  上线前必须确认账号表规模与 lock timeout。旧应用仍能处理原 `active/suspended/deleted` 文本，但不得在
+  migration 期间并发修改 enum/constraint。
+- 既有账号回填 `legacy-v1` completed onboarding；AFTER INSERT trigger 也让 rolling window 的旧 writer
+  先完成。新 registration/invitation writer 在自己的 transaction 中明确重置为 incomplete，避免旧 writer
+  创建永久绕过 onboarding 的账号。
+- Migration 前已有的 legacy `deleted` row 不会被立即 purge：统一回填 migration-time request/deleted
+  timestamp、30 天 deadline 和 queued purge job，给旧账号一次同等安全恢复窗。Upgrade fixture 必须验证
+  constraint、deadline 和 job 一起成立。
+- 新表/列对旧读路径保持可忽略；回退时关闭 onboarding/lifecycle/export/recovery routes 并保留 schema、
+  job 与 append-only event，不通过反向 enum cast、drop table 或改写历史伪造恢复。
 
 Fresh database 必须只通过 sqlx migration ledger 建立。普通启动、CI 和运维不能同时用裸 psql
 重复执行同一组文件；开发流程见[本地环境](../development/local-development.md)。
@@ -77,6 +95,13 @@ Fresh database 必须只通过 sqlx migration ledger 建立。普通启动、CI 
 `SKIP LOCKED` claim、最多 8 次有结果失败的有界指数退避（过期 final lease 仍可按同一 attempt 恢复）、
 副作用前 row-lock lease fencing、delivery receipt 和理由化人工 dead-letter retry。普通成功/
 取消事件保留 30 天，dead-letter 和 delivery receipt 保留 90 天。Redis/SSE 只承载 refresh hint。
+Account lifecycle/export 是数据库持久 job，但 consumer 仍由 API 进程内 supervised loop 启动：claim 使用
+`FOR UPDATE SKIP LOCKED`，running lease 10 分钟后可回收，失败有 attempt/backoff/bounded error。它比裸
+fire-and-forget 可恢复。Lifecycle purge claim 还必须在同一 transaction 锁账号、重验 recovery deadline
+并写不可逆 `purge_started_at`，owner cleanup 不得早于该 commit；running/failed/marker 后 recovery fail
+closed。耗尽 20 次的 lifecycle job 可从 capability-gated admin API 观察，并由 recent-auth + reason + audit
+的 requeue 恢复 worker 执行，但不会清除 marker。当前仍没有独立 worker deployment、统一 operator UI、
+SLO 或逐域 reconciliation，因此不能作为所有 future job 的最终模板。
 搜索索引等部分路径仍使用 `tokio::spawn`，属于迁移目标，不是推荐的新模式。
 
 ## 搜索、缓存与计数
@@ -189,13 +214,16 @@ Fresh database 必须只通过 sqlx migration ledger 建立。普通启动、CI 
   session 更新在同一事务中，客户端不提交 email。refresh successor 继承原 timestamp/method，但
   freshness deadline 不重置。高风险 identity mutation 在业务 transaction 内对 actor session 取 share lock
   并查验 freshness，使并发 revoke 先提交时 mutation 必须失败，而不留事务外 check/use 窗口。
+- Password method 还绑定 `recent_auth_credential_version`。验证先取得 password hash/version，写 fresh 时
+  以 account credential version 做 compare-and-set；password set/change/reset 先推进版本并清空不再有效的
+  freshness。真实 PostgreSQL barrier test 覆盖“旧密码已验证但新密码先提交”的并发顺序。
 - Migration `0048` 是 additive session column 和 email-purpose constraint 扩展，旧应用会忽略新列并写入
   nullable 默认；滚动发布先跑 migration，再部署读取新列的应用。不带 session id 的 legacy JWT
   status 明确返回 unbound，高风险 mutation 一律 428 fail closed。紧急回退应保留 schema 并在边缘
   关闭高风险 route 后回退应用，不能以恢复无 step-up 的 mutation 作为“可用性降级”。
-- `0047` 的 appeal 与 `0048` 的 recent-auth 曾分别扩展同一个 email purpose constraint；`0052` 以
-  additive 后续 migration 固定五类 purpose 的并集，避免后执行 migration 覆盖前一能力。Fresh/rolling
-  部署必须在应用接受 appeal 或 recent-auth 请求前跑到 `0052`，集成测试同时插入两类 code 防回归。
+- `0047` 的 appeal 与 `0048` 的 recent-auth 曾分别扩展同一个 email purpose constraint；`0052` 先固定
+  五类 purpose 的并集，`0053` 再增加 recovery，避免后执行 migration 覆盖前一能力。Fresh/rolling 部署
+  必须在应用接受对应请求前跑到 `0053`，集成测试覆盖 purpose isolation。
 - Appeal-only JWT 使用显式 `scope=appeal`、短 TTL、无 refresh/session。普通 identity/forum/reviews/
   credit middleware 必须拒绝 scoped token；只有治理申诉/通知 composition 调用 restricted authenticator，
   且 deleted 账号仍不可访问。

@@ -7,6 +7,7 @@
 pub mod achievements;
 mod announcements;
 mod auth;
+pub mod data_export;
 pub mod outbox;
 mod promotions;
 mod settings;

@@ -117,6 +117,7 @@ components:
     # ---- identity ----
     Account:
       type: object
+      required: [id, handle, avatarUrl, role, capabilities, trustLevel, onboardingRequired, createdAt]
       properties:
         id: { type: string }
         handle: { type: string }
@@ -130,7 +131,117 @@ components:
           type: array
           items: { type: string }
         trustLevel: { type: integer }
+        onboardingRequired:
+          type: boolean
+          description: True until the current terms version and required profile/privacy choices are accepted.
         createdAt: { type: integer }
+    AccountLifecycleState:
+      type: string
+      enum: [active, deactivated, deletion_requested, deleted, purged]
+    AccountLifecycle:
+      type: object
+      required: [state, deactivatedAt, deletionRequestedAt, recoverUntil, deletedAt, purgedAt, lifecycleVersion]
+      properties:
+        state: { $ref: "#/components/schemas/AccountLifecycleState" }
+        deactivatedAt: { type: integer, nullable: true }
+        deletionRequestedAt: { type: integer, nullable: true }
+        recoverUntil: { type: integer, nullable: true }
+        deletedAt: { type: integer, nullable: true }
+        purgedAt: { type: integer, nullable: true }
+        lifecycleVersion: { type: integer, minimum: 1 }
+    RecoveryCredential:
+      type: object
+      description: Purpose-bound credential accepted only by account-recovery routes. It never creates a session or refresh token.
+      required: [recoveryToken, expiresAt, lifecycle]
+      properties:
+        recoveryToken: { type: string, minLength: 43, maxLength: 43 }
+        expiresAt: { type: integer }
+        lifecycle: { $ref: "#/components/schemas/AccountLifecycle" }
+    OnboardingState:
+      type: object
+      required: [required, currentTermsVersion, acceptedTermsVersion, handle, displayName, bio, profileVisibility, activityVisibility, discoverable, completedAt]
+      properties:
+        required: { type: boolean }
+        currentTermsVersion: { type: string }
+        acceptedTermsVersion: { type: string, nullable: true }
+        handle: { type: string }
+        displayName: { type: string, nullable: true }
+        bio: { type: string, nullable: true }
+        profileVisibility: { $ref: "#/components/schemas/ProfileVisibility" }
+        activityVisibility: { $ref: "#/components/schemas/ActivityVisibility" }
+        discoverable: { type: boolean }
+        completedAt: { type: integer, nullable: true }
+    OnboardingCompleteInput:
+      type: object
+      additionalProperties: false
+      required: [handle, displayName, bio, profileVisibility, activityVisibility, discoverable, acceptedTermsVersion]
+      properties:
+        handle: { type: string, minLength: 3, maxLength: 30, pattern: '^[a-z0-9._-]+$' }
+        displayName: { type: string, nullable: true, minLength: 1, maxLength: 50 }
+        bio: { type: string, nullable: true, maxLength: 500 }
+        profileVisibility: { $ref: "#/components/schemas/ProfileVisibility" }
+        activityVisibility: { $ref: "#/components/schemas/ActivityVisibility" }
+        discoverable: { type: boolean }
+        acceptedTermsVersion: { type: string, minLength: 1, maxLength: 64 }
+    AccountLifecycleMutationInput:
+      type: object
+      additionalProperties: false
+      required: [confirmation]
+      properties:
+        confirmation: { type: string, enum: [DEACTIVATE, DELETE] }
+    DeactivateAccountInput:
+      type: object
+      additionalProperties: false
+      required: [confirmation]
+      properties:
+        confirmation: { type: string, enum: [DEACTIVATE] }
+    DeleteAccountInput:
+      type: object
+      additionalProperties: false
+      required: [confirmation]
+      properties:
+        confirmation: { type: string, enum: [DELETE] }
+    AccountLifecycleMutation:
+      type: object
+      required: [lifecycle, recovery]
+      properties:
+        lifecycle: { $ref: "#/components/schemas/AccountLifecycle" }
+        recovery: { $ref: "#/components/schemas/RecoveryCredential" }
+    DataExportStatus:
+      type: string
+      enum: [queued, running, ready, failed, expired]
+    DataExportJob:
+      type: object
+      required: [id, status, createdAt, updatedAt, expiresAt, errorCode]
+      properties:
+        id: { type: string }
+        status: { $ref: "#/components/schemas/DataExportStatus" }
+        createdAt: { type: integer }
+        updatedAt: { type: integer }
+        expiresAt: { type: integer }
+        errorCode: { type: string, nullable: true }
+    DataExportDownloadGrant:
+      type: object
+      required: [token, expiresAt]
+      properties:
+        token: { type: string, minLength: 43, maxLength: 43 }
+        expiresAt: { type: integer }
+    AccountDataExport:
+      type: object
+      description: Machine-readable owner export assembled through domain-owned projections. Internal evidence, reporter/staff identity, inbound private-message bodies, secrets, and provider metadata are excluded.
+      required: [schemaVersion, generatedAt, includedSections, identity, forum, reviews, governance, credit, activity, platform, media]
+      properties:
+        schemaVersion: { type: string }
+        generatedAt: { type: integer }
+        includedSections: { type: array, items: { type: string } }
+        identity: { type: object }
+        forum: { type: object }
+        reviews: { type: object }
+        governance: { type: object }
+        credit: { type: object }
+        activity: { type: array, items: { type: object } }
+        platform: { type: object }
+        media: { type: array, items: { type: object } }
     ProfileVisibility:
       type: string
       enum: [public, campus, only_me]
@@ -210,7 +321,7 @@ components:
         account: { $ref: "#/components/schemas/Account" }
     EmailCodePurpose:
       type: string
-      enum: [login, registration, appeal]
+      enum: [login, registration, appeal, recovery]
     EmailCodeRequest:
       type: object
       required: [email, captchaToken]
@@ -219,7 +330,7 @@ components:
         captchaToken: { type: string, minLength: 1 }
         purpose:
           allOf: [{ $ref: "#/components/schemas/EmailCodePurpose" }]
-          description: Optional only for rolling compatibility. Appeal codes are consumed only by /auth/appeal/email/verify.
+          description: Optional only for rolling compatibility. Appeal and recovery codes are consumed only by their purpose-bound routes.
     EmailCodeVerification:
       type: object
       required: [email, code]
@@ -228,7 +339,7 @@ components:
         code: { type: string, pattern: '^[0-9]{6}$' }
         purpose:
           allOf: [{ $ref: "#/components/schemas/EmailCodePurpose" }]
-          description: Optional only for rolling compatibility. This full-login endpoint rejects appeal-purpose codes.
+          description: Optional only for rolling compatibility. This full-login endpoint rejects appeal- and recovery-purpose codes.
         handle: { type: string, minLength: 3, maxLength: 30 }
         password: { type: string, format: password, minLength: 8, maxLength: 128 }
     RefreshInput:
@@ -1984,10 +2095,27 @@ components:
         handle: { type: string }
         avatarUrl: { type: string, nullable: true }
         role: { type: string, enum: [user, mod, admin] }
-        status: { type: string, enum: [active, suspended, deleted] }
+        status: { type: string, enum: [active, suspended, deactivated, deletion_requested, deleted, purged] }
         trustLevel: { type: integer, minimum: 0 }
         lastActiveAt: { type: integer, nullable: true }
         createdAt: { type: integer }
+    AdminLifecycleJob:
+      type: object
+      required: [id, accountId, accountHandle, accountState, jobType, status, attempts, nextAttemptAt, createdAt, updatedAt]
+      properties:
+        id: { type: string }
+        accountId: { type: string }
+        accountHandle: { type: string }
+        accountState: { $ref: "#/components/schemas/AccountLifecycleState" }
+        jobType: { type: string, enum: [mark_deleted, purge] }
+        status: { type: string, enum: [queued, running, succeeded, failed] }
+        attempts: { type: integer, minimum: 0, maximum: 20 }
+        nextAttemptAt: { type: integer }
+        lockedAt: { type: integer, nullable: true }
+        lastErrorCode: { type: string, nullable: true, maxLength: 80 }
+        purgeStartedAt: { type: integer, nullable: true }
+        createdAt: { type: integer }
+        updatedAt: { type: integer }
     AdminUserInviteInput:
       type: object
       required: [email, handle, reason]
@@ -2292,6 +2420,10 @@ components:
       allOf:
         - $ref: "#/components/schemas/Page"
         - { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/AdminUser" } } } }
+    AdminLifecycleJobPage:
+      allOf:
+        - $ref: "#/components/schemas/Page"
+        - { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/AdminLifecycleJob" } } } }
     AdminAuditEventPage:
       allOf:
         - $ref: "#/components/schemas/Page"
@@ -2375,6 +2507,70 @@ paths:
         "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/AppealAccessToken" } } } }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+  /auth/recovery/password:
+    post:
+      tags: [auth]
+      security: []
+      summary: Prove control of a recoverable closed account with its password
+      description: Returns only a short-lived recovery credential; no access session or refresh token is created. Ineligible accounts and wrong credentials share the same unauthorized response.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string, format: password, minLength: 1, maxLength: 128 }
+      responses:
+        "200": { description: recovery credential, content: { application/json: { schema: { $ref: "#/components/schemas/RecoveryCredential" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+  /auth/recovery/email/verify:
+    post:
+      tags: [auth]
+      security: []
+      summary: Consume a recovery-purpose email code without opening a normal session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [email, code]
+              properties:
+                email: { type: string, format: email }
+                code: { type: string, pattern: '^[0-9]{6}$' }
+      responses:
+        "200": { description: recovery credential, content: { application/json: { schema: { $ref: "#/components/schemas/RecoveryCredential" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /auth/recovery:
+    get:
+      tags: [auth]
+      security: []
+      summary: Inspect a purpose-bound recovery credential
+      parameters:
+        - { name: X-Recovery-Token, in: header, required: true, schema: { type: string, minLength: 43, maxLength: 43 } }
+      responses:
+        "200": { description: current recoverable lifecycle, content: { application/json: { schema: { $ref: "#/components/schemas/AccountLifecycle" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      tags: [auth]
+      security: []
+      summary: Reactivate a deactivated or not-yet-purged account
+      description: Atomically consumes the recovery credential, revokes all old sessions, and returns the account to active without creating a session. The user must then sign in normally.
+      parameters:
+        - { name: X-Recovery-Token, in: header, required: true, schema: { type: string, minLength: 43, maxLength: 43 } }
+      responses:
+        "200": { description: reactivated lifecycle, content: { application/json: { schema: { $ref: "#/components/schemas/AccountLifecycle" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
   /auth/refresh:
     post:
       tags: [auth]
@@ -2443,6 +2639,111 @@ paths:
         content: { application/json: { schema: { type: object, properties: { handle: { type: string } } } } }
       responses:
         "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Account" } } } }
+  /me/onboarding:
+    get:
+      tags: [identity]
+      summary: Read resumable first-run onboarding state
+      responses:
+        "200": { description: onboarding state, content: { application/json: { schema: { $ref: "#/components/schemas/OnboardingState" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    put:
+      tags: [identity]
+      summary: Complete required handle, profile, privacy and current-terms choices atomically
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/OnboardingCompleteInput" } } }
+      responses:
+        "200": { description: completed onboarding state, content: { application/json: { schema: { $ref: "#/components/schemas/OnboardingState" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /me/lifecycle:
+    get:
+      tags: [identity]
+      summary: Read the authenticated account lifecycle state
+      responses:
+        "200": { description: lifecycle, content: { application/json: { schema: { $ref: "#/components/schemas/AccountLifecycle" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /me/lifecycle/deactivate:
+    post:
+      tags: [identity]
+      summary: Deactivate the current account and revoke every session
+      description: Requires server-side recent authentication. The response contains a purpose-bound recovery credential so a lost response is not the only recovery path; password/email recovery remains available.
+      parameters: [{ $ref: "#/components/parameters/ReconciliationIdempotencyKey" }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/DeactivateAccountInput" } } } }
+      responses:
+        "200": { description: deactivated, content: { application/json: { schema: { $ref: "#/components/schemas/AccountLifecycleMutation" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "428": { $ref: "#/components/responses/RecentAuthRequired" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /me/lifecycle/delete:
+    post:
+      tags: [identity]
+      summary: Request account deletion with a 30-day recovery window
+      description: Requires server-side recent authentication, immediately closes public/new-interaction access, revokes every session, and enqueues durable deletion and purge stages.
+      parameters: [{ $ref: "#/components/parameters/ReconciliationIdempotencyKey" }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/DeleteAccountInput" } } } }
+      responses:
+        "202": { description: deletion requested, content: { application/json: { schema: { $ref: "#/components/schemas/AccountLifecycleMutation" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "428": { $ref: "#/components/responses/RecentAuthRequired" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /me/data-exports:
+    get:
+      tags: [identity]
+      summary: List up to 20 recent owner-data export jobs
+      responses:
+        "200":
+          description: recent export jobs, newest first
+          content:
+            application/json:
+              schema: { type: array, maxItems: 20, items: { $ref: "#/components/schemas/DataExportJob" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      tags: [identity]
+      summary: Create or return an idempotent owner-data export job
+      description: Requires server-side recent authentication. The durable job is assembled through owner-domain projections and expires after 24 hours.
+      parameters:
+        - { $ref: "#/components/parameters/ReconciliationIdempotencyKey" }
+      responses:
+        "202": { description: export queued or existing, content: { application/json: { schema: { $ref: "#/components/schemas/DataExportJob" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "428": { $ref: "#/components/responses/RecentAuthRequired" }
+  /me/data-exports/{id}:
+    get:
+      tags: [identity]
+      summary: Read an owner data-export job status
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "200": { description: export status, content: { application/json: { schema: { $ref: "#/components/schemas/DataExportJob" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /me/data-exports/{id}/download-grant:
+    post:
+      tags: [identity]
+      summary: Issue a five-minute one-time download grant for a ready owner export
+      description: Requires server-side recent authentication so a later session compromise cannot fetch an earlier export artifact.
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "200": { description: download grant, content: { application/json: { schema: { $ref: "#/components/schemas/DataExportDownloadGrant" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "428": { $ref: "#/components/responses/RecentAuthRequired" }
+  /me/data-exports/{id}/download:
+    get:
+      tags: [identity]
+      summary: Consume a one-time grant and download the machine-readable owner export
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: X-Export-Token, in: header, required: true, schema: { type: string, minLength: 43, maxLength: 43 } }
+      responses:
+        "200": { description: JSON export, content: { application/json: { schema: { $ref: "#/components/schemas/AccountDataExport" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /me/profile:
     get:
       tags: [identity]
@@ -3708,7 +4009,7 @@ paths:
       parameters:
         - { name: q, in: query, schema: { type: string } }
         - { name: role, in: query, schema: { type: string, enum: [user, mod, admin] } }
-        - { name: status, in: query, schema: { type: string, enum: [active, suspended, deleted] } }
+        - { name: status, in: query, schema: { type: string, enum: [active, suspended, deactivated, deletion_requested, deleted, purged] } }
         - { $ref: "#/components/parameters/Cursor" }
         - { $ref: "#/components/parameters/Limit" }
       responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/AdminUserPage" } } } }, "403": { $ref: "#/components/responses/Forbidden" } }
@@ -3717,6 +4018,31 @@ paths:
       summary: Invite and provision a campus account
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/AdminUserInviteInput" } } } }
       responses: { "201": { description: invited, content: { application/json: { schema: { $ref: "#/components/schemas/AdminUser" } } } }, "403": { $ref: "#/components/responses/Forbidden" }, "409": { $ref: "#/components/responses/Conflict" } }
+  /admin/account-lifecycle/jobs:
+    get:
+      tags: [admin]
+      summary: Inspect durable account lifecycle jobs, including exhausted dead letters
+      parameters:
+        - { name: accountId, in: query, schema: { type: string } }
+        - { name: jobType, in: query, schema: { type: string, enum: [mark_deleted, purge] } }
+        - { name: status, in: query, schema: { type: string, enum: [queued, running, succeeded, failed] } }
+        - { $ref: "#/components/parameters/Cursor" }
+        - { $ref: "#/components/parameters/Limit" }
+      responses:
+        "200": { description: lifecycle job page, content: { application/json: { schema: { $ref: "#/components/schemas/AdminLifecycleJobPage" } } } }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /admin/account-lifecycle/jobs/{id}/requeue:
+    post:
+      tags: [admin]
+      summary: Requeue one failed account lifecycle job without reopening account recovery
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/AdminReasonInput" } } } }
+      responses:
+        "200": { description: requeued lifecycle job, content: { application/json: { schema: { $ref: "#/components/schemas/AdminLifecycleJob" } } } }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "428": { $ref: "#/components/responses/RecentAuthRequired" }
   /admin/users/{id}/role:
     patch:
       tags: [admin]

@@ -6,7 +6,7 @@
 >
 > 负责人：Platform maintainers、Domain maintainers
 >
-> 最近核验：2026-07-12，durable notification handler/integration/Web tests
+> 最近核验：2026-07-12，durable notification 与 account lifecycle/export focused suites
 
 先跑最小 focused test 获得快速反馈，再按 changed scope 跑与 CI 一致的完整 gate。没有运行的检查
 不能在 PR 或交付中写成通过。
@@ -37,6 +37,10 @@ Focused test 示例：
 
 ```bash
 cargo test -p identity password
+cargo test -p identity --test recent_auth -- --test-threads=1
+cargo test -p identity --test account_lifecycle -- --test-threads=1
+cargo test -p identity --test admin_governance lifecycle_dead_letter -- --test-threads=1
+cargo test -p api account_data::tests::partial_owner_cleanup_failure -- --test-threads=1
 cargo test -p forum --test dm_tests
 cargo test -p activity --test contribution_projection
 ```
@@ -153,7 +157,7 @@ security 和 operations 都不受影响。
 | Suite | 必须覆盖 |
 |---|---|
 | S1 Contract | OpenAPI 可解析、生成类型无 diff、关键错误/分页/unauthorized shape 与 handler 一致 |
-| S2 Identity | 注册、密码/验证码登录、purpose/replay、找回、refresh rotation、session revoke、sanction |
+| S2 Identity | 注册/onboarding/当前条款、密码/验证码登录、purpose/replay、找回、credential-version recent-auth race、refresh rotation、session revoke、sanction、停用/删除/恢复、deadline-locked irreversible purge、partial owner failure、dead-letter list/requeue/audit、owner export/grant/lease |
 | S3 Selection data | fresh migration、Raw→catalogue/selection 物化不变量、重复运行、关键 API/search |
 | S4 Reviews | publish idempotency、edit/like/unlike/report/decision、visibility、course-delete restriction |
 | S5 Community | board policy、thread/comment create/edit/delete/restore、interaction、activity、follow/privacy、notification、DM；通知 outbox 的同事务 producer、lease/SKIP LOCKED、幂等 receipt、policy 与 source-reversal 竞态、dead-letter/retry；处置通知与 owner-domain appeal reversal |

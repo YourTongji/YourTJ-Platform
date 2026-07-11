@@ -222,13 +222,16 @@ async fn test_email_flow_stores_only_encrypted_account_email() {
     assert!(stored_code_email.is_none());
 
     let code = helpers::brute_force_code(&code_hash);
+    let handle = format!("encrypted-{}", &uuid::Uuid::new_v4().simple().to_string()[..12]);
     let response = app
         .oneshot(
             Request::builder()
                 .method(Method::POST)
                 .uri("/api/v2/auth/email/verify")
                 .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(json!({ "email": email, "code": code }).to_string()))
+                .body(Body::from(
+                    json!({ "email": email, "code": code, "handle": handle }).to_string(),
+                ))
                 .unwrap(),
         )
         .await
@@ -679,7 +682,12 @@ async fn test_new_account_has_user_role() {
                 .uri("/api/v2/auth/email/verify")
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(Body::from(
-                    json!({ "email": "mike@tongji.edu.cn", "code": "333333" }).to_string(),
+                    json!({
+                        "email": "mike@tongji.edu.cn",
+                        "code": "333333",
+                        "handle": "campus-mike"
+                    })
+                    .to_string(),
                 ))
                 .unwrap(),
         )
@@ -692,14 +700,15 @@ async fn test_new_account_has_user_role() {
 }
 
 #[tokio::test]
-async fn test_handle_auto_generated_on_first_login() {
+async fn test_registration_requires_explicit_handle_without_consuming_the_code() {
     let (pool, _) = create_test_app().await;
 
     helpers::insert_valid_code(&pool, "nancy@tongji.edu.cn", "444444").await;
 
     let app = create_test_app_with_pool(pool).await;
 
-    let resp = app
+    let missing_handle = app
+        .clone()
         .oneshot(
             Request::builder()
                 .method(Method::POST)
@@ -713,7 +722,95 @@ async fn test_handle_auto_generated_on_first_login() {
         .await
         .unwrap();
 
-    assert_eq!(resp.status(), StatusCode::OK);
-    let body: Value = helpers::read_json(resp).await;
-    assert_eq!(body["account"]["handle"], "nancy");
+    assert_eq!(missing_handle.status(), StatusCode::BAD_REQUEST);
+
+    let retry = app
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/v2/auth/email/verify")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({
+                        "email": "nancy@tongji.edu.cn",
+                        "code": "444444",
+                        "handle": "campus-nancy"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(retry.status(), StatusCode::OK);
+    let body: Value = helpers::read_json(retry).await;
+    assert_eq!(body["account"]["handle"], "campus-nancy");
+}
+
+#[tokio::test]
+async fn test_registration_never_silently_changes_a_taken_handle_or_consumes_its_code() {
+    let (pool, _) = create_test_app().await;
+    let suffix_value = uuid::Uuid::new_v4().simple().to_string();
+    let suffix = &suffix_value[..8];
+    let email = format!("taken-handle-{suffix}@tongji.edu.cn");
+    let taken_handle = format!("taken-{suffix}");
+    let available_handle = format!("available-{suffix}");
+    sqlx::query("INSERT INTO identity.accounts (email, handle) VALUES ($1, $2)")
+        .bind(format!("handle-owner-{suffix}@tongji.edu.cn"))
+        .bind(&taken_handle)
+        .execute(&pool)
+        .await
+        .expect("insert handle owner");
+    helpers::insert_valid_code(&pool, &email, "454545").await;
+    let app = create_test_app_with_pool(pool.clone()).await;
+
+    let conflict = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/v2/auth/email/verify")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({
+                        "email": &email,
+                        "code": "454545",
+                        "handle": &taken_handle
+                    })
+                    .to_string(),
+                ))
+                .expect("taken handle request"),
+        )
+        .await
+        .expect("taken handle response");
+    assert_eq!(conflict.status(), StatusCode::CONFLICT);
+    let code_is_unused: bool = sqlx::query_scalar(
+        "SELECT used_at IS NULL FROM identity.email_codes WHERE email = $1 ORDER BY id DESC LIMIT 1",
+    )
+    .bind(&email)
+    .fetch_one(&pool)
+    .await
+    .expect("read registration code state");
+    assert!(code_is_unused);
+
+    let retry = app
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/v2/auth/email/verify")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({
+                        "email": &email,
+                        "code": "454545",
+                        "handle": &available_handle
+                    })
+                    .to_string(),
+                ))
+                .expect("available handle request"),
+        )
+        .await
+        .expect("available handle response");
+    assert_eq!(retry.status(), StatusCode::OK);
+    assert_eq!(helpers::read_json(retry).await["account"]["handle"], available_handle);
 }

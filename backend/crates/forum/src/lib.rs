@@ -8,6 +8,7 @@ pub mod appeals;
 pub mod cache;
 mod content_permissions;
 mod content_policy;
+pub mod data_export;
 pub mod digest;
 pub mod discovery;
 mod dto;

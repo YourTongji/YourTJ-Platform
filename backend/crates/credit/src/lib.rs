@@ -13,6 +13,7 @@
 //! source of truth. Appends are serialized (advisory lock) to keep the chain linear.
 
 pub mod auth;
+pub mod data_export;
 pub mod dto;
 pub mod error;
 pub mod handlers;

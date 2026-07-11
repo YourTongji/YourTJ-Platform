@@ -26,6 +26,14 @@ pub(crate) fn appeal_code(code: &str) -> EmailContent {
     )
 }
 
+pub(crate) fn account_recovery_code(code: &str) -> EmailContent {
+    code_email(
+        "YourTJ 账号恢复",
+        "使用以下验证码恢复已停用或处于删除恢复期的账号。该验证码不会直接登录 YourTJ。",
+        code,
+    )
+}
+
 pub(crate) fn community_invitation() -> EmailContent {
     EmailContent {
         subject: "YourTJ 社区邀请",

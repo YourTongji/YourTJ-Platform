@@ -3,6 +3,7 @@
 //! Counts are projected at write time from idempotent activation/reversal
 //! events. Policy changes reinterpret those counts and never mint credit.
 
+pub mod data_export;
 mod dto;
 mod handlers;
 mod models;

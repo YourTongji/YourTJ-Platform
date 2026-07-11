@@ -289,6 +289,9 @@ pub async fn run() -> anyhow::Result<()> {
         tracing::info!("badge credit mint bridge scheduled (every 60s)");
     }
 
+    crate::account_data::spawn_workers(state.clone());
+    tracing::info!("account lifecycle and data-export workers scheduled");
+
     let app = build_router(state);
     let addr = SocketAddr::from(([0, 0, 0, 0], config.port));
     let listener = tokio::net::TcpListener::bind(addr).await?;
@@ -316,6 +319,7 @@ fn build_router(state: AppState) -> Router {
         .merge(platform::routes(state.clone()))
         .merge(crate::admin::routes(state.clone()))
         .merge(crate::appeals::routes(state.clone()))
+        .merge(crate::account_data::routes(state.clone()))
         .merge(identity::routes(state.clone()))
         .merge(activity::routes(state.clone()))
         .merge(search::routes(state.clone()))
