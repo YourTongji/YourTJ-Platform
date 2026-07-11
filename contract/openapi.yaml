@@ -82,6 +82,7 @@ components:
     BadRequest:   { description: Bad request, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
     Unauthorized: { description: Unauthorized, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
     Forbidden:    { description: Forbidden, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+    RecentAuthRequired: { description: A fresh session-bound authentication is required, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
     NotFound:     { description: Not found, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
     Conflict:     { description: Conflict, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
     RateLimited:  { description: Too many requests, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
@@ -223,6 +224,35 @@ components:
         - type: object
           properties:
             items: { type: array, items: { $ref: "#/components/schemas/Session" } }
+    RecentAuthMethod:
+      type: string
+      enum: [password, email_code]
+    RecentAuthStatus:
+      type: object
+      required: [sessionBound, isFresh, authenticatedAt, expiresAt, method, availableMethods]
+      properties:
+        sessionBound:
+          type: boolean
+          description: False for rolling-window legacy JWTs; high-risk mutations fail closed until a new session login.
+        isFresh: { type: boolean }
+        authenticatedAt: { type: integer, nullable: true }
+        expiresAt: { type: integer, nullable: true }
+        method:
+          allOf: [{ $ref: "#/components/schemas/RecentAuthMethod" }]
+          nullable: true
+        availableMethods:
+          type: array
+          items: { $ref: "#/components/schemas/RecentAuthMethod" }
+          description: Password appears only when the authenticated account has one; email_code never accepts a client-supplied email.
+    RecentAuthVerifyInput:
+      type: object
+      additionalProperties: false
+      required: [method]
+      properties:
+        method: { $ref: "#/components/schemas/RecentAuthMethod" }
+        password: { type: string, format: password, minLength: 1, maxLength: 128 }
+        code: { type: string, pattern: '^[0-9]{6}$' }
+      description: Exactly the credential matching method must be supplied; the server binds success to the current revocable session.
 
     # ---- courses / reviews ----
     Department: { type: object, properties: { id: { type: string }, name: { type: string } } }
@@ -1984,6 +2014,38 @@ paths:
       tags: [auth]
       summary: Revoke every session for the current account
       responses: { "204": { description: all sessions revoked }, "401": { $ref: "#/components/responses/Unauthorized" } }
+  /auth/recent-auth:
+    get:
+      tags: [auth, identity]
+      summary: Get current session recent-auth status
+      description: Reads only the active server-side session timestamp; JWT iat is never accepted as freshness.
+      responses:
+        "200": { description: status, content: { application/json: { schema: { $ref: "#/components/schemas/RecentAuthStatus" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /auth/recent-auth/email/request-code:
+    post:
+      tags: [auth, identity]
+      summary: Send a purpose-bound step-up code to the authenticated account
+      description: The server resolves the current account's campus email; no email identifier is accepted or returned.
+      responses:
+        "204": { description: provider accepted the message }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "428": { $ref: "#/components/responses/RecentAuthRequired" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+  /auth/recent-auth/verify:
+    post:
+      tags: [auth, identity]
+      summary: Refresh recent authentication for the current revocable session
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/RecentAuthVerifyInput" } } }
+      responses:
+        "200": { description: fresh status, content: { application/json: { schema: { $ref: "#/components/schemas/RecentAuthStatus" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "428": { $ref: "#/components/responses/RecentAuthRequired" }
+        "429": { $ref: "#/components/responses/RateLimited" }
   /me:
     get:
       tags: [identity]
@@ -3108,14 +3170,14 @@ paths:
       summary: Change a user's platform role
       parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/AdminUserRoleInput" } } } }
-      responses: { "200": { description: updated, content: { application/json: { schema: { $ref: "#/components/schemas/AdminUser" } } } }, "403": { $ref: "#/components/responses/Forbidden" }, "404": { $ref: "#/components/responses/NotFound" }, "409": { $ref: "#/components/responses/Conflict" } }
+      responses: { "200": { description: updated, content: { application/json: { schema: { $ref: "#/components/schemas/AdminUser" } } } }, "403": { $ref: "#/components/responses/Forbidden" }, "404": { $ref: "#/components/responses/NotFound" }, "409": { $ref: "#/components/responses/Conflict" }, "428": { $ref: "#/components/responses/RecentAuthRequired" } }
   /admin/users/{id}/sessions/revoke:
     post:
       tags: [admin]
       summary: Revoke every active session for a user
       parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/AdminReasonInput" } } } }
-      responses: { "204": { description: revoked }, "403": { $ref: "#/components/responses/Forbidden" }, "404": { $ref: "#/components/responses/NotFound" } }
+      responses: { "204": { description: revoked }, "403": { $ref: "#/components/responses/Forbidden" }, "404": { $ref: "#/components/responses/NotFound" }, "428": { $ref: "#/components/responses/RecentAuthRequired" } }
   /admin/reviews:
     get:
       tags: [admin]
@@ -3332,9 +3394,9 @@ paths:
   /admin/users/{id}/silence:
     post: { tags: [admin], summary: Silence user, parameters: [{ name: id, in: path, required: true, schema: { type: string } }], requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/SanctionInput" } } } }, responses: { "204": { description: silenced }, "403": { $ref: "#/components/responses/Forbidden" }, "404": { $ref: "#/components/responses/NotFound" } } }
   /admin/users/{id}/suspend:
-    post: { tags: [admin], summary: Suspend user, parameters: [{ name: id, in: path, required: true, schema: { type: string } }], requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/SanctionInput" } } } }, responses: { "204": { description: suspended }, "403": { $ref: "#/components/responses/Forbidden" }, "404": { $ref: "#/components/responses/NotFound" } } }
+    post: { tags: [admin], summary: Suspend user, parameters: [{ name: id, in: path, required: true, schema: { type: string } }], requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/SanctionInput" } } } }, responses: { "204": { description: suspended }, "403": { $ref: "#/components/responses/Forbidden" }, "404": { $ref: "#/components/responses/NotFound" }, "428": { $ref: "#/components/responses/RecentAuthRequired" } } }
   /admin/users/{id}/unsanction:
-    post: { tags: [admin], summary: Revoke sanction, parameters: [{ name: id, in: path, required: true, schema: { type: string } }], requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/UnsanctionInput" } } } }, responses: { "204": { description: revoked }, "403": { $ref: "#/components/responses/Forbidden" }, "404": { $ref: "#/components/responses/NotFound" } } }
+    post: { tags: [admin], summary: Revoke sanction, description: Revoking a suspension requires recent authentication; revoking an ordinary silence does not., parameters: [{ name: id, in: path, required: true, schema: { type: string } }], requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/UnsanctionInput" } } } }, responses: { "204": { description: revoked }, "403": { $ref: "#/components/responses/Forbidden" }, "404": { $ref: "#/components/responses/NotFound" }, "428": { $ref: "#/components/responses/RecentAuthRequired" } } }
   /admin/users/{id}/sanctions:
     get: { tags: [admin], summary: List sanctions for user, parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Sanction" } } } } }, "403": { $ref: "#/components/responses/Forbidden" }, "404": { $ref: "#/components/responses/NotFound" } } }
   /admin/achievements:

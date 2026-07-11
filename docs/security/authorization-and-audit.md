@@ -6,7 +6,7 @@
 >
 > 负责人：Security owner、Identity/Governance maintainers
 >
-> 最近核验：2026-07-12，`codex/x-content-versioning`
+> 最近核验：2026-07-12，migration `0048` 与 identity recent-auth tests
 
 后端授权每一个 staff 操作。Web 按 capability 隐藏导航只是可用性和数据最小化措施，绝不是
 安全边界。
@@ -28,11 +28,13 @@
   都要求 reason，并把业务状态与成功 audit 放在同一事务。
 - 成就运营使用独立 `badges.manage`；定义 mutation 使用版本并发控制，人工授予/撤销拒绝 self/equal/
   higher-role target、要求 reason，并把状态与成功 audit 放在同一事务。
+- 角色变更、suspend/解除 suspend 和管理员强制 session revoke 要求 10 分钟内的
+  server-side session recent-auth；密码和 `recent_auth` purpose 邮箱 code 均可验证。
 
 ### Partial
 
 - capability 仍按角色静态映射，没有 per-account delegation。
-- 缺 recent-auth、标准 request id/source/result、失败/拒绝 attempt audit 和受控 export。
+- 缺标准 request id/source/result、失败/拒绝 attempt audit 和受控 export。
 - 缺双人审批、利益冲突 assignment/recusal、appeal independent review 和明确 retention。
 - 仍有 admin/platform 业务 SQL 位于 api crate，owner/audit 一致性需要持续收敛。
 
@@ -71,8 +73,13 @@ capability，不能塞进过宽的 `community.manage`。
 - User mutation 锁定目标，拒绝 self/equal/higher-role，验证 reason、duration 和当前状态。
 - Admin 不能处置另一个 admin；最终管理员管理走 out-of-band policy。
 - Moderator silence 有明确最长时长，suspend 和角色授予仅 admin。
-- PII reveal、永久/高影响制裁、角色改变、账号删除和敏感 export 需要 recent-auth；部分操作还
-  应双人审批。
+- 当前角色改变、suspend/解除 suspend 和强制注销已要求 recent-auth；普通 silence 发放/撤销与
+  内容审核不滥用 step-up。未来 PII reveal、账号删除和敏感 export 上线时同样必须要求；
+  部分操作还应双人审批。
+- recent-auth 必须绑定当前未撤销 session，只信任数据库时间，不信任 JWT `iat` 或 Web
+  状态。高风险 mutation 在自身业务事务内锁定并重验 session，与并发 session revoke 形成
+  明确先后顺序；不允许在事务外检查后带着 TOCTOU 窗口写入。refresh rotation 可携带原
+  freshness 但不延长时间；legacy JWT fail closed。
 - Reported-DM 只开放 participant 报告的最小 evidence，读取动作本身写 audit。
 - 内容打赏的 recipient 必须由内容 owner domain 解析为当前可见 target 的 author，再由 identity
   目的限定接口确认账号 active 且无有效 suspend；拒绝 self-tip 和客户端伪造 recipient。
@@ -130,4 +137,7 @@ reference 或实际证据内容。
 - 敏感 mutation 与成功 audit 原子，失败不留下半状态。
 - Evidence/PII read 目的限定、最小化并可追踪。
 - Audit 中不存在 secret、邮箱、完整 DM 或无界 request payload。
-- Recent-auth、双人审批和 export 上线前有独立 threat review 与恢复测试。
+- Recent-auth 不把 password、code 或 email 写入 reason/audit/log，并覆盖过期、重放、并发、
+  provider 未接受和 session 撤销恢复。双人审批与 export 仍需独立 threat review。
+- Staff recent-auth 只证明同一账号在当前 session 内再次提供单因素；它不是 phishing-resistant
+  MFA，WebAuthn/passkey、recovery 和 break-glass 仍为 `Partial`。

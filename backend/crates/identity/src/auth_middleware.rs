@@ -9,11 +9,29 @@ use axum::http::HeaderMap;
 use shared::AuthAccount;
 use sqlx::PgPool;
 
+/// A successful step-up remains valid for ten minutes on one revocable session family.
+pub const RECENT_AUTH_WINDOW_SECONDS: i64 = 10 * 60;
+
 /// Authenticated account plus the revocable session bound to its JWT, when present.
 #[derive(Debug, Clone)]
 pub struct AuthenticatedContext {
     pub account: AuthAccount,
     pub session_id: Option<i64>,
+}
+
+/// Server-side recent-auth state; JWT issuance time is intentionally absent.
+#[derive(Debug, Clone)]
+pub struct RecentAuthState {
+    pub session_bound: bool,
+    pub authenticated_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub method: Option<String>,
+    is_fresh: bool,
+}
+
+impl RecentAuthState {
+    pub fn is_fresh(&self) -> bool {
+        self.is_fresh
+    }
 }
 
 #[derive(sqlx::FromRow)]
@@ -140,4 +158,69 @@ pub async fn authenticate_context(
         account: AuthAccount { id: account_id, role: account.role, status: account.status },
         session_id,
     })
+}
+
+/// Read freshness from the active server-side session, never from JWT claims.
+pub async fn recent_auth_state(
+    context: &AuthenticatedContext,
+    db: &PgPool,
+) -> shared::AppResult<RecentAuthState> {
+    let Some(session_id) = context.session_id else {
+        return Ok(RecentAuthState {
+            session_bound: false,
+            authenticated_at: None,
+            method: None,
+            is_fresh: false,
+        });
+    };
+    let state: Option<(Option<chrono::DateTime<chrono::Utc>>, Option<String>, bool)> =
+        sqlx::query_as(
+            "SELECT recent_authenticated_at, recent_auth_method, \
+                COALESCE(recent_authenticated_at <= now() + interval '1 minute' \
+                  AND recent_authenticated_at > now() - ($3::bigint * interval '1 second'), false) \
+                  AS is_fresh \
+         FROM identity.sessions \
+         WHERE id = $1 AND account_id = $2 AND revoked_at IS NULL AND expires_at > now()",
+        )
+        .bind(session_id)
+        .bind(context.account.id)
+        .bind(RECENT_AUTH_WINDOW_SECONDS)
+        .fetch_optional(db)
+        .await?;
+    let Some((authenticated_at, method, is_fresh)) = state else {
+        return Ok(RecentAuthState {
+            session_bound: false,
+            authenticated_at: None,
+            method: None,
+            is_fresh: false,
+        });
+    };
+    Ok(RecentAuthState { session_bound: true, authenticated_at, method, is_fresh })
+}
+
+/// Lock and require fresh session state inside the high-risk mutation transaction.
+pub async fn require_recent_auth_tx(
+    context: &AuthenticatedContext,
+    tx: &mut sqlx::PgConnection,
+) -> shared::AppResult<()> {
+    let Some(session_id) = context.session_id else {
+        return Err(shared::AppError::RecentAuthRequired);
+    };
+    let is_fresh: Option<bool> = sqlx::query_scalar(
+        "SELECT COALESCE(recent_authenticated_at <= now() + interval '1 minute' \
+                  AND recent_authenticated_at > now() - ($3::bigint * interval '1 second'), false) \
+         FROM identity.sessions \
+         WHERE id = $1 AND account_id = $2 AND revoked_at IS NULL AND expires_at > now() \
+         FOR SHARE",
+    )
+    .bind(session_id)
+    .bind(context.account.id)
+    .bind(RECENT_AUTH_WINDOW_SECONDS)
+    .fetch_optional(tx)
+    .await?;
+    if is_fresh == Some(true) {
+        Ok(())
+    } else {
+        Err(shared::AppError::RecentAuthRequired)
+    }
 }

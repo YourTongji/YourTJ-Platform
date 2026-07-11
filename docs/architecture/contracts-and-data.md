@@ -132,6 +132,15 @@ Fresh database 必须只通过 sqlx migration ledger 建立。普通启动、CI 
   login/registration purpose，绝不根据验证时的账号状态重新推断，也不能触及 password-reset code。
 - Access JWT 的 session id/auth version 是 revocation binding，不是客户端授权事实；每次受保护请求仍
   查询账号状态和 session。滚动窗口内的 legacy JWT 受账号级 revoked-before timestamp 约束。
+- Recent-auth 是 Identity 所有的 session 投影：只记录 server-written timestamp 和受控 method，不从
+  JWT `iat` 推导。密码验证只能更新当前 active session；`recent_auth` email code 的一次消费和
+  session 更新在同一事务中，客户端不提交 email。refresh successor 继承原 timestamp/method，但
+  freshness deadline 不重置。高风险 identity mutation 在业务 transaction 内对 actor session 取 share lock
+  并查验 freshness，使并发 revoke 先提交时 mutation 必须失败，而不留事务外 check/use 窗口。
+- Migration `0048` 是 additive session column 和 email-purpose constraint 扩展，旧应用会忽略新列并写入
+  nullable 默认；滚动发布先跑 migration，再部署读取新列的应用。不带 session id 的 legacy JWT
+  status 明确返回 unbound，高风险 mutation 一律 428 fail closed。紧急回退应保留 schema 并在边缘
+  关闭高风险 route 后回退应用，不能以恢复无 step-up 的 mutation 作为“可用性降级”。
 - Identity 的 public account API 只返回 active、未 suspended 且无邮箱的 profile/privacy projection；
   新增 profile/list/new-DM target 解析通过该 API 与 Forum 的 follow/mute/block policy 组合。旧 Forum
   projection 中仍有直接 identity join，需按 owner public API 逐步迁移，不能作为新代码模式复制。

@@ -44,6 +44,8 @@ pub struct SessionRow {
     pub user_agent: Option<String>,
     pub created_at: DateTime<Utc>,
     pub last_used_at: DateTime<Utc>,
+    pub recent_authenticated_at: Option<DateTime<Utc>>,
+    pub recent_auth_method: Option<String>,
 }
 
 /// A row from `identity.account_keys`.

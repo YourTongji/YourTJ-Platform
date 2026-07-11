@@ -14,6 +14,10 @@ pub(crate) fn password_reset_code(code: &str) -> EmailContent {
     code_email("YourTJ 密码重置", "使用以下验证码重置您的 YourTJ 密码。", code)
 }
 
+pub(crate) fn recent_auth_code(code: &str) -> EmailContent {
+    code_email("YourTJ 安全验证", "使用以下验证码确认当前设备上的高风险操作。", code)
+}
+
 pub(crate) fn community_invitation() -> EmailContent {
     EmailContent {
         subject: "YourTJ 社区邀请",

@@ -31,7 +31,7 @@
 | 领域 | 状态 | 已验证问题 |
 |---|---|---|
 | 登录注册 | `Current` | purpose-bound 一次性 code、密码防枚举与 reset/change 撤销语义已完成；Web 已拆分密码、验证码、注册和找回流程，注册要求显式公开 handle |
-| 账号与会话 | `Partial` | session-bound access、refresh replay 防护与 Web 设备中心已完成；仍缺 onboarding、recent-auth、自助导出/停用/删除，refresh token 仍存 localStorage |
+| 账号与会话 | `Partial` | session-bound access、refresh replay 防护、Web 设备中心和 10 分钟 server-side recent-auth 已完成；仍缺 onboarding、自助导出/停用/删除，refresh token 仍存 localStorage |
 | 社交图 | `Current` | 已有公开单向 follow、幂等接口、owner remove-follower、followers/following、relationship API 与 trigger 维护的准确计数；移除关注者不等于 block，第一阶段明确不做私密账号审批 |
 | block/mute | `Current` | mute 为单向私密 feed/通知过滤，block 为双向安全边界并原子移除双方 follow；profile、feed、通知、DM、回复与投票已接统一规则 |
 | 个人资料 | `Partial` | display name、bio、HTTPS website、clean OSS avatar/banner reference、owner 上传/状态恢复/绑定 UI、关系数和 profile/list/DM/discoverability 隐私已落地；仍缺 handle history、activity/mention privacy 和公开 media/likes tabs |
@@ -47,7 +47,7 @@
 | 私信 | `Partial` | canonical 1:1、DM policy、单条陌生请求、incoming/sent 请求箱、accept/decline/withdraw/report、独立 unread/request 角标、幂等/限流/冷却、archive/delete/recover、搜索、mute 和最小举报证据已接通；仍缺附件、request expiry、typing/presence、多实例实时及 retention/legal-hold worker |
 | 推广位 | `Partial` | 左侧已由 API 返回自营站内推广，具备 clean owned asset id、状态、排期、受众、位置、优先级、独立 capability、审计和后台 UI；匿名素材图、asset usage/GC、曝光/点击日聚合尚未完成 |
 | 徽章与认证 | `Partial` | 成就徽章、人工身份/特殊认证和实时角色标识已经拆分；成就具备独立 capability、versioned 受控定义、自动幂等授予/mint、人工非 mint 授予、撤销/重新授予、append-only history、同事务审计、后台 UI 与公开投影。人工认证具备 typed definition、可到期/撤销 grant、私有 evidence reference、后台 UI 与安全公开投影；仍缺成就/认证通知、自动授予 durable outbox 和认证证据存储/复核政策 |
-| 治理 | `Partial` | 审核和制裁基础较强；缺当事人通知、申诉、冲突回避、账号生命周期、保留 worker 和高风险 recent-auth |
+| 治理 | `Partial` | 审核和制裁基础较强，角色/suspend/强制注销已有 session-bound recent-auth；仍缺当事人通知、申诉、冲突回避、账号生命周期、保留 worker、Staff WebAuthn/MFA 和双人审批 |
 | 积分运营 | `Partial` | 用户侧 verify、内容打赏和 escrow 完整性已加固；持久化只读 reconcile、单并发/幂等执行、逐钱包漂移指标、独立 capability、审计和管理视图已接通；仍缺告警/SLO 与受审批 projection 重建，历史 constraint anomaly 需单独兼容策略 |
 | 运维 | `Partial` | 设置仍为 string key/value；任务只确认提交，无持久状态、进度、失败日志和重试；缺 SLO/恢复演练 |
 | 测试 | `Partial` | 后端 CI 有 lint/集成，Web 有 lint/type/build 与最小 Vitest/Testing Library/axe harness；仍无浏览器 E2E、完整前端覆盖，许多契约与 UI 行为差异无法被 CI 捕获 |

@@ -200,6 +200,131 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/auth/recent-auth": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get current session recent-auth status
+         * @description Reads only the active server-side session timestamp; JWT iat is never accepted as freshness.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description status */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["RecentAuthStatus"];
+                    };
+                };
+                401: components["responses"]["Unauthorized"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/recent-auth/email/request-code": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Send a purpose-bound step-up code to the authenticated account
+         * @description The server resolves the current account's campus email; no email identifier is accepted or returned.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description provider accepted the message */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                401: components["responses"]["Unauthorized"];
+                428: components["responses"]["RecentAuthRequired"];
+                429: components["responses"]["RateLimited"];
+                503: components["responses"]["ServiceUnavailable"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/recent-auth/verify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Refresh recent authentication for the current revocable session */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["RecentAuthVerifyInput"];
+                };
+            };
+            responses: {
+                /** @description fresh status */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["RecentAuthStatus"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
+                428: components["responses"]["RecentAuthRequired"];
+                429: components["responses"]["RateLimited"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/me": {
         parameters: {
             query?: never;
@@ -6012,6 +6137,7 @@ export interface paths {
                 403: components["responses"]["Forbidden"];
                 404: components["responses"]["NotFound"];
                 409: components["responses"]["Conflict"];
+                428: components["responses"]["RecentAuthRequired"];
             };
         };
         trace?: never;
@@ -6050,6 +6176,7 @@ export interface paths {
                 };
                 403: components["responses"]["Forbidden"];
                 404: components["responses"]["NotFound"];
+                428: components["responses"]["RecentAuthRequired"];
             };
         };
         delete?: never;
@@ -7897,6 +8024,7 @@ export interface paths {
                 };
                 403: components["responses"]["Forbidden"];
                 404: components["responses"]["NotFound"];
+                428: components["responses"]["RecentAuthRequired"];
             };
         };
         delete?: never;
@@ -7914,7 +8042,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Revoke sanction */
+        /**
+         * Revoke sanction
+         * @description Revoking a suspension requires recent authentication; revoking an ordinary silence does not.
+         */
         post: {
             parameters: {
                 query?: never;
@@ -7939,6 +8070,7 @@ export interface paths {
                 };
                 403: components["responses"]["Forbidden"];
                 404: components["responses"]["NotFound"];
+                428: components["responses"]["RecentAuthRequired"];
             };
         };
         delete?: never;
@@ -8630,6 +8762,25 @@ export interface components {
         };
         SessionPage: components["schemas"]["Page"] & {
             items?: components["schemas"]["Session"][];
+        };
+        /** @enum {string} */
+        RecentAuthMethod: "password" | "email_code";
+        RecentAuthStatus: {
+            /** @description False for rolling-window legacy JWTs; high-risk mutations fail closed until a new session login. */
+            sessionBound: boolean;
+            isFresh: boolean;
+            authenticatedAt: number | null;
+            expiresAt: number | null;
+            method: components["schemas"]["RecentAuthMethod"] | null;
+            /** @description Password appears only when the authenticated account has one; email_code never accepts a client-supplied email. */
+            availableMethods: components["schemas"]["RecentAuthMethod"][];
+        };
+        /** @description Exactly the credential matching method must be supplied; the server binds success to the current revocable session. */
+        RecentAuthVerifyInput: {
+            method: components["schemas"]["RecentAuthMethod"];
+            /** Format: password */
+            password?: string;
+            code?: string;
         };
         Department: {
             id?: string;
@@ -10188,6 +10339,15 @@ export interface components {
         };
         /** @description Forbidden */
         Forbidden: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description A fresh session-bound authentication is required */
+        RecentAuthRequired: {
             headers: {
                 [name: string]: unknown;
             };

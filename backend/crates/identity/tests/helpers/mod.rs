@@ -215,6 +215,21 @@ async fn run_migrations(pool: &PgPool) {
             .expect("migration 0034 failed");
     }
 
+    let has_recent_auth: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM information_schema.columns \
+         WHERE table_schema = 'identity' AND table_name = 'sessions' \
+           AND column_name = 'recent_authenticated_at')",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or(false);
+    if !has_recent_auth {
+        sqlx::raw_sql(include_str!("../../../../migrations/0048_recent_auth.sql"))
+            .execute(pool)
+            .await
+            .expect("migration 0048 failed");
+    }
+
     // Clean test data from previous runs (always run, even if migrations were skipped).
     sqlx::query("DELETE FROM governance.audit_events").execute(pool).await.ok();
     sqlx::query("DELETE FROM identity.sessions").execute(pool).await.ok();

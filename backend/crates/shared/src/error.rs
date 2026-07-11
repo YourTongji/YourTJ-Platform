@@ -21,6 +21,9 @@ pub enum AppError {
     #[error("forbidden")]
     Forbidden,
 
+    #[error("recent authentication required")]
+    RecentAuthRequired,
+
     #[error("{0}")]
     BadRequest(String),
 
@@ -48,6 +51,9 @@ impl AppError {
             AppError::NotFound => (StatusCode::NOT_FOUND, "NOT_FOUND"),
             AppError::Unauthorized => (StatusCode::UNAUTHORIZED, "UNAUTHORIZED"),
             AppError::Forbidden => (StatusCode::FORBIDDEN, "FORBIDDEN"),
+            AppError::RecentAuthRequired => {
+                (StatusCode::PRECONDITION_REQUIRED, "RECENT_AUTH_REQUIRED")
+            }
             AppError::BadRequest(_) => (StatusCode::BAD_REQUEST, "BAD_REQUEST"),
             AppError::Conflict(_) => (StatusCode::CONFLICT, "CONFLICT"),
             AppError::OptimisticLockConflict { .. } => (StatusCode::CONFLICT, "VERSION_CONFLICT"),

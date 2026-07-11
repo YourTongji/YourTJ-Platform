@@ -116,6 +116,35 @@ pub struct SessionDto {
     pub expires_at: i64,
 }
 
+/// Server-verifiable methods that can refresh the current session's freshness.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RecentAuthMethod {
+    Password,
+    EmailCode,
+}
+
+/// Current owner-visible step-up state without exposing an email address.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecentAuthStatusDto {
+    pub session_bound: bool,
+    pub is_fresh: bool,
+    pub authenticated_at: Option<i64>,
+    pub expires_at: Option<i64>,
+    pub method: Option<RecentAuthMethod>,
+    pub available_methods: Vec<RecentAuthMethod>,
+}
+
+/// POST /auth/recent-auth/verify verifies exactly one method.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecentAuthVerifyInput {
+    pub method: RecentAuthMethod,
+    pub password: Option<String>,
+    pub code: Option<String>,
+}
+
 /// PATCH /me
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]

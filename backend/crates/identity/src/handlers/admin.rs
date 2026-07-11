@@ -62,6 +62,20 @@ async fn authenticate(headers: &HeaderMap, state: &AppState) -> AppResult<AuthAc
     .map_err(|_| AppError::Unauthorized)
 }
 
+async fn authenticate_context(
+    headers: &HeaderMap,
+    state: &AppState,
+) -> AppResult<crate::auth_middleware::AuthenticatedContext> {
+    crate::auth_middleware::authenticate_context(
+        headers,
+        &state.db,
+        &state.jwt_secret,
+        state.redis.as_ref(),
+    )
+    .await
+    .map_err(|_| AppError::Unauthorized)
+}
+
 fn parse_id(value: &str, field: &str) -> AppResult<i64> {
     value.parse().map_err(|_| AppError::BadRequest(format!("invalid {field}")))
 }
@@ -231,7 +245,8 @@ pub async fn change_role(
     headers: HeaderMap,
     Json(body): Json<AdminUserRoleInput>,
 ) -> AppResult<Json<AdminUserDto>> {
-    let auth = authenticate(&headers, &state).await?;
+    let auth_context = authenticate_context(&headers, &state).await?;
+    let auth = &auth_context.account;
     auth.require_capability(Capability::ChangeRoles).map_err(|_| AppError::Forbidden)?;
     let reason = validate_reason(&body.reason)?;
     if !matches!(body.role.as_str(), "user" | "mod") {
@@ -241,13 +256,14 @@ pub async fn change_role(
     }
     let account_id = parse_id(&account_id, "account id")?;
     let mut tx = state.db.begin().await?;
+    crate::auth_middleware::require_recent_auth_tx(&auth_context, &mut tx).await?;
     let old_role: String =
         sqlx::query_scalar("SELECT role::text FROM identity.accounts WHERE id = $1 FOR UPDATE")
             .bind(account_id)
             .fetch_optional(&mut *tx)
             .await?
             .ok_or(AppError::NotFound)?;
-    require_lower_role(&auth, account_id, &old_role)?;
+    require_lower_role(auth, account_id, &old_role)?;
     if old_role == body.role {
         return Err(AppError::Conflict("account already has that role".into()));
     }
@@ -291,18 +307,20 @@ pub async fn revoke_sessions(
     headers: HeaderMap,
     Json(body): Json<AdminReasonInput>,
 ) -> AppResult<StatusCode> {
-    let auth = authenticate(&headers, &state).await?;
+    let auth_context = authenticate_context(&headers, &state).await?;
+    let auth = &auth_context.account;
     auth.require_capability(Capability::SuspendUsers).map_err(|_| AppError::Forbidden)?;
     let reason = validate_reason(&body.reason)?;
     let account_id = parse_id(&account_id, "account id")?;
     let mut tx = state.db.begin().await?;
+    crate::auth_middleware::require_recent_auth_tx(&auth_context, &mut tx).await?;
     let target_role: String =
         sqlx::query_scalar("SELECT role::text FROM identity.accounts WHERE id = $1 FOR UPDATE")
             .bind(account_id)
             .fetch_optional(&mut *tx)
             .await?
             .ok_or(AppError::NotFound)?;
-    require_lower_role(&auth, account_id, &target_role)?;
+    require_lower_role(auth, account_id, &target_role)?;
     let revoked = sqlx::query(
         "UPDATE identity.sessions SET revoked_at = now() \
          WHERE account_id = $1 AND revoked_at IS NULL",
@@ -335,11 +353,12 @@ pub async fn revoke_sessions(
 
 async fn create_sanction(
     state: &AppState,
-    auth: &AuthAccount,
+    auth_context: &crate::auth_middleware::AuthenticatedContext,
     account_id: i64,
     kind: &str,
     body: SanctionInput,
 ) -> AppResult<()> {
+    let auth = &auth_context.account;
     let capability =
         if kind == "suspend" { Capability::SuspendUsers } else { Capability::SilenceUsers };
     auth.require_capability(capability).map_err(|_| AppError::Forbidden)?;
@@ -354,6 +373,9 @@ async fn create_sanction(
         }
     }
     let mut tx = state.db.begin().await?;
+    if kind == "suspend" {
+        crate::auth_middleware::require_recent_auth_tx(auth_context, &mut tx).await?;
+    }
     let target_role: String =
         sqlx::query_scalar("SELECT role::text FROM identity.accounts WHERE id = $1 FOR UPDATE")
             .bind(account_id)
@@ -427,7 +449,7 @@ pub async fn silence_user(
     headers: HeaderMap,
     Json(body): Json<SanctionInput>,
 ) -> AppResult<StatusCode> {
-    let auth = authenticate(&headers, &state).await?;
+    let auth = authenticate_context(&headers, &state).await?;
     let account_id = parse_id(&account_id, "account id")?;
     create_sanction(&state, &auth, account_id, "silence", body).await?;
     Ok(StatusCode::NO_CONTENT)
@@ -440,9 +462,13 @@ pub async fn suspend_user(
     headers: HeaderMap,
     Json(body): Json<SanctionInput>,
 ) -> AppResult<StatusCode> {
-    let auth = authenticate(&headers, &state).await?;
+    let auth_context = authenticate_context(&headers, &state).await?;
+    auth_context
+        .account
+        .require_capability(Capability::SuspendUsers)
+        .map_err(|_| AppError::Forbidden)?;
     let account_id = parse_id(&account_id, "account id")?;
-    create_sanction(&state, &auth, account_id, "suspend", body).await?;
+    create_sanction(&state, &auth_context, account_id, "suspend", body).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -453,11 +479,27 @@ pub async fn unsanction_user(
     headers: HeaderMap,
     Json(body): Json<UnsanctionInput>,
 ) -> AppResult<StatusCode> {
-    let auth = authenticate(&headers, &state).await?;
+    let auth_context = authenticate_context(&headers, &state).await?;
+    let auth = &auth_context.account;
     let account_id = parse_id(&account_id, "account id")?;
     let sanction_id = parse_id(&body.sanction_id, "sanctionId")?;
     let reason = validate_reason(&body.reason)?;
+    let kind: String = sqlx::query_scalar(
+        "SELECT kind FROM identity.sanctions \
+         WHERE id = $1 AND account_id = $2 AND revoked_at IS NULL",
+    )
+    .bind(sanction_id)
+    .bind(account_id)
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or(AppError::NotFound)?;
+    let capability =
+        if kind == "suspend" { Capability::SuspendUsers } else { Capability::SilenceUsers };
+    auth.require_capability(capability).map_err(|_| AppError::Forbidden)?;
     let mut tx = state.db.begin().await?;
+    if kind == "suspend" {
+        crate::auth_middleware::require_recent_auth_tx(&auth_context, &mut tx).await?;
+    }
     let sanction: Option<(String, String, String)> = sqlx::query_as(
         "SELECT sanctions.kind, sanctions.reason, accounts.role::text \
          FROM identity.sanctions sanctions \
@@ -469,17 +511,17 @@ pub async fn unsanction_user(
     .bind(account_id)
     .fetch_optional(&mut *tx)
     .await?;
-    let (kind, original_reason, target_role) = sanction.ok_or(AppError::NotFound)?;
-    let capability =
-        if kind == "suspend" { Capability::SuspendUsers } else { Capability::SilenceUsers };
-    auth.require_capability(capability).map_err(|_| AppError::Forbidden)?;
-    require_lower_role(&auth, account_id, &target_role)?;
+    let (locked_kind, original_reason, target_role) = sanction.ok_or(AppError::NotFound)?;
+    if locked_kind != kind {
+        return Err(AppError::Conflict("sanction type changed during update".into()));
+    }
+    require_lower_role(auth, account_id, &target_role)?;
     sqlx::query("UPDATE identity.sanctions SET revoked_at = now(), revoked_by = $1 WHERE id = $2")
         .bind(auth.id)
         .bind(sanction_id)
         .execute(&mut *tx)
         .await?;
-    let metadata = serde_json::json!({ "kind": kind, "originalReason": original_reason });
+    let metadata = serde_json::json!({ "kind": locked_kind, "originalReason": original_reason });
     governance::record_account_event_tx(
         &mut tx,
         AccountActor { account_id: auth.id, role: &auth.role },

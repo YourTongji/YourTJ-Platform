@@ -10,6 +10,7 @@ import {
   ReasonDialog,
 } from "@/components/admin/admin-primitives";
 import { ADMIN_CAPABILITIES, hasCapability } from "@/components/admin/capabilities";
+import { RecentAuthDialog } from "@/components/auth/recent-auth-dialog";
 import { EmptyState, ErrorState, LoadingState } from "@/components/common/states";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -28,6 +29,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { useAuth } from "@/context/auth-provider";
 import { api } from "@/lib/api/endpoints";
+import { ApiError } from "@/lib/api/client";
 import type { Account, AdminUser, AdminUserInviteInput, Sanction } from "@/lib/api/types";
 import { formatUnixTime } from "@/lib/format";
 
@@ -113,11 +115,13 @@ function SanctionsDialog({
   capabilities,
   canMutateUser,
   onClose,
+  onRecentAuthRequired,
 }: {
   user: AdminUser | null;
   capabilities: Set<string>;
   canMutateUser: boolean;
   onClose: () => void;
+  onRecentAuthRequired: (retry: () => void) => void;
 }) {
   const queryClient = useQueryClient();
   const [revoking, setRevoking] = React.useState<Sanction | null>(null);
@@ -127,16 +131,24 @@ function SanctionsDialog({
     enabled: Boolean(user?.id),
   });
   const revoke = useMutation({
-    mutationFn: ({ sanctionId, reason }: { sanctionId: string; reason: string }) =>
-      api.unsanctionAdminUser(user?.id ?? "", sanctionId, reason),
-    onSuccess: async () => {
+    mutationFn: ({ accountId, sanctionId, reason }: { accountId: string; sanctionId: string; reason: string }) =>
+      api.unsanctionAdminUser(accountId, sanctionId, reason),
+    onSuccess: async (_data, variables) => {
       toast.success("制裁已撤销");
       setRevoking(null);
-      await queryClient.invalidateQueries({ queryKey: ["admin", "users", user?.id, "sanctions"] });
+      await queryClient.invalidateQueries({ queryKey: ["admin", "users", variables.accountId, "sanctions"] });
       await queryClient.invalidateQueries({ queryKey: ["admin", "users"] });
       await queryClient.invalidateQueries({ queryKey: ["admin", "overview"] });
     },
-    onError: (error) => toast.error(error instanceof Error ? error.message : "撤销失败"),
+    onError: (error, variables) => {
+      if (error instanceof ApiError && error.code === "RECENT_AUTH_REQUIRED") {
+        setRevoking(null);
+        onClose();
+        onRecentAuthRequired(() => revoke.mutate(variables));
+        return;
+      }
+      toast.error(error instanceof Error ? error.message : "撤销失败");
+    },
   });
 
   function canRevoke(kind?: string) {
@@ -196,7 +208,7 @@ function SanctionsDialog({
         description="撤销不会覆盖原记录，而是追加一条新的治理审计事件。"
         confirmLabel="确认撤销"
         isPending={revoke.isPending}
-        onConfirm={(reason) => revoking?.id && revoke.mutate({ sanctionId: revoking.id, reason })}
+        onConfirm={(reason) => revoking?.id && user?.id && revoke.mutate({ accountId: user.id, sanctionId: revoking.id, reason })}
       />
     </>
   );
@@ -214,6 +226,7 @@ export function UsersPanel({ capabilities, initialQuery = "" }: { capabilities: 
   const [action, setAction] = React.useState<UserAction | null>(null);
   const [endsAt, setEndsAt] = React.useState("");
   const [sanctionsUser, setSanctionsUser] = React.useState<AdminUser | null>(null);
+  const [recentAuthRetry, setRecentAuthRetry] = React.useState<(() => void) | null>(null);
   const cursor = cursorStack.at(-1);
   const canSearchUsers = hasCapability(capabilities, ADMIN_CAPABILITIES.searchUsers);
   const canInvite = hasCapability(capabilities, ADMIN_CAPABILITIES.inviteUsers);
@@ -269,7 +282,15 @@ export function UsersPanel({ capabilities, initialQuery = "" }: { capabilities: 
       await queryClient.invalidateQueries({ queryKey: ["admin", "users"] });
       await queryClient.invalidateQueries({ queryKey: ["admin", "overview"] });
     },
-    onError: (error) => toast.error(error instanceof Error ? error.message : "操作失败"),
+    onError: (error, variables) => {
+      if (error instanceof ApiError && error.code === "RECENT_AUTH_REQUIRED") {
+        setAction(null);
+        setEndsAt("");
+        setRecentAuthRetry(() => () => actionMutation.mutate(variables));
+        return;
+      }
+      toast.error(error instanceof Error ? error.message : "操作失败");
+    },
   });
 
   const actionTitle = action?.kind === "role"
@@ -431,6 +452,7 @@ export function UsersPanel({ capabilities, initialQuery = "" }: { capabilities: 
         capabilities={capabilities}
         canMutateUser={canManageTarget(account, sanctionsUser)}
         onClose={() => setSanctionsUser(null)}
+        onRecentAuthRequired={(retry) => setRecentAuthRetry(() => retry)}
       />
       <ReasonDialog
         open={Boolean(action)}
@@ -465,6 +487,15 @@ export function UsersPanel({ capabilities, initialQuery = "" }: { capabilities: 
           </div>
         ) : null}
       </ReasonDialog>
+      <RecentAuthDialog
+        open={recentAuthRetry !== null}
+        onOpenChange={(open) => { if (!open) setRecentAuthRetry(null); }}
+        onVerified={() => {
+          const retry = recentAuthRetry;
+          setRecentAuthRetry(null);
+          retry?.();
+        }}
+      />
     </div>
   );
 }

@@ -91,6 +91,8 @@ import type {
   MyUpload,
   ProfilePrivacy,
   ProfileUpdateInput,
+  RecentAuthStatus,
+  RecentAuthVerifyInput,
   UserComment,
   UserProfile,
   UserRelationship,
@@ -164,6 +166,21 @@ export const api = {
 
   passwordChange(input: { currentPassword: string; newPassword: string }) {
     return apiRequest<void>("/auth/password/change", { method: "POST", body: input });
+  },
+
+  recentAuthStatus() {
+    return apiRequest<RecentAuthStatus>("/auth/recent-auth");
+  },
+
+  requestRecentAuthCode() {
+    return apiRequest<void>("/auth/recent-auth/email/request-code", { method: "POST" });
+  },
+
+  verifyRecentAuth(input: RecentAuthVerifyInput) {
+    return apiRequest<RecentAuthStatus>("/auth/recent-auth/verify", {
+      method: "POST",
+      body: input,
+    });
   },
 
   logout() {

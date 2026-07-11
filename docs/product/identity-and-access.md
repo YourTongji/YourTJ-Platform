@@ -6,7 +6,7 @@
 >
 > 负责人：Identity maintainers、Security owner、Product owner
 >
-> 最近核验：2026-07-11，`origin/main@33584db`
+> 最近核验：2026-07-12，migration `0048` 与 identity recent-auth tests
 
 身份域证明“谁在使用平台”和“是否具备校园资格”，但不把校园邮箱变成公开身份。本规范定义
 登录、注册、密码、会话、onboarding、handle 与账号生命周期的目标语义。
@@ -24,6 +24,10 @@
 - 后端支持当前设备、其他设备和全部设备撤销，以及本人设备 session 列表；密码 reset 撤销全部
   session，已认证 change 保留当前 session 并撤销其他 session。
 - 账号状态、角色、禁言/封禁会参与受保护请求判断。
+- recent-auth 只读取当前可撤销 session 的服务端时间和方法，10 分钟后过期；有密码账号
+  可验证当前密码，所有当前 session 可请求 `recent_auth` purpose 的校园邮箱 code。
+- recent-auth 邮件路径不接受客户端 email；code 仍保持 hash、到期、尝试上限、provider-accepted
+  和锁行一次消费。成功消费与当前 session 标记在同一事务提交。
 - 校园邮箱不进入公开 profile DTO；支持加密和 blind index 配置。
 - Identity 已持有 owner-editable profile text、受控 avatar/banner asset reference 和 profile/list/new-DM
   privacy policy；任意头像 URL 不再可写。
@@ -35,7 +39,7 @@
 - Web 已提供设备中心、单设备/其他设备/全部设备撤销和修改密码；验证码登录允许无密码账号首次
   设置密码，已有密码不会被验证码覆盖。
 - access 与 refresh token 都保存在 localStorage；富文本上线前必须重新评估 XSS 后果。
-- Web 尚无跨标签页 refresh 协调；没有 recent-auth、条款版本确认、onboarding、导出或自助删除。
+- Web 尚无跨标签页 refresh 协调；没有条款版本确认、onboarding、导出或自助删除。
 
 ## 登录与注册体验
 
@@ -67,8 +71,8 @@ code 不可使用。
 
 - 密码登录和忘记密码对“账号是否存在”提供中性外部响应。忘记密码即使 provider 失败也返回
   相同的 204，失败 code 保持不可用并由不含 PII 的运维指标告警。
-- 修改密码要求当前密码或 recent-auth；重置密码依赖 reset-purpose code。
-- recent-auth password change 保留当前设备并撤销其他设备；password reset、角色变化和 suspend
+- 修改密码当前要求当前密码；重置密码依赖 reset-purpose code。
+- 已认证 password change 保留当前设备并撤销其他设备；password reset、角色变化和 suspend
   撤销全部设备及已签发 access token。
 - refresh token rotation 必须识别重放；设备中心显示有限的设备/时间信息，不暴露精确历史 IP。
 - 支持撤销单设备、撤销其他设备和全设备注销。
@@ -77,6 +81,17 @@ code 不可使用。
 - 角色、永久制裁、PII reveal、账号删除等高风险操作需要最近认证或独立 challenge。
 - Moderator/admin 目标要求 phishing-resistant MFA（优先 WebAuthn/passkey）与受审计 recovery；在
   交付前 staff 账号安全仍为 `Partial`，不能把普通 JWT recent-auth 当完整二次验证。
+
+### Recent-auth 状态机
+
+- 新登录 session 默认不 fresh；密码或 purpose-bound 邮箱 code 验证成功后写入
+  `recent_authenticated_at/method`，客户端 JWT `iat` 不参与判定。
+- refresh rotation 在同一 session family 中传递原时间和方法，不延长 10 分钟窗口。
+- session/family 撤销、密码重置、角色变化或 suspend 撤销对应 session/access，recent-auth 随之
+  立即失效。只更新当前活跃 session，不写账号级“已验证”开关。
+- 兼容期不含 session id 的 legacy JWT 可继续普通读写，但 recent-auth status 返回
+  `sessionBound=false`，所有受保护高风险 mutation fail closed，用户需重新登录。
+- Web dialog 可恢复过期/428 失败并在验证成功后重试原操作；服务端仍是唯一安全边界。
 
 ## Onboarding
 
@@ -139,5 +154,7 @@ handle history。
 - code 跨 purpose、并发重放、过期、超尝试次数均失败且无状态竞争。
 - 外部响应不能可靠区分不存在账号、无密码和错误密码。
 - 密码重置、角色变化、session revoke 和 suspend 后对应旧 access/refresh token 都不可继续使用。
+- 高风险 identity staff mutation 必须用当前 server-side session 的未过期 recent-auth；legacy JWT、
+  过期时间、撤销 session、错误/跨 purpose/replay code 和并发验证都有负向覆盖。
 - 公共 API、日志、通知和审计不泄露邮箱、code、password hash 或 refresh secret。
 - handler→repo→PostgreSQL 集成测试覆盖上述正向与负向旅程。

@@ -17,8 +17,9 @@ use crate::auth::{create_session_access_token, generate_refresh_token};
 use crate::dto::{
     AccountDto, AuthTokensOutput, BindKeyInput, ClaimChallengeOutput, ClaimInput, MyProfileDto,
     PasswordChangeInput, PasswordForgotInput, PasswordLoginInput, PasswordResetInput,
-    ProfilePrivacyDto, ProfileUpdateInput, RefreshInput, RequestCodeInput, SessionDto,
-    UpdateMeInput, VerifyEmailInput, WalletDto,
+    ProfilePrivacyDto, ProfileUpdateInput, RecentAuthMethod, RecentAuthStatusDto,
+    RecentAuthVerifyInput, RefreshInput, RequestCodeInput, SessionDto, UpdateMeInput,
+    VerifyEmailInput, WalletDto,
 };
 use crate::email_code::{generate_code, hash_code, CodePurpose};
 use crate::error::IdentityError;
@@ -437,6 +438,163 @@ pub async fn refresh(
         refresh_token: format!("{:x}:{new_refresh_plain}", rotation.session_id),
         account: row_to_dto(&account),
     }))
+}
+
+async fn authenticated_context(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> AppResult<crate::auth_middleware::AuthenticatedContext> {
+    crate::auth_middleware::authenticate_context(
+        headers,
+        &state.db,
+        &state.jwt_secret,
+        state.redis.as_ref(),
+    )
+    .await
+    .map_err(|_| shared::AppError::Unauthorized)
+}
+
+/// GET /auth/recent-auth — describe the current session's server-side freshness.
+#[tracing::instrument(skip_all)]
+pub async fn recent_auth_status(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> AppResult<Json<RecentAuthStatusDto>> {
+    let auth = authenticated_context(&state, &headers).await?;
+    let recent = crate::auth_middleware::recent_auth_state(&auth, &state.db).await?;
+    let has_password =
+        repo::find_password_hash_by_account_id(&state.db, auth.account.id).await?.is_some();
+    let authenticated_at = recent.authenticated_at.map(|value| value.timestamp());
+    let expires_at = recent
+        .authenticated_at
+        .map(|value| value.timestamp() + crate::auth_middleware::RECENT_AUTH_WINDOW_SECONDS);
+    let method = match recent.method.as_deref() {
+        Some("password") => Some(RecentAuthMethod::Password),
+        Some("email_code") => Some(RecentAuthMethod::EmailCode),
+        Some(_) => {
+            return Err(shared::AppError::Internal(anyhow::anyhow!(
+                "invalid persisted recent-auth method"
+            )))
+        }
+        None => None,
+    };
+    let mut available_methods = Vec::with_capacity(2);
+    if recent.session_bound && has_password {
+        available_methods.push(RecentAuthMethod::Password);
+    }
+    if recent.session_bound {
+        available_methods.push(RecentAuthMethod::EmailCode);
+    }
+    Ok(Json(RecentAuthStatusDto {
+        session_bound: recent.session_bound,
+        is_fresh: recent.is_fresh(),
+        authenticated_at,
+        expires_at,
+        method,
+        available_methods,
+    }))
+}
+
+/// POST /auth/recent-auth/email/request-code — send to the authenticated account's email.
+#[tracing::instrument(skip_all)]
+pub async fn request_recent_auth_code(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> AppResult<StatusCode> {
+    let auth = authenticated_context(&state, &headers).await?;
+    let session_id = auth.session_id.ok_or(shared::AppError::RecentAuthRequired)?;
+    let recent = crate::auth_middleware::recent_auth_state(&auth, &state.db).await?;
+    if !recent.session_bound {
+        return Err(shared::AppError::RecentAuthRequired);
+    }
+    let rate_limit_key = format!("{}:{session_id}", auth.account.id);
+    shared::ratelimit::check_token_bucket(
+        state.redis.as_ref(),
+        "recent_auth_email",
+        &rate_limit_key,
+        1,
+        60,
+    )
+    .await?;
+    let account =
+        repo::find_account_by_id(&state.db, state.email_encryption.as_ref(), auth.account.id)
+            .await?
+            .ok_or(shared::AppError::Unauthorized)?;
+    let code = generate_code();
+    let request_id = repo::insert_email_code(
+        &state.db,
+        state.email_encryption.as_ref(),
+        &account.email,
+        CodePurpose::RecentAuth,
+        &hash_code(&code),
+        Utc::now() + chrono::Duration::minutes(10),
+    )
+    .await?;
+    let content = crate::email_templates::recent_auth_code(&code);
+    deliver_email_code(&state, &account.email, request_id, &content).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// POST /auth/recent-auth/verify — refresh only the current active session.
+#[tracing::instrument(skip_all)]
+pub async fn verify_recent_auth(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<RecentAuthVerifyInput>,
+) -> AppResult<Json<RecentAuthStatusDto>> {
+    let auth = authenticated_context(&state, &headers).await?;
+    let session_id = auth.session_id.ok_or(shared::AppError::RecentAuthRequired)?;
+    let rate_limit_key = format!("{}:{session_id}", auth.account.id);
+    shared::ratelimit::check_token_bucket(
+        state.redis.as_ref(),
+        "recent_auth_verify",
+        &rate_limit_key,
+        5,
+        300,
+    )
+    .await?;
+    let account =
+        repo::find_account_by_id(&state.db, state.email_encryption.as_ref(), auth.account.id)
+            .await?
+            .ok_or(shared::AppError::Unauthorized)?;
+    match body.method {
+        RecentAuthMethod::Password => {
+            let has_valid_password = matches!(body.password.as_deref(), Some(password) if (1..=128).contains(&password.len()));
+            if body.code.is_some() || !has_valid_password {
+                return Err(shared::AppError::BadRequest(
+                    "password verification requires only password".into(),
+                ));
+            }
+            let password_matches = password::verify_or_dummy(
+                body.password.as_deref().unwrap_or_default(),
+                account.password_hash.as_deref(),
+            )
+            .await?;
+            if !password_matches {
+                return Err(IdentityError::RecentAuthFailed.into());
+            }
+            repo::mark_recent_auth_password(&state.db, account.id, session_id).await?;
+        }
+        RecentAuthMethod::EmailCode => {
+            let has_valid_code =
+                matches!(body.code.as_deref(), Some(code) if validate_email_code(code).is_ok());
+            if body.password.is_some() || !has_valid_code {
+                return Err(shared::AppError::BadRequest(
+                    "email-code verification requires only a six-digit code".into(),
+                ));
+            }
+            repo::consume_recent_auth_code(
+                &state.db,
+                state.email_encryption.as_ref(),
+                account.id,
+                session_id,
+                &account.email,
+                body.code.as_deref().unwrap_or_default(),
+            )
+            .await?;
+        }
+    }
+    recent_auth_status(State(state), headers).await
 }
 
 /// POST /auth/logout

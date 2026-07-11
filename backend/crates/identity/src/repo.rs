@@ -203,6 +203,69 @@ pub async fn consume_email_code(
         .ok_or_else(|| AppError::Internal(anyhow::anyhow!("invalid persisted email code purpose")))
 }
 
+/// Consume a recent-auth code and mark the same active session in one transaction.
+pub async fn consume_recent_auth_code(
+    pool: &PgPool,
+    encryption: Option<&EmailEncryption>,
+    account_id: i64,
+    session_id: i64,
+    email: &str,
+    attempted_code: &str,
+) -> AppResult<DateTime<Utc>> {
+    let blind_index = encryption.map(|encryption| encryption.blind_index(email));
+    let mut tx = pool.begin().await?;
+    let session_exists: Option<i64> = sqlx::query_scalar(
+        "SELECT id FROM identity.sessions \
+         WHERE id = $1 AND account_id = $2 AND revoked_at IS NULL AND expires_at > now() \
+         FOR UPDATE",
+    )
+    .bind(session_id)
+    .bind(account_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    if session_exists.is_none() {
+        return Err(AppError::RecentAuthRequired);
+    }
+    let row = sqlx::query_as::<_, EmailCodeRow>(
+        "SELECT id, purpose, code_hash, attempts FROM identity.email_codes \
+         WHERE (email = $1 OR email_blind_index = $2) AND purpose = 'recent_auth' \
+           AND expires_at > now() AND used_at IS NULL \
+           AND delivery_accepted_at IS NOT NULL \
+         ORDER BY created_at DESC, id DESC LIMIT 1 FOR UPDATE",
+    )
+    .bind(email)
+    .bind(&blind_index)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let row = row.ok_or(crate::error::IdentityError::CodeExpired)?;
+    if row.attempts >= 5 {
+        return Err(crate::error::IdentityError::CodeExhausted.into());
+    }
+    if !verify_code(attempted_code, &row.code_hash) {
+        sqlx::query("UPDATE identity.email_codes SET attempts = attempts + 1 WHERE id = $1")
+            .bind(row.id)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        return Err(crate::error::IdentityError::InvalidCode.into());
+    }
+    sqlx::query(
+        "UPDATE identity.email_codes SET attempts = attempts + 1, used_at = now() WHERE id = $1",
+    )
+    .bind(row.id)
+    .execute(&mut *tx)
+    .await?;
+    let authenticated_at: DateTime<Utc> = sqlx::query_scalar(
+        "UPDATE identity.sessions SET recent_authenticated_at = now(), \
+                recent_auth_method = 'email_code' WHERE id = $1 RETURNING recent_authenticated_at",
+    )
+    .bind(session_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(authenticated_at)
+}
+
 // ---------------------------------------------------------------------------
 // accounts
 // ---------------------------------------------------------------------------
@@ -528,7 +591,8 @@ pub async fn rotate_session(
     let mut tx = pool.begin().await?;
     let row = sqlx::query_as::<_, SessionRow>(
         "SELECT id, account_id, refresh_hash, expires_at, revoked_at, family_id, \
-                replaced_by_id, user_agent, created_at, last_used_at \
+                replaced_by_id, user_agent, created_at, last_used_at, \
+                recent_authenticated_at, recent_auth_method \
          FROM identity.sessions WHERE id = $1 FOR UPDATE",
     )
     .bind(session_id)
@@ -562,8 +626,9 @@ pub async fn rotate_session(
 
     let successor_id: i64 = sqlx::query_scalar(
         "INSERT INTO identity.sessions \
-         (account_id, refresh_hash, family_id, rotated_from_id, user_agent, expires_at) \
-         VALUES ($1, $2, $3, $4, $5, $6) RETURNING id",
+         (account_id, refresh_hash, family_id, rotated_from_id, user_agent, expires_at, \
+          recent_authenticated_at, recent_auth_method) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id",
     )
     .bind(row.account_id)
     .bind(successor_hash)
@@ -571,6 +636,8 @@ pub async fn rotate_session(
     .bind(row.id)
     .bind(user_agent.or(row.user_agent.as_deref()))
     .bind(successor_expires_at)
+    .bind(row.recent_authenticated_at)
+    .bind(row.recent_auth_method)
     .fetch_one(&mut *tx)
     .await?;
     sqlx::query(
@@ -588,6 +655,26 @@ pub async fn rotate_session(
             .await?;
     tx.commit().await?;
     Ok(RotatedSession { account_id: row.account_id, session_id: successor_id, auth_version })
+}
+
+/// Mark a password-verified active session as recently authenticated.
+pub async fn mark_recent_auth_password(
+    pool: &PgPool,
+    account_id: i64,
+    session_id: i64,
+) -> AppResult<DateTime<Utc>> {
+    let authenticated_at = sqlx::query_scalar(
+        "UPDATE identity.sessions SET recent_authenticated_at = now(), \
+                recent_auth_method = 'password' \
+         WHERE id = $1 AND account_id = $2 AND revoked_at IS NULL AND expires_at > now() \
+         RETURNING recent_authenticated_at",
+    )
+    .bind(session_id)
+    .bind(account_id)
+    .fetch_optional(pool)
+    .await?
+    .ok_or(AppError::RecentAuthRequired)?;
+    Ok(authenticated_at)
 }
 
 /// Revoke a named session owned by an account.

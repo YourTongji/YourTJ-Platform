@@ -40,6 +40,12 @@ pub fn routes(state: AppState) -> Router {
         .route("/api/v2/auth/password/forgot", post(handlers::password_forgot))
         .route("/api/v2/auth/password/reset", post(handlers::password_reset))
         .route("/api/v2/auth/password/change", post(handlers::password_change))
+        .route("/api/v2/auth/recent-auth", get(handlers::recent_auth_status))
+        .route(
+            "/api/v2/auth/recent-auth/email/request-code",
+            post(handlers::request_recent_auth_code),
+        )
+        .route("/api/v2/auth/recent-auth/verify", post(handlers::verify_recent_auth))
         // Profile
         .route("/api/v2/me", get(handlers::get_me).patch(handlers::update_me))
         .route(
