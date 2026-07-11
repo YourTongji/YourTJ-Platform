@@ -230,6 +230,25 @@ async fn run_migrations(pool: &PgPool) {
             .expect("migration 0048 failed");
     }
 
+    let has_composed_code_purposes: bool = sqlx::query_scalar(
+        "SELECT EXISTS( \
+           SELECT 1 FROM pg_constraint \
+           WHERE conrelid = 'identity.email_codes'::regclass \
+             AND conname = 'email_codes_purpose_check' \
+             AND pg_get_constraintdef(oid) LIKE '%appeal%' \
+             AND pg_get_constraintdef(oid) LIKE '%recent_auth%' \
+         )",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or(false);
+    if !has_composed_code_purposes {
+        sqlx::raw_sql(include_str!("../../../../migrations/0052_email_code_purpose_union.sql"))
+            .execute(pool)
+            .await
+            .expect("migration 0052 failed");
+    }
+
     // Clean test data from previous runs (always run, even if migrations were skipped).
     sqlx::query("DELETE FROM governance.audit_events").execute(pool).await.ok();
     sqlx::query("DELETE FROM identity.sessions").execute(pool).await.ok();

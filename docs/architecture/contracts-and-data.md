@@ -152,6 +152,9 @@ Fresh database 必须只通过 sqlx migration ledger 建立。普通启动、CI 
   nullable 默认；滚动发布先跑 migration，再部署读取新列的应用。不带 session id 的 legacy JWT
   status 明确返回 unbound，高风险 mutation 一律 428 fail closed。紧急回退应保留 schema 并在边缘
   关闭高风险 route 后回退应用，不能以恢复无 step-up 的 mutation 作为“可用性降级”。
+- `0047` 的 appeal 与 `0048` 的 recent-auth 曾分别扩展同一个 email purpose constraint；`0052` 以
+  additive 后续 migration 固定五类 purpose 的并集，避免后执行 migration 覆盖前一能力。Fresh/rolling
+  部署必须在应用接受 appeal 或 recent-auth 请求前跑到 `0052`，集成测试同时插入两类 code 防回归。
 - Appeal-only JWT 使用显式 `scope=appeal`、短 TTL、无 refresh/session。普通 identity/forum/reviews/
   credit middleware 必须拒绝 scoped token；只有治理申诉/通知 composition 调用 restricted authenticator，
   且 deleted 账号仍不可访问。

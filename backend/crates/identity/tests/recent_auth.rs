@@ -571,3 +571,23 @@ async fn concurrent_session_revocation_wins_before_a_high_risk_mutation_commits(
             .expect("target role after revocation race");
     assert_eq!(persisted_role, "user");
 }
+
+#[tokio::test]
+async fn email_code_constraint_composes_appeal_and_recent_auth_purposes() {
+    let (pool, _) = helpers::create_test_app().await;
+    let suffix = uuid::Uuid::new_v4().simple().to_string();
+    for purpose in ["appeal", "recent_auth"] {
+        sqlx::query(
+            "INSERT INTO identity.email_codes \
+             (email, code_hash, expires_at, purpose, request_id, delivery_accepted_at) \
+             VALUES ($1, $2, now() + interval '10 minutes', $3, $4, now())",
+        )
+        .bind(format!("purpose-{purpose}-{suffix}@tongji.edu.cn"))
+        .bind(hex::encode(Sha256::digest(format!("{purpose}-{suffix}"))))
+        .bind(purpose)
+        .bind(uuid::Uuid::new_v4())
+        .execute(&pool)
+        .await
+        .expect("composed email code purpose must remain valid");
+    }
+}
