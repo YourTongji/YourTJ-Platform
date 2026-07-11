@@ -255,9 +255,13 @@ export const api = {
     });
   },
 
-  search(q: string, type: "course" | "teacher" | "review" | "thread" | "all" = "all") {
+  search(
+    q: string,
+    type: "course" | "teacher" | "review" | "thread" | "all" = "all",
+    limit = 12,
+  ) {
     return apiRequest<SearchResult>("/search", {
-      query: { q, type, limit: 12 },
+      query: { q, type, limit },
       auth: false,
     });
   },

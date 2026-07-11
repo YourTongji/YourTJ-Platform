@@ -60,6 +60,15 @@ export function SearchDialog({
             </div>
           ) : (
             <div className="space-y-5">
+              <div className="flex justify-end">
+                <Link
+                  to={`/search?q=${encodeURIComponent(trimmed)}`}
+                  onClick={() => onOpenChange(false)}
+                  className="text-sm font-medium text-primary underline-offset-4 hover:underline"
+                >
+                  在完整搜索页查看结果
+                </Link>
+              </div>
               <section>
                 <div className="mb-2 flex items-center gap-2 text-sm font-medium">
                   <BookOpen className="h-4 w-4 text-primary" />

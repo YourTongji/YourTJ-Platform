@@ -43,6 +43,9 @@ const ProfilePage = React.lazy(async () => ({
 const SchedulePage = React.lazy(async () => ({
   default: (await import("@/pages/schedule-page")).SchedulePage,
 }));
+const SearchPage = React.lazy(async () => ({
+  default: (await import("@/pages/search-page")).SearchPage,
+}));
 const SettingsPage = React.lazy(async () => ({
   default: (await import("@/pages/settings-page")).SettingsPage,
 }));
@@ -72,6 +75,7 @@ const router = createBrowserRouter(
         { path: "courses", element: <CoursesPage /> },
         { path: "courses/:id", element: <CourseDetailPage /> },
         { path: "schedule", element: <SchedulePage /> },
+        { path: "search", element: <SearchPage /> },
         { path: "wallet", element: <WalletPage /> },
         { path: "notifications", element: <NotificationsPage /> },
         { path: "messages", element: <MessagesPage /> },

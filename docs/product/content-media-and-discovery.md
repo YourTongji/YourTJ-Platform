@@ -37,8 +37,8 @@
 - tags、tag filter、subscription、poll/vote viewer state、read tracking 和 drafts 契约未接齐。
 - 首页使用固定摘要、按 index 伪造徽章，部分收藏/分享/筛选只有视觉没有行为。
 - Web 没有用户媒体上传链路；头像仍接受外部 URL，上传记录没有绑定到具体内容。
-- 聚合搜索已有稳定三类结果和有效 type filter；仍缺独立综合结果页、每类 cursor、用户/板块/tag
-  结果、highlight/纠错，以及 transactional outbox 驱动的索引可靠更新。
+- 聚合搜索已有稳定三类结果、有效 type filter 和独立 Web 综合结果页；仍缺每类 cursor、用户/板块/tag
+  结果、highlight/纠错、局部失败，以及 transactional outbox 驱动的索引可靠更新。
 - 左侧社区推广位硬编码，没有管理模型。
 
 ## 内容类型与格式
