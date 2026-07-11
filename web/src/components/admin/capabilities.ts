@@ -14,6 +14,7 @@ export const ADMIN_CAPABILITIES = {
   manageActivity: "activity.policy",
   manageAnnouncements: "announcements.manage",
   managePromotions: "promotions.manage",
+  manageBadges: "badges.manage",
   manageVerifications: "verifications.manage",
   runOperations: "operations.jobs",
   manageCreditIntegrity: "credit.integrity",

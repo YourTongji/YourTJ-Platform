@@ -7822,17 +7822,21 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/admin/platform/badges": {
+    "/admin/achievements": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** List all badges */
+        /** List versioned contribution achievement definitions */
         get: {
             parameters: {
-                query?: never;
+                query?: {
+                    /** @description Opaque pagination cursor */
+                    cursor?: components["parameters"]["Cursor"];
+                    limit?: components["parameters"]["Limit"];
+                };
                 header?: never;
                 path?: never;
                 cookie?: never;
@@ -7845,13 +7849,14 @@ export interface paths {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": components["schemas"]["Badge"][];
+                        "application/json": components["schemas"]["AchievementPage"];
                     };
                 };
+                403: components["responses"]["Forbidden"];
             };
         };
         put?: never;
-        /** Create a badge */
+        /** Create a controlled contribution achievement definition */
         post: {
             parameters: {
                 query?: never;
@@ -7861,7 +7866,7 @@ export interface paths {
             };
             requestBody: {
                 content: {
-                    "application/json": components["schemas"]["BadgeInput"];
+                    "application/json": components["schemas"]["AchievementCreateInput"];
                 };
             };
             responses: {
@@ -7871,7 +7876,291 @@ export interface paths {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": components["schemas"]["Badge"];
+                        "application/json": components["schemas"]["Achievement"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                403: components["responses"]["Forbidden"];
+                409: components["responses"]["Conflict"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/achievements/{achievementId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Update or retire an achievement with optimistic concurrency */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    achievementId: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["AchievementUpdateInput"];
+                };
+            };
+            responses: {
+                /** @description updated */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Achievement"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+                409: components["responses"]["Conflict"];
+            };
+        };
+        trace?: never;
+    };
+    "/admin/users/{id}/achievements": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List an account's active and revoked contribution achievements */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description Opaque pagination cursor */
+                    cursor?: components["parameters"]["Cursor"];
+                    limit?: components["parameters"]["Limit"];
+                };
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AchievementGrantPage"];
+                    };
+                };
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+            };
+        };
+        put?: never;
+        /** Manually award or re-award an achievement without minting points */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["AchievementGrantInput"];
+                };
+            };
+            responses: {
+                /** @description awarded */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AchievementGrant"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+                409: components["responses"]["Conflict"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/users/{id}/achievements/{achievementId}/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Revoke an account achievement without reversing historical contribution points */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                    achievementId: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["AchievementRevokeInput"];
+                };
+            };
+            responses: {
+                /** @description revoked */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AchievementGrant"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+                409: components["responses"]["Conflict"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/users/{id}/achievement-events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List append-only achievement award and revocation history */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description Opaque pagination cursor */
+                    cursor?: components["parameters"]["Cursor"];
+                    limit?: components["parameters"]["Limit"];
+                };
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AchievementEventPage"];
+                    };
+                };
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/platform/badges": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Deprecated alias for listing contribution achievements
+         * @deprecated
+         */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description Opaque pagination cursor */
+                    cursor?: components["parameters"]["Cursor"];
+                    limit?: components["parameters"]["Limit"];
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AchievementPage"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        /**
+         * Deprecated alias for creating a contribution achievement
+         * @deprecated
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["AchievementCreateInput"];
+                };
+            };
+            responses: {
+                /** @description created */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Achievement"];
                     };
                 };
             };
@@ -9441,23 +9730,74 @@ export interface components {
             metadata?: Record<string, never> | null;
             createdAt: number;
         };
-        Badge: {
-            id?: string;
-            slug?: string;
-            name?: string;
-            description?: string | null;
-            iconUrl?: string | null;
-            mintAmount?: number;
-            createdAt?: number;
-        };
-        BadgeInput: {
+        /** @enum {string} */
+        AchievementIcon: "award" | "book-open-check" | "message-circle-heart" | "star";
+        /** @enum {string} */
+        AchievementStatus: "active" | "retired";
+        Achievement: {
+            id: string;
             slug: string;
             name: string;
-            description?: string;
-            iconUrl?: string;
-            /** @default 0 */
+            description: string | null;
+            icon: components["schemas"]["AchievementIcon"];
+            status: components["schemas"]["AchievementStatus"];
+            mintAmount: number;
+            version: number;
+            createdAt: number;
+            updatedAt: number;
+        };
+        AchievementCreateInput: {
+            slug: string;
+            name: string;
+            description?: string | null;
+            icon: components["schemas"]["AchievementIcon"];
             mintAmount: number;
             reason: string;
+        };
+        AchievementUpdateInput: {
+            expectedVersion: number;
+            name: string;
+            description?: string | null;
+            icon: components["schemas"]["AchievementIcon"];
+            status: components["schemas"]["AchievementStatus"];
+            mintAmount: number;
+            reason: string;
+        };
+        AchievementGrant: {
+            accountId: string;
+            achievementId: string;
+            slug: string;
+            name: string;
+            icon: components["schemas"]["AchievementIcon"];
+            definitionStatus: components["schemas"]["AchievementStatus"];
+            /** @enum {string} */
+            status: "active" | "revoked";
+            awardReason: string | null;
+            awardedAt: number;
+            awardedBy: string;
+            revokedAt: number | null;
+            revokedBy: string | null;
+            revokeReason: string | null;
+        };
+        AchievementGrantInput: {
+            achievementId: string;
+            reason: string;
+        };
+        AchievementRevokeInput: {
+            reason: string;
+        };
+        AchievementEvent: {
+            id: string;
+            achievementId: string;
+            slug: string;
+            name: string;
+            /** @enum {string} */
+            action: "awarded" | "revoked";
+            /** @enum {string} */
+            source: "automatic" | "manual";
+            actorId: string | null;
+            reason: string;
+            createdAt: number;
         };
         VerificationType: {
             id: string;
@@ -9534,8 +9874,14 @@ export interface components {
         IgnorePage: components["schemas"]["Page"] & {
             items?: components["schemas"]["IgnoreUser"][];
         };
-        BadgePage: components["schemas"]["Page"] & {
-            items?: components["schemas"]["Badge"][];
+        AchievementPage: components["schemas"]["Page"] & {
+            items?: components["schemas"]["Achievement"][];
+        };
+        AchievementEventPage: components["schemas"]["Page"] & {
+            items?: components["schemas"]["AchievementEvent"][];
+        };
+        AchievementGrantPage: components["schemas"]["Page"] & {
+            items?: components["schemas"]["AchievementGrant"][];
         };
         VerificationTypePage: components["schemas"]["Page"] & {
             items?: components["schemas"]["VerificationType"][];

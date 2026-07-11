@@ -1,6 +1,12 @@
 import { apiRequest } from "./client";
 import type {
   Account,
+  Achievement,
+  AchievementCreateInput,
+  AchievementEvent,
+  AchievementGrant,
+  AchievementGrantInput,
+  AchievementUpdateInput,
   ActivityPolicy,
   ActivityPolicyUpdateInput,
   ActivityCalendar,
@@ -1112,6 +1118,51 @@ export const api = {
     return apiRequest<VerificationGrant>(
       `/admin/verifications/grants/${encodeURIComponent(grantId)}/revoke`,
       { method: "POST", body: { reason } },
+    );
+  },
+
+  adminAchievements(cursor?: string | null) {
+    return apiRequest<Page<Achievement>>("/admin/achievements", {
+      query: { cursor, limit: 50 },
+    });
+  },
+
+  createAdminAchievement(body: AchievementCreateInput) {
+    return apiRequest<Achievement>("/admin/achievements", { method: "POST", body });
+  },
+
+  updateAdminAchievement(id: string, body: AchievementUpdateInput) {
+    return apiRequest<Achievement>(`/admin/achievements/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body,
+    });
+  },
+
+  adminUserAchievements(accountId: string, cursor?: string | null) {
+    return apiRequest<Page<AchievementGrant>>(
+      `/admin/users/${encodeURIComponent(accountId)}/achievements`,
+      { query: { cursor, limit: 50 } },
+    );
+  },
+
+  grantAdminUserAchievement(accountId: string, body: AchievementGrantInput) {
+    return apiRequest<AchievementGrant>(
+      `/admin/users/${encodeURIComponent(accountId)}/achievements`,
+      { method: "POST", body },
+    );
+  },
+
+  revokeAdminUserAchievement(accountId: string, achievementId: string, reason: string) {
+    return apiRequest<AchievementGrant>(
+      `/admin/users/${encodeURIComponent(accountId)}/achievements/${encodeURIComponent(achievementId)}/revoke`,
+      { method: "POST", body: { reason } },
+    );
+  },
+
+  adminUserAchievementEvents(accountId: string, cursor?: string | null) {
+    return apiRequest<Page<AchievementEvent>>(
+      `/admin/users/${encodeURIComponent(accountId)}/achievement-events`,
+      { query: { cursor, limit: 50 } },
     );
   },
 

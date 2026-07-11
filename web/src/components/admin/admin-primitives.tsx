@@ -58,6 +58,7 @@ export function AdminStatusBadge({ value }: { value?: string | null }) {
     admin: "管理员",
     expired: "已到期",
     revoked: "已撤销",
+    retired: "已停用",
     queued: "等待执行",
     running: "执行中",
     succeeded: "已完成",

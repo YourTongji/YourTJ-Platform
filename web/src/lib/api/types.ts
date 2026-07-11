@@ -11,6 +11,14 @@ export type ActivityCalendar = Schema["ActivityCalendar"];
 export type ActivityDay = Schema["ActivityDay"];
 export type ActivityPolicy = Schema["ActivityPolicy"];
 export type ActivityPolicyUpdateInput = Schema["ActivityPolicyUpdateInput"];
+export type Achievement = Schema["Achievement"];
+export type AchievementCreateInput = Schema["AchievementCreateInput"];
+export type AchievementUpdateInput = Schema["AchievementUpdateInput"];
+export type AchievementGrant = Schema["AchievementGrant"];
+export type AchievementGrantInput = Schema["AchievementGrantInput"];
+export type AchievementEvent = Schema["AchievementEvent"];
+export type AchievementIcon = Schema["AchievementIcon"];
+export type AchievementStatus = Schema["AchievementStatus"];
 export type AdminAuditEvent = Schema["AdminAuditEvent"];
 export interface AdminBoardCreateInput {
   slug: string;

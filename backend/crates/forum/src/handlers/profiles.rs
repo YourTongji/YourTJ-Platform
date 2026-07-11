@@ -65,7 +65,7 @@ pub async fn get_user_profile(
     let (stats, social_counts, badge_rows, asset_urls, verifications) = tokio::try_join!(
         crate::repo::profiles::get_public_profile_stats(&state.db, account.id),
         crate::repo::relationships::get_social_counts(&state.db, account.id),
-        crate::badges::list_account_badges(&state.db, account.id),
+        platform::achievements::list_public_account_achievements(&state.db, account.id),
         media::resolve_clean_profile_images(&state.db, &asset_ids),
         platform::verifications::list_public_account_verifications(&state.db, account.id),
     )?;

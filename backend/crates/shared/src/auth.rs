@@ -46,6 +46,7 @@ pub enum Capability {
     ManageActivity,
     ManageAnnouncements,
     ManagePromotions,
+    ManageBadges,
     ManageVerifications,
     RunOperations,
     ManageCreditIntegrity,
@@ -67,6 +68,7 @@ impl Capability {
             Self::ManageActivity => "activity.policy",
             Self::ManageAnnouncements => "announcements.manage",
             Self::ManagePromotions => "promotions.manage",
+            Self::ManageBadges => "badges.manage",
             Self::ManageVerifications => "verifications.manage",
             Self::RunOperations => "operations.jobs",
             Self::ManageCreditIntegrity => "credit.integrity",
@@ -95,6 +97,7 @@ const ADMIN_CAPABILITIES: &[Capability] = &[
     Capability::ManageActivity,
     Capability::ManageAnnouncements,
     Capability::ManagePromotions,
+    Capability::ManageBadges,
     Capability::ManageVerifications,
     Capability::RunOperations,
     Capability::ManageCreditIntegrity,
@@ -187,6 +190,7 @@ mod tests {
         assert!(moderator.has_capability(Capability::SilenceUsers));
         assert!(!moderator.has_capability(Capability::ManageActivity));
         assert!(!moderator.has_capability(Capability::ManagePromotions));
+        assert!(!moderator.has_capability(Capability::ManageBadges));
         assert!(!moderator.has_capability(Capability::ManageVerifications));
         assert!(!moderator.has_capability(Capability::ManageCreditIntegrity));
         assert!(!moderator.has_capability(Capability::ChangeRoles));
@@ -197,6 +201,7 @@ mod tests {
         let administrator = AuthAccount { id: 1, role: "admin".into(), status: "active".into() };
         assert!(administrator.has_capability(Capability::ManageAnnouncements));
         assert!(administrator.has_capability(Capability::ManagePromotions));
+        assert!(administrator.has_capability(Capability::ManageBadges));
         assert!(administrator.has_capability(Capability::ManageVerifications));
         assert!(administrator.has_capability(Capability::ManageCreditIntegrity));
     }

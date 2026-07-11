@@ -168,8 +168,8 @@ pub async fn run() -> anyhow::Result<()> {
     tracing::info!("forum watched words loaded");
 
     // 4. Seed standard badges.
-    forum::badges::seed_badges(&state.db).await;
-    tracing::info!("forum badges seeded");
+    platform::achievements::seed_achievements(&state.db).await?;
+    tracing::info!("platform achievements seeded");
 
     // 5. Auto-archive stale threads (daily).
     {

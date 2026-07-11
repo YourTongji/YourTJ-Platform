@@ -1613,26 +1613,92 @@ components:
         reason: { type: string, nullable: true }
         metadata: { type: object, nullable: true }
         createdAt: { type: integer }
-    Badge:
+    AchievementIcon:
+      type: string
+      enum: [award, book-open-check, message-circle-heart, star]
+    AchievementStatus:
+      type: string
+      enum: [active, retired]
+    Achievement:
       type: object
+      required: [id, slug, name, description, icon, status, mintAmount, version, createdAt, updatedAt]
       properties:
         id: { type: string }
         slug: { type: string }
         name: { type: string }
         description: { type: string, nullable: true }
-        iconUrl: { type: string, nullable: true }
+        icon: { $ref: "#/components/schemas/AchievementIcon" }
+        status: { $ref: "#/components/schemas/AchievementStatus" }
         mintAmount: { type: integer, minimum: 0 }
+        version: { type: integer, minimum: 1 }
         createdAt: { type: integer }
-    BadgeInput:
+        updatedAt: { type: integer }
+    AchievementCreateInput:
       type: object
-      required: [slug, name, reason]
+      additionalProperties: false
+      required: [slug, name, icon, mintAmount, reason]
       properties:
-        slug: { type: string, minLength: 1, maxLength: 64 }
+        slug: { type: string, pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$", maxLength: 64 }
         name: { type: string, minLength: 1, maxLength: 100 }
-        description: { type: string, maxLength: 500 }
-        iconUrl: { type: string, maxLength: 2000 }
-        mintAmount: { type: integer, minimum: 0, maximum: 100000, default: 0 }
+        description: { type: string, maxLength: 240, nullable: true }
+        icon: { $ref: "#/components/schemas/AchievementIcon" }
+        mintAmount: { type: integer, minimum: 0, maximum: 100000 }
         reason: { type: string, minLength: 3, maxLength: 500 }
+    AchievementUpdateInput:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, name, icon, status, mintAmount, reason]
+      properties:
+        expectedVersion: { type: integer, minimum: 1 }
+        name: { type: string, minLength: 1, maxLength: 100 }
+        description: { type: string, maxLength: 240, nullable: true }
+        icon: { $ref: "#/components/schemas/AchievementIcon" }
+        status: { $ref: "#/components/schemas/AchievementStatus" }
+        mintAmount: { type: integer, minimum: 0, maximum: 100000 }
+        reason: { type: string, minLength: 3, maxLength: 500 }
+    AchievementGrant:
+      type: object
+      required: [accountId, achievementId, slug, name, icon, definitionStatus, status, awardReason, awardedAt, awardedBy, revokedAt, revokedBy, revokeReason]
+      properties:
+        accountId: { type: string }
+        achievementId: { type: string }
+        slug: { type: string }
+        name: { type: string }
+        icon: { $ref: "#/components/schemas/AchievementIcon" }
+        definitionStatus: { $ref: "#/components/schemas/AchievementStatus" }
+        status: { type: string, enum: [active, revoked] }
+        awardReason: { type: string, nullable: true }
+        awardedAt: { type: integer }
+        awardedBy: { type: string }
+        revokedAt: { type: integer, nullable: true }
+        revokedBy: { type: string, nullable: true }
+        revokeReason: { type: string, nullable: true }
+    AchievementGrantInput:
+      type: object
+      additionalProperties: false
+      required: [achievementId, reason]
+      properties:
+        achievementId: { type: string }
+        reason: { type: string, minLength: 3, maxLength: 500 }
+    AchievementRevokeInput:
+      type: object
+      additionalProperties: false
+      required: [reason]
+      properties:
+        reason: { type: string, minLength: 3, maxLength: 500 }
+    AchievementEvent:
+      type: object
+      required: [id, achievementId, slug, name, action, source, actorId, reason, createdAt]
+      properties:
+        id: { type: string }
+        achievementId: { type: string }
+        slug: { type: string }
+        name: { type: string }
+        action: { type: string, enum: [awarded, revoked] }
+        source: { type: string, enum: [automatic, manual] }
+        actorId: { type: string, nullable: true }
+        reason: { type: string }
+        createdAt: { type: integer }
     VerificationType:
       type: object
       required: [id, slug, category, label, icon, badgeVariant, allowsPublicDisplay, createdAt]
@@ -1729,10 +1795,18 @@ components:
       allOf:
         - $ref: "#/components/schemas/Page"
         - { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/IgnoreUser" } } } }
-    BadgePage:
+    AchievementPage:
       allOf:
         - $ref: "#/components/schemas/Page"
-        - { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/Badge" } } } }
+        - { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/Achievement" } } } }
+    AchievementEventPage:
+      allOf:
+        - $ref: "#/components/schemas/Page"
+        - { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/AchievementEvent" } } } }
+    AchievementGrantPage:
+      allOf:
+        - $ref: "#/components/schemas/Page"
+        - { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/AchievementGrant" } } } }
     VerificationTypePage:
       allOf:
         - $ref: "#/components/schemas/Page"
@@ -3131,9 +3205,99 @@ paths:
     post: { tags: [admin], summary: Revoke sanction, parameters: [{ name: id, in: path, required: true, schema: { type: string } }], requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/UnsanctionInput" } } } }, responses: { "204": { description: revoked }, "403": { $ref: "#/components/responses/Forbidden" }, "404": { $ref: "#/components/responses/NotFound" } } }
   /admin/users/{id}/sanctions:
     get: { tags: [admin], summary: List sanctions for user, parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Sanction" } } } } }, "403": { $ref: "#/components/responses/Forbidden" }, "404": { $ref: "#/components/responses/NotFound" } } }
+  /admin/achievements:
+    get:
+      tags: [admin, platform]
+      summary: List versioned contribution achievement definitions
+      parameters: [{ $ref: "#/components/parameters/Cursor" }, { $ref: "#/components/parameters/Limit" }]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/AchievementPage" } } } }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      tags: [admin, platform]
+      summary: Create a controlled contribution achievement definition
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/AchievementCreateInput" } } } }
+      responses:
+        "201": { description: created, content: { application/json: { schema: { $ref: "#/components/schemas/Achievement" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /admin/achievements/{achievementId}:
+    patch:
+      tags: [admin, platform]
+      summary: Update or retire an achievement with optimistic concurrency
+      parameters: [{ name: achievementId, in: path, required: true, schema: { type: string } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/AchievementUpdateInput" } } } }
+      responses:
+        "200": { description: updated, content: { application/json: { schema: { $ref: "#/components/schemas/Achievement" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /admin/users/{id}/achievements:
+    get:
+      tags: [admin, platform]
+      summary: List an account's active and revoked contribution achievements
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { $ref: "#/components/parameters/Cursor" }
+        - { $ref: "#/components/parameters/Limit" }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/AchievementGrantPage" } } } }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      tags: [admin, platform]
+      summary: Manually award or re-award an achievement without minting points
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/AchievementGrantInput" } } } }
+      responses:
+        "201": { description: awarded, content: { application/json: { schema: { $ref: "#/components/schemas/AchievementGrant" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /admin/users/{id}/achievements/{achievementId}/revoke:
+    post:
+      tags: [admin, platform]
+      summary: Revoke an account achievement without reversing historical contribution points
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: achievementId, in: path, required: true, schema: { type: string } }
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/AchievementRevokeInput" } } } }
+      responses:
+        "200": { description: revoked, content: { application/json: { schema: { $ref: "#/components/schemas/AchievementGrant" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /admin/users/{id}/achievement-events:
+    get:
+      tags: [admin, platform]
+      summary: List append-only achievement award and revocation history
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { $ref: "#/components/parameters/Cursor" }
+        - { $ref: "#/components/parameters/Limit" }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/AchievementEventPage" } } } }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /admin/platform/badges:
-    get: { tags: [admin], summary: List all badges, responses: { "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Badge" } } } } } } }
-    post: { tags: [admin], summary: Create a badge, requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/BadgeInput" } } } }, responses: { "201": { description: created, content: { application/json: { schema: { $ref: "#/components/schemas/Badge" } } } } } }
+    get:
+      deprecated: true
+      tags: [admin, platform]
+      summary: Deprecated alias for listing contribution achievements
+      parameters: [{ $ref: "#/components/parameters/Cursor" }, { $ref: "#/components/parameters/Limit" }]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/AchievementPage" } } } }
+    post:
+      deprecated: true
+      tags: [admin, platform]
+      summary: Deprecated alias for creating a contribution achievement
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/AchievementCreateInput" } } } }
+      responses:
+        "201": { description: created, content: { application/json: { schema: { $ref: "#/components/schemas/Achievement" } } } }
   /admin/verifications/types:
     get:
       tags: [admin, platform]

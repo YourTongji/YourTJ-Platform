@@ -21,6 +21,8 @@
   能提交，release 与 hold 清理同事务完成。
 - `Current`：公开 verify 与受 `credit.integrity` 独立 capability 保护的运营 reconcile 均已存在；
   reconcile 持久保存请求原因、状态、账本快照、逐钱包比较和聚合漂移指标，管理 UI 只读展示。
+- `Current`：只有系统确认的自动贡献成就首次授予可写入幂等 pending mint；管理员人工授予成就永不
+  mint，撤销成就也不删除、冲销或重写已经产生的 ledger entry。
 - `Partial`：持久结果尚未接告警通知、SLO 和受审批的 projection 重建流程；当前发现异常只留证和
   升级处理，不自动改账。
 
@@ -32,6 +34,8 @@
 - Product seller / buyer：公开 Product 不返回 `deliveryInfo`；该字段只通过 buyer/seller 可访问的
   Purchase response 返回。第三方不能枚举订单。
 - System signer：只负责贡献 mint 和 escrow release，不代表人工余额编辑入口。
+- Achievement operator：可以管理展示定义和 lower-role 账号的人工荣誉，但不能通过该入口发积分；
+  `mintAmount` 只供代码中的自动贡献规则读取。
 - Credit integrity operator：只有管理员默认拥有独立 `credit.integrity` capability；moderator、普通
   用户和仅有通用 job capability 的账号不能运行或读取钱包比较结果。
 
@@ -94,3 +98,4 @@ stateDiagram-v2
 - 每条 value journey 后 ledger verification 通过，wallet projection 与 ledger 重算一致。
 - 普通用户/moderator 无法运行、列出或读取 reconcile；管理员重复请求幂等，同类并发请求被拒绝。
 - drift、缺 wallet、篡改 ledger 和任务失败均产生可区分的持久状态；任何路径都不改变余额或 ledger。
+- 人工成就授予、撤销和重新授予不产生 pending mint；重复自动贡献授予只产生一个幂等 mint。

@@ -23,6 +23,8 @@
   在业务事务中写入，reported-DM evidence list 也会审计。
 - 人工认证使用独立 `verifications.manage`，拒绝 self/equal/higher-role target；类型创建、授予和撤销
   都要求 reason，并把业务状态与成功 audit 放在同一事务。
+- 成就运营使用独立 `badges.manage`；定义 mutation 使用版本并发控制，人工授予/撤销拒绝 self/equal/
+  higher-role target、要求 reason，并把状态与成功 audit 放在同一事务。
 
 ### Partial
 
@@ -42,20 +44,21 @@
 | `users.invite` | — | yes | 到期校园邀请 |
 | `users.roles` | — | yes | lower-role 的 user/mod 变更 |
 | `users.suspend` | — | yes | suspension、撤销和会话撤销 |
-| `community.manage` | — | yes | boards、tags、watched words、现有 badge backend |
+| `community.manage` | — | yes | boards、tags、watched words |
 | `courses.manage` | — | yes | 课程目录管理 |
 | `platform.settings` | — | yes | 当前 generic settings |
 | `activity.policy` | — | yes | 活跃权重和历史 |
 | `announcements.manage` | — | yes | 当前公告管理 |
 | `promotions.manage` | — | yes | 自营推广、排期、站内目标和 clean asset reference |
+| `badges.manage` | — | yes | versioned 成就定义、lower-role 人工授予/撤销与事件历史 |
 | `verifications.manage` | — | yes | typed 身份/特殊认证定义、低角色账号授予历史与撤销 |
 | `operations.jobs` | — | yes | selection sync/reindex triggers |
 | `credit.integrity` | — | yes | 运行和读取只读 ledger/wallet reconciliation |
 
 用户角色没有 staff capability。没有 capability 可以查看任意校园邮箱/DM、编辑 wallet balance 或
-append 任意 ledger。推广、人工认证与积分完整性分别使用 `promotions.manage`、`verifications.manage`
-和只读 `credit.integrity`；PII reveal 若上线也必须使用独立 capability，不能塞进过宽的
-`community.manage`。
+append 任意 ledger。推广、成就、人工认证与积分完整性分别使用 `promotions.manage`、
+`badges.manage`、`verifications.manage` 和只读 `credit.integrity`；PII reveal 若上线也必须使用独立
+capability，不能塞进过宽的 `community.manage`。
 
 ## 授权规则
 
@@ -80,6 +83,8 @@ append 任意 ledger。推广、人工认证与积分完整性分别使用 `prom
 - 后端 denial 使用统一错误 envelope；客户端不能靠 capability 推断隐藏数据存在。
 - `verifications.manage` 只允许管理员处理 lower-role account。Definition 只接受受控 category/icon/style；
   grant 默认私密，公开开关不能绕过 definition policy，重复有效 grant 与重复/过期撤销返回 conflict。
+- `badges.manage` 只允许管理员处理 lower-role account。Definition 只接受受控 icon/plain text，stale
+  version 返回 conflict；人工授予不能触发 mint，撤销不能反转历史积分，事件与中央审计都只追加。
 
 ## Audit event
 

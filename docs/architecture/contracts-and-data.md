@@ -6,7 +6,7 @@
 >
 > 负责人：Platform maintainers、Domain maintainers
 >
-> 最近核验：2026-07-12，`codex/x-credit-reconciliation`
+> 最近核验：2026-07-12，`codex/x-community-complete`
 
 本规范说明产品规则如何落实为 HTTP 契约、migration、domain API、事务和可重建投影。它不复制
 完整 OpenAPI 或 DDL。
@@ -120,6 +120,9 @@ Fresh database 必须只通过 sqlx migration ledger 建立。普通启动、CI 
 - 人工认证由 platform 持有 typed definition 与可到期/撤销 grant；forum 公开 profile 只调用其 public
   projection API。公开条件在 PostgreSQL 查询边界同时检查 type policy、grant opt-in、expiry 与 revoke，
   不把 issuer、reason、evidence reference 或 internal grant id 复制到 profile DTO。
+- 成就定义、账号授予/撤销和 append-only event 由 platform 持有；forum 只计算贡献资格并调用 owner
+  API。Definition 以 version CAS 更新，grant/revoke 与 governance audit 同事务；自动首次授予用
+  `(account_id, badge_id)` 和稳定 mint idempotency key 去重，人工授予不进入 mint queue，撤销不改 ledger。
 - Secrets、code、token、signature-as-credential、raw email、完整请求 body 和任意 DM 不进入日志/审计。
 - Evidence read 本身是敏感动作，需要 capability、purpose 和 audit。
 - DM archive、mute 和 delete 是 `dm_participants` 上的 participant-local 状态；不能改写另一参与者的

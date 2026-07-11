@@ -34,7 +34,9 @@
 - “手动注册”只有安全的邀请流程，没有管理员设置明文密码或跳过邮箱验证；这是有意边界。
 - 缺账号停用/删除/恢复/purge、当事人通知、申诉和独立复核。
 - generic settings 只有 string key/value；job trigger 无 durable 状态、进度、失败日志或重试。
-- 成就徽章后端存在但定义、人工授予与撤销 UI 仍不完整；它不复用已经闭环的身份/特殊认证后台。
+- 成就徽章使用独立 `badges.manage` capability，具备 versioned 定义、人工授予/撤销/重新授予、事件历史、
+  运营 UI 与同事务审计；它不复用身份/特殊认证权限。自动贡献授予仍需从 request-local task 迁移到
+  durable outbox，避免进程在内容提交后退出造成延迟或漏发。
 - 推广的曝光/点击聚合、公告 receipt 保留策略、批量审核和综合服务健康视图缺失；积分完整性已有
   只读视图，但告警/SLO 和受审批 projection 重建仍缺。
 - 高风险角色/永久封禁/PII 操作没有 recent-auth 或双人确认。
@@ -170,7 +172,7 @@ sanction、trust-level rate limit 和 watched words，尚未接入同一 captcha
 | Media | scan/flag queue、approve/block、asset lookup | `moderation.content` |
 | Community | boards、tags、watched words | `community.manage` |
 | Promotions | placement、clean asset、站内目标、排期、受众、状态 | `promotions.manage` |
-| Badges | 成就定义、规则与人工例外 | 后续独立 achievement capability；不可复用认证权限 |
+| Achievements | 受控定义、自动规则、人工授予/撤销与事件历史 | `badges.manage`；不可复用认证权限 |
 | Verifications | typed 身份/特殊认证定义、授予历史、到期与撤销 | `verifications.manage` |
 | Announcements | draft、排期、发布、revision、receipt summary | `announcements.manage` |
 | Policies | 社区规则、隐私政策、条款的 draft/review/publish/version/acceptance | 独立 `policies.manage` |
@@ -204,7 +206,8 @@ draft/review/published/retired、effective time、owner/approver、diff、适用
 
 - 推广只使用 clean asset、受控 URL、排期和 audience；第一阶段限定自营信息。
 - 公告修改保留 revision；删除改为 archive，强制确认由 requires-ack policy 控制。
-- 成就徽章的自动规则、人工授予和撤销都审计。
+- 成就定义只接受受控图标 token，使用 version CAS；停用不删除历史。自动授予写入 achievement event
+  和幂等 pending mint，人工授予明确不 mint；人工撤销/重新授予追加事件且不反转历史积分。
 - 身份/特殊认证默认私密；只有 definition 允许且 grant 明确公开的有效认证进入 profile。公开不含
   issuer、reason、evidence；图标/样式来自受控 enum，不接受任意素材或 CSS。
 - 认证 evidence 字段只保存 opaque internal reference，后台列表只显示是否存在引用，不回显原始引用；
@@ -231,3 +234,5 @@ draft/review/published/retired、effective time、owner/approver、diff、适用
 - 用户、内容、媒体、推广、公告、徽章和任务的核心状态机都有可恢复路径和验收旅程。
 - 认证后台缺 capability、self/equal/higher target、非法展示、重复有效 grant、过期/重复撤销与非法
   evidence reference 均有 handler→PostgreSQL 负向测试。
+- 成就后台缺 capability、self/equal/higher target、非法 icon/text、stale version、重复授予、撤销/
+  重新授予和人工 mint 禁止均有 handler→PostgreSQL 测试；Web 操作具备 reason、后果说明和 axe 验证。

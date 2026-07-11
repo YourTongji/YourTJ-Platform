@@ -4,6 +4,7 @@
 //! named capability, an audit reason, optimistic concurrency, and an audit event in the same
 //! transaction. Public reads apply lifecycle and audience policy at the database boundary.
 
+pub mod achievements;
 mod announcements;
 mod auth;
 mod promotions;
@@ -17,6 +18,7 @@ use shared::AppState;
 /// Compose every route owned by the platform domain.
 pub fn routes(state: AppState) -> Router {
     Router::new()
+        .merge(achievements::routes())
         .merge(announcements::routes())
         .merge(promotions::routes())
         .merge(settings::routes())

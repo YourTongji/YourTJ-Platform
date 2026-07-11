@@ -6,7 +6,7 @@
 >
 > 负责人：Forum/Identity/Web maintainers、Privacy owner、Product owner
 >
-> 最近核验：2026-07-11，migration `0034_social_identity_privacy.sql`
+> 最近核验：2026-07-12，migrations `0034_social_identity_privacy.sql`、`0045_achievement_operations.sql`
 
 本规范定义公开资料、用户关注、板块/主题订阅、block、mute、资料隐私和徽章语义。目标是
 建立可解释的社交关系，而不是把所有关系都命名为 “following” 或 “屏蔽”。
@@ -22,6 +22,8 @@
 - 资料响应包含受控媒体派生 URL、角色、信任等级、徽章、主题/回复/获赞与准确 followers/following 计数。
 - 公开资料把成就徽章、实时角色标识与人工身份/特殊认证分开；人工认证只返回仍有效、类型允许公开且
   grant 明确 `displayOnProfile` 的 label/说明/受控图标/有效期，不返回签发人、原因或证据引用。
+- Platform 持有 versioned 成就定义、可撤销/可重新授予的账号成就和 append-only 事件历史；图标使用
+  受控 token。自动贡献规则首次授予可幂等排队 mint，人工授予永不 mint，撤销也不改写历史积分。
 - Forum 持有公开单向 follow、私密单向 mute 和双向安全边界 block；follow/unfollow/mute/block 都幂等，
   relationship API 一次返回页面操作所需状态。
 - followers/following 使用稳定游标，读取时过滤 suspended/deleted、viewer block 和第三方
@@ -134,12 +136,18 @@ followers-only 内容，应建立独立内容类型和授权模型。
 不进入公开 profile 或公共列表。后台按独立 `verifications.manage` capability 创建类型、授予、查看历史和
 撤销，所有 mutation 要求 reason 并与 governance audit 同事务提交。Self、同级和更高角色目标被拒绝。
 
+成就由 Platform owner 管理 definition、grant/revoke/regrant 和事件历史，Forum 只拥有首帖、首评、
+精选作者等贡献资格判断。Definition 的 `slug` 不可变，名称、说明、受控图标、状态和自动规则积分使用
+`expectedVersion` 乐观并发更新；停用阻止新授予但不抹掉历史。人工授予/撤销只接受 lower-role target，
+要求理由并与 governance audit 同事务提交。只有 `automatic` 来源的首次贡献授予可以写入幂等 pending
+mint；人工操作不能发积分，撤销不会冲销已经由真实贡献获得的 ledger 历史。
+
 ## API 与数据所有权
 
 Forum 拥有 follow/block/mute 与计数投影；Identity 拥有账号、owner-editable profile 和 privacy policy；
-Media 验证 owner+clean image 后调用 Identity 的受限 asset binding API；Platform 拥有人工认证定义与
-授予历史。Forum 公开资料通过 Platform public API 获取最小公开认证投影，不跨 schema SQL。HTTP shape
-以 OpenAPI 为准。
+Media 验证 owner+clean image 后调用 Identity 的受限 asset binding API；Platform 拥有成就和人工认证
+的定义与授予历史。Forum 只通过 Platform public API 获取公开成就与最小公开认证投影，不跨 schema
+SQL。HTTP shape 以 OpenAPI 为准。
 
 头像和 banner 只保存 clean media asset reference。服务端生成可用 URL，客户端不得提交任意
 第三方 URL 作为权威字段。上传 intent 会持久化可选的 `profile_avatar/profile_banner` usage，使待审
@@ -162,5 +170,7 @@ Media 验证 owner+clean image 后调用 Identity 的受限 asset binding API；
 - 隐私设置对匿名、校园成员、关系用户、本人和 staff 有矩阵化授权测试。
 - 所有公开 profile 响应不含邮箱或内部治理字段，媒体来自平台 asset。
 - profile 上传刷新后仍能恢复待审/通过/未通过状态；待审或未通过资产没有可用绑定按钮，服务端也拒绝绑定。
-- 成就、认证和角色标识有独立 DTO、视觉语义和权限来源；认证授予/撤销留下同事务审计。
+- 成就、认证和角色标识有独立 DTO、视觉语义和权限来源；成就/认证授予与撤销留下同事务审计。
+- 成就定义 stale version 返回 conflict；人工授予不产生 pending mint，重复自动授予最多产生一个 grant、
+  一个事件和一个幂等 mint；撤销后公开资料不展示但历史仍可追溯。
 - 私密、已撤销、已到期或 definition 禁止公开的认证不会出现在任何公开资料响应。
