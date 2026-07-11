@@ -2130,6 +2130,15 @@ paths:
       summary: Unfollow an account idempotently
       parameters: [{ name: handle, in: path, required: true, schema: { type: string } }]
       responses: { "204": { description: not following }, "404": { $ref: "#/components/responses/NotFound" } }
+  /me/followers/{handle}:
+    delete:
+      tags: [identity]
+      summary: Remove an account from the authenticated user's followers without blocking it
+      parameters: [{ name: handle, in: path, required: true, schema: { type: string } }]
+      responses:
+        "204": { description: follower removed or relationship already absent }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /users/{handle}/followers:
     get:
       tags: [identity]

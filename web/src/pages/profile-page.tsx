@@ -230,6 +230,7 @@ export function ProfilePage() {
         handle={profile.data.handle}
         kind={relationshipList ?? "followers"}
         open={relationshipList !== null}
+        canRemoveFollowers={isSelf}
         onOpenChange={(open) => !open && setRelationshipList(null)}
       />
     </div>

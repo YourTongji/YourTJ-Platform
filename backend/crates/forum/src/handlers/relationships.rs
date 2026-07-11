@@ -249,6 +249,18 @@ pub async fn unfollow_user_handler(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// DELETE /api/v2/me/followers/{handle}
+pub async fn remove_follower_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(handle): Path<String>,
+) -> AppResult<StatusCode> {
+    let (auth, follower_id) =
+        authenticate_and_find_cleanup_target(&state, &headers, &handle).await?;
+    crate::repo::relationships::remove_follower(&state.db, auth.id, follower_id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 /// PUT /api/v2/users/{handle}/mute
 pub async fn mute_user_handler(
     State(state): State<AppState>,

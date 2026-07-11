@@ -164,6 +164,11 @@ pub async fn unfollow(pool: &PgPool, follower_id: i64, followed_id: i64) -> AppR
     Ok(())
 }
 
+/// Remove one incoming follower idempotently while preserving trigger-maintained counts.
+pub async fn remove_follower(pool: &PgPool, account_id: i64, follower_id: i64) -> AppResult<()> {
+    unfollow(pool, follower_id, account_id).await
+}
+
 /// Mute one account without changing follow, access, or interaction permissions.
 pub async fn mute(pool: &PgPool, account_id: i64, muted_account_id: i64) -> AppResult<()> {
     if account_id == muted_account_id {

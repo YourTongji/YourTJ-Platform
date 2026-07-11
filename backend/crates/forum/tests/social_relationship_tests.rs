@@ -363,3 +363,110 @@ async fn social_graph_enforces_counts_privacy_and_block_boundaries() {
     assert_eq!(cycle_counts.len(), 3);
     assert!(cycle_counts.iter().all(|counts| *counts == (1, 1)));
 }
+
+#[tokio::test]
+async fn profile_owner_removes_an_incoming_follower_idempotently_without_blocking() {
+    let (pool, app) = helpers::create_test_app().await;
+    let suffix = uuid::Uuid::new_v4().simple().to_string();
+    let owner_handle = format!("remove-owner-{suffix}");
+    let follower_handle = format!("remove-follower-{suffix}");
+    let intruder_handle = format!("remove-intruder-{suffix}");
+    let (owner_id, owner_token) = helpers::create_test_account(
+        &pool,
+        &format!("{owner_handle}@tongji.edu.cn"),
+        &owner_handle,
+    )
+    .await;
+    let (follower_id, follower_token) = helpers::create_test_account(
+        &pool,
+        &format!("{follower_handle}@tongji.edu.cn"),
+        &follower_handle,
+    )
+    .await;
+    let (_, intruder_token) = helpers::create_test_account(
+        &pool,
+        &format!("{intruder_handle}@tongji.edu.cn"),
+        &intruder_handle,
+    )
+    .await;
+
+    assert_eq!(
+        status(
+            &app,
+            Method::PUT,
+            format!("/api/v2/users/{owner_handle}/follow"),
+            Some(&follower_token),
+            None,
+        )
+        .await,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        status(
+            &app,
+            Method::DELETE,
+            format!("/api/v2/me/followers/{follower_handle}"),
+            None,
+            None,
+        )
+        .await,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        status(
+            &app,
+            Method::DELETE,
+            format!("/api/v2/me/followers/{follower_handle}"),
+            Some(&intruder_token),
+            None,
+        )
+        .await,
+        StatusCode::NO_CONTENT
+    );
+    assert!(forum::repo::relationships::is_following(&pool, follower_id, owner_id)
+        .await
+        .expect("owner follow still exists after unrelated cleanup"));
+
+    for _ in 0..2 {
+        assert_eq!(
+            status(
+                &app,
+                Method::DELETE,
+                format!("/api/v2/me/followers/{follower_handle}"),
+                Some(&owner_token),
+                None,
+            )
+            .await,
+            StatusCode::NO_CONTENT
+        );
+    }
+    assert!(!forum::repo::relationships::is_following(&pool, follower_id, owner_id)
+        .await
+        .expect("incoming follow removed"));
+    let owner_counts = forum::repo::relationships::get_social_counts(&pool, owner_id)
+        .await
+        .expect("owner social counts");
+    let follower_counts = forum::repo::relationships::get_social_counts(&pool, follower_id)
+        .await
+        .expect("follower social counts");
+    assert_eq!(owner_counts.follower_count, 0);
+    assert_eq!(follower_counts.following_count, 0);
+
+    assert_eq!(
+        status(
+            &app,
+            Method::PUT,
+            format!("/api/v2/users/{owner_handle}/follow"),
+            Some(&follower_token),
+            None,
+        )
+        .await,
+        StatusCode::NO_CONTENT
+    );
+    let relationship = forum::repo::relationships::get_relationship(&pool, owner_id, follower_id)
+        .await
+        .expect("relationship after re-follow");
+    assert!(relationship.followed_by);
+    assert!(!relationship.blocked_by_me);
+    assert!(!relationship.blocked_me);
+}

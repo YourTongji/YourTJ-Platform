@@ -261,6 +261,12 @@ export const api = {
     return apiRequest<void>(`/users/${encodeURIComponent(handle)}/follow`, { method: "DELETE" });
   },
 
+  removeFollower(handle: string) {
+    return apiRequest<void>(`/me/followers/${encodeURIComponent(handle)}`, {
+      method: "DELETE",
+    });
+  },
+
   userFollowers(handle: string, cursor?: string | null) {
     return apiRequest<Page<UserSummary>>(`/users/${encodeURIComponent(handle)}/followers`, {
       query: { cursor, limit: 30 },

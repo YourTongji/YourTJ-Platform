@@ -40,6 +40,7 @@ pub fn routes(state: AppState) -> Router {
             "/api/v2/users/{handle}/follow",
             put(handlers::follow_user_handler).delete(handlers::unfollow_user_handler),
         )
+        .route("/api/v2/me/followers/{handle}", delete(handlers::remove_follower_handler))
         .route("/api/v2/users/{handle}/followers", get(handlers::list_followers_handler))
         .route("/api/v2/users/{handle}/following", get(handlers::list_following_handler))
         .route(

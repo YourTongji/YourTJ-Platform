@@ -26,6 +26,8 @@
   受控 token。自动贡献规则首次授予可幂等排队 mint，人工授予永不 mint，撤销也不改写历史积分。
 - Forum 持有公开单向 follow、私密单向 mute 和双向安全边界 block；follow/unfollow/mute/block 都幂等，
   relationship API 一次返回页面操作所需状态。
+- 资料 owner 可以从自己的关注者列表幂等移除一条 incoming follow；该操作不会创建 block，对方以后
+  仍可重新关注，界面必须明确说明这一后果差异。
 - followers/following 使用稳定游标，读取时过滤 suspended/deleted、viewer block 和第三方
   `discoverable=false` 账号。
 - 创建 block 与同一用户对的 follow 串行化，在同一事务移除双方 follow；数据库 trigger 维护计数，
@@ -40,7 +42,7 @@
 
 ### Partial
 
-- 暂无 remove-follower、handle history/cooldown/redirect、公开 activity/media/likes tabs。
+- 暂无 handle history/cooldown/redirect、公开 activity/media/likes tabs。
 - activity/mention 隐私仍未实现；public profile 是否允许外部搜索引擎索引仍需独立政策。
 - 第一阶段不做私密账号与 pending request；若未来引入，必须增加显式状态机和通知/反滥用策略。
 - Avatar/banner 已有 owner+clean binding 和上传状态 UI，但图片 scanner、变体、EXIF 清理和 orphan GC
@@ -69,7 +71,8 @@ Forum 订阅在用户界面统一显示为“订阅”；内部保留的 `follow
 - 列表使用稳定游标并在读取时应用 block、账号状态和可见性规则。
 - suspended/deleted 账号不出现在 profile、relationship 或列表，也不能成为新 follow target；用户仍可
   对 suspended 账号建立 block/mute，并可清理自己对生命周期关闭账号的既有关系。
-- remove follower 尚未实现；落地时只删除对方→本人的关系，不得自动 block。
+- remove follower 只删除对方→本人的关系，使用与 follow/block 相同的账号对事务锁并由 trigger 校正
+  计数；它不自动 block、不通知对方，也不阻止对方未来重新关注。
 
 relationship 一次返回 `following`、`followedBy`、`blockedByMe`、`blockedMe`、`muted`、
 `canFollow`、`canStartConversation`，Web 不再下载整张 block 列表推断单个用户状态。第一阶段没有
@@ -171,6 +174,8 @@ Identity 同时维护最小化的用户搜索候选文档，只包含 account id
 ## 验收基线
 
 - follow/unfollow 与 block 并发安全，计数、列表和 relationship 结果一致。
+- 只有资料 owner 能通过 `/me` surface 移除自己的 incoming follower；重复移除幂等、不能借此删除
+  其他账号的关系，且移除后双方未被隐式 block。
 - follow、subscription、mute、block 的文案、API 与行为不混用。
 - block/mute 在 profile、feed、search、notification、DM 和互动中使用同一 policy。
 - 隐私设置对匿名、校园成员、关系用户、本人和 staff 有矩阵化授权测试。
