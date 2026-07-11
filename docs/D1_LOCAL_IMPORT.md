@@ -76,11 +76,18 @@ done
 ### 第 3 步：导入 Raw PK 数据
 
 ```bash
-python3 tools/d1/d1_import_pg.py
+python3 tools/d1/d1_import_pg.py --source d1_export.db
 ```
 
-从 `d1_export.db` 读数据 → `INSERT INTO selection.pk_*`。
-13 张表，约 141k 行。
+从 SQLite 显式映射 D1 camelCase 列到 PostgreSQL snake_case 列，再通过 `COPY` 写入
+`selection.pk_*`。13 张表约 141k 行，在同一事务内完成。为防止把快照叠加到未知基线，
+首次导入要求所有 Raw 目标表为空。
+
+数据库只能经运维 shell 访问时，可生成原子 psql 数据流：
+
+```bash
+python3 tools/d1/d1_import_pg.py --source d1_export.db --emit-copy | psql "$DATABASE_URL"
+```
 
 ### 第 4 步：物化 courses.* & selection.*
 
@@ -105,16 +112,15 @@ psql "$DATABASE_URL" -f backend/ops/materialize_selection.sql
 - `selection.major_courses` — 从 `pk_major_courses` 映射
 - `selection.timeslots` — 从 `pk_teacher_timeslots` 展开（含 `DISTINCT ON` 去重）
 
-### 第 5 步：导入 Reviews 数据
+### 第 5 步：历史 Reviews 数据（独立迁移，不属于选课首次导入）
 
 ```bash
 python3 tools/d1/gen_reviews_sql.py | psql "$DATABASE_URL" -f -
 ```
 
-由于 `reviews.reviews.id` 是 `GENERATED ALWAYS AS IDENTITY`，需 `OVERRIDING SYSTEM VALUE`。
-由于 `account_id` 是 FK 指向 `identity.accounts`（D1 没有此表），导入时填 `NULL`。
-旧 `course_id` 不可直接复用；生成器通过 D1 `courses.code` 查找规范化后的课程 ID，
-若课程代码未物化则导入会因外键/非空约束失败，避免静默挂错课程。
+历史评价还包含钱包哈希、匿名编辑凭证，以及指向旧课程 ID 的外键。导入前必须先定义
+身份归属、课程 ID 映射、凭证保留/删除策略和审核状态映射。不得在选课 Raw 首次导入时
+顺带写入生产 `reviews.*`。
 
 ## 数据映射对照
 
@@ -187,7 +193,7 @@ TRUNCATE reviews.review_likes CASCADE;
 TRUNCATE reviews.reviews CASCADE;
 EOSQL
 # 2. 重新导入 Raw PK（如果已经清空）
-python3 tools/d1/d1_import_pg.py
+python3 tools/d1/d1_import_pg.py --source d1_export.db
 
 # 3. 物化 courses.*
 psql "$DATABASE_URL" -f backend/ops/materialize_courses.sql
@@ -195,6 +201,4 @@ psql "$DATABASE_URL" -f backend/ops/materialize_courses.sql
 # 4. 物化 selection.*
 psql "$DATABASE_URL" -f backend/ops/materialize_selection.sql
 
-# 5. 导入 reviews
-python3 tools/d1/gen_reviews_sql.py | psql "$DATABASE_URL" -f -
 ```
