@@ -120,33 +120,8 @@ pub async fn flag_post(
         )
         .await;
         crate::meili::reconcile_thread_in_background(&state, outcome.thread_id);
-        if let Some(author_id) = outcome.author_id {
-            crate::notification_hooks::create_notification(
-                &state.db,
-                author_id,
-                "flag_auto_hide",
-                serde_json::json!({ "postType": target_type, "postId": post_id.to_string() }),
-                None,
-                None,
-            )
-            .await;
-            if auto_silenced {
-                identity::sanctions::invalidate_silence_cache(state.redis.as_ref(), author_id)
-                    .await;
-                crate::notification_hooks::create_notification(
-                    &state.db,
-                    author_id,
-                    "mod_action",
-                    serde_json::json!({
-                        "action": "auto_silence",
-                        "reason": AUTO_SILENCE_REASON,
-                        "duration": "24h",
-                    }),
-                    None,
-                    None,
-                )
-                .await;
-            }
+        if let Some(author_id) = outcome.author_id.filter(|_| auto_silenced) {
+            identity::sanctions::invalidate_silence_cache(state.redis.as_ref(), author_id).await;
         }
     }
 

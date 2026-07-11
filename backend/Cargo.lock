@@ -63,6 +63,7 @@ dependencies = [
  "credit",
  "deadpool-redis",
  "forum",
+ "futures",
  "governance",
  "hex",
  "identity",

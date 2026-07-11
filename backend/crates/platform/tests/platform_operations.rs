@@ -46,6 +46,17 @@ async fn test_pool() -> PgPool {
                 .await
                 .expect("run promotion event metric migration");
         }
+        let has_outbox: bool =
+            sqlx::query_scalar("SELECT to_regclass('platform.outbox_events') IS NOT NULL")
+                .fetch_one(&pool)
+                .await
+                .expect("check durable notification outbox schema");
+        if !has_outbox {
+            sqlx::raw_sql(include_str!("../../../migrations/0054_durable_notification_outbox.sql"))
+                .execute(&pool)
+                .await
+                .expect("run durable notification outbox migration");
+        }
     }
     pool
 }
@@ -96,6 +107,247 @@ fn json_request(method: Method, uri: String, token: Option<&str>, body: Value) -
         request = request.header(header::AUTHORIZATION, format!("Bearer {token}"));
     }
     request.body(Body::from(body.to_string())).expect("build JSON request")
+}
+
+#[tokio::test]
+async fn durable_outbox_leases_dead_letters_and_manual_retries_are_audited() {
+    let pool = test_pool().await;
+    let suffix = uuid::Uuid::new_v4().simple().to_string();
+    let (admin_id, admin_token) = account(&pool, &suffix, "admin").await;
+    let (_, moderator_token) = account(&pool, &format!("mod-{suffix}"), "mod").await;
+    let (recipient_id, _) = account(&pool, &format!("user-{suffix}"), "user").await;
+    let source_key = format!("outbox-lease-{suffix}");
+    let second_source_key = format!("outbox-skip-locked-{suffix}");
+    let abandoned_source_key = format!("outbox-abandoned-final-lease-{suffix}");
+    let mut enqueue = pool.begin().await.expect("begin durable outbox enqueue");
+    let first_id = platform::outbox::enqueue_notification_tx(
+        &mut enqueue,
+        &source_key,
+        recipient_id,
+        None,
+        "system",
+        &json!({ "title": "private integration payload" }),
+        None,
+        None,
+    )
+    .await
+    .expect("enqueue first durable event");
+    let second_id = platform::outbox::enqueue_notification_tx(
+        &mut enqueue,
+        &second_source_key,
+        recipient_id,
+        None,
+        "system",
+        &json!({ "title": "second private integration payload" }),
+        None,
+        None,
+    )
+    .await
+    .expect("enqueue second durable event");
+    let abandoned_id = platform::outbox::enqueue_notification_tx(
+        &mut enqueue,
+        &abandoned_source_key,
+        recipient_id,
+        None,
+        "system",
+        &json!({ "title": "recover final leased attempt" }),
+        None,
+        None,
+    )
+    .await
+    .expect("enqueue abandoned final-attempt event");
+    enqueue.commit().await.expect("commit durable events");
+    let mut replay = pool.begin().await.expect("begin idempotent outbox replay");
+    let replayed_id = platform::outbox::enqueue_notification_tx(
+        &mut replay,
+        &source_key,
+        recipient_id,
+        None,
+        "system",
+        &json!({ "title": "private integration payload" }),
+        None,
+        None,
+    )
+    .await
+    .expect("replay identical durable event");
+    assert_eq!(replayed_id, first_id);
+    replay.commit().await.expect("commit idempotent outbox replay");
+    let mut conflicting_replay = pool.begin().await.expect("begin conflicting outbox replay");
+    let conflict = platform::outbox::enqueue_notification_tx(
+        &mut conflicting_replay,
+        &source_key,
+        recipient_id,
+        None,
+        "system",
+        &json!({ "title": "different private payload" }),
+        None,
+        None,
+    )
+    .await;
+    assert!(matches!(conflict, Err(shared::AppError::Conflict(_))));
+    conflicting_replay.rollback().await.expect("rollback conflicting outbox replay");
+    sqlx::query(
+        "UPDATE platform.outbox_events SET available_at = \
+           CASE WHEN id = $1 THEN '1900-01-01'::timestamptz \
+                WHEN id = $2 THEN '1900-01-02'::timestamptz \
+                ELSE '1900-01-03'::timestamptz END \
+         WHERE id = ANY($3)",
+    )
+    .bind(first_id)
+    .bind(second_id)
+    .bind(vec![first_id, second_id, abandoned_id])
+    .execute(&pool)
+    .await
+    .expect("order durable lease candidates");
+
+    let mut locked_candidate = pool.begin().await.expect("begin candidate lock");
+    sqlx::query("SELECT id FROM platform.outbox_events WHERE id = $1 FOR UPDATE")
+        .bind(first_id)
+        .execute(&mut *locked_candidate)
+        .await
+        .expect("lock first outbox candidate");
+    let second_worker = uuid::Uuid::new_v4();
+    let claimed_while_locked = platform::outbox::claim_events(&pool, second_worker, 1)
+        .await
+        .expect("claim around locked candidate");
+    assert_eq!(claimed_while_locked[0].id, second_id);
+    locked_candidate.rollback().await.expect("release first candidate");
+
+    let first_worker = uuid::Uuid::new_v4();
+    let first_claim = platform::outbox::claim_events(&pool, first_worker, 1)
+        .await
+        .expect("claim first candidate");
+    assert_eq!(first_claim[0].id, first_id);
+    sqlx::query(
+        "UPDATE platform.outbox_events SET lease_expires_at = now() - interval '1 second' \
+         WHERE id = $1",
+    )
+    .bind(first_id)
+    .execute(&pool)
+    .await
+    .expect("expire first worker lease");
+    let replacement_worker = uuid::Uuid::new_v4();
+    let replacement_claim = platform::outbox::claim_events(&pool, replacement_worker, 1)
+        .await
+        .expect("reclaim expired lease");
+    assert_eq!(replacement_claim[0].id, first_id);
+    assert_eq!(replacement_claim[0].attempts, 2);
+    sqlx::query("UPDATE platform.outbox_events SET max_attempts = attempts WHERE id = $1")
+        .bind(first_id)
+        .execute(&pool)
+        .await
+        .expect("bound retry attempts for dead-letter test");
+    assert_eq!(
+        platform::outbox::record_failure(&pool, &replacement_claim[0], "database_unavailable")
+            .await
+            .expect("record terminal delivery failure"),
+        Some("dead".into())
+    );
+    let mut complete_second = pool.begin().await.expect("begin second completion");
+    assert!(platform::outbox::mark_succeeded_tx(&mut complete_second, second_id, second_worker,)
+        .await
+        .expect("complete second event"));
+    complete_second.commit().await.expect("commit second completion");
+
+    let abandoned_worker = uuid::Uuid::new_v4();
+    let abandoned_claim = platform::outbox::claim_events(&pool, abandoned_worker, 1)
+        .await
+        .expect("claim event that will lose its final lease");
+    assert_eq!(abandoned_claim[0].id, abandoned_id);
+    sqlx::query(
+        "UPDATE platform.outbox_events \
+         SET max_attempts = attempts, lease_expires_at = now() - interval '1 second' \
+         WHERE id = $1",
+    )
+    .bind(abandoned_id)
+    .execute(&pool)
+    .await
+    .expect("expire final-attempt lease");
+    let recovery_worker = uuid::Uuid::new_v4();
+    let recovery_claim = platform::outbox::claim_events(&pool, recovery_worker, 1)
+        .await
+        .expect("reclaim final attempt without stranding running state");
+    assert_eq!(recovery_claim[0].id, abandoned_id);
+    assert_eq!(recovery_claim[0].attempts, recovery_claim[0].max_attempts);
+    assert_eq!(
+        platform::outbox::record_failure(&pool, &recovery_claim[0], "worker_failed")
+            .await
+            .expect("dead-letter recovered final attempt"),
+        Some("dead".into())
+    );
+
+    let app = platform::routes(test_state(pool.clone()));
+    let denied = app
+        .clone()
+        .oneshot(json_request(
+            Method::GET,
+            "/api/v2/admin/notification-outbox?state=dead".into(),
+            Some(&moderator_token),
+            json!({}),
+        ))
+        .await
+        .expect("moderator outbox response");
+    assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+    let listed = app
+        .clone()
+        .oneshot(json_request(
+            Method::GET,
+            "/api/v2/admin/notification-outbox?state=dead".into(),
+            Some(&admin_token),
+            json!({}),
+        ))
+        .await
+        .expect("administrator outbox response");
+    assert_eq!(listed.status(), StatusCode::OK);
+    let listed = read_json(listed).await;
+    let first_id_string = first_id.to_string();
+    let item = listed["items"]
+        .as_array()
+        .expect("dead-letter items")
+        .iter()
+        .find(|item| item["id"].as_str() == Some(first_id_string.as_str()))
+        .expect("dead-letter event visible");
+    assert_eq!(item["lastErrorCode"], "database_unavailable");
+    assert!(item.get("payload").is_none());
+    assert!(item.get("sourceKey").is_none());
+
+    let short_reason = app
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            format!("/api/v2/admin/notification-outbox/{first_id}/retry"),
+            Some(&admin_token),
+            json!({ "reason": "no" }),
+        ))
+        .await
+        .expect("short retry reason response");
+    assert_eq!(short_reason.status(), StatusCode::BAD_REQUEST);
+    let retried = app
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            format!("/api/v2/admin/notification-outbox/{first_id}/retry"),
+            Some(&admin_token),
+            json!({ "reason": "database connectivity has recovered" }),
+        ))
+        .await
+        .expect("manual retry response");
+    assert_eq!(retried.status(), StatusCode::OK);
+    let retried = read_json(retried).await;
+    assert_eq!(retried["state"], "queued");
+    assert_eq!(retried["attempts"], 0);
+    assert_eq!(retried["manualRetryCount"], 1);
+    let audit_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM governance.audit_events \
+         WHERE actor_account_id = $1 AND action = 'platform.outbox.retried' \
+           AND target_id = $2",
+    )
+    .bind(admin_id)
+    .bind(first_id.to_string())
+    .fetch_one(&pool)
+    .await
+    .expect("count manual retry audit events");
+    assert_eq!(audit_count, 1);
 }
 
 #[tokio::test]

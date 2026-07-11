@@ -32,6 +32,17 @@ async fn test_pool() -> PgPool {
                 .await
                 .expect("run verification credential migration");
         }
+        let has_outbox: bool =
+            sqlx::query_scalar("SELECT to_regclass('platform.outbox_events') IS NOT NULL")
+                .fetch_one(&pool)
+                .await
+                .expect("check durable outbox schema");
+        if !has_outbox {
+            sqlx::raw_sql(include_str!("../../../migrations/0054_durable_notification_outbox.sql"))
+                .execute(&pool)
+                .await
+                .expect("run durable notification outbox migration");
+        }
     }
     pool
 }
@@ -139,6 +150,21 @@ async fn grant_revoke_and_public_projection_preserve_private_evidence_and_audit_
     assert_eq!(grant["status"], "active");
     assert_eq!(grant["hasEvidence"], true);
     assert!(grant.get("evidenceReference").is_none());
+    let grant_outbox_states: Vec<(String, String)> = sqlx::query_as(
+        "SELECT event_type, state FROM platform.outbox_events \
+         WHERE source_key LIKE $1 ORDER BY event_type",
+    )
+    .bind(format!("verification-grant:{grant_id}:%"))
+    .fetch_all(&pool)
+    .await
+    .expect("load verification notification events");
+    assert_eq!(
+        grant_outbox_states,
+        vec![
+            ("verification_expired".into(), "queued".into()),
+            ("verification_granted".into(), "queued".into())
+        ]
+    );
 
     let type_list = app
         .clone()
@@ -212,6 +238,22 @@ async fn grant_revoke_and_public_projection_preserve_private_evidence_and_audit_
         .expect("revoke verification response");
     assert_eq!(revoke.status(), StatusCode::OK);
     assert_eq!(read_json(revoke).await["status"], "revoked");
+    let revoke_outbox_states: Vec<(String, String)> = sqlx::query_as(
+        "SELECT event_type, state FROM platform.outbox_events \
+         WHERE source_key LIKE $1 ORDER BY event_type",
+    )
+    .bind(format!("verification-grant:{grant_id}:%"))
+    .fetch_all(&pool)
+    .await
+    .expect("load revoked verification notification events");
+    assert_eq!(
+        revoke_outbox_states,
+        vec![
+            ("verification_expired".into(), "cancelled".into()),
+            ("verification_granted".into(), "queued".into()),
+            ("verification_revoked".into(), "queued".into()),
+        ]
+    );
     let repeated_revoke = app
         .clone()
         .oneshot(json_request(
@@ -227,6 +269,13 @@ async fn grant_revoke_and_public_projection_preserve_private_evidence_and_audit_
         .await
         .expect("read revoked public projection")
         .is_empty());
+    let mut revoked_expiry_check = pool.acquire().await.expect("acquire revoked expiry check");
+    assert!(!platform::verifications::lock_current_expiry_notification(
+        &mut revoked_expiry_check,
+        grant_id.parse::<i64>().expect("numeric revoked grant id"),
+    )
+    .await
+    .expect("reject revoked expiry notification"));
 
     let concurrent_one = app.clone().oneshot(json_request(
         Method::POST,
@@ -440,6 +489,13 @@ async fn capability_target_hierarchy_and_public_display_policy_are_enforced_by_h
     .fetch_one(&pool)
     .await
     .expect("insert expired verification grant");
+    let mut current_expiry_check = pool.acquire().await.expect("acquire current expiry check");
+    assert!(platform::verifications::lock_current_expiry_notification(
+        &mut current_expiry_check,
+        expired_grant_id,
+    )
+    .await
+    .expect("accept current expiry notification"));
     let expired_revoke = app
         .clone()
         .oneshot(json_request(

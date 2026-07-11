@@ -5,7 +5,6 @@
 //! fan-out-on-write. Hot ranking is a periodic job writing a Redis ZSET.
 mod admin;
 pub mod appeals;
-pub mod badges;
 pub mod cache;
 mod content_permissions;
 mod content_policy;
@@ -15,9 +14,8 @@ mod dto;
 mod error;
 mod handlers;
 pub mod meili;
-mod mentions;
 mod models;
-pub mod notification_hooks;
+pub mod notification_delivery;
 mod notifications;
 pub mod repo;
 mod sanctions;

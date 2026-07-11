@@ -170,6 +170,7 @@ pub async fn run() -> anyhow::Result<()> {
     // 4. Seed standard badges.
     platform::achievements::seed_achievements(&state.db).await?;
     tracing::info!("platform achievements seeded");
+    crate::notification_worker::start(&state);
 
     // 5. Auto-archive stale threads (daily).
     {

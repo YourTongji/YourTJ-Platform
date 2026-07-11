@@ -73,7 +73,7 @@ async fn social_graph_enforces_counts_privacy_and_block_boundaries() {
     let (campus_profile_status, campus_profile) =
         json_response(&app, Method::GET, "/api/v2/users/social-bob", Some(&alice_token), None)
             .await;
-    assert_eq!(campus_profile_status, StatusCode::OK);
+    assert_eq!(campus_profile_status, StatusCode::OK, "profile response: {campus_profile}");
     assert_eq!(campus_profile["followerCount"], 0);
     assert!(campus_profile.get("email").is_none());
 
@@ -117,6 +117,28 @@ async fn social_graph_enforces_counts_privacy_and_block_boundaries() {
     .expect("read social counts");
     assert_eq!(counts.len(), 2);
     assert!(counts.iter().all(|(_, followers, following)| *followers == 1 && *following == 1));
+    let alice_follow_events: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM platform.outbox_events \
+         WHERE recipient_account_id = $1 AND actor_account_id = $2 \
+           AND topic = 'notification' AND event_type = 'follow'",
+    )
+    .bind(bob_id)
+    .bind(alice_id)
+    .fetch_one(&pool)
+    .await
+    .expect("count idempotent follow notification events");
+    assert_eq!(alice_follow_events, 1);
+    let follow_payload: serde_json::Value = sqlx::query_scalar(
+        "SELECT payload FROM platform.outbox_events \
+         WHERE recipient_account_id = $1 AND actor_account_id = $2 \
+           AND topic = 'notification' AND event_type = 'follow'",
+    )
+    .bind(bob_id)
+    .bind(alice_id)
+    .fetch_one(&pool)
+    .await
+    .expect("load follow lifecycle payload");
+    assert!(follow_payload["followedAtMicros"].as_str().is_some());
 
     let (followers_status, followers) = json_response(
         &app,

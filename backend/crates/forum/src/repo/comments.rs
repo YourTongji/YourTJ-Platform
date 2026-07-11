@@ -305,6 +305,149 @@ pub async fn create_comment(
         source.image_references,
     )
     .await?;
+    if !is_hidden {
+        let body_excerpt = crate::content_policy::plain_text_projection(
+            &row.body,
+            crate::dto::ContentFormat::from_db(&row.content_format),
+            100,
+        );
+        platform::outbox::enqueue_achievement_award_tx(
+            &mut tx,
+            &format!("forum-comment:{}:achievement:first-comment", row.id),
+            author_id,
+            author_id,
+            "first-comment",
+            "published a first forum comment",
+        )
+        .await?;
+        if let Some(thread_author_id) =
+            thread_state.author_id.filter(|target_id| *target_id != author_id)
+        {
+            platform::outbox::enqueue_notification_tx(
+                &mut tx,
+                &format!("forum-comment:{}:reply:{thread_author_id}", row.id),
+                thread_author_id,
+                Some(author_id),
+                "reply",
+                &serde_json::json!({
+                    "threadId": thread_id.to_string(),
+                    "commentId": row.id.to_string(),
+                    "authorHandle": &row.author_handle,
+                    "bodyExcerpt": &body_excerpt,
+                    "title": format!("{} 回复了你的主题", row.author_handle),
+                }),
+                None,
+                None,
+            )
+            .await?;
+        }
+        if let Some(parent_author_id) = parent_author_id.filter(|target_id| {
+            *target_id != author_id && Some(*target_id) != thread_state.author_id
+        }) {
+            platform::outbox::enqueue_notification_tx(
+                &mut tx,
+                &format!("forum-comment:{}:parent-reply:{parent_author_id}", row.id),
+                parent_author_id,
+                Some(author_id),
+                "reply",
+                &serde_json::json!({
+                    "threadId": thread_id.to_string(),
+                    "commentId": row.id.to_string(),
+                    "authorHandle": &row.author_handle,
+                    "bodyExcerpt": &body_excerpt,
+                    "title": format!("{} 回复了你的评论", row.author_handle),
+                }),
+                None,
+                None,
+            )
+            .await?;
+        }
+        if let (Some(quoted_comment_id), Some(quoted_author_id)) =
+            (quoted_comment_id, quoted_author_id.filter(|target_id| *target_id != author_id))
+        {
+            platform::outbox::enqueue_notification_tx(
+                &mut tx,
+                &format!("forum-comment:{}:quote:{quoted_author_id}", row.id),
+                quoted_author_id,
+                Some(author_id),
+                "quote",
+                &serde_json::json!({
+                    "threadId": thread_id.to_string(),
+                    "commentId": row.id.to_string(),
+                    "quotedCommentId": quoted_comment_id.to_string(),
+                    "authorHandle": &row.author_handle,
+                    "bodyExcerpt": &body_excerpt,
+                    "title": format!("{} 引用了你的评论", row.author_handle),
+                }),
+                None,
+                None,
+            )
+            .await?;
+        }
+
+        let mut watcher_exclude = vec![author_id];
+        watcher_exclude.extend(
+            [thread_state.author_id, parent_author_id, quoted_author_id].into_iter().flatten(),
+        );
+        watcher_exclude.sort_unstable();
+        watcher_exclude.dedup();
+        for watcher_id in super::subscriptions::get_watching_subscriber_ids_tx(
+            &mut tx,
+            thread_id,
+            &watcher_exclude,
+        )
+        .await?
+        {
+            platform::outbox::enqueue_notification_tx(
+                &mut tx,
+                &format!("forum-comment:{}:watching:{watcher_id}", row.id),
+                watcher_id,
+                Some(author_id),
+                "watching",
+                &serde_json::json!({
+                    "threadId": thread_id.to_string(),
+                    "commentId": row.id.to_string(),
+                    "authorHandle": &row.author_handle,
+                    "bodyExcerpt": &body_excerpt,
+                    "title": "你订阅的主题有新回复",
+                }),
+                Some(&format!("watching:{thread_id}")),
+                None,
+            )
+            .await?;
+        }
+
+        let mention_handles = crate::content_policy::mention_handles(
+            &row.body,
+            crate::dto::ContentFormat::from_db(&row.content_format),
+            &row.author_handle,
+        );
+        for target in
+            identity::public_accounts::find_mention_targets_by_handles_tx(&mut tx, &mention_handles)
+                .await?
+                .into_iter()
+                .filter(|target| target.id != author_id)
+        {
+            platform::outbox::enqueue_notification_tx(
+                &mut tx,
+                &format!("forum-comment:{}:mention:{}", row.id, target.id),
+                target.id,
+                Some(author_id),
+                "mention",
+                &serde_json::json!({
+                    "threadId": thread_id.to_string(),
+                    "commentId": row.id.to_string(),
+                    "authorHandle": &row.author_handle,
+                    "handle": target.handle,
+                    "bodyExcerpt": &body_excerpt,
+                    "title": format!("{} 提及了你", row.author_handle),
+                }),
+                None,
+                None,
+            )
+            .await?;
+        }
+    }
     tx.commit().await?;
     Ok(CommentCreateOutcome { row, thread_author_id: thread_state.author_id, quoted_author_id })
 }
@@ -339,6 +482,7 @@ async fn insert_comment_tx(
     .await?;
 
     if !comment.is_hidden {
+        super::subscriptions::lock_account_subscriptions(tx, comment.author_id).await?;
         sqlx::query(
             "UPDATE forum.threads \
              SET reply_count = reply_count + 1, last_activity_at = now() \

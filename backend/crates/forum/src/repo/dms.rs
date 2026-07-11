@@ -71,16 +71,17 @@ async fn insert_message_tx(
     conversation_id: i64,
     sender_id: i64,
     body: &str,
-) -> AppResult<()> {
-    sqlx::query(
-        "INSERT INTO forum.dm_messages (conversation_id, sender_id, body) VALUES ($1, $2, $3)",
+) -> AppResult<InsertedMessage> {
+    let message = sqlx::query_as(
+        "INSERT INTO forum.dm_messages (conversation_id, sender_id, body) \
+         VALUES ($1, $2, $3) RETURNING id, created_at",
     )
     .bind(conversation_id)
     .bind(sender_id)
     .bind(body)
-    .execute(&mut **transaction)
+    .fetch_one(&mut **transaction)
     .await?;
-    Ok(())
+    Ok(message)
 }
 
 /// Return a completed matching start request before consuming abuse-control budget.
@@ -215,7 +216,7 @@ pub async fn start_conversation(
 
     let mut request_created = false;
     let mut conversation_changed = false;
-    let mut message_created = false;
+    let mut inserted_message = None;
     let (conversation_id, request_status) = match existing {
         None => match effective_mode {
             DmStartMode::Direct => {
@@ -338,9 +339,10 @@ pub async fn start_conversation(
     let should_insert_message =
         initial_message.is_some() && (request_status != "pending" || request_created);
     if let Some(message) = initial_message.filter(|_| should_insert_message) {
-        insert_message_tx(&mut transaction, conversation_id, sender_id, message).await?;
-        message_created = true;
+        inserted_message =
+            Some(insert_message_tx(&mut transaction, conversation_id, sender_id, message).await?);
     }
+    let message_created = inserted_message.is_some();
 
     if let Some((idempotency_key, request_hash)) =
         idempotency.filter(|_| conversation_changed || message_created)
@@ -356,6 +358,54 @@ pub async fn start_conversation(
         .bind(conversation_id)
         .execute(&mut *transaction)
         .await?;
+    }
+
+    if request_created || message_created {
+        let sender =
+            identity::public_accounts::lock_notification_recipient(&mut transaction, sender_id)
+                .await?
+                .ok_or(AppError::Forbidden)?;
+        if request_created {
+            let requested_at: DateTime<Utc> =
+                sqlx::query_scalar("SELECT requested_at FROM forum.dm_conversations WHERE id = $1")
+                    .bind(conversation_id)
+                    .fetch_one(&mut *transaction)
+                    .await?;
+            platform::outbox::enqueue_notification_tx(
+                &mut transaction,
+                &format!("dm-request:{conversation_id}:{}", requested_at.timestamp_micros()),
+                recipient_id,
+                Some(sender_id),
+                "dm_request",
+                &serde_json::json!({
+                    "conversationId": conversation_id.to_string(),
+                    "requestedAtMicros": requested_at.timestamp_micros().to_string(),
+                    "senderHandle": &sender.handle,
+                    "title": format!("{} 发来消息请求", sender.handle),
+                }),
+                Some(&conversation_id.to_string()),
+                None,
+            )
+            .await?;
+        } else if let (Some(message), Some(body)) = (inserted_message.as_ref(), initial_message) {
+            platform::outbox::enqueue_notification_tx(
+                &mut transaction,
+                &format!("dm-message:{}", message.id),
+                recipient_id,
+                Some(sender_id),
+                "dm",
+                &serde_json::json!({
+                    "conversationId": conversation_id.to_string(),
+                    "messageId": message.id.to_string(),
+                    "senderHandle": &sender.handle,
+                    "title": format!("{} 发来私信", sender.handle),
+                    "bodyExcerpt": body.chars().take(100).collect::<String>(),
+                }),
+                Some(&conversation_id.to_string()),
+                None,
+            )
+            .await?;
+        }
     }
 
     transaction.commit().await?;
@@ -820,9 +870,19 @@ pub async fn send_message(
     pool: &PgPool,
     conversation_id: i64,
     sender_id: i64,
+    recipient_id: i64,
     body: &str,
 ) -> AppResult<(i64, DateTime<Utc>)> {
     let mut transaction = pool.begin().await?;
+    if !identity::public_accounts::lock_active_interaction_accounts(
+        &mut transaction,
+        &[sender_id.min(recipient_id), sender_id.max(recipient_id)],
+    )
+    .await?
+    {
+        return Err(AppError::Forbidden);
+    }
+    super::relationships::lock_pair_unblocked(&mut transaction, sender_id, recipient_id).await?;
     let row: InsertedMessage = sqlx::query_as(
         "INSERT INTO forum.dm_messages (conversation_id, sender_id, body) \
          SELECT $1, $2, $3 \
@@ -850,6 +910,28 @@ pub async fn send_message(
     )
     .bind(conversation_id)
     .execute(&mut *transaction)
+    .await?;
+
+    let sender =
+        identity::public_accounts::lock_notification_recipient(&mut transaction, sender_id)
+            .await?
+            .ok_or(AppError::Forbidden)?;
+    platform::outbox::enqueue_notification_tx(
+        &mut transaction,
+        &format!("dm-message:{}", row.id),
+        recipient_id,
+        Some(sender_id),
+        "dm",
+        &serde_json::json!({
+            "conversationId": conversation_id.to_string(),
+            "messageId": row.id.to_string(),
+            "senderHandle": &sender.handle,
+            "title": format!("{} 发来私信", sender.handle),
+            "bodyExcerpt": body.chars().take(100).collect::<String>(),
+        }),
+        Some(&conversation_id.to_string()),
+        None,
+    )
     .await?;
 
     transaction.commit().await?;
@@ -1067,20 +1149,20 @@ pub async fn accept_request(
     {
         return Err(AppError::Forbidden);
     }
-    let result = sqlx::query(
+    let requested_at: Option<DateTime<Utc>> = sqlx::query_scalar(
         "UPDATE forum.dm_conversations \
          SET request_status = 'accepted', responded_at = now(), request_cooldown_until = NULL \
          WHERE id = $1 AND request_status = 'pending' AND request_recipient_id = $2 \
-           AND request_sender_id = $3",
+           AND request_sender_id = $3 \
+         RETURNING requested_at",
     )
     .bind(conversation_id)
     .bind(recipient_id)
     .bind(state.sender_id)
-    .execute(&mut *transaction)
+    .fetch_optional(&mut *transaction)
     .await?;
-    if result.rows_affected() == 0 {
-        return Err(AppError::Conflict("message request is no longer pending".into()));
-    }
+    let requested_at = requested_at
+        .ok_or_else(|| AppError::Conflict("message request is no longer pending".into()))?;
     sqlx::query(
         "UPDATE forum.dm_participants \
          SET deleted_at = NULL, archived_at = NULL, \
@@ -1092,6 +1174,21 @@ pub async fn accept_request(
     .bind(conversation_id)
     .bind(recipient_id)
     .execute(&mut *transaction)
+    .await?;
+    platform::outbox::enqueue_notification_tx(
+        &mut transaction,
+        &format!("dm-request-accepted:{conversation_id}:{}", requested_at.timestamp_micros()),
+        state.sender_id,
+        Some(recipient_id),
+        "dm_request_accepted",
+        &serde_json::json!({
+            "conversationId": conversation_id.to_string(),
+            "requestedAtMicros": requested_at.timestamp_micros().to_string(),
+            "title": "对方已接受你的消息请求",
+        }),
+        Some(&conversation_id.to_string()),
+        None,
+    )
     .await?;
     transaction.commit().await?;
     Ok(DmAcceptResult { sender_id: state.sender_id, changed: true })

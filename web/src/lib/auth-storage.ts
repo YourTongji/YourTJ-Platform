@@ -3,6 +3,7 @@ import type { Account } from "@/lib/api/types";
 const ACCESS_TOKEN_KEY = "yourtj.accessToken";
 const REFRESH_TOKEN_KEY = "yourtj.refreshToken";
 const ACCOUNT_KEY = "yourtj.account";
+export const AUTH_CLEARED_EVENT = "yourtj:auth-cleared";
 
 export interface StoredAuth {
   accessToken: string;
@@ -44,4 +45,5 @@ export function clearAuth() {
   localStorage.removeItem(ACCESS_TOKEN_KEY);
   localStorage.removeItem(REFRESH_TOKEN_KEY);
   localStorage.removeItem(ACCOUNT_KEY);
+  window.dispatchEvent(new Event(AUTH_CLEARED_EVENT));
 }

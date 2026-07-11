@@ -6,7 +6,7 @@
 >
 > 负责人：Security owner、Identity/Governance maintainers
 >
-> 最近核验：2026-07-12，migrations `0047`、`0048`、`0055` 与 governance/identity integration tests
+> 最近核验：2026-07-12，migrations `0047`、`0048`、`0054`、`0055` 与 governance/identity/outbox integration tests
 
 后端授权每一个 staff 操作。Web 按 capability 隐藏导航只是可用性和数据最小化措施，绝不是
 安全边界。
@@ -94,6 +94,8 @@ capability，不能塞进过宽的 `community.manage`。
 - 商品 `deliveryInfo` 是订单双方信息，不进入公开 Product DTO、搜索、日志或第三方订单列表。
 - SSE/实时请求通过 Authorization header 认证，不把 access token 放入 URL/query；事件只作为刷新提示，
   客户端仍从受授权 API 读取 durable 通知与私信状态。
+- `operations.jobs` 可读取通知 outbox 的非 payload 运维元数据，并只对 `dead` 事件执行理由化人工重试；
+  source key、payload、正文和邮箱不返回，重试次数与 reason 写入不可变 audit。
 - Credit reconcile 的 request/resume/start/succeeded/failed 使用同一 run id 关联 audit；reason、账本是否通过和
   bounded drift counts 可入 metadata，idempotency key、签名、邮箱、数据库错误和完整 ledger payload 不入。
 - `credit.integrity` 只允许验证和读取持久结果，不授予 wallet update、ledger append 或历史 ledger

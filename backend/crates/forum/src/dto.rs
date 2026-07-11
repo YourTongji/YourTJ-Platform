@@ -287,7 +287,13 @@ pub struct InAppNotificationPreferences {
     pub votes: bool,
     pub badges: bool,
     pub subscriptions: bool,
+    #[serde(default = "notification_enabled")]
+    pub follows: bool,
     pub direct_messages: bool,
+}
+
+const fn notification_enabled() -> bool {
+    true
 }
 
 impl Default for InAppNotificationPreferences {
@@ -299,6 +305,7 @@ impl Default for InAppNotificationPreferences {
             votes: true,
             badges: true,
             subscriptions: true,
+            follows: true,
             direct_messages: true,
         }
     }
@@ -319,11 +326,34 @@ pub struct NotificationPreferences {
     pub email: EmailNotificationPreferences,
 }
 
+/// Rolling-compatible input: legacy clients omit `follows`, so the handler preserves its value.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct InAppNotificationPreferencesInput {
+    pub replies: bool,
+    pub mentions: bool,
+    pub quotes: bool,
+    pub votes: bool,
+    pub badges: bool,
+    pub subscriptions: bool,
+    #[serde(default)]
+    pub follows: Option<bool>,
+    pub direct_messages: bool,
+}
+
+/// User-controlled input channels before rolling compatibility is applied.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct NotificationPreferencesInput {
+    pub in_app: InAppNotificationPreferencesInput,
+    pub email: EmailNotificationPreferences,
+}
+
 /// GET/PUT /api/v2/me/notification-prefs — request body.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct NotificationPrefsInput {
-    pub prefs: NotificationPreferences,
+    pub prefs: NotificationPreferencesInput,
 }
 
 /// GET/PUT /api/v2/me/notification-prefs — response body.

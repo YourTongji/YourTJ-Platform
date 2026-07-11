@@ -6,7 +6,7 @@
 >
 > 负责人：Platform maintainers
 >
-> 最近核验：2026-07-12，`codex/x-governance-appeals`
+> 最近核验：2026-07-12，migration `0054` 与 API bootstrap/worker wiring
 
 YourTJ 是 Rust/Axum 后端与 React Web 的 monorepo。论坛、课程、评课、选课、积分共享身份和
 PostgreSQL，但每个 domain 仍拥有自己的表、业务规则和 HTTP routes。
@@ -106,8 +106,9 @@ iOS 与 Flutter 在独立仓库，只消费 OpenAPI 生成的类型和平台 HTT
 - Governance audit/appeal history 在 PostgreSQL 拒绝 row mutation 和 table truncate；comment reversal
   统一 thread→comment lock 并在锁后读取 parent state。Production runtime role 不拥有这些表，也不能
   disable trigger；migration owner 只用于受控 rollout。
-- 搜索、通知、媒体处理和重型 reconciliation 是异步副作用，目标使用 transactional outbox 与
-  幂等 consumer；当前仍存在 fire-and-forget 路径，应标为 `Partial`。
+- 普通通知已经使用 transactional outbox 与幂等 receipt consumer，治理 notice 继续与处置/申诉同
+  事务；Redis/SSE 只提供刷新提示。搜索、部分媒体处理和重型 reconciliation 仍存在未持久化或
+  fire-and-forget 路径，应标为 `Partial`。
 - 公开搜索必须在返回前应用数据库可见性/隐私 policy；索引不能扩大权限。
 - Profile authored-content 聚合由 Forum 提供，但 profile/activity/mention policy 仍归 Identity；Forum
   通过 owner public projection 或 batch API 取得最小 policy，再结合自己的 follow/block/mute 事实。

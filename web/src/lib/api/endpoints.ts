@@ -64,6 +64,8 @@ import type {
   MediaUsage,
   ModerationPreviewGrant,
   Notification,
+  NotificationOutboxEvent,
+  NotificationOutboxState,
   NotificationPreferences,
   Page,
   Poll,
@@ -1111,6 +1113,22 @@ export const api = {
     return apiRequest<Page<AdminAuditEvent>>("/admin/audit-events", {
       query: { ...query, limit: 30 },
     });
+  },
+
+  adminNotificationOutbox(
+    state: NotificationOutboxState = "dead",
+    cursor?: string | null,
+  ) {
+    return apiRequest<Page<NotificationOutboxEvent>>("/admin/notification-outbox", {
+      query: { state, cursor, limit: 30 },
+    });
+  },
+
+  retryAdminNotificationOutbox(id: string, reason: string) {
+    return apiRequest<NotificationOutboxEvent>(
+      `/admin/notification-outbox/${encodeURIComponent(id)}/retry`,
+      { method: "POST", body: { reason } },
+    );
   },
 
   adminAppeals(status?: AppealStatus, cursor?: string | null) {

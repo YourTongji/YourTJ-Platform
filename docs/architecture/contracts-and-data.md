@@ -6,7 +6,7 @@
 >
 > 负责人：Platform maintainers、Domain maintainers
 >
-> 最近核验：2026-07-12，`contract/openapi.yaml`、migrations 与 owner-domain tests
+> 最近核验：2026-07-12，`contract/openapi.yaml`、migration `0054` 与 owner-domain tests
 
 本规范说明产品规则如何落实为 HTTP 契约、migration、domain API、事务和可重建投影。它不复制
 完整 OpenAPI 或 DDL。
@@ -66,12 +66,18 @@ Fresh database 必须只通过 sqlx migration ledger 建立。普通启动、CI 
 业务事务需要可靠触发搜索、通知、媒体或其他跨域副作用时，写入 transactional outbox。consumer：
 
 - 通过 event id/source key 幂等；
-- 有 queued/running/succeeded/failed 状态、重试上限和 dead-letter；
+- 对可撤销 source 锁定 exact generation（follow/vote timestamp、DM request cycle/message id）或当前
+  effective subscription；仅凭候选 payload/target URL 不构成可投递事实；
+- 有 queued/running/succeeded/dead/cancelled 状态、lease、重试上限和 dead-letter；
 - 记录不含 PII/secret 的 bounded error；
 - 支持 reconciliation 比较事实源和 projection；
 - 失败不伪装成成功，也不让 API 请求无限等待外部供应商。
 
-当前部分索引/通知路径仍使用 `tokio::spawn`，属于迁移目标，不是推荐的新模式。
+通知 side effect 已通过 migration `0054` 统一为 PostgreSQL outbox：稳定 source key、30 秒 lease、
+`SKIP LOCKED` claim、最多 8 次有结果失败的有界指数退避（过期 final lease 仍可按同一 attempt 恢复）、
+副作用前 row-lock lease fencing、delivery receipt 和理由化人工 dead-letter retry。普通成功/
+取消事件保留 30 天，dead-letter 和 delivery receipt 保留 90 天。Redis/SSE 只承载 refresh hint。
+搜索索引等部分路径仍使用 `tokio::spawn`，属于迁移目标，不是推荐的新模式。
 
 ## 搜索、缓存与计数
 
@@ -201,9 +207,11 @@ Fresh database 必须只通过 sqlx migration ledger 建立。普通启动、CI 
   同一事实，公共 thread/feed route 不受 profile activity policy 反向影响。Profile aggregate 仍是公开
   内容计数，不从 activity list 的拒绝推断为零。
 - Mention 创建先从 canonical visible text 得到最多 10 个去重 handle，再通过 Identity public batch API
-  一次解析 active、未 suspended 的 account id/canonical handle/policy。Forum 在一条有界 SQL 写路径中
-  应用 recipient-follows-actor、双向 block、recipient mute 和通知偏好；拒绝只省略语义通知，不修改
-  canonical 正文、不返回 target existence/policy，也不形成逐 handle 跨 schema SQL。
+  一次解析 active、未 suspended 的 account id/canonical handle，并在内容事务中追加候选 outbox。
+  Consumer 与 privacy/relationship writer 使用相同 advisory lock，在最终通知事务中重验当前
+  recipient-follows-actor、双向 block、recipient mute、mention policy、通知偏好和 source content
+  可见性；拒绝只省略语义通知，不修改 canonical 正文、不返回 target existence/policy，也不形成逐
+  handle 跨 schema SQL。
 - Migration `0050` 只增加非 PII policy columns，已有账号回填 activity=`only_me`、mention=`everyone`。
   旧应用 writer 不触碰新列；新应用的 PUT 对旧客户端缺少这两个字段时保留当前值，避免 rolling window
   把已设置的 policy 重置为默认。新 Web 遇到旧 backend 未返回字段时使用 only-me activity 与

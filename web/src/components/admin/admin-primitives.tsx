@@ -63,9 +63,11 @@ export function AdminStatusBadge({ value }: { value?: string | null }) {
     running: "执行中",
     succeeded: "已完成",
     failed: "失败",
+    dead: "已停止重试",
+    cancelled: "已取消",
   };
   const normalized = value ?? "unknown";
-  const isRisk = ["suspended", "deleted", "hidden", "upheld", "suspend", "blocked", "block", "failed"].includes(normalized);
+  const isRisk = ["suspended", "deleted", "hidden", "upheld", "suspend", "blocked", "block", "failed", "dead"].includes(normalized);
   return (
     <Badge variant={isRisk ? "destructive" : normalized === "active" || normalized === "visible" ? "secondary" : "outline"}>
       {labels[normalized] ?? normalized}

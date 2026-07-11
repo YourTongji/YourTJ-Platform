@@ -23,6 +23,7 @@ import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useAuth } from "@/context/auth-provider";
 import { api } from "@/lib/api/endpoints";
+import { accountQueryKeys } from "@/lib/account-query-keys";
 import { cn } from "@/lib/utils";
 
 function ThemeToggle() {
@@ -57,7 +58,7 @@ export function AppLayout() {
   const location = useLocation();
   const isHome = location.pathname === "/";
   const notificationCount = useQuery({
-    queryKey: ["notification-count"],
+    queryKey: accountQueryKeys.notificationCount(account?.id),
     queryFn: api.unreadNotificationCount,
     enabled: isAuthenticated,
     staleTime: 30_000,
@@ -65,7 +66,7 @@ export function AppLayout() {
   });
   const unreadCount = notificationCount.data?.count ?? 0;
   const governanceNotificationCount = useQuery({
-    queryKey: ["governance-notice-count"],
+    queryKey: accountQueryKeys.governanceNoticeCount(account?.id),
     queryFn: () => api.governanceNoticeUnreadCount(),
     enabled: isAuthenticated,
     staleTime: 30_000,
@@ -73,7 +74,7 @@ export function AppLayout() {
   });
   const combinedUnreadCount = unreadCount + (governanceNotificationCount.data?.count ?? 0);
   const dmCount = useQuery({
-    queryKey: ["dm-unread-count"],
+    queryKey: accountQueryKeys.directMessageCount(account?.id),
     queryFn: api.dmUnreadCount,
     enabled: isAuthenticated,
     staleTime: 30_000,
@@ -85,7 +86,7 @@ export function AppLayout() {
 
   return (
     <TooltipProvider>
-      <RealtimeRefresh isAuthenticated={isAuthenticated} />
+      <RealtimeRefresh accountId={account?.id} isAuthenticated={isAuthenticated} />
       <div className="min-h-screen bg-background">
         <header className="sticky top-0 z-40 h-16 border-b border-border/60 bg-white/95 backdrop-blur dark:bg-card/95">
           <div className="relative mx-auto flex h-full max-w-[1280px] items-center gap-3 px-4 sm:px-6">

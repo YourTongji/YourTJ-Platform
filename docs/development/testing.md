@@ -6,7 +6,7 @@
 >
 > 负责人：Platform maintainers、Domain maintainers
 >
-> 最近核验：2026-07-12，`codex/x-governance-appeals`
+> 最近核验：2026-07-12，durable notification handler/integration/Web tests
 
 先跑最小 focused test 获得快速反馈，再按 changed scope 跑与 CI 一致的完整 gate。没有运行的检查
 不能在 PR 或交付中写成通过。
@@ -156,7 +156,7 @@ security 和 operations 都不受影响。
 | S2 Identity | 注册、密码/验证码登录、purpose/replay、找回、refresh rotation、session revoke、sanction |
 | S3 Selection data | fresh migration、Raw→catalogue/selection 物化不变量、重复运行、关键 API/search |
 | S4 Reviews | publish idempotency、edit/like/unlike/report/decision、visibility、course-delete restriction |
-| S5 Community | board policy、thread/comment create/edit/delete/restore、interaction、activity、follow/privacy、notification、DM；处置通知与 owner-domain appeal reversal |
+| S5 Community | board policy、thread/comment create/edit/delete/restore、interaction、activity、follow/privacy、notification、DM；通知 outbox 的同事务 producer、lease/SKIP LOCKED、幂等 receipt、policy 与 source-reversal 竞态、dead-letter/retry；处置通知与 owner-domain appeal reversal |
 | S6 Governance | suspended appeal-only access、普通 route scope isolation、仅本人原事件、idempotency conflict、30 天窗口、独立 reviewer/hierarchy、stale claim、原子 overturn/amend/history/notice |
 | S7 Credit | signing intent、tamper/replay、ledger chain、balance reconciliation、escrow edge states |
 | S8 Search/media | typed federated results、visibility/stale index、reindex；upload intent/callback/scan/binding/delete/GC |

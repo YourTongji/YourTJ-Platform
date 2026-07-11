@@ -20,6 +20,7 @@ serde_json.workspace = true
 sqlx.workspace = true
 serde.workspace = true
 chrono.workspace = true
+futures.workspace = true
 redis.workspace = true
 deadpool-redis.workspace = true
 ring.workspace = true

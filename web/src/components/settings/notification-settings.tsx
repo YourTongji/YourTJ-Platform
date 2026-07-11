@@ -6,6 +6,8 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
+import { useAuth } from "@/context/auth-provider";
+import { accountQueryKeys } from "@/lib/account-query-keys";
 import { api } from "@/lib/api/endpoints";
 import type { NotificationPreferences } from "@/lib/api/types";
 
@@ -16,6 +18,7 @@ const defaultPreferences: NotificationPreferences = {
     quotes: true,
     votes: true,
     badges: true,
+    follows: true,
     subscriptions: true,
     directMessages: true,
   },
@@ -32,15 +35,17 @@ const inAppOptions: Array<{
   { key: "quotes", label: "引用", description: "有人引用你的评论。" },
   { key: "votes", label: "赞同", description: "你的内容获得新的赞同。" },
   { key: "badges", label: "成就徽章", description: "账号获得新的社区成就。" },
+  { key: "follows", label: "新关注", description: "有人开始关注你。" },
   { key: "subscriptions", label: "订阅更新", description: "你正在关注的主题出现更新。" },
   { key: "directMessages", label: "私信", description: "收到新的私信；会话级静音优先。" },
 ];
 
 export function NotificationSettings() {
+  const { account } = useAuth();
   const queryClient = useQueryClient();
   const [draft, setDraft] = React.useState<NotificationPreferences>(defaultPreferences);
   const preferences = useQuery({
-    queryKey: ["notification-prefs"],
+    queryKey: accountQueryKeys.notificationPreferences(account?.id),
     queryFn: api.notificationPrefs,
   });
   const save = useMutation({
@@ -48,7 +53,9 @@ export function NotificationSettings() {
     onSuccess: async (result) => {
       setDraft(result.prefs);
       toast.success("通知偏好已保存");
-      await queryClient.invalidateQueries({ queryKey: ["notification-prefs"] });
+      await queryClient.invalidateQueries({
+        queryKey: accountQueryKeys.notificationPreferences(account?.id),
+      });
     },
     onError: (error) => toast.error(error instanceof Error ? error.message : "保存失败"),
   });

@@ -6,7 +6,7 @@
 >
 > 负责人：Forum/Identity/Web maintainers、Privacy owner、Product owner
 >
-> 最近核验：2026-07-12，migrations `0034`、`0044`、`0045`、`0050` 与 owner-domain tests
+> 最近核验：2026-07-12，migrations `0034`、`0044`、`0045`、`0050`、`0054` 与 owner-domain tests
 
 本规范定义公开资料、用户关注、板块/主题订阅、block、mute、资料隐私和徽章语义。目标是
 建立可解释的社交关系，而不是把所有关系都命名为 “following” 或 “屏蔽”。
@@ -182,7 +182,8 @@ Identity 同时维护最小化的用户搜索候选文档，只包含 account id
 
 Mention handle 解析属于 Identity 的最小 public batch API，只返回 account id、canonical handle 和
 mention policy，不返回邮箱、资料正文或生命周期内部原因；Forum 使用自己的 follow/block/mute 事实
-决定 notification side effect。Profile activity list 由 Forum 持有，但只消费 Identity 返回的
+在内容事务中写候选 outbox，并在最终 delivery transaction 重读当前 mention policy、偏好、关系、
+账号生命周期和 canonical 内容可见性。Profile activity list 由 Forum 持有，但只消费 Identity 返回的
 activity visibility，不跨 schema 读取私有字段。
 
 ## 已决策与后续决策
@@ -205,10 +206,11 @@ activity visibility，不跨 schema 读取私有字段。
 - Profile 的 `canViewActivity` 与主题/回复 endpoint 使用同一 policy；私密状态不触发 Web 重试风暴，
   aggregate 公共内容计数仍保持可解释。
 - Mention 覆盖 everyone/following/nobody/self/block/inactive/suspended；被拒绝的文字仍原样公开且没有
-  通知，relationship `canMention` 与最终写入授权一致。
+  通知，relationship `canMention` 与最终写入授权一致；privacy/mute/block/content hide 与排队 delivery
+  的竞态由同一事务 advisory/row lock 重验覆盖。
 - 所有公开 profile 响应不含邮箱或内部治理字段，媒体来自平台 asset。
 - profile 上传刷新后仍能恢复待审/通过/未通过状态；待审或未通过资产没有可用绑定按钮，服务端也拒绝绑定。
 - 成就、认证和角色标识有独立 DTO、视觉语义和权限来源；成就/认证授予与撤销留下同事务审计。
 - 成就定义 stale version 返回 conflict；人工授予不产生 pending mint，重复自动授予最多产生一个 grant、
-  一个事件和一个幂等 mint；撤销后公开资料不展示但历史仍可追溯。
+  一个事件、一个幂等 mint 和一个通知；撤销后公开资料不展示但历史仍可追溯并产生变更通知。
 - 私密、已撤销、已到期或 definition 禁止公开的认证不会出现在任何公开资料响应。

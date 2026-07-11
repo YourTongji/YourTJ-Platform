@@ -238,31 +238,7 @@ pub async fn follow_user_handler(
     if !profile_is_visible(&target, Some(auth.id), Some(relationship)) {
         return Err(AppError::NotFound);
     }
-    let follower = identity::public_accounts::find_public_account_by_id(&state.db, auth.id)
-        .await?
-        .ok_or(AppError::Unauthorized)?;
-    let inserted = crate::repo::relationships::follow(&state.db, auth.id, target.id).await?;
-    if inserted {
-        let pool = state.db.clone();
-        let follower_id = auth.id;
-        let follower_handle = follower.handle;
-        tokio::spawn(async move {
-            let aggregation_key = format!("follow:{follower_id}");
-            crate::notification_hooks::create_notification(
-                &pool,
-                target.id,
-                "follow",
-                serde_json::json!({
-                    "followerId": follower_id.to_string(),
-                    "followerHandle": follower_handle.clone(),
-                    "targetUrl": format!("/profile/{follower_handle}"),
-                }),
-                Some(&aggregation_key),
-                Some(follower_id),
-            )
-            .await;
-        });
-    }
+    crate::repo::relationships::follow(&state.db, auth.id, target.id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

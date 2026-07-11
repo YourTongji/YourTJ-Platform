@@ -230,65 +230,6 @@ pub async fn create_or_get_conversation_handler(
     let conversation = repo::dms::get_conversation(&state.db, result.conversation_id, auth.id)
         .await?
         .ok_or(AppError::NotFound)?;
-    let sender_handle = if result.request_created || result.message_created {
-        sqlx::query_scalar("SELECT handle::text FROM identity.accounts WHERE id = $1")
-            .bind(auth.id)
-            .fetch_one(&state.db)
-            .await?
-    } else {
-        String::new()
-    };
-    let recipient_is_muted = if result.request_status == "accepted" && result.message_created {
-        repo::dms::participant_is_muted(&state.db, result.conversation_id, recipient_id).await?
-    } else {
-        false
-    };
-    if result.request_created {
-        let pool = state.db.clone();
-        let conversation_id = result.conversation_id;
-        let sender_id = auth.id;
-        let sender_handle = sender_handle.clone();
-        let notification_title = format!("{sender_handle} 发来消息请求");
-        tokio::spawn(async move {
-            crate::notification_hooks::create_notification(
-                &pool,
-                recipient_id,
-                "dm_request",
-                serde_json::json!({
-                    "conversationId": conversation_id.to_string(),
-                    "senderHandle": sender_handle,
-                    "title": notification_title,
-                }),
-                Some(&conversation_id.to_string()),
-                Some(sender_id),
-            )
-            .await;
-        });
-    } else if result.request_status == "accepted" && result.message_created && !recipient_is_muted {
-        let pool = state.db.clone();
-        let conversation_id = result.conversation_id;
-        let sender_id = auth.id;
-        let sender_handle = sender_handle.clone();
-        let notification_title = format!("{sender_handle} 发来私信");
-        let body_excerpt =
-            request_message.unwrap_or_default().chars().take(100).collect::<String>();
-        tokio::spawn(async move {
-            crate::notification_hooks::create_notification(
-                &pool,
-                recipient_id,
-                "dm",
-                serde_json::json!({
-                    "conversationId": conversation_id.to_string(),
-                    "senderHandle": sender_handle,
-                    "title": notification_title,
-                    "bodyExcerpt": body_excerpt,
-                }),
-                Some(&conversation_id.to_string()),
-                Some(sender_id),
-            )
-            .await;
-        });
-    }
     Ok(Json(conversation_to_dto(conversation)))
 }
 
@@ -376,27 +317,10 @@ pub async fn accept_message_request_handler(
             return Err(AppError::Forbidden);
         }
     }
-    let accepted = repo::dms::accept_request(&state.db, conversation_id, auth.id).await?;
+    repo::dms::accept_request(&state.db, conversation_id, auth.id).await?;
     let conversation = repo::dms::get_conversation(&state.db, conversation_id, auth.id)
         .await?
         .ok_or(AppError::NotFound)?;
-    if accepted.changed {
-        let pool = state.db.clone();
-        tokio::spawn(async move {
-            crate::notification_hooks::create_notification(
-                &pool,
-                accepted.sender_id,
-                "dm_request_accepted",
-                serde_json::json!({
-                    "conversationId": conversation_id.to_string(),
-                    "title": "对方已接受你的消息请求",
-                }),
-                Some(&conversation_id.to_string()),
-                Some(auth.id),
-            )
-            .await;
-        });
-    }
     Ok(Json(conversation_to_dto(conversation)))
 }
 
@@ -570,9 +494,6 @@ pub async fn send_message_handler(
     if repo::relationships::pair_is_blocked(&state.db, auth.id, recipient_id).await? {
         return Err(AppError::Forbidden);
     }
-    let recipient_is_muted =
-        repo::dms::participant_is_muted(&state.db, conversation_id, recipient_id).await?;
-
     shared::ratelimit::check_token_bucket(
         state.redis.as_ref(),
         "dm_send",
@@ -583,37 +504,13 @@ pub async fn send_message_handler(
     .await?;
 
     let (message_id, created_at) =
-        repo::dms::send_message(&state.db, conversation_id, auth.id, &body.body).await?;
+        repo::dms::send_message(&state.db, conversation_id, auth.id, recipient_id, &body.body)
+            .await?;
     let sender_handle: String =
         sqlx::query_scalar("SELECT handle::text FROM identity.accounts WHERE id = $1")
             .bind(auth.id)
             .fetch_one(&state.db)
             .await?;
-
-    if !recipient_is_muted {
-        let pool = state.db.clone();
-        let conversation_id_string = conversation_id.to_string();
-        let body_excerpt = body.body.chars().take(100).collect::<String>();
-        let sender_id = auth.id;
-        let notification_sender_handle = sender_handle.clone();
-        let notification_title = format!("{sender_handle} 发来私信");
-        tokio::spawn(async move {
-            crate::notification_hooks::create_notification(
-                &pool,
-                recipient_id,
-                "dm",
-                serde_json::json!({
-                    "conversationId": conversation_id_string,
-                    "senderHandle": notification_sender_handle,
-                    "title": notification_title,
-                    "bodyExcerpt": body_excerpt,
-                }),
-                Some(&conversation_id.to_string()),
-                Some(sender_id),
-            )
-            .await;
-        });
-    }
 
     Ok((
         StatusCode::CREATED,

@@ -52,20 +52,23 @@ pub async fn feature_thread(
     super::require_lower_author_role(&mut transaction, &auth, Some(thread.0)).await?;
 
     let action = if body.featured { "feature" } else { "unfeature" };
-    if body.featured {
+    let newly_featured = if body.featured {
         sqlx::query(
             "UPDATE forum.threads SET featured_at = now() \
              WHERE id = $1 AND featured_at IS NULL",
         )
         .bind(thread_id)
         .execute(&mut *transaction)
-        .await?;
+        .await?
+        .rows_affected()
+            == 1
     } else {
         sqlx::query("UPDATE forum.threads SET featured_at = NULL WHERE id = $1")
             .bind(thread_id)
             .execute(&mut *transaction)
             .await?;
-    }
+        false
+    };
 
     crate::repo::insert_mod_action(
         &mut *transaction,
@@ -87,22 +90,18 @@ pub async fn feature_thread(
         None,
     )
     .await?;
-    transaction.commit().await?;
-
-    if body.featured {
-        let pool = state.db.clone();
-        let author_id = thread.0;
-        let awarded_by = auth.id;
-        tokio::spawn(async move {
-            match crate::badges::award_quality_author_badge(&pool, author_id, awarded_by).await {
-                Ok(true) => tracing::info!(author_id, "quality-author achievement awarded"),
-                Ok(false) => {}
-                Err(error) => {
-                    tracing::warn!(?error, author_id, "failed to award quality-author achievement");
-                }
-            }
-        });
+    if newly_featured {
+        platform::outbox::enqueue_achievement_award_tx(
+            &mut transaction,
+            &format!("forum-thread:{thread_id}:achievement:quality-author"),
+            thread.0,
+            auth.id,
+            "quality-author",
+            "staff featured a forum thread",
+        )
+        .await?;
     }
+    transaction.commit().await?;
 
     crate::cache::invalidate_thread_surfaces(state.redis.as_ref(), thread_id, thread.1).await;
     Ok(Json(json!({ "ok": true })))

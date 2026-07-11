@@ -113,17 +113,18 @@ pub async fn vote_post(
     .await?;
 
     // UPSERT into forum.votes — same (post_type, post_id, account_id) → UPDATE value.
-    sqlx::query(
+    let vote_updated_at: chrono::DateTime<chrono::Utc> = sqlx::query_scalar(
         "INSERT INTO forum.votes (post_type, post_id, account_id, value) \
          VALUES ($1, $2, $3, $4) \
          ON CONFLICT (post_type, post_id, account_id) \
-         DO UPDATE SET value = EXCLUDED.value, updated_at = now()",
+         DO UPDATE SET value = EXCLUDED.value, updated_at = now() \
+         RETURNING updated_at",
     )
     .bind(post_type)
     .bind(post_id)
     .bind(account_id)
     .bind(delta)
-    .execute(&mut *tx)
+    .fetch_one(&mut *tx)
     .await?;
 
     // Recompute the vote_count for the post by summing votes. `SUM(smallint)`
@@ -191,6 +192,32 @@ pub async fn vote_post(
         .bind(received_delta)
         .execute(&mut *tx)
         .await?;
+    }
+
+    if delta == 1 && previous_value != Some(1) {
+        if let Some(author_id) = post_author_id {
+            platform::outbox::enqueue_notification_tx(
+                &mut tx,
+                &format!(
+                    "forum-vote:{post_type}:{post_id}:{account_id}:{}",
+                    vote_updated_at.timestamp_micros()
+                ),
+                author_id,
+                Some(account_id),
+                "vote",
+                &serde_json::json!({
+                    "postType": post_type,
+                    "postId": post_id.to_string(),
+                    "threadId": thread_id.to_string(),
+                    "voterId": account_id.to_string(),
+                    "voteUpdatedAtMicros": vote_updated_at.timestamp_micros().to_string(),
+                    "title": "你的内容获得了赞同",
+                }),
+                Some(&format!("vote:{post_type}:{post_id}")),
+                None,
+            )
+            .await?;
+        }
     }
 
     tx.commit().await?;

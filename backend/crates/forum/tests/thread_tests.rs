@@ -10,6 +10,33 @@ use serde_json::json;
 use sqlx::PgPool;
 use tower::ServiceExt;
 
+async fn drain_notification_outbox(pool: &PgPool) {
+    let worker_id = uuid::Uuid::new_v4();
+    loop {
+        let events = platform::outbox::claim_events(pool, worker_id, 100)
+            .await
+            .expect("claim durable thread events");
+        if events.is_empty() {
+            break;
+        }
+        for event in events {
+            match event.topic.as_str() {
+                "notification" => {
+                    forum::notification_delivery::deliver_event(pool, &event)
+                        .await
+                        .expect("deliver durable thread notification");
+                }
+                "achievement_award" => {
+                    platform::achievements::deliver_automatic_award(pool, &event)
+                        .await
+                        .expect("deliver durable thread achievement");
+                }
+                topic => panic!("unexpected durable thread topic: {topic}"),
+            }
+        }
+    }
+}
+
 async fn create_thread_request(
     app: &axum::Router,
     token: &str,
@@ -188,6 +215,16 @@ async fn test_create_thread_returns_detail_dto() {
     .unwrap();
     assert_eq!(activity_count, 1);
     assert_eq!(board_thread_count(&pool, 1).await, 1);
+    let achievement_outbox_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM platform.outbox_events \
+         WHERE recipient_account_id = $1 AND topic = 'achievement_award' \
+           AND event_type = 'first-thread'",
+    )
+    .bind(account_id)
+    .fetch_one(&pool)
+    .await
+    .expect("count first-thread outbox event");
+    assert_eq!(achievement_outbox_count, 1);
 }
 
 #[tokio::test]
@@ -853,20 +890,7 @@ async fn thread_mentions_apply_recipient_policy_without_rejecting_literal_text()
         actor_id,
     ];
 
-    for _ in 0..50 {
-        let count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM forum.notifications \
-             WHERE type = 'mention' AND account_id = ANY($1)",
-        )
-        .bind(&mention_candidate_ids)
-        .fetch_one(&pool)
-        .await
-        .expect("poll mention notifications");
-        if count >= 2 {
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-    }
+    drain_notification_outbox(&pool).await;
     let recipients: Vec<i64> = sqlx::query_scalar(
         "SELECT account_id FROM forum.notifications \
          WHERE type = 'mention' AND account_id = ANY($1) ORDER BY account_id",

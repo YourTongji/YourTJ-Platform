@@ -4,6 +4,7 @@
 mod admin;
 mod appeals;
 mod bootstrap;
+mod notification_worker;
 mod onebox;
 mod tip_targets;
 

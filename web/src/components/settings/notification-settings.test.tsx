@@ -19,6 +19,10 @@ vi.mock("@/lib/api/endpoints", () => ({
   },
 }));
 
+vi.mock("@/context/auth-provider", () => ({
+  useAuth: () => ({ account: { id: "account-1" } }),
+}));
+
 describe("NotificationSettings", () => {
   beforeEach(() => {
     const prefs = {
@@ -28,6 +32,7 @@ describe("NotificationSettings", () => {
         quotes: true,
         votes: true,
         badges: true,
+        follows: true,
         subscriptions: true,
         directMessages: true,
       },
@@ -52,7 +57,7 @@ describe("NotificationSettings", () => {
     await user.click(screen.getByRole("button", { name: "保存通知偏好" }));
 
     await waitFor(() => expect(apiMocks.update).toHaveBeenCalledWith(expect.objectContaining({
-      inApp: expect.objectContaining({ replies: false, directMessages: true }),
+      inApp: expect.objectContaining({ replies: false, follows: true, directMessages: true }),
       email: { weeklyDigest: false },
     })));
     await expectNoAccessibilityViolations(view.container);

@@ -5609,7 +5609,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** SSE stream for real-time notifications */
+        /**
+         * SSE stream for real-time notifications
+         * @description Best-effort refresh hints only. The stream emits sync immediately after every connection; clients must refetch durable notification and unread-count endpoints after sync or any event.
+         */
         get: {
             parameters: {
                 query?: never;
@@ -6088,6 +6091,100 @@ export interface paths {
         };
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/notification-outbox": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List durable notification outbox operations by state
+         * @description Requires operations.jobs. Payloads and source keys are intentionally excluded.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    state?: "queued" | "running" | "succeeded" | "dead" | "cancelled";
+                    /** @description Opaque pagination cursor */
+                    cursor?: components["parameters"]["Cursor"];
+                    limit?: components["parameters"]["Limit"];
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["NotificationOutboxEventPage"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                403: components["responses"]["Forbidden"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/notification-outbox/{id}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Retry one dead-letter notification operation
+         * @description Requires operations.jobs. The reason and retry metadata are written to the immutable admin audit log.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["NotificationOutboxRetryInput"];
+                };
+            };
+            responses: {
+                /** @description queued */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["NotificationOutboxEvent"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                403: components["responses"]["Forbidden"];
+                409: components["responses"]["Conflict"];
+            };
+        };
         delete?: never;
         options?: never;
         head?: never;
@@ -10283,6 +10380,8 @@ export interface components {
             /** @default true */
             badges: boolean;
             /** @default true */
+            follows: boolean;
+            /** @default true */
             subscriptions: boolean;
             /** @default true */
             directMessages: boolean;
@@ -10295,11 +10394,26 @@ export interface components {
             inApp: components["schemas"]["InAppNotificationPrefs"];
             email: components["schemas"]["EmailNotificationPrefs"];
         };
+        InAppNotificationPrefsInput: {
+            replies: boolean;
+            mentions: boolean;
+            quotes: boolean;
+            votes: boolean;
+            badges: boolean;
+            /** @description Optional only during rolling deployment; omission preserves the stored value. */
+            follows?: boolean;
+            subscriptions: boolean;
+            directMessages: boolean;
+        };
+        NotificationPreferencesInput: {
+            inApp: components["schemas"]["InAppNotificationPrefsInput"];
+            email: components["schemas"]["EmailNotificationPrefs"];
+        };
         NotificationPrefs: {
             prefs: components["schemas"]["NotificationPreferences"];
         };
         NotificationPrefsInput: {
-            prefs: components["schemas"]["NotificationPreferences"];
+            prefs: components["schemas"]["NotificationPreferencesInput"];
         };
         ReadTrackingInput: {
             /** @description When null or omitted, mark through the thread's current last visible comment. */
@@ -11065,6 +11179,28 @@ export interface components {
             metadata?: Record<string, never> | null;
             createdAt: number;
         };
+        /** @description Operational metadata for a durable notification side effect. The private payload and source key are never exposed. */
+        NotificationOutboxEvent: {
+            id: string;
+            /** @enum {string} */
+            topic: "notification" | "achievement_award";
+            recipientAccountId: string;
+            eventType: string;
+            /** @enum {string} */
+            state: "queued" | "running" | "succeeded" | "dead" | "cancelled";
+            attempts: number;
+            maxAttempts: number;
+            manualRetryCount: number;
+            availableAt: number;
+            lastErrorCode?: string | null;
+            completedAt?: number | null;
+            deadAt?: number | null;
+            createdAt: number;
+            updatedAt: number;
+        };
+        NotificationOutboxRetryInput: {
+            reason: string;
+        };
         /** @enum {string} */
         AchievementIcon: "award" | "book-open-check" | "message-circle-heart" | "star";
         /** @enum {string} */
@@ -11232,6 +11368,9 @@ export interface components {
         };
         AdminAuditEventPage: components["schemas"]["Page"] & {
             items?: components["schemas"]["AdminAuditEvent"][];
+        };
+        NotificationOutboxEventPage: components["schemas"]["Page"] & {
+            items?: components["schemas"]["NotificationOutboxEvent"][];
         };
         DmReportPage: components["schemas"]["Page"] & {
             items?: components["schemas"]["DmReport"][];

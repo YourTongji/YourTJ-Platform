@@ -32,6 +32,17 @@ async fn test_pool() -> PgPool {
                 .await
                 .expect("run achievement operations migration");
         }
+        let has_outbox: bool =
+            sqlx::query_scalar("SELECT to_regclass('platform.outbox_events') IS NOT NULL")
+                .fetch_one(&pool)
+                .await
+                .expect("check durable outbox schema");
+        if !has_outbox {
+            sqlx::raw_sql(include_str!("../../../migrations/0054_durable_notification_outbox.sql"))
+                .execute(&pool)
+                .await
+                .expect("run durable notification outbox migration");
+        }
     }
     pool
 }
@@ -232,6 +243,15 @@ async fn staff_definition_and_manual_award_lifecycle_is_versioned_audited_and_no
         .expect("grant achievement response");
     assert_eq!(grant.status(), StatusCode::CREATED);
     assert_eq!(read_json(grant).await["status"], "active");
+    let awarded_notifications: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM platform.outbox_events \
+         WHERE recipient_account_id = $1 AND event_type = 'achievement_awarded'",
+    )
+    .bind(user_id)
+    .fetch_one(&pool)
+    .await
+    .expect("count manual award notification events");
+    assert_eq!(awarded_notifications, 1);
 
     let pending_mints: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM platform.pending_mints WHERE account_id = $1 AND badge_slug = $2",
@@ -259,6 +279,15 @@ async fn staff_definition_and_manual_award_lifecycle_is_versioned_audited_and_no
         .expect("revoke achievement response");
     assert_eq!(revoke.status(), StatusCode::OK);
     assert_eq!(read_json(revoke).await["status"], "revoked");
+    let revoked_notifications: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM platform.outbox_events \
+         WHERE recipient_account_id = $1 AND event_type = 'achievement_revoked'",
+    )
+    .bind(user_id)
+    .fetch_one(&pool)
+    .await
+    .expect("count manual revoke notification events");
+    assert_eq!(revoked_notifications, 1);
     assert!(platform::achievements::list_public_account_achievements(&pool, user_id)
         .await
         .expect("list revoked public achievements")
@@ -350,4 +379,13 @@ async fn automatic_contribution_award_enqueues_exactly_one_idempotent_mint() {
     .await
     .expect("count automatic award events");
     assert_eq!(award_events, 1);
+    let notification_events: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM platform.outbox_events \
+         WHERE recipient_account_id = $1 AND event_type = 'achievement_awarded'",
+    )
+    .bind(user_id)
+    .fetch_one(&pool)
+    .await
+    .expect("count automatic award notifications");
+    assert_eq!(notification_events, 1);
 }

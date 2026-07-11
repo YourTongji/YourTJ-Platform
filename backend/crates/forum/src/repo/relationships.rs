@@ -43,38 +43,24 @@ async fn lock_pair(
     Ok(())
 }
 
-/// Lock several direct-interaction pairs in deterministic order with one database query.
-pub(crate) async fn lock_pairs(
-    tx: &mut Transaction<'_, Postgres>,
-    account_id: i64,
-    other_account_ids: &[i64],
-) -> AppResult<()> {
-    let mut lock_keys: Vec<String> = other_account_ids
-        .iter()
-        .copied()
-        .filter(|other_id| *other_id != account_id)
-        .map(|other_id| {
-            let account_low_id = account_id.min(other_id);
-            let account_high_id = account_id.max(other_id);
-            format!("forum-social:{account_low_id}:{account_high_id}")
-        })
-        .collect();
-    lock_keys.sort_unstable();
-    lock_keys.dedup();
-    if lock_keys.is_empty() {
-        return Ok(());
-    }
-    sqlx::query(
-        "SELECT pg_advisory_xact_lock(hashtextextended(ordered.lock_key, 0)) \
-         FROM ( \
-           SELECT pair.lock_key FROM unnest($1::text[]) AS pair(lock_key) \
-           ORDER BY pair.lock_key \
-         ) AS ordered",
-    )
-    .bind(&lock_keys)
-    .execute(&mut **tx)
-    .await?;
-    Ok(())
+/// Serialize notification filtering with follow, mute, and block mutations for the same pair.
+pub async fn lock_notification_pair(
+    connection: &mut sqlx::PgConnection,
+    recipient_id: i64,
+    actor_id: i64,
+) -> AppResult<bool> {
+    let account_low_id = recipient_id.min(actor_id);
+    let account_high_id = recipient_id.max(actor_id);
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind(format!("forum-social:{account_low_id}:{account_high_id}"))
+        .execute(&mut *connection)
+        .await?;
+    let hidden = sqlx::query_scalar("SELECT forum.user_content_hidden($1, $2)")
+        .bind(recipient_id)
+        .bind(actor_id)
+        .fetch_one(connection)
+        .await?;
+    Ok(hidden)
 }
 
 /// Serialize a direct interaction with block mutation and reject either block direction.
@@ -168,16 +154,37 @@ pub async fn follow(pool: &PgPool, follower_id: i64, followed_id: i64) -> AppRes
     }
     let mut tx = pool.begin().await?;
     lock_pair_unblocked(&mut tx, follower_id, followed_id).await?;
-    let inserted = sqlx::query(
+    let followed_at: Option<DateTime<Utc>> = sqlx::query_scalar(
         "INSERT INTO forum.user_follows (follower_id, followed_id) VALUES ($1, $2) \
-         ON CONFLICT (follower_id, followed_id) DO NOTHING",
+         ON CONFLICT (follower_id, followed_id) DO NOTHING RETURNING created_at",
     )
     .bind(follower_id)
     .bind(followed_id)
-    .execute(&mut *tx)
-    .await?
-    .rows_affected()
-        == 1;
+    .fetch_optional(&mut *tx)
+    .await?;
+    let inserted = followed_at.is_some();
+    if let Some(followed_at) = followed_at {
+        let follower = identity::public_accounts::lock_notification_recipient(&mut tx, follower_id)
+            .await?
+            .ok_or(AppError::Forbidden)?;
+        platform::outbox::enqueue_notification_tx(
+            &mut tx,
+            &format!("forum-follow:{follower_id}:{followed_id}:{}", followed_at.timestamp_micros()),
+            followed_id,
+            Some(follower_id),
+            "follow",
+            &serde_json::json!({
+                "followerId": follower_id.to_string(),
+                "followerHandle": &follower.handle,
+                "followedAtMicros": followed_at.timestamp_micros().to_string(),
+                "title": format!("{} 关注了你", follower.handle),
+                "targetUrl": format!("/profile/{}", follower.handle),
+            }),
+            Some(&format!("follow:{follower_id}")),
+            None,
+        )
+        .await?;
+    }
     tx.commit().await?;
     Ok(inserted)
 }
@@ -208,24 +215,30 @@ pub async fn mute(pool: &PgPool, account_id: i64, muted_account_id: i64) -> AppR
     if account_id == muted_account_id {
         return Err(AppError::BadRequest("cannot mute yourself".into()));
     }
+    let mut tx = pool.begin().await?;
+    lock_pair(&mut tx, account_id, muted_account_id).await?;
     sqlx::query(
         "INSERT INTO forum.user_mutes (account_id, muted_account_id) VALUES ($1, $2) \
          ON CONFLICT (account_id, muted_account_id) DO NOTHING",
     )
     .bind(account_id)
     .bind(muted_account_id)
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
+    tx.commit().await?;
     Ok(())
 }
 
 /// Unmute one account idempotently.
 pub async fn unmute(pool: &PgPool, account_id: i64, muted_account_id: i64) -> AppResult<()> {
+    let mut tx = pool.begin().await?;
+    lock_pair(&mut tx, account_id, muted_account_id).await?;
     sqlx::query("DELETE FROM forum.user_mutes WHERE account_id = $1 AND muted_account_id = $2")
         .bind(account_id)
         .bind(muted_account_id)
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
+    tx.commit().await?;
     Ok(())
 }
 

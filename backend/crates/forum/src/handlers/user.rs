@@ -39,8 +39,6 @@ pub async fn set_my_notification_prefs(
     .await
     .map_err(|_| AppError::Unauthorized)?;
 
-    let stored = serde_json::to_value(&body.prefs)
-        .map_err(|error| AppError::Internal(anyhow::Error::new(error)))?;
-    crate::repo::set_notification_prefs(&state.db, auth.id, &stored).await?;
-    Ok(Json(crate::dto::NotificationPrefsDto { prefs: body.prefs }))
+    let prefs = crate::repo::set_notification_prefs(&state.db, auth.id, body.prefs).await?;
+    Ok(Json(crate::dto::NotificationPrefsDto { prefs }))
 }

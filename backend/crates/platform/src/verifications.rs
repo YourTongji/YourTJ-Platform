@@ -13,7 +13,7 @@ use governance::AccountActor;
 use serde::{Deserialize, Serialize};
 use shared::auth::{AuthAccount, Capability};
 use shared::{AppError, AppResult, AppState, Page};
-use sqlx::{FromRow, PgPool, Postgres, Transaction};
+use sqlx::{FromRow, PgConnection, PgPool, Postgres, Transaction};
 
 use crate::auth::staff_account;
 use crate::validation::{optional_text, parse_id, reason, required_text, timestamp};
@@ -384,6 +384,22 @@ async fn find_grant_for_update(
     .ok_or(AppError::NotFound)
 }
 
+/// Lock an expiry notification's grant and confirm that expiry, rather than revocation, won.
+pub async fn lock_current_expiry_notification(
+    connection: &mut PgConnection,
+    grant_id: i64,
+) -> AppResult<bool> {
+    let is_current = sqlx::query_scalar(
+        "SELECT revoked_at IS NULL AND expires_at IS NOT NULL AND expires_at <= now() \
+         FROM platform.verification_grants WHERE id = $1 FOR SHARE",
+    )
+    .bind(grant_id)
+    .fetch_optional(connection)
+    .await?
+    .unwrap_or(false);
+    Ok(is_current)
+}
+
 /// Return only active, explicitly public verification labels for a public account surface.
 pub async fn list_public_account_verifications(
     pool: &PgPool,
@@ -631,6 +647,43 @@ async fn admin_grant(
         Some(&metadata),
     )
     .await?;
+    crate::outbox::enqueue_notification_tx(
+        &mut tx,
+        &format!("verification-grant:{grant_id}:granted"),
+        account_id,
+        None,
+        "verification_granted",
+        &serde_json::json!({
+            "verificationGrantId": grant_id.to_string(),
+            "verificationTypeId": verification_type_id.to_string(),
+            "verificationSlug": &definition.slug,
+            "verificationLabel": &definition.label,
+            "title": "你的账号获得了一项认证",
+            "expiresAt": expires_at.map(|value| value.timestamp()),
+        }),
+        None,
+        None,
+    )
+    .await?;
+    if let Some(expires_at) = expires_at {
+        crate::outbox::enqueue_notification_tx(
+            &mut tx,
+            &format!("verification-grant:{grant_id}:expired"),
+            account_id,
+            None,
+            "verification_expired",
+            &serde_json::json!({
+                "verificationGrantId": grant_id.to_string(),
+                "verificationTypeId": verification_type_id.to_string(),
+                "verificationSlug": &definition.slug,
+                "verificationLabel": &definition.label,
+                "title": "你的一项账号认证已到期",
+            }),
+            None,
+            Some(expires_at),
+        )
+        .await?;
+    }
     tx.commit().await?;
     Ok((StatusCode::CREATED, Json(verification_grant_dto(record))))
 }
@@ -644,10 +697,10 @@ async fn admin_revoke(
     let actor = staff_account(&headers, &state, Capability::ManageVerifications).await?;
     let grant_id = parse_id(&grant_id, "verification grant id")?;
     let audit_reason = reason(&input.reason)?;
-    let now = Utc::now();
     let mut tx = state.db.begin().await?;
     let current = find_grant_for_update(&mut tx, grant_id).await?;
     require_lower_target(&mut tx, &actor, current.account_id).await?;
+    let now = Utc::now();
     if current.revoked_at.is_some()
         || current.expires_at.is_some_and(|expires_at| expires_at <= now)
     {
@@ -682,6 +735,28 @@ async fn admin_revoke(
         &grant_id.to_string(),
         audit_reason,
         Some(&metadata),
+    )
+    .await?;
+    crate::outbox::cancel_queued_event_tx(
+        &mut tx,
+        &format!("verification-grant:{grant_id}:expired"),
+    )
+    .await?;
+    crate::outbox::enqueue_notification_tx(
+        &mut tx,
+        &format!("verification-grant:{grant_id}:revoked"),
+        record.account_id,
+        None,
+        "verification_revoked",
+        &serde_json::json!({
+            "verificationGrantId": grant_id.to_string(),
+            "verificationTypeId": record.verification_type_id.to_string(),
+            "verificationSlug": &record.slug,
+            "verificationLabel": &record.label,
+            "title": "你的一项账号认证已被撤销",
+        }),
+        None,
+        None,
     )
     .await?;
     tx.commit().await?;

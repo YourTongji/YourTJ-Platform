@@ -411,6 +411,15 @@ async fn dm_lifecycle_is_canonical_private_readable_and_moderated() {
     assert_eq!(pending["requestStatus"], "pending");
     assert_eq!(pending["requestDirection"], "outgoing");
     assert_eq!(pending["canSend"], false);
+    let request_notification_payload: serde_json::Value = sqlx::query_scalar(
+        "SELECT payload FROM platform.outbox_events \
+         WHERE event_type = 'dm_request' AND payload ->> 'conversationId' = $1",
+    )
+    .bind(request_conversation_id)
+    .fetch_one(&pool)
+    .await
+    .expect("load request notification lifecycle payload");
+    assert!(request_notification_payload["requestedAtMicros"].as_str().is_some());
 
     let replay = request_with_idempotency(
         &app,
@@ -585,6 +594,18 @@ async fn dm_lifecycle_is_canonical_private_readable_and_moderated() {
     assert_eq!(accepted["requestStatus"], "accepted");
     assert!(accepted["requestDirection"].is_null());
     assert_eq!(accepted["canSend"], true);
+    let acceptance_notification_payload: serde_json::Value = sqlx::query_scalar(
+        "SELECT payload FROM platform.outbox_events \
+         WHERE event_type = 'dm_request_accepted' AND payload ->> 'conversationId' = $1",
+    )
+    .bind(request_conversation_id)
+    .fetch_one(&pool)
+    .await
+    .expect("load acceptance notification lifecycle payload");
+    assert_eq!(
+        acceptance_notification_payload["requestedAtMicros"],
+        request_notification_payload["requestedAtMicros"]
+    );
     let accept_replay = request(
         &app,
         Method::POST,
@@ -610,6 +631,15 @@ async fn dm_lifecycle_is_canonical_private_readable_and_moderated() {
     )
     .await;
     assert_eq!(accepted_send.status(), StatusCode::CREATED);
+    let accepted_message = read_json(accepted_send).await;
+    let accepted_message_id = accepted_message["id"].as_str().expect("accepted message id");
+    let message_notification_payload: serde_json::Value =
+        sqlx::query_scalar("SELECT payload FROM platform.outbox_events WHERE source_key = $1")
+            .bind(format!("dm-message:{accepted_message_id}"))
+            .fetch_one(&pool)
+            .await
+            .expect("load message notification lifecycle payload");
+    assert_eq!(message_notification_payload["messageId"], accepted_message_id);
 
     let (decline_sender_id, decline_sender_token) =
         create_test_account(&pool, "dm-decline-sender@tongji.edu.cn", "decline-sender").await;

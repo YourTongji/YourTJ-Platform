@@ -1098,13 +1098,14 @@ components:
     InAppNotificationPrefs:
       type: object
       additionalProperties: false
-      required: [replies, mentions, quotes, votes, badges, subscriptions, directMessages]
+      required: [replies, mentions, quotes, votes, badges, follows, subscriptions, directMessages]
       properties:
         replies: { type: boolean, default: true }
         mentions: { type: boolean, default: true }
         quotes: { type: boolean, default: true }
         votes: { type: boolean, default: true }
         badges: { type: boolean, default: true }
+        follows: { type: boolean, default: true }
         subscriptions: { type: boolean, default: true }
         directMessages: { type: boolean, default: true }
     EmailNotificationPrefs:
@@ -1120,6 +1121,28 @@ components:
       properties:
         inApp: { $ref: "#/components/schemas/InAppNotificationPrefs" }
         email: { $ref: "#/components/schemas/EmailNotificationPrefs" }
+    InAppNotificationPrefsInput:
+      type: object
+      additionalProperties: false
+      required: [replies, mentions, quotes, votes, badges, subscriptions, directMessages]
+      properties:
+        replies: { type: boolean }
+        mentions: { type: boolean }
+        quotes: { type: boolean }
+        votes: { type: boolean }
+        badges: { type: boolean }
+        follows:
+          type: boolean
+          description: Optional only during rolling deployment; omission preserves the stored value.
+        subscriptions: { type: boolean }
+        directMessages: { type: boolean }
+    NotificationPreferencesInput:
+      type: object
+      additionalProperties: false
+      required: [inApp, email]
+      properties:
+        inApp: { $ref: "#/components/schemas/InAppNotificationPrefsInput" }
+        email: { $ref: "#/components/schemas/EmailNotificationPrefs" }
     NotificationPrefs:
       type: object
       additionalProperties: false
@@ -1129,7 +1152,7 @@ components:
       type: object
       additionalProperties: false
       required: [prefs]
-      properties: { prefs: { $ref: "#/components/schemas/NotificationPreferences" } }
+      properties: { prefs: { $ref: "#/components/schemas/NotificationPreferencesInput" } }
     ReadTrackingInput:
       type: object
       properties:
@@ -2033,6 +2056,32 @@ components:
         reason: { type: string, nullable: true }
         metadata: { type: object, nullable: true }
         createdAt: { type: integer }
+    NotificationOutboxEvent:
+      type: object
+      additionalProperties: false
+      required: [id, topic, recipientAccountId, eventType, state, attempts, maxAttempts, manualRetryCount, availableAt, createdAt, updatedAt]
+      description: Operational metadata for a durable notification side effect. The private payload and source key are never exposed.
+      properties:
+        id: { type: string }
+        topic: { type: string, enum: [notification, achievement_award] }
+        recipientAccountId: { type: string }
+        eventType: { type: string }
+        state: { type: string, enum: [queued, running, succeeded, dead, cancelled] }
+        attempts: { type: integer, minimum: 0 }
+        maxAttempts: { type: integer, minimum: 1 }
+        manualRetryCount: { type: integer, minimum: 0 }
+        availableAt: { type: integer }
+        lastErrorCode: { type: string, nullable: true }
+        completedAt: { type: integer, nullable: true }
+        deadAt: { type: integer, nullable: true }
+        createdAt: { type: integer }
+        updatedAt: { type: integer }
+    NotificationOutboxRetryInput:
+      type: object
+      additionalProperties: false
+      required: [reason]
+      properties:
+        reason: { type: string, minLength: 3, maxLength: 500 }
     AchievementIcon:
       type: string
       enum: [award, book-open-check, message-circle-heart, star]
@@ -2247,6 +2296,10 @@ components:
       allOf:
         - $ref: "#/components/schemas/Page"
         - { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/AdminAuditEvent" } } } }
+    NotificationOutboxEventPage:
+      allOf:
+        - $ref: "#/components/schemas/Page"
+        - { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/NotificationOutboxEvent" } } } }
     DmReportPage:
       allOf:
         - $ref: "#/components/schemas/Page"
@@ -3397,6 +3450,9 @@ paths:
     get:
       tags: [notifications]
       summary: SSE stream for real-time notifications
+      description: >-
+        Best-effort refresh hints only. The stream emits sync immediately after every connection;
+        clients must refetch durable notification and unread-count endpoints after sync or any event.
       responses:
         "200":
           description: SSE stream
@@ -3506,6 +3562,31 @@ paths:
         - { $ref: "#/components/parameters/Cursor" }
         - { $ref: "#/components/parameters/Limit" }
       responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/AdminAuditEventPage" } } } }, "403": { $ref: "#/components/responses/Forbidden" } }
+  /admin/notification-outbox:
+    get:
+      tags: [admin, notifications]
+      summary: List durable notification outbox operations by state
+      description: Requires operations.jobs. Payloads and source keys are intentionally excluded.
+      parameters:
+        - { name: state, in: query, schema: { type: string, enum: [queued, running, succeeded, dead, cancelled], default: dead } }
+        - { $ref: "#/components/parameters/Cursor" }
+        - { $ref: "#/components/parameters/Limit" }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/NotificationOutboxEventPage" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /admin/notification-outbox/{id}/retry:
+    post:
+      tags: [admin, notifications]
+      summary: Retry one dead-letter notification operation
+      description: Requires operations.jobs. The reason and retry metadata are written to the immutable admin audit log.
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/NotificationOutboxRetryInput" } } } }
+      responses:
+        "200": { description: queued, content: { application/json: { schema: { $ref: "#/components/schemas/NotificationOutboxEvent" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
   /admin/appeals:
     get:
       tags: [admin]

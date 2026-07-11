@@ -2,7 +2,19 @@
 
 use crate::models::SubscriptionRow;
 use shared::{AppError, AppResult};
-use sqlx::PgPool;
+use sqlx::{PgConnection, PgPool};
+
+/// Serialize effective thread/board subscription reads and writes for one account.
+pub async fn lock_account_subscriptions(
+    connection: &mut PgConnection,
+    account_id: i64,
+) -> AppResult<()> {
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind(format!("forum-subscriptions:{account_id}"))
+        .execute(connection)
+        .await?;
+    Ok(())
+}
 
 fn encode_subscription_cursor(row: &SubscriptionRow) -> String {
     super::base64_encode_str(&format!(
@@ -72,6 +84,8 @@ pub async fn set_subscription(
     if !target_exists {
         return Err(AppError::NotFound);
     }
+    let mut transaction = pool.begin().await?;
+    lock_account_subscriptions(&mut transaction, account_id).await?;
     sqlx::query(
         "INSERT INTO forum.subscriptions (account_id, target_type, target_id, level) \
          VALUES ($1, $2, $3, $4) \
@@ -82,8 +96,9 @@ pub async fn set_subscription(
     .bind(target_type)
     .bind(target_id)
     .bind(level)
-    .execute(pool)
+    .execute(&mut *transaction)
     .await?;
+    transaction.commit().await?;
     Ok(())
 }
 
@@ -97,6 +112,8 @@ pub async fn delete_subscription(
     if !matches!(target_type, "board" | "thread") {
         return Err(AppError::BadRequest("targetType must be board/thread".into()));
     }
+    let mut transaction = pool.begin().await?;
+    lock_account_subscriptions(&mut transaction, account_id).await?;
     sqlx::query(
         "DELETE FROM forum.subscriptions \
          WHERE account_id = $1 AND target_type = $2 AND target_id = $3",
@@ -104,8 +121,9 @@ pub async fn delete_subscription(
     .bind(account_id)
     .bind(target_type)
     .bind(target_id)
-    .execute(pool)
+    .execute(&mut *transaction)
     .await?;
+    transaction.commit().await?;
     Ok(())
 }
 
@@ -221,6 +239,16 @@ pub async fn get_watching_subscriber_ids(
     thread_id: i64,
     exclude_ids: &[i64],
 ) -> AppResult<Vec<i64>> {
+    let mut connection = pool.acquire().await?;
+    get_watching_subscriber_ids_tx(&mut connection, thread_id, exclude_ids).await
+}
+
+/// Resolve watching recipients inside the business transaction that appends their outbox events.
+pub async fn get_watching_subscriber_ids_tx(
+    connection: &mut PgConnection,
+    thread_id: i64,
+    exclude_ids: &[i64],
+) -> AppResult<Vec<i64>> {
     let ids: Vec<i64> = sqlx::query_scalar(
         "SELECT DISTINCT candidate.account_id FROM forum.subscriptions candidate \
          WHERE ((candidate.target_type = 'thread' AND candidate.target_id = $1) \
@@ -242,7 +270,7 @@ pub async fn get_watching_subscriber_ids(
     )
     .bind(thread_id)
     .bind(exclude_ids)
-    .fetch_all(pool)
+    .fetch_all(connection)
     .await?;
     Ok(ids)
 }

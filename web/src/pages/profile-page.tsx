@@ -19,6 +19,7 @@ import {
 import { ProfileSummary } from "@/components/profile/profile-summary";
 import { Badge } from "@/components/ui/badge";
 import { useAuth } from "@/context/auth-provider";
+import { accountQueryKeys } from "@/lib/account-query-keys";
 import { api } from "@/lib/api/endpoints";
 import { formatUnixTime } from "@/lib/format";
 
@@ -102,7 +103,9 @@ export function ProfilePage() {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["profile", name] }),
         queryClient.invalidateQueries({ queryKey: ["profile", name, "relationship"] }),
-        queryClient.invalidateQueries({ queryKey: ["dm", "conversations"] }),
+        queryClient.invalidateQueries({
+          queryKey: [...accountQueryKeys.directMessages(account?.id), "conversations"],
+        }),
       ]);
     },
     onError: (error) => toast.error(error instanceof Error ? error.message : "屏蔽设置失败"),

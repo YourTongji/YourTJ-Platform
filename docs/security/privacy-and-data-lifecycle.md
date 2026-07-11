@@ -6,7 +6,7 @@
 >
 > 负责人：Privacy owner、Security owner、Domain maintainers
 >
-> 最近核验：2026-07-12，migrations `0034`、`0037`、`0038`、`0040`、`0044`、`0047`、`0048`、`0049`、`0050`、`0051`、`0052`、`0055`
+> 最近核验：2026-07-12，migrations `0034`–`0056` 中与隐私/生命周期相关的 schema 与 tests
 
 本规范将数据最小化、可见性、导出、删除和保留作为产品前置条件。它不是法律意见；涉及 PIPL、
 未成年人、广告或跨境处理的最终政策需要合格法律与隐私负责人确认。
@@ -80,6 +80,7 @@
 | 私密通信 | DM body、单条 request 附言、private attachment | participants | staff 仅举报证据；未举报 declined request 正文立即删除，其他内容独立 retention |
 | 治理证据 | reports、sanctions、appeals、appeal history、audit | 本人最小披露；staff capability + purpose | 防篡改、访问审计、期限/hold；不向本人泄露 reporter/staff/evidence |
 | 治理通知 | 处置/申诉安全摘要、subject/event/appeal id、read time | 仅受影响账号 | 不受互动偏好关闭、无 evidence/PII、随治理 retention 协调 |
+| 通知 outbox/receipt | account/actor id、event type、有界站内 payload、状态/error code、delivery outcome | consumer；operators 只见无 payload 元数据 | 成功/取消 30 天，dead/receipt 90 天；不含邮箱、secret、stack trace |
 | 认证凭证 | type/grant、签发/撤销原因、opaque evidence reference | `verifications.manage`；允许时为最小公开投影 | 默认私密、可到期/撤销、公开不含证据/操作者 |
 | 运营数据 | job log、metrics、aggregated promo events | operators | 聚合、去标识、有限保留 |
 | 外链预览缓存 | 无 query 的规范化 allowlisted HTTPS URL、公开 metadata、失败类别 | 服务端与页面请求者 | ready 最长 7 天、error 2 分钟；query URL/远程图片不持久化，日志只记 hash |
@@ -151,10 +152,13 @@ Profile 字段与社交关系不进入普通请求日志、metrics label 或 gov
 
 编排覆盖 identity、forum、reviews、DM、media、activity、platform verification、search、cache、notifications、audit、credit
 和 backups。每个 step 幂等、有状态、有重试和人工恢复；删除 API 返回 job/status 而非假装立即完成。
+普通通知 outbox 以 recipient account 外键级联删除，actor 删除只置空 actor id；不含账号 id/payload 的
+delivery receipt 最长继续保留到 90 天幂等窗口后清理。已投递通知按账号通知导出/删除政策处理。
 
 ## 数据导出
 
 - 用户可导出自己的 profile、内容、关系、偏好、通知、允许的 DM 和积分记录。
+- 内部 outbox source key、lease/error 和 receipt 不作为用户内容导出；用户导出的是已投递通知事实。
 - 治理通知与本人申诉的提交/状态/公开理由可进入本人导出；reviewer identity、举报人、内部 metadata 和
   evidence 不默认导出，额外披露需目的限定政策与访问审计。
 - 账号导出应包含本人认证的类型、当前状态、签发/到期/撤销时间；staff reason、issuer 与 evidence
@@ -170,7 +174,8 @@ Profile 字段与社交关系不进入普通请求日志、metrics label 或 gov
 - expired email codes、revoked sessions、security logs；
 - soft-deleted public content 和 revision；
 - unreported DM、reported evidence、private attachments；
-- DM request pair/cooldown metadata、request idempotency、outbox/job records；
+- DM request pair/cooldown metadata、request idempotency、其他 job records；通知 outbox 的成功/取消记录
+  固定 30 天、dead-letter 和 delivery receipt 固定 90 天，purge worker 幂等执行；
 - sanctions、appeals、audit 与 access logs；
 - account-private governance notices 与 appeal idempotency records；notice 清理不能先于其申诉窗口，
   appeal/audit 清理不能破坏仍有效的 legal hold 或原决定可解释性；
@@ -221,4 +226,5 @@ Legal hold 有合法目的、授权者、范围、到期和审计，不得成为
 - Credit ledger 在删除后仍可验证，但 tombstone 不能反查邮箱或公开身份。
 - PR preview、日志、audit 和 metrics 不包含生产 secret 或不必要 PII。
 - Governance notice/User appeal DTO 只返回 owner 可见字段；普通 token、appeal token、staff capability
-  和他人账号之间有矩阵化授权测试，通知/申诉 retention 在 worker 上线前仍明确标为待决。
+  和他人账号之间有矩阵化授权测试。普通通知 outbox/receipt retention 已固定；治理 notice/申诉的
+  独立 retention 在其 worker 上线前仍明确标为待决。

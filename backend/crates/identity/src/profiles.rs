@@ -113,6 +113,11 @@ pub async fn replace_privacy(
     dm_policy: &str,
     mention_policy: Option<&str>,
 ) -> AppResult<ProfilePrivacyRecord> {
+    let mut transaction = pool.begin().await?;
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind(format!("identity-profile-privacy:{account_id}"))
+        .execute(&mut *transaction)
+        .await?;
     let privacy = sqlx::query_as::<_, ProfilePrivacyRecord>(
         "INSERT INTO identity.profile_privacy \
          (account_id, profile_visibility, activity_visibility, followers_visibility, \
@@ -138,8 +143,9 @@ pub async fn replace_privacy(
     .bind(discoverable)
     .bind(dm_policy)
     .bind(mention_policy)
-    .fetch_one(pool)
+    .fetch_one(&mut *transaction)
     .await?;
+    transaction.commit().await?;
     Ok(privacy)
 }
 

@@ -22,7 +22,7 @@ describe("RealtimeRefresh", () => {
 
     render(
       <QueryClientProvider client={queryClient}>
-        <RealtimeRefresh isAuthenticated />
+        <RealtimeRefresh accountId="account-1" isAuthenticated />
       </QueryClientProvider>,
     );
 
@@ -32,7 +32,31 @@ describe("RealtimeRefresh", () => {
         headers: expect.objectContaining({ Authorization: "Bearer access-token" }),
       }),
     ));
-    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["dm-unread-count"] }));
-    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["notification-count"] });
+    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({
+      queryKey: ["dm-unread-count", "account-1"],
+    }));
+    expect(invalidate).toHaveBeenCalledWith({
+      queryKey: ["notification-count", "account-1"],
+    });
+  });
+
+  it("refreshes private messages after reconnect sync because intermediate hints may be lost", async () => {
+    localStorage.setItem("yourtj.accessToken", "access-token");
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(
+      "event: sync\ndata: {}\n\n",
+      { status: 200, headers: { "Content-Type": "text/event-stream" } },
+    )));
+    const queryClient = new QueryClient();
+    const invalidate = vi.spyOn(queryClient, "invalidateQueries").mockResolvedValue(undefined);
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RealtimeRefresh accountId="account-2" isAuthenticated />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({
+      queryKey: ["dm", "account-2", "conversations"],
+    }));
   });
 });

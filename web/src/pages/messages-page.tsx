@@ -11,6 +11,7 @@ import { NewConversationDialog } from "@/components/messages/new-conversation-di
 import { ReportMessageDialog } from "@/components/messages/report-message-dialog";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/context/auth-provider";
+import { accountQueryKeys } from "@/lib/account-query-keys";
 import { api } from "@/lib/api/endpoints";
 import type { DmConversation, DmMessage, DmReportReason } from "@/lib/api/types";
 import { cn } from "@/lib/utils";
@@ -34,9 +35,21 @@ export function MessagesPage() {
   const [reportingMessage, setReportingMessage] = React.useState<DmMessage | null>(null);
   const [reportingRequest, setReportingRequest] = React.useState(false);
   const lastMarkedRead = React.useRef("");
+  const directMessageKey = React.useMemo(
+    () => accountQueryKeys.directMessages(account?.id),
+    [account?.id],
+  );
+  const directMessageCountKey = React.useMemo(
+    () => accountQueryKeys.directMessageCount(account?.id),
+    [account?.id],
+  );
+  const ignoredUsersKey = React.useMemo(
+    () => accountQueryKeys.ignoredUsers(account?.id),
+    [account?.id],
+  );
 
   const conversations = useInfiniteQuery({
-    queryKey: ["dm", "conversations", view, deferredConversationSearch],
+    queryKey: [...directMessageKey, "conversations", view, deferredConversationSearch],
     queryFn: ({ pageParam }) => api.dmConversations({
       cursor: pageParam,
       view,
@@ -52,7 +65,7 @@ export function MessagesPage() {
   const hasNextConversationPage = conversations.hasNextPage;
   const isFetchingNextConversationPage = conversations.isFetchingNextPage;
   const dmCounts = useQuery({
-    queryKey: ["dm-unread-count"],
+    queryKey: directMessageCountKey,
     queryFn: api.dmUnreadCount,
     enabled: isAuthenticated,
     staleTime: 30_000,
@@ -71,7 +84,7 @@ export function MessagesPage() {
   ]);
 
   const messages = useInfiniteQuery({
-    queryKey: ["dm", "messages", selectedId],
+    queryKey: [...directMessageKey, "messages", selectedId],
     queryFn: ({ pageParam }) => api.dmMessages(selectedId, pageParam),
     initialPageParam: null as string | null,
     getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
@@ -83,7 +96,7 @@ export function MessagesPage() {
   );
 
   const ignoredUsers = useInfiniteQuery({
-    queryKey: ["ignores"],
+    queryKey: ignoredUsersKey,
     queryFn: ({ pageParam }) => api.ignoredUsers(pageParam),
     initialPageParam: null as string | null,
     getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
@@ -115,8 +128,8 @@ export function MessagesPage() {
         : `已打开与 ${conversation.participantHandle} 的对话`);
       selectConversation(conversation, conversation.requestStatus === "pending" ? "sent" : "inbox");
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["dm", "conversations"] }),
-        queryClient.invalidateQueries({ queryKey: ["dm-unread-count"] }),
+        queryClient.invalidateQueries({ queryKey: [...directMessageKey, "conversations"] }),
+        queryClient.invalidateQueries({ queryKey: directMessageCountKey }),
       ]);
     },
   });
@@ -125,9 +138,9 @@ export function MessagesPage() {
     onSuccess: async () => {
       setBody("");
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["dm", "messages", selectedId] }),
-        queryClient.invalidateQueries({ queryKey: ["dm", "conversations"] }),
-        queryClient.invalidateQueries({ queryKey: ["dm-unread-count"] }),
+        queryClient.invalidateQueries({ queryKey: [...directMessageKey, "messages", selectedId] }),
+        queryClient.invalidateQueries({ queryKey: [...directMessageKey, "conversations"] }),
+        queryClient.invalidateQueries({ queryKey: directMessageCountKey }),
       ]);
     },
   });
@@ -143,8 +156,8 @@ export function MessagesPage() {
       toast.success("举报已提交，审核人员只会看到这条消息及你的说明");
       if (reportingRequest) clearSelection();
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["dm", "conversations"] }),
-        queryClient.invalidateQueries({ queryKey: ["dm-unread-count"] }),
+        queryClient.invalidateQueries({ queryKey: [...directMessageKey, "conversations"] }),
+        queryClient.invalidateQueries({ queryKey: directMessageCountKey }),
       ]);
     },
   });
@@ -166,8 +179,8 @@ export function MessagesPage() {
         clearSelection();
       }
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["dm", "conversations"] }),
-        queryClient.invalidateQueries({ queryKey: ["dm-unread-count"] }),
+        queryClient.invalidateQueries({ queryKey: [...directMessageKey, "conversations"] }),
+        queryClient.invalidateQueries({ queryKey: directMessageCountKey }),
       ]);
     },
     onError: (error) => toast.error(error instanceof Error ? error.message : "消息请求操作失败"),
@@ -184,8 +197,8 @@ export function MessagesPage() {
     onSuccess: async () => {
       toast.success(selectedIsIgnored ? "已解除屏蔽" : "已屏蔽该用户");
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["ignores"] }),
-        queryClient.invalidateQueries({ queryKey: ["dm", "conversations"] }),
+        queryClient.invalidateQueries({ queryKey: ignoredUsersKey }),
+        queryClient.invalidateQueries({ queryKey: [...directMessageKey, "conversations"] }),
       ]);
     },
     onError: (error) => toast.error(error instanceof Error ? error.message : "关系设置失败"),
@@ -220,8 +233,8 @@ export function MessagesPage() {
       if (action === "delete" || action === "archive") clearSelection();
       if (action === "recover") selectConversation(conversation, "inbox");
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["dm", "conversations"] }),
-        queryClient.invalidateQueries({ queryKey: ["dm-unread-count"] }),
+        queryClient.invalidateQueries({ queryKey: [...directMessageKey, "conversations"] }),
+        queryClient.invalidateQueries({ queryKey: directMessageCountKey }),
       ]);
     },
     onError: (error) => toast.error(error instanceof Error ? error.message : "会话操作失败"),
@@ -235,11 +248,13 @@ export function MessagesPage() {
     lastMarkedRead.current = readKey;
     void api
       .markDmConversationRead(selectedId, newestMessage.id)
-      .then(() => queryClient.invalidateQueries({ queryKey: ["dm", "conversations"] }))
+      .then(() => queryClient.invalidateQueries({
+        queryKey: [...directMessageKey, "conversations"],
+      }))
       .catch(() => {
         lastMarkedRead.current = "";
       });
-  }, [newestMessage?.id, queryClient, selectedConversation?.requestStatus, selectedId]);
+  }, [directMessageKey, newestMessage?.id, queryClient, selectedConversation?.requestStatus, selectedId]);
 
   function selectConversation(conversation: DmConversation, nextView: ConversationView = view) {
     setBody("");

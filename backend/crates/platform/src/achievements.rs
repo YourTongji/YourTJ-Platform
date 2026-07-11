@@ -354,11 +354,11 @@ async fn insert_event(
     source: &str,
     actor_id: Option<i64>,
     event_reason: &str,
-) -> AppResult<()> {
-    sqlx::query(
+) -> AppResult<i64> {
+    let event_id = sqlx::query_scalar(
         "INSERT INTO platform.achievement_events \
          (account_id, badge_id, action, source, actor_id, reason) \
-         VALUES ($1, $2, $3, $4, $5, $6)",
+         VALUES ($1, $2, $3, $4, $5, $6) RETURNING id",
     )
     .bind(account_id)
     .bind(achievement_id)
@@ -366,9 +366,9 @@ async fn insert_event(
     .bind(source)
     .bind(actor_id)
     .bind(event_reason)
-    .execute(&mut **transaction)
+    .fetch_one(&mut **transaction)
     .await?;
-    Ok(())
+    Ok(event_id)
 }
 
 /// Seed the first-party automatic achievement definitions without overwriting operator changes.
@@ -409,26 +409,23 @@ pub async fn list_public_account_achievements(
     Ok(achievements.into_iter().map(|(slug, name)| PublicAchievement { slug, name }).collect())
 }
 
-/// Apply one automatic contribution award and enqueue its contribution mint exactly once.
-pub async fn award_achievement_by_slug(
-    pool: &PgPool,
+async fn award_achievement_tx(
+    transaction: &mut Transaction<'_, Postgres>,
     account_id: i64,
     slug: &str,
     awarded_by: i64,
     award_reason: &str,
 ) -> AppResult<Option<AutomaticAwardResult>> {
     let award_reason = reason(award_reason)?;
-    let mut transaction = pool.begin().await?;
     let achievement = sqlx::query_as::<_, AchievementRecord>(
         "SELECT id, slug, name, description, icon_token, status, mint_amount, version, \
                 created_at, updated_at \
          FROM platform.badges WHERE slug = $1 AND status = 'active' FOR UPDATE",
     )
     .bind(slug)
-    .fetch_optional(&mut *transaction)
+    .fetch_optional(&mut **transaction)
     .await?;
     let Some(achievement) = achievement else {
-        transaction.commit().await?;
         return Ok(None);
     };
     let inserted = sqlx::query(
@@ -440,13 +437,13 @@ pub async fn award_achievement_by_slug(
     .bind(achievement.id)
     .bind(awarded_by)
     .bind(award_reason)
-    .execute(&mut *transaction)
+    .execute(&mut **transaction)
     .await?
     .rows_affected()
         == 1;
     if inserted {
-        insert_event(
-            &mut transaction,
+        let achievement_event_id = insert_event(
+            transaction,
             account_id,
             achievement.id,
             "awarded",
@@ -465,12 +462,87 @@ pub async fn award_achievement_by_slug(
             .bind(achievement.mint_amount)
             .bind(format!("badge:{}:{account_id}", achievement.slug))
             .bind(&achievement.slug)
-            .execute(&mut *transaction)
+            .execute(&mut **transaction)
             .await?;
         }
+        crate::outbox::enqueue_notification_tx(
+            transaction,
+            &format!("achievement-event:{achievement_event_id}:notification"),
+            account_id,
+            None,
+            "achievement_awarded",
+            &serde_json::json!({
+                "achievementId": achievement.id.to_string(),
+                "badgeSlug": &achievement.slug,
+                "badgeName": &achievement.name,
+                "title": "你获得了新的社区成就",
+            }),
+            None,
+            None,
+        )
+        .await?;
+    }
+    Ok(Some(AutomaticAwardResult { newly_awarded: inserted, name: achievement.name }))
+}
+
+/// Apply one automatic contribution award and enqueue its notification and mint exactly once.
+pub async fn award_achievement_by_slug(
+    pool: &PgPool,
+    account_id: i64,
+    slug: &str,
+    awarded_by: i64,
+    award_reason: &str,
+) -> AppResult<Option<AutomaticAwardResult>> {
+    let mut transaction = pool.begin().await?;
+    let result =
+        award_achievement_tx(&mut transaction, account_id, slug, awarded_by, award_reason).await?;
+    transaction.commit().await?;
+    Ok(result)
+}
+
+/// Consume one claimed automatic-achievement event and complete it with the award atomically.
+pub async fn deliver_automatic_award(
+    pool: &PgPool,
+    event: &crate::outbox::OutboxEvent,
+) -> AppResult<()> {
+    if event.topic != "achievement_award" {
+        return Err(AppError::Internal(
+            std::io::Error::other("achievement consumer received a different outbox topic").into(),
+        ));
+    }
+    let award_reason =
+        event.payload.get("awardReason").and_then(serde_json::Value::as_str).ok_or_else(|| {
+            AppError::Internal(std::io::Error::other("achievement event has no reason").into())
+        })?;
+    let awarded_by = event.actor_account_id.ok_or_else(|| {
+        AppError::Internal(
+            std::io::Error::other("achievement event has no contribution actor").into(),
+        )
+    })?;
+    let mut transaction = pool.begin().await?;
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind(format!("achievement-outbox:{}", event.id))
+        .execute(&mut *transaction)
+        .await?;
+    if !crate::outbox::lock_claim_tx(&mut transaction, event.id, event.claimed_by).await? {
+        transaction.rollback().await?;
+        return Ok(());
+    }
+    award_achievement_tx(
+        &mut transaction,
+        event.recipient_account_id,
+        &event.event_type,
+        awarded_by,
+        award_reason,
+    )
+    .await?;
+    if !crate::outbox::mark_succeeded_tx(&mut transaction, event.id, event.claimed_by).await? {
+        return Err(AppError::Internal(
+            std::io::Error::other("locked outbox claim changed").into(),
+        ));
     }
     transaction.commit().await?;
-    Ok(Some(AutomaticAwardResult { newly_awarded: inserted, name: achievement.name }))
+    Ok(())
 }
 
 async fn admin_list_achievements(
@@ -702,7 +774,7 @@ async fn admin_grant_achievement(
             .await?;
         }
     }
-    insert_event(
+    let achievement_event_id = insert_event(
         &mut transaction,
         account_id,
         achievement_id,
@@ -710,6 +782,22 @@ async fn admin_grant_achievement(
         "manual",
         Some(actor.id),
         audit_reason,
+    )
+    .await?;
+    crate::outbox::enqueue_notification_tx(
+        &mut transaction,
+        &format!("achievement-event:{achievement_event_id}:notification"),
+        account_id,
+        None,
+        "achievement_awarded",
+        &serde_json::json!({
+            "achievementId": achievement_id.to_string(),
+            "badgeSlug": &achievement.slug,
+            "badgeName": &achievement.name,
+            "title": "你获得了新的社区成就",
+        }),
+        None,
+        None,
     )
     .await?;
     governance::record_account_event_tx(
@@ -767,7 +855,7 @@ async fn admin_revoke_achievement(
     .bind(achievement_id)
     .execute(&mut *transaction)
     .await?;
-    insert_event(
+    let achievement_event_id = insert_event(
         &mut transaction,
         account_id,
         achievement_id,
@@ -775,6 +863,22 @@ async fn admin_revoke_achievement(
         "manual",
         Some(actor.id),
         audit_reason,
+    )
+    .await?;
+    crate::outbox::enqueue_notification_tx(
+        &mut transaction,
+        &format!("achievement-event:{achievement_event_id}:notification"),
+        account_id,
+        None,
+        "achievement_revoked",
+        &serde_json::json!({
+            "achievementId": achievement_id.to_string(),
+            "badgeSlug": &achievement.slug,
+            "badgeName": &achievement.name,
+            "title": "一项社区成就已被撤销",
+        }),
+        None,
+        None,
     )
     .await?;
     governance::record_account_event_tx(

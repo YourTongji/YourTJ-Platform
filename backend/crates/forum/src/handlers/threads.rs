@@ -607,58 +607,6 @@ pub async fn create_thread(
 
     if !is_queued {
         let pool = state.db.clone();
-        let author_id = auth.id;
-        tokio::spawn(async move {
-            match crate::badges::award_first_thread_badge(&pool, author_id).await {
-                Ok(true) => tracing::info!(author_id, "first-thread badge awarded"),
-                Ok(false) => {}
-                Err(error) => {
-                    tracing::warn!(%error, author_id, "failed to award first-thread badge")
-                }
-            }
-        });
-    }
-
-    if !is_queued {
-        if let Some(ref body_text) = body.body {
-            let handles = crate::content_policy::mention_handles(
-                body_text,
-                body.content_format,
-                &row.author_handle,
-            );
-
-            let thread_actor_id = auth.id;
-            if !handles.is_empty() {
-                let pool = state.db.clone();
-                let thread_body = row.body.clone().unwrap_or_default();
-                let context = crate::mentions::MentionContext {
-                    thread_id: row.id,
-                    comment_id: None,
-                    author_handle: row.author_handle.clone(),
-                    body_excerpt: crate::content_policy::plain_text_projection(
-                        &thread_body,
-                        crate::dto::ContentFormat::from_db(&row.content_format),
-                        100,
-                    ),
-                };
-                tokio::spawn(async move {
-                    if let Err(error) = crate::mentions::create_mention_notifications(
-                        &pool,
-                        thread_actor_id,
-                        &handles,
-                        context,
-                    )
-                    .await
-                    {
-                        tracing::warn!(%error, thread_actor_id, "failed to create mention notifications");
-                    }
-                });
-            }
-        }
-    }
-
-    if !is_queued {
-        let pool = state.db.clone();
         let meili_url = state.meili_url.clone();
         let meili_key = state.meili_master_key.clone();
         let thread_id = row.id;

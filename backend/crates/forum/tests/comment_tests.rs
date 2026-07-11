@@ -10,6 +10,33 @@ use serde_json::json;
 use sqlx::PgPool;
 use tower::ServiceExt;
 
+async fn drain_notification_outbox(pool: &PgPool) {
+    let worker_id = uuid::Uuid::new_v4();
+    loop {
+        let events = platform::outbox::claim_events(pool, worker_id, 100)
+            .await
+            .expect("claim durable comment events");
+        if events.is_empty() {
+            break;
+        }
+        for event in events {
+            match event.topic.as_str() {
+                "notification" => {
+                    forum::notification_delivery::deliver_event(pool, &event)
+                        .await
+                        .expect("deliver durable comment notification");
+                }
+                "achievement_award" => {
+                    platform::achievements::deliver_automatic_award(pool, &event)
+                        .await
+                        .expect("deliver durable comment achievement");
+                }
+                topic => panic!("unexpected durable comment topic: {topic}"),
+            }
+        }
+    }
+}
+
 async fn create_comment_request(
     app: &axum::Router,
     thread_id: i64,
@@ -193,6 +220,16 @@ async fn markdown_comment_format_is_explicit_and_rejects_raw_html() {
     let created = read_json(created).await;
     assert_eq!(created["contentFormat"], "markdown_v1");
     let comment_id = created["id"].as_str().expect("comment id").parse::<i64>().unwrap();
+    let achievement_outbox_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM platform.outbox_events \
+         WHERE recipient_account_id = $1 AND topic = 'achievement_award' \
+           AND event_type = 'first-comment'",
+    )
+    .bind(author_id)
+    .fetch_one(&pool)
+    .await
+    .expect("count first-comment outbox event");
+    assert_eq!(achievement_outbox_count, 1);
 
     let rejected = create_comment_request(
         &app,
@@ -861,17 +898,7 @@ async fn comment_mentions_share_the_recipient_policy_boundary() {
     let created = read_json(response).await;
     let comment_id = created["id"].as_str().expect("created comment id");
 
-    for _ in 0..50 {
-        let count: i64 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM forum.notifications WHERE type = 'mention'")
-                .fetch_one(&pool)
-                .await
-                .expect("poll comment mention");
-        if count >= 1 {
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-    }
+    drain_notification_outbox(&pool).await;
     let notifications: Vec<(i64, serde_json::Value)> = sqlx::query_as(
         "SELECT account_id, payload FROM forum.notifications WHERE type = 'mention'",
     )

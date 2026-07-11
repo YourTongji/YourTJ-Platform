@@ -6,7 +6,7 @@
 >
 > 负责人：Community operations、Security owner、Identity/Forum/Reviews/Media/Web maintainers
 >
-> 最近核验：2026-07-12，migrations `0047`、`0048`、`0055` 与 governance/identity integration tests
+> 最近核验：2026-07-12，migrations `0047`、`0048`、`0054`、`0055` 与 governance/identity/achievement/outbox integration tests
 
 管理后台是社区政策的执行界面，不是数据库编辑器。所有操作必须先有产品语义、capability、
 目标层级、理由、审计、恢复和通知，再决定按钮放在哪里。
@@ -51,8 +51,8 @@
   和最终 retention worker。
 - generic settings 只有 string key/value；job trigger 无 durable 状态、进度、失败日志或重试。
 - 成就徽章使用独立 `badges.manage` capability，具备 versioned 定义、人工授予/撤销/重新授予、事件历史、
-  运营 UI 与同事务审计；它不复用身份/特殊认证权限。自动贡献授予仍需从 request-local task 迁移到
-  durable outbox，避免进程在内容提交后退出造成延迟或漏发。
+  运营 UI 与同事务审计；它不复用身份/特殊认证权限。自动贡献事实通过 durable outbox 投递，授予、
+  mint 和 outbox completion 同事务幂等；人工/自动授予及撤销都有可到达的 durable 通知。
 - 推广的曝光/点击聚合、公告 receipt 保留策略、批量审核和综合服务健康视图缺失；积分完整性已有
   只读视图，但告警/SLO 和受审批 projection 重建仍缺。
 - Staff WebAuthn/MFA、高风险双人确认和尚未交付的 PII 操作仍缺完整安全流程。

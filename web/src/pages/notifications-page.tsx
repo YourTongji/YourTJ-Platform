@@ -11,20 +11,27 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { useAuth } from "@/context/auth-provider";
 import { api } from "@/lib/api/endpoints";
+import { accountQueryKeys } from "@/lib/account-query-keys";
 import { formatUnixTime } from "@/lib/format";
 
 const NOTIFICATION_LABELS: Record<string, string> = {
   badge: "徽章",
+  achievement_awarded: "成就",
+  achievement_revoked: "成就变更",
   dm: "私信",
   dm_request: "消息请求",
   dm_request_accepted: "请求已接受",
   flag_auto_hide: "内容治理",
+  follow: "新关注",
   mention: "提及",
   mod_action: "治理通知",
   quote: "引用回复",
   reply: "回复",
   vote: "点赞",
   watching: "订阅更新",
+  verification_expired: "认证到期",
+  verification_granted: "认证",
+  verification_revoked: "认证变更",
 };
 
 function payloadText(payload: Record<string, unknown> | undefined, key: string) {
@@ -46,30 +53,30 @@ function payloadExcerpt(payload?: Record<string, unknown>) {
 }
 
 export function NotificationsPage() {
-  const { isAuthenticated } = useAuth();
+  const { account, isAuthenticated } = useAuth();
   const queryClient = useQueryClient();
   const [unreadOnly, setUnreadOnly] = React.useState(false);
   const notifications = useInfiniteQuery({
-    queryKey: ["notifications", { unreadOnly }],
+    queryKey: [...accountQueryKeys.notifications(account?.id), { unreadOnly }],
     queryFn: ({ pageParam }) => api.notifications(unreadOnly || undefined, pageParam),
     initialPageParam: null as string | null,
     getNextPageParam: (page) => page.hasMore ? page.nextCursor ?? undefined : undefined,
     enabled: isAuthenticated,
   });
   const unreadCount = useQuery({
-    queryKey: ["notification-count"],
+    queryKey: accountQueryKeys.notificationCount(account?.id),
     queryFn: api.unreadNotificationCount,
     enabled: isAuthenticated,
   });
   const governanceNotices = useInfiniteQuery({
-    queryKey: ["governance-notices", { unreadOnly }],
+    queryKey: [...accountQueryKeys.governanceNotices(account?.id), { unreadOnly }],
     queryFn: ({ pageParam }) => api.governanceNotices(unreadOnly || undefined, pageParam),
     initialPageParam: null as string | null,
     getNextPageParam: (page) => page.hasMore ? page.nextCursor ?? undefined : undefined,
     enabled: isAuthenticated,
   });
   const governanceUnreadCount = useQuery({
-    queryKey: ["governance-notice-count"],
+    queryKey: accountQueryKeys.governanceNoticeCount(account?.id),
     queryFn: () => api.governanceNoticeUnreadCount(),
     enabled: isAuthenticated,
   });
@@ -78,8 +85,8 @@ export function NotificationsPage() {
     onSuccess: async (_, ids) => {
       toast.success(ids ? "已标记为已读" : "全部通知已读");
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["notifications"] }),
-        queryClient.invalidateQueries({ queryKey: ["notification-count"] }),
+        queryClient.invalidateQueries({ queryKey: accountQueryKeys.notifications(account?.id) }),
+        queryClient.invalidateQueries({ queryKey: accountQueryKeys.notificationCount(account?.id) }),
       ]);
     },
     onError: (error) => toast.error(error instanceof Error ? error.message : "操作失败"),
@@ -88,8 +95,8 @@ export function NotificationsPage() {
     mutationFn: (ids?: string[]) => api.markGovernanceNoticesRead(ids),
     onSuccess: async () => {
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["governance-notices"] }),
-        queryClient.invalidateQueries({ queryKey: ["governance-notice-count"] }),
+        queryClient.invalidateQueries({ queryKey: accountQueryKeys.governanceNotices(account?.id) }),
+        queryClient.invalidateQueries({ queryKey: accountQueryKeys.governanceNoticeCount(account?.id) }),
       ]);
     },
     onError: (error) => toast.error(error instanceof Error ? error.message : "操作失败"),

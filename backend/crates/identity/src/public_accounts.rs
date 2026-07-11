@@ -37,6 +37,13 @@ pub struct MentionTarget {
     pub mention_policy: String,
 }
 
+/// Minimal active-account projection used by the notification delivery boundary.
+#[derive(Debug, Clone, FromRow)]
+pub struct NotificationRecipient {
+    pub handle: String,
+    pub mention_policy: String,
+}
+
 /// Minimal account state used by other domains for privileged target checks.
 #[derive(Debug, Clone, FromRow)]
 pub struct AccountAuthorizationState {
@@ -158,6 +165,84 @@ pub async fn find_mention_targets_by_handles(
     .fetch_all(pool)
     .await?;
     Ok(targets)
+}
+
+/// Resolve active mention candidates in the caller's content transaction.
+pub async fn find_mention_targets_by_handles_tx(
+    connection: &mut PgConnection,
+    handles: &[String],
+) -> AppResult<Vec<MentionTarget>> {
+    let mut seen = HashSet::new();
+    let normalized_handles: Vec<String> = handles
+        .iter()
+        .map(|handle| handle.to_ascii_lowercase())
+        .filter(|handle| seen.insert(handle.clone()))
+        .collect();
+    if normalized_handles.is_empty() {
+        return Ok(Vec::new());
+    }
+    let targets = sqlx::query_as::<_, MentionTarget>(
+        "SELECT account.id, account.handle::text, \
+                COALESCE(privacy.mention_policy, 'everyone') AS mention_policy \
+         FROM identity.accounts AS account \
+         LEFT JOIN identity.profile_privacy AS privacy ON privacy.account_id = account.id \
+         WHERE lower(account.handle::text) = ANY($1) \
+           AND account.status = 'active'::identity.account_status \
+           AND NOT EXISTS ( \
+             SELECT 1 FROM identity.sanctions AS sanction \
+             WHERE sanction.account_id = account.id AND sanction.kind = 'suspend' \
+               AND sanction.revoked_at IS NULL AND sanction.starts_at <= now() \
+               AND (sanction.ends_at IS NULL OR sanction.ends_at > now()) \
+           ) \
+         ORDER BY account.id \
+         FOR SHARE OF account",
+    )
+    .bind(&normalized_handles)
+    .fetch_all(connection)
+    .await?;
+    Ok(targets)
+}
+
+/// Lock and return the minimum recipient policy needed to deliver an interaction notification.
+///
+/// Lifecycle-closed and currently suspended accounts return `None`; no email or profile body is
+/// selected. Forum applies its own block, mute, follow, conversation, and channel policy after
+/// this owner-domain check.
+pub async fn lock_notification_recipient(
+    connection: &mut PgConnection,
+    account_id: i64,
+) -> AppResult<Option<NotificationRecipient>> {
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind(format!("identity-profile-privacy:{account_id}"))
+        .execute(&mut *connection)
+        .await?;
+    let handle: Option<String> = sqlx::query_scalar(
+        "SELECT account.handle::text \
+         FROM identity.accounts AS account \
+         WHERE account.id = $1 AND account.status = 'active'::identity.account_status \
+           AND NOT EXISTS ( \
+             SELECT 1 FROM identity.sanctions AS sanction \
+             WHERE sanction.account_id = account.id AND sanction.kind = 'suspend' \
+               AND sanction.revoked_at IS NULL AND sanction.starts_at <= now() \
+               AND (sanction.ends_at IS NULL OR sanction.ends_at > now()) \
+           ) \
+         FOR SHARE OF account",
+    )
+    .bind(account_id)
+    .fetch_optional(&mut *connection)
+    .await?;
+    let Some(handle) = handle else {
+        return Ok(None);
+    };
+    let mention_policy = sqlx::query_scalar(
+        "SELECT mention_policy FROM identity.profile_privacy \
+         WHERE account_id = $1 FOR SHARE",
+    )
+    .bind(account_id)
+    .fetch_optional(&mut *connection)
+    .await?
+    .unwrap_or_else(|| "everyone".to_owned());
+    Ok(Some(NotificationRecipient { handle, mention_policy }))
 }
 
 /// Resolve an exact handle only so another domain can remove an owner-held relationship.

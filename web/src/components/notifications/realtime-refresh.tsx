@@ -3,11 +3,18 @@ import * as React from "react";
 
 import { readAccessToken } from "@/lib/auth-storage";
 import { API_BASE_URL } from "@/lib/api/client";
+import { accountQueryKeys } from "@/lib/account-query-keys";
 import { consumeSseBuffer } from "@/lib/sse";
 
 const MAX_RECONNECT_DELAY = 30_000;
 
-export function RealtimeRefresh({ isAuthenticated }: { isAuthenticated: boolean }) {
+export function RealtimeRefresh({
+  accountId,
+  isAuthenticated,
+}: {
+  accountId?: string;
+  isAuthenticated: boolean;
+}) {
   const queryClient = useQueryClient();
 
   React.useEffect(() => {
@@ -19,13 +26,15 @@ export function RealtimeRefresh({ isAuthenticated }: { isAuthenticated: boolean 
 
     async function invalidate(eventType: string) {
       const tasks = [
-        queryClient.invalidateQueries({ queryKey: ["notification-count"] }),
-        queryClient.invalidateQueries({ queryKey: ["notifications"] }),
+        queryClient.invalidateQueries({ queryKey: accountQueryKeys.notificationCount(accountId) }),
+        queryClient.invalidateQueries({ queryKey: accountQueryKeys.notifications(accountId) }),
       ];
-      if (["dm", "dm_request", "dm_request_accepted"].includes(eventType)) {
+      if (eventType === "sync" || ["dm", "dm_request", "dm_request_accepted"].includes(eventType)) {
         tasks.push(
-          queryClient.invalidateQueries({ queryKey: ["dm-unread-count"] }),
-          queryClient.invalidateQueries({ queryKey: ["dm", "conversations"] }),
+          queryClient.invalidateQueries({ queryKey: accountQueryKeys.directMessageCount(accountId) }),
+          queryClient.invalidateQueries({
+            queryKey: [...accountQueryKeys.directMessages(accountId), "conversations"],
+          }),
         );
       }
       await Promise.all(tasks);
@@ -80,7 +89,7 @@ export function RealtimeRefresh({ isAuthenticated }: { isAuthenticated: boolean 
       controller?.abort();
       if (reconnectTimer !== undefined) window.clearTimeout(reconnectTimer);
     };
-  }, [isAuthenticated, queryClient]);
+  }, [accountId, isAuthenticated, queryClient]);
 
   return null;
 }

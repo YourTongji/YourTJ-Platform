@@ -59,31 +59,6 @@ pub async fn vote_post(
 
     let outcome = repo::vote_post(&state.db, &post_type, post_id, auth.id, &body.value).await?;
 
-    // Notify post author of upvote (fire-and-forget).
-    if let Some(author_id) = outcome.post_author_id {
-        if outcome.became_upvote {
-            let pool = state.db.clone();
-            let vote_type = post_type.clone();
-            let vote_post_id = post_id;
-            let voter_id = auth.id;
-            tokio::spawn(async move {
-                crate::notification_hooks::create_notification(
-                    &pool,
-                    author_id,
-                    "vote",
-                    serde_json::json!({
-                        "postType": vote_type,
-                        "postId": vote_post_id.to_string(),
-                        "voterHandle": "",
-                    }),
-                    None,
-                    Some(voter_id),
-                )
-                .await;
-            });
-        }
-    }
-
     crate::cache::invalidate_thread_surfaces(
         state.redis.as_ref(),
         outcome.thread_id,

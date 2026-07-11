@@ -311,6 +311,23 @@ async fn run_migrations(pool: &PgPool) {
             .expect("migration 0046 failed");
     }
 
+    let has_achievement_operations: bool = sqlx::query_scalar(
+        "SELECT EXISTS( \
+           SELECT 1 FROM information_schema.columns \
+           WHERE table_schema = 'platform' AND table_name = 'account_badges' \
+             AND column_name = 'revoked_at' \
+         )",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or(false);
+    if !has_achievement_operations {
+        sqlx::raw_sql(include_str!("../../../../migrations/0045_achievement_operations.sql"))
+            .execute(pool)
+            .await
+            .expect("migration 0045 failed");
+    }
+
     let has_governance_schema: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM information_schema.schemata WHERE schema_name = 'governance')",
     )
@@ -382,6 +399,18 @@ async fn run_migrations(pool: &PgPool) {
             .expect("migration 0026 failed");
     }
 
+    let has_notification_outbox: bool =
+        sqlx::query_scalar("SELECT to_regclass('platform.outbox_events') IS NOT NULL")
+            .fetch_one(pool)
+            .await
+            .unwrap_or(false);
+    if !has_notification_outbox {
+        sqlx::raw_sql(include_str!("../../../../migrations/0054_durable_notification_outbox.sql"))
+            .execute(pool)
+            .await
+            .expect("migration 0054 failed");
+    }
+
     let database_name: String = sqlx::query_scalar("SELECT current_database()")
         .fetch_one(pool)
         .await
@@ -389,6 +418,9 @@ async fn run_migrations(pool: &PgPool) {
     assert!(database_name.ends_with("_test"), "refuse destructive cleanup outside a test database");
 
     // Clean test data from previous runs (always run, even if migrations were skipped).
+    sqlx::query("DELETE FROM forum.notification_delivery_receipts").execute(pool).await.ok();
+    sqlx::query("DELETE FROM forum.notifications").execute(pool).await.ok();
+    sqlx::query("DELETE FROM platform.outbox_events").execute(pool).await.ok();
     sqlx::query("DELETE FROM forum.post_revisions").execute(pool).await.ok();
     sqlx::query("DELETE FROM forum.comments").execute(pool).await.ok();
     sqlx::query("DELETE FROM forum.threads").execute(pool).await.ok();

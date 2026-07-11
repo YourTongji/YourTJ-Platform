@@ -7,6 +7,7 @@
 pub mod achievements;
 mod announcements;
 mod auth;
+pub mod outbox;
 mod promotions;
 mod settings;
 mod validation;
@@ -22,6 +23,7 @@ pub fn routes(state: AppState) -> Router {
     Router::new()
         .merge(achievements::routes())
         .merge(announcements::routes())
+        .merge(outbox::routes())
         .merge(promotions::routes())
         .merge(settings::routes())
         .merge(verifications::routes())

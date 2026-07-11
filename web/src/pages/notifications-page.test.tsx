@@ -18,7 +18,7 @@ const apiMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("@/context/auth-provider", () => ({
-  useAuth: () => ({ isAuthenticated: true }),
+  useAuth: () => ({ account: { id: "account-1" }, isAuthenticated: true }),
 }));
 
 vi.mock("@/lib/api/endpoints", () => ({
@@ -58,6 +58,15 @@ describe("NotificationsPage", () => {
           readAt: null,
           createdAt: 1_700_000_000,
         },
+        {
+          id: "12",
+          type: "verification_granted",
+          payload: { title: "学院认证已通过" },
+          targetUrl: "/profile/alice",
+          read: true,
+          readAt: 1_700_000_020,
+          createdAt: 1_700_000_020,
+        },
       ],
       hasMore: false,
       nextCursor: null,
@@ -91,7 +100,8 @@ describe("NotificationsPage", () => {
     const view = renderPage();
 
     expect(await screen.findByText("新的回复")).toBeVisible();
-    expect(screen.getByRole("link", { name: "查看通知详情" })).toHaveAttribute(
+    expect(screen.getByText("认证 ·", { exact: false })).toBeVisible();
+    expect(screen.getAllByRole("link", { name: "查看通知详情" })[0]).toHaveAttribute(
       "href",
       "/forum/threads/2",
     );

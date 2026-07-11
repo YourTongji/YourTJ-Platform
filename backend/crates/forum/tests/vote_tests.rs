@@ -98,6 +98,19 @@ async fn test_vote_thread_up() {
     .await
     .unwrap();
     assert_eq!(activity_count, 1);
+    let outbox_payload: serde_json::Value = sqlx::query_scalar(
+        "SELECT payload FROM platform.outbox_events \
+         WHERE recipient_account_id = $1 AND actor_account_id = $2 \
+           AND topic = 'notification' AND event_type = 'vote'",
+    )
+    .bind(author_id)
+    .bind(voter_id)
+    .fetch_one(&pool)
+    .await
+    .expect("load atomic vote notification event");
+    assert_eq!(outbox_payload["threadId"], thread_id.to_string());
+    assert_eq!(outbox_payload["voterId"], voter_id.to_string());
+    assert!(outbox_payload["voteUpdatedAtMicros"].as_str().is_some());
 }
 
 #[tokio::test]

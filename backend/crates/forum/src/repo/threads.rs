@@ -952,6 +952,7 @@ pub async fn create_thread(
             row.created_at,
         )
         .await?;
+        super::subscriptions::lock_account_subscriptions(&mut tx, author_id).await?;
         sqlx::query(
             "INSERT INTO forum.user_stats (account_id, threads_created, last_posted_at) \
              VALUES ($1, 1, now()) \
@@ -972,6 +973,51 @@ pub async fn create_thread(
         .bind(row.id)
         .execute(&mut *tx)
         .await?;
+
+        platform::outbox::enqueue_achievement_award_tx(
+            &mut tx,
+            &format!("forum-thread:{}:achievement:first-thread", row.id),
+            author_id,
+            author_id,
+            "first-thread",
+            "published a first forum thread",
+        )
+        .await?;
+        let source_body = row.body.as_deref().unwrap_or_default();
+        let mention_handles = crate::content_policy::mention_handles(
+            source_body,
+            crate::dto::ContentFormat::from_db(&row.content_format),
+            &row.author_handle,
+        );
+        let body_excerpt = crate::content_policy::plain_text_projection(
+            source_body,
+            crate::dto::ContentFormat::from_db(&row.content_format),
+            100,
+        );
+        for target in
+            identity::public_accounts::find_mention_targets_by_handles_tx(&mut tx, &mention_handles)
+                .await?
+                .into_iter()
+                .filter(|target| target.id != author_id)
+        {
+            platform::outbox::enqueue_notification_tx(
+                &mut tx,
+                &format!("forum-thread:{}:mention:{}", row.id, target.id),
+                target.id,
+                Some(author_id),
+                "mention",
+                &serde_json::json!({
+                    "threadId": row.id.to_string(),
+                    "authorHandle": &row.author_handle,
+                    "handle": target.handle,
+                    "bodyExcerpt": &body_excerpt,
+                    "title": format!("{} 提及了你", row.author_handle),
+                }),
+                None,
+                None,
+            )
+            .await?;
+        }
     }
     super::boards::refresh_board_thread_counts(&mut tx, &board_ids).await?;
     tx.commit().await?;
