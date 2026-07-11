@@ -6,7 +6,7 @@
 >
 > 负责人：Privacy owner、Security owner、Domain maintainers
 >
-> 最近核验：2026-07-12，migrations `0034`–`0056` 中与隐私/生命周期相关的 schema 与 tests
+> 最近核验：2026-07-12，migrations `0034`–`0056` 中与隐私/生命周期相关的 schema、tests 与 Onebox TLS fixture
 
 本规范将数据最小化、可见性、导出、删除和保留作为产品前置条件。它不是法律意见；涉及 PIPL、
 未成年人、广告或跨境处理的最终政策需要合格法律与隐私负责人确认。
@@ -231,8 +231,10 @@ Legal hold 有合法目的、授权者、范围、到期和审计，不得成为
 
 - Cloudflare Email、Alibaba OSS/CDN、captcha、Meilisearch/Redis 运维都需要数据流和 secret 边界。
 - 任意第三方头像/Markdown 图片会泄露访问者 IP，因此持久媒体只允许平台 asset。
-- Onebox 只服务 allowlisted 公共 HTTPS 页面；fragment 被移除，含 query 的 URL 不进入持久 cache，
-  metadata 有界且不返回远程图片。Migration 清除历史 query URL/remote-image cache；访问日志不记录 URL。
+- Onebox 只服务 allowlisted 公共 HTTPS 页面；逐跳重新解析且全部地址必须为公网，请求 pin 到已验证地址
+  并禁用系统代理，TLS 继续校验原 host。fragment 被移除，含 query 的 URL 不进入持久 cache，metadata
+  有界且不返回远程图片。受控 HTTPS 回归只连接 loopback fixture，不调用公网；测试证书信任和地址映射
+  仅在 test build 存在。Migration 清除历史 query URL/remote-image cache；访问日志不记录 URL。
 - Web renderer 只把 `yourtj-asset` 映射到同一响应中匹配的服务端派生 URL；remote/data destination 与
   DTO 中多余/损坏 binding 都 fail closed。管理审核 DTO 同样不披露 object key、hash 或持久 URL；待审
   证据只通过 capability-gated、独立审核员、60 秒一次性 token 的同源 bounded proxy 读取，读取 purpose/

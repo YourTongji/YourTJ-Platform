@@ -6,7 +6,7 @@
 >
 > 负责人：Platform maintainers、Domain maintainers
 >
-> 最近核验：2026-07-12，durable notification 与 account lifecycle/export focused suites
+> 最近核验：2026-07-12，durable notification、account lifecycle/export focused suites 与 Onebox TLS fixture
 
 先跑最小 focused test 获得快速反馈，再按 changed scope 跑与 CI 一致的完整 gate。没有运行的检查
 不能在 PR 或交付中写成通过。
@@ -119,6 +119,11 @@ Forum 图片变更还必须运行 `cargo test -p forum --test forum_media_attach
 --test-threads=1`，覆盖 `yourtj-asset` AST/ordered set、owner/usage/clean、stale CAS、revision、
 delete/restore/GC grace；Web 运行 Markdown renderer/editor 与 Forum attachment component tests。测试
 只向数据库写合成 metadata，不调用真实 OSS、CDN 或生产 credential。
+
+Onebox 网络边界变更运行 `cargo test -p api onebox::network`。该 suite 启动运行时生成证书的本地 TLS
+fixture，仍穿透生产 redirect、逐块 body limit 和 DNS pin 状态机，覆盖 host/SNI、逐跳 allowlist/DNS、
+rebinding、MIME/charset、Content-Length/chunked 超限和两层 timeout；`cfg(test)` transport 只负责把
+合成公网 pin 映射到 loopback 和增加测试 root，不得跳过策略状态机或访问公网。
 
 截图/录屏放 PR，不提交临时 `/tmp` 路径报告。补完整前端单元覆盖和浏览器旅程测试仍是产品 P1
 质量工作。

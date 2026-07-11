@@ -36,6 +36,7 @@ deadpool-redis = "0.19"
 regex = "1"
 percent-encoding = "2"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+rcgen = { version = "0.13", default-features = false, features = ["ring"] }
 # 0.24 stays on edition 2021 for the workspace's Rust 1.80 compatibility floor.
 scraper = { version = "=0.24.0", default-features = false }
 ring = "0.17"
@@ -48,6 +49,7 @@ sha1 = "0.10"
 sqlx = { version = "0.8", features = ["runtime-tokio", "tls-rustls", "postgres", "chrono", "uuid"] }
 thiserror = "2"
 tokio = { version = "1", features = ["full"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
 tower = "0.5"
 tower-http = { version = "0.6", features = ["trace", "cors", "request-id", "uuid", "limit", "set-header"] }
 tracing = "0.1"

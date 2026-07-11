@@ -30,6 +30,7 @@ reqwest.workspace = true
 sha2.workspace = true
 scraper.workspace = true
 uuid.workspace = true
+async-trait.workspace = true
 
 shared.workspace = true
 identity.workspace = true
@@ -42,3 +43,7 @@ activity.workspace = true
 governance.workspace = true
 search.workspace = true
 platform.workspace = true
+
+[dev-dependencies]
+rcgen.workspace = true
+tokio-rustls.workspace = true

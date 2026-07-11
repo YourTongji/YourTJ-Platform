@@ -1,8 +1,7 @@
 //! Onebox link preview module. Fetches OG meta tags from whitelisted domains and
 //! returns preview cards. Cached in both Redis (fast) and Postgres (persistent).
 
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
-use std::time::Duration;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 use axum::extract::{Query, State};
 use axum::http::HeaderMap;
@@ -14,11 +13,9 @@ use sha2::Digest as _;
 use shared::{AppError, AppResult, AppState};
 use sqlx::PgPool;
 
-const MAX_BODY_BYTES: usize = 512 * 1024;
-const MAX_REDIRECTS: usize = 5;
-const ONEBOX_POLICY_VERSION: &str = "v3";
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(3);
-const TOTAL_TIMEOUT: Duration = Duration::from_secs(6);
+mod network;
+
+const ONEBOX_POLICY_VERSION: &str = "v4";
 const ERROR_CACHE_TTL_SECONDS: i64 = 120;
 const SUCCESS_CACHE_TTL_SECONDS: i64 = 604_800;
 
@@ -437,18 +434,20 @@ async fn save_failed_preview(
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum OneboxFetchError {
     InvalidUrl,
     UnsafeTarget,
     DomainNotAllowed,
     DnsResolution,
     Request,
+    RequestTimeout,
     Redirect,
     UpstreamStatus,
     InvalidContentType,
+    InvalidCharset,
     BodyTooLarge,
-    Timeout,
+    TotalTimeout,
 }
 
 impl OneboxFetchError {
@@ -459,36 +458,15 @@ impl OneboxFetchError {
             Self::DomainNotAllowed => "domain_not_allowed",
             Self::DnsResolution => "dns_resolution",
             Self::Request => "request",
+            Self::RequestTimeout => "request_timeout",
             Self::Redirect => "redirect",
             Self::UpstreamStatus => "upstream_status",
             Self::InvalidContentType => "invalid_content_type",
+            Self::InvalidCharset => "invalid_charset",
             Self::BodyTooLarge => "body_too_large",
-            Self::Timeout => "timeout",
+            Self::TotalTimeout => "total_timeout",
         }
     }
-}
-
-async fn resolve_public_target(
-    pool: &PgPool,
-    redis: Option<&deadpool_redis::Pool>,
-    url: &reqwest::Url,
-) -> Result<(String, SocketAddr), OneboxFetchError> {
-    let host = url.host_str().ok_or(OneboxFetchError::InvalidUrl)?.to_string();
-    if !is_allowed_domain(pool, redis, &host).await.map_err(|_| OneboxFetchError::Request)? {
-        return Err(OneboxFetchError::DomainNotAllowed);
-    }
-
-    let mut addresses: Vec<SocketAddr> = tokio::net::lookup_host((host.as_str(), 443))
-        .await
-        .map_err(|_| OneboxFetchError::DnsResolution)?
-        .collect();
-    addresses.sort_unstable();
-    addresses.dedup();
-    if addresses.is_empty() || addresses.iter().any(|address| !is_public_ip(address.ip())) {
-        return Err(OneboxFetchError::UnsafeTarget);
-    }
-
-    Ok((host, addresses[0]))
 }
 
 fn is_public_ip(ip: IpAddr) -> bool {
@@ -543,81 +521,6 @@ fn is_public_ipv6(ip: Ipv6Addr) -> bool {
         && !is_six_to_four
 }
 
-async fn fetch_bounded_html(
-    pool: &PgPool,
-    redis: Option<&deadpool_redis::Pool>,
-    initial_url: reqwest::Url,
-) -> Result<String, OneboxFetchError> {
-    let mut current_url = initial_url;
-    for redirect_count in 0..=MAX_REDIRECTS {
-        let (host, address) = resolve_public_target(pool, redis, &current_url).await?;
-        let client = reqwest::Client::builder()
-            .timeout(REQUEST_TIMEOUT)
-            .user_agent("YourTJ-Onebox/2.0")
-            .redirect(reqwest::redirect::Policy::none())
-            .resolve(&host, address)
-            .build()
-            .map_err(|_| OneboxFetchError::Request)?;
-        let mut response =
-            client.get(current_url.clone()).send().await.map_err(|_| OneboxFetchError::Request)?;
-
-        if response.status().is_redirection() {
-            if redirect_count == MAX_REDIRECTS {
-                return Err(OneboxFetchError::Redirect);
-            }
-            let location = response
-                .headers()
-                .get(reqwest::header::LOCATION)
-                .and_then(|value| value.to_str().ok())
-                .ok_or(OneboxFetchError::Redirect)?;
-            current_url = normalize_target_url(
-                current_url.join(location).map_err(|_| OneboxFetchError::Redirect)?.as_str(),
-            )?;
-            continue;
-        }
-
-        if !response.status().is_success() {
-            return Err(OneboxFetchError::UpstreamStatus);
-        }
-        let content_type = response
-            .headers()
-            .get(reqwest::header::CONTENT_TYPE)
-            .and_then(|value| value.to_str().ok())
-            .unwrap_or_default()
-            .to_ascii_lowercase();
-        if !content_type.starts_with("text/html")
-            && !content_type.starts_with("application/xhtml+xml")
-        {
-            return Err(OneboxFetchError::InvalidContentType);
-        }
-        if response.content_length().is_some_and(|length| length > MAX_BODY_BYTES as u64) {
-            return Err(OneboxFetchError::BodyTooLarge);
-        }
-
-        let mut bytes = Vec::with_capacity(
-            response.content_length().unwrap_or(16 * 1024).min(MAX_BODY_BYTES as u64) as usize,
-        );
-        while let Some(chunk) = response.chunk().await.map_err(|_| OneboxFetchError::Request)? {
-            append_bounded_chunk(&mut bytes, &chunk)?;
-        }
-        return Ok(decode_html_bytes(&bytes));
-    }
-
-    Err(OneboxFetchError::Redirect)
-}
-
-fn append_bounded_chunk(bytes: &mut Vec<u8>, chunk: &[u8]) -> Result<(), OneboxFetchError> {
-    if bytes.len().saturating_add(chunk.len()) > MAX_BODY_BYTES {
-        return Err(OneboxFetchError::BodyTooLarge);
-    }
-    bytes.extend_from_slice(chunk);
-    Ok(())
-}
-
-fn decode_html_bytes(bytes: &[u8]) -> String {
-    String::from_utf8_lossy(bytes).into_owned()
-}
-
 /// Fetch a remote URL and parse bounded Open Graph metadata without loading subresources.
 async fn fetch_og_tags(
     pool: &PgPool,
@@ -625,9 +528,7 @@ async fn fetch_og_tags(
     url: &str,
 ) -> Result<OneboxResult, OneboxFetchError> {
     let parsed = parse_target_url(url)?;
-    let body = tokio::time::timeout(TOTAL_TIMEOUT, fetch_bounded_html(pool, redis, parsed))
-        .await
-        .map_err(|_| OneboxFetchError::Timeout)??;
+    let body = network::fetch_bounded_html(pool, redis, parsed).await?;
     Ok(parse_og_tags(&body, url))
 }
 
@@ -713,9 +614,8 @@ mod tests {
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
     use super::{
-        append_bounded_chunk, compute_url_hash, decode_html_bytes, is_persistently_cacheable_url,
-        is_public_ip, matches_domain, normalize_target_url, parse_og_tags, parse_target_url,
-        MAX_BODY_BYTES,
+        compute_url_hash, is_persistently_cacheable_url, is_public_ip, matches_domain,
+        normalize_target_url, parse_og_tags, parse_target_url,
     };
 
     #[test]
@@ -835,19 +735,5 @@ mod tests {
             compute_url_hash("https://example.com"),
             compute_url_hash("https://example.org")
         );
-    }
-
-    #[test]
-    fn bounded_reader_rejects_oversize_before_appending() {
-        let mut bytes = vec![b'a'; MAX_BODY_BYTES];
-        assert!(append_bounded_chunk(&mut bytes, b"x").is_err());
-        assert_eq!(bytes.len(), MAX_BODY_BYTES);
-    }
-
-    #[test]
-    fn invalid_utf8_is_decoded_without_byte_boundary_panics() {
-        let decoded = decode_html_bytes(&[b'a', 0xf0, 0x28, 0x8c, 0x28, b'b']);
-        assert!(decoded.starts_with('a'));
-        assert!(decoded.ends_with('b'));
     }
 }
