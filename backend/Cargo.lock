@@ -2369,6 +2369,7 @@ name = "shared"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "axum",
  "base64",
  "chrono",
@@ -2378,6 +2379,7 @@ dependencies = [
  "jsonwebtoken",
  "lettre",
  "redis",
+ "reqwest",
  "ring",
  "serde",
  "serde_json",

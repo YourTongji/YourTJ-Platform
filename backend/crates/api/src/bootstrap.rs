@@ -75,6 +75,17 @@ pub async fn run() -> anyhow::Result<()> {
         anyhow::bail!("EMAIL_ENCRYPTION_STRICT=true but no encryption keys are configured");
     }
 
+    // Captcha verifier (fail closed when not configured).
+    let captcha_verifier: Option<std::sync::Arc<dyn shared::captcha::CaptchaVerifier>> =
+        if config.captcha_siteverify_url.is_empty() {
+            None
+        } else {
+            Some(std::sync::Arc::new(shared::captcha::YourTongjiCaptcha::new(
+                config.captcha_siteverify_url.clone(),
+                std::time::Duration::from_secs(5),
+            )))
+        };
+
     let state = AppState {
         db,
         config: config.clone(),
@@ -87,6 +98,7 @@ pub async fn run() -> anyhow::Result<()> {
         system_private_key,
         system_public_key_b64,
         email_encryption,
+        captcha_verifier,
         sse_tx: Some(sse_tx),
     };
 

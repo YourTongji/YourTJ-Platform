@@ -3,6 +3,7 @@
 //! is compiled by everything.
 pub mod auth;
 pub mod cache;
+pub mod captcha;
 pub mod config;
 pub mod email;
 pub mod email_crypto;

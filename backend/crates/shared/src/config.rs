@@ -28,6 +28,7 @@ pub struct Config {
     pub email_encryption_active_aead_hex: String,
     pub email_encryption_active_blind_hex: String,
     pub email_encryption_strict: bool,
+    pub captcha_siteverify_url: String,
 }
 
 impl Config {
@@ -70,6 +71,7 @@ impl Config {
             email_encryption_strict: std::env::var("EMAIL_ENCRYPTION_STRICT")
                 .map(|v| v == "1" || v == "true")
                 .unwrap_or(false),
+            captcha_siteverify_url: env_or_default("CAPTCHA_SITEVERIFY_URL", ""),
         })
     }
 

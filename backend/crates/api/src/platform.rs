@@ -142,9 +142,29 @@ pub async fn list_settings_handler(
     Ok(Json(items))
 }
 
-/// POST /api/v2/startup/verify — captcha stub (accept any token, return 200)
-pub async fn startup_verify_handler() -> AppResult<Json<serde_json::Value>> {
-    Ok(Json(serde_json::json!({ "ok": true })))
+/// POST /api/v2/startup/verify — captcha verification
+pub async fn startup_verify_handler(
+    State(state): State<AppState>,
+    Json(body): Json<serde_json::Value>,
+) -> AppResult<Json<serde_json::Value>> {
+    let token = body.get("token").and_then(|v| v.as_str()).unwrap_or("");
+    let verifier = match state.captcha_verifier.as_deref() {
+        Some(v) => v,
+        None => {
+            return Err(AppError::BadRequest("captcha not configured".into()));
+        }
+    };
+    let outcome =
+        shared::captcha::enforce_captcha(verifier, state.redis.as_ref(), "startup", token).await;
+    match outcome {
+        shared::captcha::CaptchaOutcome::Ok => Ok(Json(serde_json::json!({ "ok": true }))),
+        shared::captcha::CaptchaOutcome::Invalid => {
+            Err(AppError::BadRequest("captcha verification failed".into()))
+        }
+        shared::captcha::CaptchaOutcome::Unavailable => {
+            Err(AppError::BadRequest("captcha service unavailable".into()))
+        }
+    }
 }
 
 /// GET /api/v2/admin/settings — admin: list all settings
@@ -250,6 +270,7 @@ mod tests {
             system_private_key: vec![0u8; 32],
             system_public_key_b64: String::new(),
             email_encryption: None,
+            captcha_verifier: Some(std::sync::Arc::new(shared::captcha::FakeCaptcha)),
             sse_tx: None,
         };
 
