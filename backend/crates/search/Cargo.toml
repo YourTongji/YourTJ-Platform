@@ -1,0 +1,17 @@
+[package]
+name = "search"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+axum.workspace = true
+courses.workspace = true
+forum.workspace = true
+hex.workspace = true
+reviews.workspace = true
+serde.workspace = true
+sha2.workspace = true
+shared.workspace = true
+tokio.workspace = true

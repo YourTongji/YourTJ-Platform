@@ -186,7 +186,7 @@ export const api = {
     });
   },
 
-  search(q: string, type: "course" | "teacher" | "review" | "all" = "all") {
+  search(q: string, type: "course" | "teacher" | "review" | "thread" | "all" = "all") {
     return apiRequest<SearchResult>("/search", {
       query: { q, type, limit: 12 },
       auth: false,
@@ -837,6 +837,10 @@ export const api = {
 
   triggerSelectionSync(reason: string) {
     return apiRequest<void>("/admin/selection/sync", { method: "POST", body: { reason } });
+  },
+
+  reindexCourses(reason: string) {
+    return apiRequest<void>("/admin/courses/reindex", { method: "POST", body: { reason } });
   },
 
   reindexReviews(reason: string) {

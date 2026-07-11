@@ -11,6 +11,7 @@ pub(crate) mod error;
 mod handlers;
 pub(crate) mod models;
 pub(crate) mod repo;
+pub mod search;
 
 use axum::routing::{get, patch, post};
 use axum::Router;

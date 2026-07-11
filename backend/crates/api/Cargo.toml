@@ -40,3 +40,4 @@ forum.workspace = true
 media.workspace = true
 activity.workspace = true
 governance.workspace = true
+search.workspace = true

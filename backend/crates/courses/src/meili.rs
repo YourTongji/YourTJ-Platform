@@ -3,23 +3,81 @@
 //! All functions gracefully degrade when Meilisearch is unreachable:
 //! they log a warning and return empty results or skip the operation.
 
+use std::collections::HashSet;
+use std::time::Duration;
+
 use meilisearch_sdk::client::Client;
+use meilisearch_sdk::documents::DocumentDeletionQuery;
+use meilisearch_sdk::errors::{Error as MeiliError, ErrorCode};
+use meilisearch_sdk::task_info::TaskInfo;
 use serde::{Deserialize, Serialize};
+use shared::{AppError, AppResult, AppState};
 use sqlx::{FromRow, PgPool};
+
+const TASK_POLL_INTERVAL: Duration = Duration::from_millis(100);
+const TASK_TIMEOUT: Duration = Duration::from_secs(120);
 
 fn meili_api_key(api_key: &str) -> Option<&str> {
     let api_key = api_key.trim();
     (!api_key.is_empty()).then_some(api_key)
 }
 
-/// Minimal search result returned to clients.
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SearchResult {
-    pub id: String,
-    pub name: String,
-    pub code: Option<String>,
-    pub kind: String,
+fn is_index_not_found(error: &MeiliError) -> bool {
+    matches!(
+        error,
+        MeiliError::Meilisearch(error) if error.error_code == ErrorCode::IndexNotFound
+    )
+}
+
+async fn wait_for_task(
+    client: &Client,
+    task: TaskInfo,
+    operation: &'static str,
+) -> Result<(), String> {
+    let task = task
+        .wait_for_completion(client, Some(TASK_POLL_INTERVAL), Some(TASK_TIMEOUT))
+        .await
+        .map_err(|error| format!("{operation}: {error}"))?;
+    if task.is_failure() {
+        return Err(format!("{operation}: {}", task.unwrap_failure()));
+    }
+    if !task.is_success() {
+        return Err(format!("{operation}: task did not finish successfully"));
+    }
+    Ok(())
+}
+
+fn meili_app_failure(operation: &'static str, error: impl std::fmt::Display) -> AppError {
+    tracing::warn!(%error, operation, "course meilisearch operation failed");
+    AppError::Internal(anyhow::anyhow!("course meilisearch {operation} failed"))
+}
+
+/// Document category stored in the shared catalogue index.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SearchDocumentKind {
+    Course,
+    Review,
+}
+
+impl SearchDocumentKind {
+    fn value(self) -> &'static str {
+        match self {
+            Self::Course => "course",
+            Self::Review => "review",
+        }
+    }
+
+    fn document_prefix(self) -> &'static str {
+        match self {
+            Self::Course => "course-",
+            Self::Review => "review-",
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct SearchCandidate {
+    id: String,
 }
 
 /// Setup the Meilisearch "courses" index with searchable, filterable, and
@@ -28,20 +86,21 @@ pub async fn setup_course_index(url: &str, api_key: &str) -> Result<(), String> 
     let client =
         Client::new(url, meili_api_key(api_key)).map_err(|e| format!("Meili client: {e}"))?;
 
-    let index = client
-        .create_index("courses", None)
-        .await
-        .map_err(|e| format!("Meili create index: {e}"))?;
-
-    // Wait for creation to complete
-    let _ = index
-        .wait_for_completion(&client, None, None)
-        .await
-        .map_err(|e| format!("Meili wait: {e}"))?;
+    match client.get_index("courses").await {
+        Ok(_) => {}
+        Err(error) if is_index_not_found(&error) => {
+            let task = client
+                .create_index("courses", Some("id"))
+                .await
+                .map_err(|error| format!("course index creation: {error}"))?;
+            wait_for_task(&client, task, "course index creation").await?;
+        }
+        Err(error) => return Err(format!("course index lookup: {error}")),
+    }
 
     let index = client.index("courses");
 
-    index
+    let searchable_task = index
         .set_searchable_attributes(&[
             "name",
             "code",
@@ -54,17 +113,20 @@ pub async fn setup_course_index(url: &str, api_key: &str) -> Result<(), String> 
             "comment",
         ])
         .await
-        .map_err(|e| format!("Meili searchable attrs: {e}"))?;
+        .map_err(|error| format!("course searchable attributes: {error}"))?;
+    wait_for_task(&client, searchable_task, "course searchable attributes").await?;
 
-    index
+    let filterable_task = index
         .set_filterable_attributes(&["department", "kind"])
         .await
-        .map_err(|e| format!("Meili filterable attrs: {e}"))?;
+        .map_err(|error| format!("course filterable attributes: {error}"))?;
+    wait_for_task(&client, filterable_task, "course filterable attributes").await?;
 
-    index
+    let sortable_task = index
         .set_sortable_attributes(&["reviewCount", "reviewAvg"])
         .await
-        .map_err(|e| format!("Meili sortable attrs: {e}"))?;
+        .map_err(|error| format!("course sortable attributes: {error}"))?;
+    wait_for_task(&client, sortable_task, "course sortable attributes").await?;
 
     Ok(())
 }
@@ -87,55 +149,132 @@ pub struct CourseDocument {
     pub kind: String,
 }
 
-/// Sync a course to Meilisearch by id. Call via `tokio::spawn`.
-pub async fn sync_course_to_meili(url: &str, api_key: &str, course_id: i64, pool: &PgPool) {
-    let doc = match build_course_document(course_id, pool).await {
-        Ok(Some(d)) => d,
-        Ok(None) => {
-            tracing::warn!(course_id, "course not found for Meili sync");
-            return;
-        }
-        Err(e) => {
-            tracing::warn!(error = %e, course_id, "failed to build course doc for Meili sync");
-            return;
-        }
+/// Reconciles one course document and confirms the index task completed.
+pub async fn reconcile_course_document(
+    url: &str,
+    api_key: &str,
+    course_id: i64,
+    pool: &PgPool,
+) -> AppResult<()> {
+    let document = build_course_document(course_id, pool).await?;
+    let client = Client::new(url, meili_api_key(api_key))
+        .map_err(|error| meili_app_failure("client creation", error))?;
+    let index = client.index("courses");
+    let task = match document {
+        Some(document) => index
+            .add_documents(&[document], Some("id"))
+            .await
+            .map_err(|error| meili_app_failure("course upsert enqueue", error))?,
+        None => index
+            .delete_document(format!("course-{course_id}"))
+            .await
+            .map_err(|error| meili_app_failure("course deletion enqueue", error))?,
     };
-
-    let record = serde_json::to_value(&doc).unwrap_or_default();
-
-    match Client::new(url, meili_api_key(api_key)) {
-        Ok(client) => {
-            let index = client.index("courses");
-            if let Err(e) = index.add_documents(&[record], Some("id")).await {
-                tracing::warn!(error = %e, "Meili add_documents failed");
-            }
-        }
-        Err(e) => {
-            tracing::warn!(error = %e, "Meili client creation failed during course sync");
-        }
-    }
+    wait_for_task(&client, task, "course reconciliation")
+        .await
+        .map_err(|error| meili_app_failure("course reconciliation", error))
 }
 
-/// Search both courses and reviews in Meilisearch. Returns empty Vec on failure.
-pub async fn search_courses_and_reviews(
+/// Reconciles one course after its database transaction commits.
+pub fn reconcile_course_in_background(state: &AppState, course_id: i64) {
+    let pool = state.db.clone();
+    let meili_url = state.meili_url.clone();
+    let meili_key = state.meili_master_key.clone();
+    tokio::spawn(async move {
+        if let Err(error) =
+            reconcile_course_document(&meili_url, &meili_key, course_id, &pool).await
+        {
+            tracing::warn!(%error, course_id, "course search reconciliation failed");
+        }
+    });
+}
+
+/// Replaces every course document while preserving review documents in the shared index.
+pub async fn reindex_course_documents(pool: &PgPool, url: &str, api_key: &str) -> AppResult<usize> {
+    let course_ids: Vec<i64> =
+        sqlx::query_scalar("SELECT id FROM courses.courses ORDER BY id").fetch_all(pool).await?;
+    let mut documents = Vec::with_capacity(course_ids.len());
+    for course_id in course_ids {
+        if let Some(document) = build_course_document(course_id, pool).await? {
+            documents.push(document);
+        }
+    }
+
+    let client = Client::new(url, meili_api_key(api_key))
+        .map_err(|error| meili_app_failure("client creation", error))?;
+    let index = client.index("courses");
+    let mut deletion = DocumentDeletionQuery::new(&index);
+    let deletion_task = deletion
+        .with_filter("kind = course")
+        .execute::<serde_json::Value>()
+        .await
+        .map_err(|error| meili_app_failure("course index clear enqueue", error))?;
+    wait_for_task(&client, deletion_task, "course index clear")
+        .await
+        .map_err(|error| meili_app_failure("course index clear", error))?;
+
+    if !documents.is_empty() {
+        let addition_task = index
+            .add_documents(&documents, Some("id"))
+            .await
+            .map_err(|error| meili_app_failure("course index addition enqueue", error))?;
+        wait_for_task(&client, addition_task, "course index addition")
+            .await
+            .map_err(|error| meili_app_failure("course index addition", error))?;
+    }
+    Ok(documents.len())
+}
+
+fn ranked_candidate_ids(
+    candidates: impl IntoIterator<Item = SearchCandidate>,
+    kind: SearchDocumentKind,
+) -> Vec<i64> {
+    let mut seen = HashSet::new();
+    candidates
+        .into_iter()
+        .filter_map(|candidate| {
+            let id = candidate.id.strip_prefix(kind.document_prefix())?.parse::<i64>().ok()?;
+            (id > 0 && seen.insert(id)).then_some(id)
+        })
+        .collect()
+}
+
+/// Returns ranked candidate IDs for one document kind.
+///
+/// Callers must reconstruct every result from their owning database table before
+/// exposing it; Meilisearch is never the visibility authority.
+pub async fn search_document_ids(
     url: &str,
     api_key: &str,
     q: &str,
+    kind: SearchDocumentKind,
     limit: usize,
-) -> Vec<SearchResult> {
+) -> Vec<i64> {
+    if limit == 0 {
+        return Vec::new();
+    }
     let client = match Client::new(url, meili_api_key(api_key)) {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::warn!(error = %e, "Meili client failed — search returning empty");
+        Ok(client) => client,
+        Err(error) => {
+            tracing::warn!(%error, "catalogue search client creation failed");
             return Vec::new();
         }
     };
 
-    let index = client.index("courses");
-    match index.search().with_query(q).with_limit(limit).execute::<SearchResult>().await {
-        Ok(results) => results.hits.into_iter().map(|h| h.result).collect(),
-        Err(e) => {
-            tracing::warn!(error = %e, query = %q, "Meili search failed — returning empty");
+    let filter = format!("kind = {}", kind.value());
+    let candidate_limit = limit.saturating_mul(4).min(1_000);
+    match client
+        .index("courses")
+        .search()
+        .with_query(q)
+        .with_filter(&filter)
+        .with_limit(candidate_limit)
+        .execute::<SearchCandidate>()
+        .await
+    {
+        Ok(results) => ranked_candidate_ids(results.hits.into_iter().map(|hit| hit.result), kind),
+        Err(error) => {
+            tracing::warn!(%error, document_kind = kind.value(), "catalogue search failed");
             Vec::new()
         }
     }
@@ -150,26 +289,30 @@ pub async fn setup_selection_index(url: &str, api_key: &str) -> Result<(), Strin
     let client =
         Client::new(url, meili_api_key(api_key)).map_err(|e| format!("Meili client: {e}"))?;
 
-    match client.create_index("selection_courses", None).await {
-        Ok(index) => {
-            let _ = index.wait_for_completion(&client, None, None).await;
+    match client.get_index("selection_courses").await {
+        Ok(_) => {}
+        Err(error) if is_index_not_found(&error) => {
+            let task = client
+                .create_index("selection_courses", Some("id"))
+                .await
+                .map_err(|error| format!("selection index creation: {error}"))?;
+            wait_for_task(&client, task, "selection index creation").await?;
         }
-        Err(e) if e.to_string().contains("index_already_exists") => {
-            // Index already exists — continue
-        }
-        Err(e) => return Err(format!("Meili create index: {e}")),
+        Err(error) => return Err(format!("selection index lookup: {error}")),
     }
 
     let index = client.index("selection_courses");
-    index
+    let searchable_task = index
         .set_searchable_attributes(&["code", "name", "teacherName", "teacherNames"])
         .await
-        .map_err(|e| format!("Meili searchable attrs: {e}"))?;
+        .map_err(|error| format!("selection searchable attributes: {error}"))?;
+    wait_for_task(&client, searchable_task, "selection searchable attributes").await?;
 
-    index
+    let filterable_task = index
         .set_filterable_attributes(&["natureId", "campusId"])
         .await
-        .map_err(|e| format!("Meili filterable attrs: {e}"))?;
+        .map_err(|error| format!("selection filterable attributes: {error}"))?;
+    wait_for_task(&client, filterable_task, "selection filterable attributes").await?;
 
     Ok(())
 }
@@ -323,7 +466,7 @@ async fn build_course_document(
     let aliases: Vec<String> = aliases.into_iter().map(|(a,)| a).collect();
 
     Ok(Some(CourseDocument {
-        id: format!("course:{course_id}"),
+        id: format!("course-{course_id}"),
         name: row.name,
         code: row.code,
         pinyin: row.name_pinyin,
@@ -338,76 +481,75 @@ async fn build_course_document(
     }))
 }
 
-/// Sync a review to Meilisearch.
-pub async fn sync_review_to_meili(url: &str, api_key: &str, review_id: i64, pool: &PgPool) {
-    let record = match build_review_document(review_id, pool).await {
-        Ok(Some(r)) => r,
-        Ok(None) => {
-            match Client::new(url, meili_api_key(api_key)) {
-                Ok(client) => {
-                    if let Err(error) =
-                        client.index("courses").delete_document(format!("review:{review_id}")).await
-                    {
-                        tracing::warn!(error = %error, review_id, "Meili review delete failed");
-                    }
-                }
-                Err(error) => {
-                    tracing::warn!(error = %error, review_id, "Meili client creation failed during review delete");
-                }
-            }
-            return;
-        }
-        Err(e) => {
-            tracing::warn!(error = %e, review_id, "failed to build review doc for Meili sync");
-            return;
-        }
-    };
+/// Review document accepted by the shared catalogue index.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewDocument {
+    id: String,
+    name: String,
+    code: String,
+    course_name: String,
+    comment: Option<String>,
+    kind: String,
+}
 
-    match Client::new(url, meili_api_key(api_key)) {
-        Ok(client) => {
-            let index = client.index("courses");
-            if let Err(e) = index.add_documents(&[record], Some("id")).await {
-                tracing::warn!(error = %e, review_id, "Meili add_documents failed");
-            }
-        }
-        Err(e) => {
-            tracing::warn!(error = %e, "Meili client creation failed during review sync");
+impl ReviewDocument {
+    /// Builds the stable review document owned by the catalogue index.
+    pub fn new(
+        review_id: i64,
+        course_code: String,
+        course_name: String,
+        comment: Option<String>,
+    ) -> Self {
+        Self {
+            id: format!("review-{review_id}"),
+            name: format!("Review: {course_name}"),
+            code: course_code,
+            course_name,
+            comment,
+            kind: "review".into(),
         }
     }
 }
 
-async fn build_review_document(
+/// Upserts or removes a review document supplied by the reviews domain.
+pub async fn sync_review_document_to_meili(
+    url: &str,
+    api_key: &str,
     review_id: i64,
-    pool: &PgPool,
-) -> Result<Option<serde_json::Value>, sqlx::Error> {
-    #[derive(Debug, sqlx::FromRow)]
-    #[allow(dead_code)]
-    struct ReviewSyncRow {
-        pub id: i64,
-        pub comment: Option<String>,
-        pub course_name: String,
-        pub course_code: String,
+    document: Option<ReviewDocument>,
+) {
+    match Client::new(url, meili_api_key(api_key)) {
+        Ok(client) => {
+            let index = client.index("courses");
+            let result = match document {
+                Some(document) => index.add_documents(&[document], Some("id")).await,
+                None => index.delete_document(format!("review-{review_id}")).await,
+            };
+            if let Err(error) = result {
+                tracing::warn!(%error, review_id, "review search document reconciliation failed");
+            }
+        }
+        Err(error) => {
+            tracing::warn!(%error, review_id, "review search client creation failed");
+        }
     }
+}
 
-    let row = sqlx::query_as::<_, ReviewSyncRow>(
-        "SELECT r.id, r.comment, c.name AS course_name, c.code AS course_code \
-         FROM reviews.reviews r \
-         JOIN courses.courses c ON c.id = r.course_id \
-         WHERE r.id = $1 AND r.status = 'visible'",
-    )
-    .bind(review_id)
-    .fetch_optional(pool)
-    .await?;
+#[cfg(test)]
+mod tests {
+    use super::{ranked_candidate_ids, SearchCandidate, SearchDocumentKind};
 
-    match row {
-        Some(r) => Ok(Some(serde_json::json!({
-            "id": format!("review:{review_id}"),
-            "name": format!("Review: {}", r.course_name),
-            "code": r.course_code,
-            "courseName": r.course_name,
-            "comment": r.comment,
-            "kind": "review",
-        }))),
-        None => Ok(None),
+    #[test]
+    fn candidate_ids_require_the_requested_prefix_and_remain_ranked() {
+        let candidates = [
+            SearchCandidate { id: "course-9".into() },
+            SearchCandidate { id: "review-8".into() },
+            SearchCandidate { id: "course-9".into() },
+            SearchCandidate { id: "course-3".into() },
+            SearchCandidate { id: "course-invalid".into() },
+        ];
+
+        assert_eq!(ranked_candidate_ids(candidates, SearchDocumentKind::Course), vec![9, 3]);
     }
 }

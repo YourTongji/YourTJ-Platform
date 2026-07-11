@@ -279,3 +279,45 @@ async fn create_review_idempotency_replays_before_captcha_and_rejects_key_reuse(
             .expect("idempotent course aggregate");
     assert_eq!(aggregate_count, 1);
 }
+
+#[tokio::test]
+async fn search_projection_drops_stale_hidden_candidates_and_preserves_rank() {
+    let (pool, _) = create_test_app().await;
+    let suffix = uuid::Uuid::new_v4().simple().to_string();
+    let account_id = seed_account(
+        &pool,
+        &format!("search-review-{suffix}@tongji.edu.cn"),
+        &format!("search-review-{suffix}"),
+    )
+    .await;
+    let course_id = seed_course(&pool, &format!("SEARCH-{suffix}"), "搜索测试课程").await;
+
+    let visible_id: i64 = sqlx::query_scalar(
+        "INSERT INTO reviews.reviews (course_id, account_id, rating, comment, status) \
+         VALUES ($1, $2, 5, 'visible review', 'visible') RETURNING id",
+    )
+    .bind(course_id)
+    .bind(account_id)
+    .fetch_one(&pool)
+    .await
+    .expect("seed visible review");
+    let hidden_id: i64 = sqlx::query_scalar(
+        "INSERT INTO reviews.reviews (course_id, account_id, rating, comment, status) \
+         VALUES ($1, $2, 1, 'hidden review', 'hidden') RETURNING id",
+    )
+    .bind(course_id)
+    .bind(account_id)
+    .fetch_one(&pool)
+    .await
+    .expect("seed hidden review");
+
+    let hits = reviews::search::load_review_hits(&pool, &[hidden_id, visible_id, 999_999], 10)
+        .await
+        .expect("load review search hits");
+
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].id, visible_id.to_string());
+    assert_eq!(hits[0].course_id, course_id.to_string());
+    assert_eq!(hits[0].course_name, "搜索测试课程");
+    assert_eq!(hits[0].comment.as_deref(), Some("visible review"));
+}

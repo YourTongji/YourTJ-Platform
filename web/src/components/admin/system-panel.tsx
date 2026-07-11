@@ -11,7 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { api } from "@/lib/api/endpoints";
 
-type JobKind = "selection" | "reviews" | "forum";
+type JobKind = "selection" | "courses" | "reviews" | "forum";
 
 function SettingsPanel() {
   const queryClient = useQueryClient();
@@ -87,6 +87,7 @@ function JobsPanel() {
   const job = useMutation({
     mutationFn: ({ kind, reason }: { kind: JobKind; reason: string }) => {
       if (kind === "selection") return api.triggerSelectionSync(reason);
+      if (kind === "courses") return api.reindexCourses(reason);
       if (kind === "reviews") return api.reindexReviews(reason);
       return api.reindexForum(reason);
     },
@@ -98,6 +99,7 @@ function JobsPanel() {
   });
   const jobs = [
     { kind: "selection" as const, title: "选课数据同步", description: "从一系统镜像选课目录。", icon: DatabaseZap },
+    { kind: "courses" as const, title: "课程索引重建", description: "重建 Meilisearch course documents。", icon: RefreshCcw },
     { kind: "reviews" as const, title: "点评索引重建", description: "重建 Meilisearch reviews 索引。", icon: RefreshCcw },
     { kind: "forum" as const, title: "论坛索引重建", description: "重建 Meilisearch forum 索引。", icon: RefreshCcw },
   ];
@@ -106,7 +108,7 @@ function JobsPanel() {
   return (
     <div className="space-y-3">
       <p className="text-xs text-muted-foreground">当前接口只返回 202，没有持久任务 ID、进度、失败日志或安全重试状态。确认仅表示已提交，不表示已完成。</p>
-      <div className="grid gap-3 md:grid-cols-3">
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
         {jobs.map((item) => (
           <Card key={item.kind} className="rounded-xl">
             <CardHeader>

@@ -288,6 +288,7 @@ fn build_router(state: AppState) -> Router {
         .merge(crate::admin::routes(state.clone()))
         .merge(identity::routes(state.clone()))
         .merge(activity::routes(state.clone()))
+        .merge(search::routes(state.clone()))
         .merge(courses::routes(state.clone()))
         .merge(reviews::routes(state.clone()))
         .merge(credit::routes(state.clone()))

@@ -6,7 +6,7 @@
 >
 > 负责人：Forum/Reviews/Media/Courses/Web maintainers、Product owner
 >
-> 最近核验：2026-07-11，`origin/main@33584db`
+> 最近核验：2026-07-11，`origin/main@ed8a06c`
 
 本规范覆盖主题、评论、课评、Markdown、草稿、OSS 资产、互动状态、feed、聚合搜索和社区
 推广位。核心原则是先定义内容与媒体边界，再选择编辑器和推荐算法。
@@ -20,7 +20,10 @@
 - 课评有发布、编辑、点赞/取消、举报和审核基础。
 - Media 后端已有 account-bound upload intent、短期 OSS STS、回调验签、MIME/大小限制和
   `pending/clean/blocked` 审核状态。
-- 课程/课评与论坛各有 Meilisearch 能力；公开论坛搜索会用 PostgreSQL 重验候选可见性。
+- 课程/课评与论坛各有 Meilisearch 候选能力；独立 `search` domain 返回 typed
+  courses/reviews/threads，每类都由 owner domain 回 PostgreSQL 重建，Web 可到达对应 canonical route。
+- 课程管理 mutation 会在事务提交后 reconcile 单个 course document；后台提供 course/review/forum
+  重建入口。任务仍是进程内 202 job，没有 durable progress/retry，因此可靠投影闭环仍为 `Partial`。
 
 ### Partial
 
@@ -29,7 +32,8 @@
 - tags、tag filter、subscription、poll/vote viewer state、read tracking 和 drafts 契约未接齐。
 - 首页使用固定摘要、按 index 伪造徽章，部分收藏/分享/筛选只有视觉没有行为。
 - Web 没有用户媒体上传链路；头像仍接受外部 URL，上传记录没有绑定到具体内容。
-- 聚合搜索的 OpenAPI、Rust DTO、type filtering 和 Web 渲染不一致。
+- 聚合搜索已有稳定三类结果和有效 type filter；仍缺独立综合结果页、每类 cursor、用户/板块/tag
+  结果、highlight/纠错，以及 transactional outbox 驱动的索引可靠更新。
 - 左侧社区推广位硬编码，没有管理模型。
 
 ## 内容类型与格式
@@ -170,6 +174,11 @@ Feed 卡片只显示真实作者、正文摘要、asset、viewer state 和计数
 - index 更新使用 transactional outbox/idempotent consumer；full reindex clear 完成后再 add。
 - PostgreSQL 重验权限、status、deleted/hidden/archived 状态；索引文档不能成为隐私事实源。
 - 查询日志最小化、限定保留；是否用于推荐属于 `Decision needed`。
+
+当前 `/api/v2/search` 支持 `course | teacher | review | thread | all`，其中 teacher 是课程文档的
+检索入口，不产生不完整的独立 teacher DTO；query 长度 2–100，单类 limit 1–30。索引内部
+`course-<id>` / `review-<id>` 前缀不得出现在 HTTP 结果，隐藏课评以及 hidden/deleted/archived/pending
+主题即使仍有陈旧 hit 也必须在回表阶段丢弃。
 
 ## 社区推广位
 

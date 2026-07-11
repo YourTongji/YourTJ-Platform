@@ -1494,12 +1494,12 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Realtime search (course / teacher / location / alias / pinyin / review text) */
+        /** Typed federated search across courses, reviews, and forum threads */
         get: {
             parameters: {
                 query: {
                     q: string;
-                    type?: "course" | "teacher" | "review" | "all";
+                    type?: "course" | "teacher" | "review" | "thread" | "all";
                     limit?: number;
                 };
                 header?: never;
@@ -1517,6 +1517,8 @@ export interface paths {
                         "application/json": components["schemas"]["SearchResult"];
                     };
                 };
+                400: components["responses"]["BadRequest"];
+                429: components["responses"]["RateLimited"];
             };
         };
         put?: never;
@@ -5197,6 +5199,44 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/courses/reindex": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Rebuild the Meilisearch course documents */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["AdminReasonInput"];
+                };
+            };
+            responses: {
+                /** @description queued */
+                202: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/reviews/reindex": {
         parameters: {
             query?: never;
@@ -6358,9 +6398,42 @@ export interface components {
             /** @enum {string} */
             action: "accept" | "deliver" | "confirm";
         };
+        CourseSearchHit: {
+            id: string;
+            code: string;
+            name: string;
+            credit: number | null;
+            department: string | null;
+            teacherName: string | null;
+            reviewCount: number;
+            reviewAvg: number | null;
+        };
+        ReviewSearchHit: {
+            id: string;
+            courseId: string;
+            courseName: string;
+            rating: number;
+            comment: string | null;
+            approveCount: number;
+            createdAt: number;
+        };
+        ThreadSearchHit: {
+            id: string;
+            title: string;
+            bodyExcerpt: string;
+            board: string;
+            tags: string[];
+            authorHandle: string;
+            replyCount: number;
+            voteCount: number;
+            createdAt: number;
+            /** @enum {string} */
+            status: "visible";
+        };
         SearchResult: {
-            courses?: components["schemas"]["Course"][];
-            reviews?: components["schemas"]["Review"][];
+            courses: components["schemas"]["CourseSearchHit"][];
+            reviews: components["schemas"]["ReviewSearchHit"][];
+            threads: components["schemas"]["ThreadSearchHit"][];
         };
         Calendar: {
             id?: string;

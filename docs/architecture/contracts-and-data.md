@@ -6,7 +6,7 @@
 >
 > 负责人：Platform maintainers、Domain maintainers
 >
-> 最近核验：2026-07-11，`origin/main@33584db`
+> 最近核验：2026-07-11，`origin/main@ed8a06c`
 
 本规范说明产品规则如何落实为 HTTP 契约、migration、domain API、事务和可重建投影。它不复制
 完整 OpenAPI 或 DDL。
@@ -69,6 +69,12 @@ Fresh database 必须只通过 sqlx migration ledger 建立。普通启动、CI 
 
 - PostgreSQL 是权限、内容和当前状态事实源；Meilisearch 文档可全部删除重建。
 - 索引只包含搜索所需最小字段；返回前应用 status、visibility、privacy、block/mute policy。
+- 联邦搜索由 `search` crate 编排 typed section；owner domain 从索引取得 ranked candidate id 后，
+  用自己的 public API 批量回表并保持候选顺序。聚合层不读取外域表，也不序列化 Meilisearch hit。
+- `/api/v2/search` 的 `type` 在后端决定实际查询域；course/review/thread 每类独立有界，ID 必须是
+  可直接用于 canonical route 的业务 ID，不带内部 index prefix。
+- Meilisearch document primary key 只能使用其允许的字母数字、`-`、`_` 字符；当前内部前缀为
+  `course-<id>` / `review-<id>`，HTTP DTO 始终去掉前缀。改变前缀必须配套 full reindex。
 - Full reindex 等待 clear task 成功后再 add，并观察 add 结果。
 - Hot/search counter 使用增量/投影，读路径避免全表聚合；定期 reconciliation 纠偏。
 - Redis cache key 版本化或短 TTL，mutation 精确 bump 相关 version；缓存故障不改变业务写入事实。

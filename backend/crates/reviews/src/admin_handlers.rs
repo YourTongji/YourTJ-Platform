@@ -134,7 +134,7 @@ pub async fn admin_delete_review(
     repo::admin_soft_delete_review(&state.db, review_id, auth.id, &auth.role, reason).await?;
 
     bump_review_cache(&state, review_id).await;
-    courses::meili::sync_review_to_meili(
+    crate::search::sync_search_document(
         &state.meili_url,
         &state.meili_master_key,
         review_id,
@@ -167,7 +167,7 @@ pub async fn admin_toggle_review(
     repo::admin_toggle_review_visibility(&state.db, review_id, auth.id, &auth.role, reason).await?;
 
     bump_review_cache(&state, review_id).await;
-    courses::meili::sync_review_to_meili(
+    crate::search::sync_search_document(
         &state.meili_url,
         &state.meili_master_key,
         review_id,
@@ -238,7 +238,7 @@ pub async fn admin_resolve_report(
     if report.status == "upheld" {
         if let Ok(review_id) = report.review_id.parse::<i64>() {
             bump_review_cache(&state, review_id).await;
-            courses::meili::sync_review_to_meili(
+            crate::search::sync_search_document(
                 &state.meili_url,
                 &state.meili_master_key,
                 review_id,

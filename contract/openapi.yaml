@@ -298,11 +298,50 @@ components:
         action: { type: string, enum: [accept, deliver, confirm] }
 
     # ---- search ----
+    CourseSearchHit:
+      type: object
+      required: [id, code, name, credit, department, teacherName, reviewCount, reviewAvg]
+      properties:
+        id: { type: string }
+        code: { type: string }
+        name: { type: string }
+        credit: { type: number, nullable: true }
+        department: { type: string, nullable: true }
+        teacherName: { type: string, nullable: true }
+        reviewCount: { type: integer, minimum: 0 }
+        reviewAvg: { type: number, nullable: true }
+    ReviewSearchHit:
+      type: object
+      required: [id, courseId, courseName, rating, comment, approveCount, createdAt]
+      properties:
+        id: { type: string }
+        courseId: { type: string }
+        courseName: { type: string }
+        rating: { type: integer, minimum: 0, maximum: 5 }
+        comment: { type: string, nullable: true }
+        approveCount: { type: integer, minimum: 0 }
+        createdAt: { type: integer }
+    ThreadSearchHit:
+      type: object
+      required: [id, title, bodyExcerpt, board, tags, authorHandle, replyCount, voteCount, createdAt, status]
+      properties:
+        id: { type: string }
+        title: { type: string }
+        bodyExcerpt: { type: string }
+        board: { type: string }
+        tags: { type: array, items: { type: string } }
+        authorHandle: { type: string }
+        replyCount: { type: integer, minimum: 0 }
+        voteCount: { type: integer }
+        createdAt: { type: integer }
+        status: { type: string, enum: [visible] }
     SearchResult:
       type: object
+      required: [courses, reviews, threads]
       properties:
-        courses: { type: array, items: { $ref: "#/components/schemas/Course" } }
-        reviews: { type: array, items: { $ref: "#/components/schemas/Review" } }
+        courses: { type: array, items: { $ref: "#/components/schemas/CourseSearchHit" } }
+        reviews: { type: array, items: { $ref: "#/components/schemas/ReviewSearchHit" } }
+        threads: { type: array, items: { $ref: "#/components/schemas/ThreadSearchHit" } }
 
     # ---- selection (选课/PK) ----
     Calendar: { type: object, properties: { id: { type: string }, name: { type: string }, isCurrent: { type: boolean } } }
@@ -1398,12 +1437,15 @@ paths:
     get:
       tags: [search]
       security: []
-      summary: Realtime search (course / teacher / location / alias / pinyin / review text)
+      summary: Typed federated search across courses, reviews, and forum threads
       parameters:
-        - { name: q, in: query, required: true, schema: { type: string } }
-        - { name: type, in: query, schema: { type: string, enum: [course, teacher, review, all], default: all } }
-        - { name: limit, in: query, schema: { type: integer, default: 10, maximum: 30 } }
-      responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/SearchResult" } } } } }
+        - { name: q, in: query, required: true, schema: { type: string, minLength: 2, maxLength: 100 } }
+        - { name: type, in: query, schema: { type: string, enum: [course, teacher, review, thread, all], default: all } }
+        - { name: limit, in: query, schema: { type: integer, default: 10, minimum: 1, maximum: 30 } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/SearchResult" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "429": { $ref: "#/components/responses/RateLimited" }
 
   # ============ courses ============
   /departments:
@@ -1953,6 +1995,8 @@ paths:
       responses: { "200": { description: blocked }, "403": { $ref: "#/components/responses/Forbidden" }, "404": { $ref: "#/components/responses/NotFound" }, "409": { $ref: "#/components/responses/Conflict" } }
   /admin/selection/sync:
     post: { tags: [admin], summary: Trigger 一系统 sync job, requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/AdminReasonInput" } } } }, responses: { "202": { description: queued } } }
+  /admin/courses/reindex:
+    post: { tags: [admin], summary: Rebuild the Meilisearch course documents, requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/AdminReasonInput" } } } }, responses: { "202": { description: queued } } }
   /admin/reviews/reindex:
     post: { tags: [admin], summary: Rebuild the Meilisearch review index, requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/AdminReasonInput" } } } }, responses: { "202": { description: queued } } }
   /admin/forum/reindex:

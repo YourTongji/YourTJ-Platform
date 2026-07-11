@@ -6,7 +6,7 @@
 >
 > 负责人：Platform maintainers
 >
-> 最近核验：2026-07-11，`origin/main@33584db`
+> 最近核验：2026-07-11，`origin/main@ed8a06c`
 
 YourTJ 是 Rust/Axum 后端与 React Web 的 monorepo。论坛、课程、评课、选课、积分共享身份和
 PostgreSQL，但每个 domain 仍拥有自己的表、业务规则和 HTTP routes。
@@ -26,6 +26,7 @@ flowchart LR
     A --> P["Credit"]
     A --> M["Media"]
     A --> V["Activity / Governance"]
+    A --> S["Federated Search"]
     I --> DB[("PostgreSQL")]
     F --> DB
     R --> DB
@@ -33,6 +34,9 @@ flowchart LR
     P --> DB
     M --> DB
     V --> DB
+    S --> K
+    S --> R
+    S --> F
     A --> Redis[("Redis")]
     A --> Meili[("Meilisearch")]
     M --> OSS[("OSS provider boundary (when configured)")]
@@ -55,6 +59,7 @@ PostgreSQL 是业务事实源。Redis 用于限流、缓存和热计数；Meilis
 | `media` | upload intent、OSS callback、asset quarantine/status | 任意业务内容本身 |
 | `activity` | contribution events、daily projection、score policy | 从源表在读路径临时聚合 |
 | `governance` | 跨域 append-only staff/system audit | 代替各域业务状态 |
+| `search` | 聚合 course/review/thread typed results、查询边界与限流 | 自有业务表、原始索引文档或跨 schema SQL |
 | `shared` | config、errors、auth primitives、pagination、cache/rate-limit helpers | domain SQL 或反向依赖 |
 | `e2e` | 可执行旅程测试 harness | 生产路由或测试替身进入业务 crate |
 
@@ -94,6 +99,8 @@ iOS 与 Flutter 在独立仓库，只消费 OpenAPI 生成的类型和平台 HTT
 - 搜索、通知、媒体处理和重型 reconciliation 是异步副作用，目标使用 transactional outbox 与
   幂等 consumer；当前仍存在 fire-and-forget 路径，应标为 `Partial`。
 - 公开搜索必须在返回前应用数据库可见性/隐私 policy；索引不能扩大权限。
+- `search` 只并行编排 owner crate public API；courses/reviews/forum 各自按候选 id 回 PostgreSQL
+  重建结果，避免 gateway 或聚合层拥有他域 SQL。
 - 缓存使用版本化 key/短 TTL；失效失败不得改变数据库事实。
 - 任何跨域后台汇总优先 read model，不让 `api` 直接形成越来越大的跨 schema join。
 

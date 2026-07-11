@@ -200,7 +200,42 @@ pub async fn selection_sync_handler(
     ))
 }
 
-/// POST /api/v2/admin/reviews/reindex — rebuild reviews in Meilisearch
+/// POST /api/v2/admin/courses/reindex — rebuild courses in Meilisearch.
+pub async fn courses_reindex_handler(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Json(body): Json<AdminJobInput>,
+) -> AppResult<(StatusCode, Json<serde_json::Value>)> {
+    let auth = authenticate_staff(&headers, &state).await?;
+    auth.require_capability(Capability::RunOperations).map_err(|_| shared::AppError::Forbidden)?;
+
+    let meili_url = state.meili_url.clone();
+    let meili_key = state.meili_master_key.clone();
+    let pool = state.db.clone();
+    let job_id = Uuid::new_v4().to_string();
+    audit_job_request(&state, &auth, &job_id, "courses_reindex", validate_reason(&body.reason)?)
+        .await?;
+    let response_job_id = job_id.clone();
+
+    tokio::spawn(async move {
+        tracing::info!(%job_id, "course reindex started");
+        match courses::meili::reindex_course_documents(&pool, &meili_url, &meili_key).await {
+            Ok(count) => tracing::info!(%job_id, count, "course reindex completed"),
+            Err(error) => tracing::error!(%error, %job_id, "course reindex failed"),
+        }
+    });
+
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(serde_json::json!({
+            "status": "queued",
+            "message": "course reindex started",
+            "jobId": response_job_id,
+        })),
+    ))
+}
+
+/// POST /api/v2/admin/reviews/reindex — rebuild reviews in Meilisearch.
 pub async fn reviews_reindex_handler(
     headers: HeaderMap,
     State(state): State<AppState>,
@@ -226,21 +261,10 @@ pub async fn reviews_reindex_handler(
 
     tokio::spawn(async move {
         tracing::info!(%job_id, "review reindex started");
-        let rows: Vec<(i64,)> = match sqlx::query_as("SELECT id FROM reviews.reviews ORDER BY id")
-            .fetch_all(&pool)
-            .await
-        {
-            Ok(r) => r,
-            Err(e) => {
-                tracing::error!(error = %e, %job_id, "review reindex: query failed");
-                return;
-            }
-        };
-        tracing::info!(%job_id, count = rows.len(), "review reindex: syncing reviews to meilisearch");
-        for (review_id,) in rows {
-            courses::meili::sync_review_to_meili(&meili_url, &meili_key, review_id, &pool).await;
+        match reviews::search::reindex_search_documents(&pool, &meili_url, &meili_key).await {
+            Ok(count) => tracing::info!(%job_id, count, "review reindex completed"),
+            Err(error) => tracing::error!(%error, %job_id, "review reindex failed"),
         }
-        tracing::info!(%job_id, "review reindex completed");
     });
 
     Ok((
@@ -299,6 +323,7 @@ pub fn routes(state: AppState) -> Router {
         .route("/api/v2/admin/overview", get(overview_handler))
         .route("/api/v2/admin/audit-events", get(audit_events_handler))
         .route("/api/v2/admin/selection/sync", post(selection_sync_handler))
+        .route("/api/v2/admin/courses/reindex", post(courses_reindex_handler))
         .route("/api/v2/admin/reviews/reindex", post(reviews_reindex_handler))
         .route("/api/v2/admin/forum/reindex", post(forum_reindex_handler))
         .with_state(state)

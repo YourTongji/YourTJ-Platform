@@ -184,6 +184,7 @@ pub async fn admin_create_course(
     )
     .await?;
     tx.commit().await?;
+    crate::meili::reconcile_course_in_background(&state, row.id);
 
     let dto = AdminCourseDto {
         id: row.id.to_string(),
@@ -261,6 +262,7 @@ pub async fn admin_update_course(
     )
     .await?;
     tx.commit().await?;
+    crate::meili::reconcile_course_in_background(&state, id);
 
     let teacher_name = if let Some(teacher_name) = teacher_name_input {
         Some(teacher_name.to_string())
@@ -316,6 +318,7 @@ pub async fn admin_delete_course(
     )
     .await?;
     tx.commit().await?;
+    crate::meili::reconcile_course_in_background(&state, id);
 
     Ok(StatusCode::NO_CONTENT)
 }

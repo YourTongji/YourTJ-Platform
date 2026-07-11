@@ -263,7 +263,7 @@ pub async fn search_threads(
     meili_key: &str,
     query: &str,
     limit: usize,
-) -> AppResult<Vec<Value>> {
+) -> AppResult<Vec<ForumThreadDoc>> {
     if limit == 0 {
         return Ok(Vec::new());
     }
@@ -293,13 +293,7 @@ pub async fn search_threads(
 
     let candidate_ids = candidate_thread_ids(&hits);
     let documents = load_public_thread_documents(pool, &candidate_ids).await?;
-    order_public_documents(&candidate_ids, documents, limit)
-        .into_iter()
-        .map(|document| {
-            serde_json::to_value(document)
-                .map_err(|error| AppError::Internal(anyhow::anyhow!(error)))
-        })
-        .collect()
+    Ok(order_public_documents(&candidate_ids, documents, limit))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

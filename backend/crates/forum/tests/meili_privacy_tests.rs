@@ -100,9 +100,9 @@ async fn public_search_reconstructs_hits_and_omits_every_non_public_thread_state
     server.abort();
 
     assert_eq!(results.len(), 1);
-    assert_eq!(results[0]["id"], visible_id.to_string());
-    assert_eq!(results[0]["title"], "visible");
-    assert_eq!(results[0]["bodyExcerpt"], "body for visible");
-    assert_eq!(results[0]["tags"], serde_json::json!(["privacy"]));
-    assert_eq!(results[0]["authorHandle"], "search_author");
+    assert_eq!(results[0].id, visible_id.to_string());
+    assert_eq!(results[0].title, "visible");
+    assert_eq!(results[0].body_excerpt, "body for visible");
+    assert_eq!(results[0].tags, ["privacy"]);
+    assert_eq!(results[0].author_handle, "search_author");
 }

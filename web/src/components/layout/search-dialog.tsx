@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { BookOpen, MessageSquare, Search } from "lucide-react";
+import { BookOpen, MessageCircle, MessageSquare, Search } from "lucide-react";
 import * as React from "react";
 import { Link } from "react-router";
 
@@ -8,6 +8,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { api } from "@/lib/api/endpoints";
+import { formatUnixTime } from "@/lib/format";
 
 export function SearchDialog({
   open,
@@ -35,6 +36,7 @@ export function SearchDialog({
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               autoFocus
+              aria-label="搜索关键词"
               className="pl-9"
               placeholder="搜索课程、老师、点评、帖子"
             />
@@ -44,7 +46,18 @@ export function SearchDialog({
           {trimmed.length < 2 ? (
             <p className="py-8 text-center text-sm text-muted-foreground">输入至少 2 个字符开始搜索</p>
           ) : result.isLoading ? (
-            <p className="py-8 text-center text-sm text-muted-foreground">搜索中...</p>
+            <p role="status" className="py-8 text-center text-sm text-muted-foreground">搜索中…</p>
+          ) : result.isError ? (
+            <div className="space-y-3 py-8 text-center text-sm text-muted-foreground">
+              <p>搜索暂时不可用，请稍后重试。</p>
+              <button
+                type="button"
+                className="text-primary underline underline-offset-4"
+                onClick={() => void result.refetch()}
+              >
+                重新搜索
+              </button>
+            </div>
           ) : (
             <div className="space-y-5">
               <section>
@@ -89,12 +102,41 @@ export function SearchDialog({
                     >
                       <p className="line-clamp-2 text-sm">{review.comment ?? "无文字点评"}</p>
                       <p className="mt-1 text-xs text-muted-foreground">
-                        {review.authorHandle} · {review.rating} 星
+                        {review.courseName} · {review.rating} 星
                       </p>
                     </Link>
                   ))}
                   {result.data?.reviews?.length === 0 ? (
                     <p className="rounded-md border border-dashed p-3 text-sm text-muted-foreground">没有点评结果</p>
+                  ) : null}
+                </div>
+              </section>
+              <section>
+                <div className="mb-2 flex items-center gap-2 text-sm font-medium">
+                  <MessageCircle className="h-4 w-4 text-primary" />
+                  社区帖子
+                </div>
+                <div className="space-y-2">
+                  {(result.data?.threads ?? []).map((thread) => (
+                    <Link
+                      key={thread.id}
+                      to={`/forum/threads/${thread.id}`}
+                      onClick={() => onOpenChange(false)}
+                      className="block rounded-md border p-3 transition-colors hover:bg-accent"
+                    >
+                      <p className="font-medium">{thread.title}</p>
+                      {thread.bodyExcerpt ? (
+                        <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">
+                          {thread.bodyExcerpt}
+                        </p>
+                      ) : null}
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        {thread.authorHandle} · {thread.replyCount} 条回复 · {formatUnixTime(thread.createdAt)}
+                      </p>
+                    </Link>
+                  ))}
+                  {result.data?.threads.length === 0 ? (
+                    <p className="rounded-md border border-dashed p-3 text-sm text-muted-foreground">没有帖子结果</p>
                   ) : null}
                 </div>
               </section>

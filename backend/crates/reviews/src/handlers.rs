@@ -75,7 +75,7 @@ async fn invalidate_created_review(state: &AppState, course_id: i64, dto: &Revie
     shared::cache::bump_version_opt(state.redis.as_ref(), "course", &course_key).await.ok();
     shared::cache::bump_version_opt(state.redis.as_ref(), "reviews", &course_key).await.ok();
     if let Ok(review_id) = dto.id.parse::<i64>() {
-        courses::meili::sync_review_to_meili(
+        crate::search::sync_search_document(
             &state.meili_url,
             &state.meili_master_key,
             review_id,
@@ -221,7 +221,7 @@ pub async fn edit_review(
     shared::cache::bump_version_opt(state.redis.as_ref(), "course", &cid).await.ok();
     shared::cache::bump_version_opt(state.redis.as_ref(), "reviews", &cid).await.ok();
 
-    courses::meili::sync_review_to_meili(
+    crate::search::sync_search_document(
         &state.meili_url,
         &state.meili_master_key,
         review_id,
