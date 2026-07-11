@@ -24,8 +24,7 @@ jobs:
     if: github.event.action != 'closed'
     runs-on: ubuntu-latest
     outputs:
-      backend: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.filter.outputs.backend }}
-      frontend: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.filter.outputs.frontend }}
+      preview: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.filter.outputs.preview }}
     steps:
       - uses: actions/checkout@v4
       - name: validate PR number
@@ -40,17 +39,16 @@ jobs:
         id: filter
         with:
           filters: |
-            backend:
+            preview:
               - "backend/**"
-              - "contract/openapi.yaml"
-            frontend:
               - "web/**"
               - "contract/openapi.yaml"
+              - ".github/workflows/pr-preview.yml"
 
   # ── Build backend Docker image ──
   backend:
     needs: changes
-    if: needs.changes.outputs.backend == 'true'
+    if: needs.changes.outputs.preview == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -75,7 +73,7 @@ jobs:
   # ── Build frontend ──
   frontend:
     needs: changes
-    if: needs.changes.outputs.frontend == 'true'
+    if: needs.changes.outputs.preview == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     defaults:
@@ -104,10 +102,13 @@ jobs:
           retention-days: 1
 
   # ── Deploy to test server ──
-  # always() so deploy runs even when one of backend/frontend was skipped
-  # (the build jobs only run when their code actually changed).
   deploy:
-    if: always() && github.event.action != 'closed'
+    if: >-
+      always() &&
+      github.event.action != 'closed' &&
+      needs.changes.result == 'success' &&
+      needs.backend.result == 'success' &&
+      needs.frontend.result == 'success'
     needs: [changes, backend, frontend]
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -116,12 +117,10 @@ jobs:
         with:
           name: api-image-${{ github.event.pull_request.number || github.event.inputs.pr_number }}
           path: ./api-image-${{ github.event.pull_request.number || github.event.inputs.pr_number }}
-        continue-on-error: true
       - uses: actions/download-artifact@v4
         with:
           name: frontend-dist-${{ github.event.pull_request.number || github.event.inputs.pr_number }}
           path: ./frontend-dist-${{ github.event.pull_request.number || github.event.inputs.pr_number }}
-        continue-on-error: true
 
       - name: setup SSH
         run: |
@@ -139,31 +138,22 @@ jobs:
           EOF
 
       - name: transfer backend image
-        if: always()
         run: |
           ART="api-image-${{ github.event.pull_request.number || github.event.inputs.pr_number }}"
           TAR="${ART}/api-image.tar"
-          if [ -f "$TAR" ]; then
-            scp "$TAR" preview:/tmp/api-image-pr-${{ github.event.pull_request.number || github.event.inputs.pr_number }}.tar
-            ssh preview "docker load < /tmp/api-image-pr-${{ github.event.pull_request.number || github.event.inputs.pr_number }}.tar && rm /tmp/api-image-pr-${{ github.event.pull_request.number || github.event.inputs.pr_number }}.tar"
-          else
-            echo "(no backend image)"
-          fi
+          test -f "$TAR"
+          scp "$TAR" preview:/tmp/api-image-pr-${{ github.event.pull_request.number || github.event.inputs.pr_number }}.tar
+          ssh preview "docker load < /tmp/api-image-pr-${{ github.event.pull_request.number || github.event.inputs.pr_number }}.tar && rm /tmp/api-image-pr-${{ github.event.pull_request.number || github.event.inputs.pr_number }}.tar"
 
       - name: transfer frontend dist
-        if: always()
         run: |
           ART="frontend-dist-${{ github.event.pull_request.number || github.event.inputs.pr_number }}"
           FE_DIR="/opt/yourtj-preview/pr/${{ github.event.pull_request.number || github.event.inputs.pr_number }}/frontend"
-          if [ -d "$ART" ]; then
-            ssh preview "mkdir -p ${FE_DIR} && rm -rf ${FE_DIR}/*"
-            scp -r "$ART"/* preview:${FE_DIR}/
-          else
-            echo "(no frontend dist)"
-          fi
+          test -f "${ART}/index.html"
+          ssh preview "mkdir -p ${FE_DIR} && rm -rf ${FE_DIR}/*"
+          scp -r "$ART"/* preview:${FE_DIR}/
 
       - name: run deploy script
-        if: always()
         run: |
           PR="${{ github.event.pull_request.number || github.event.inputs.pr_number }}"
           FE_DIR="/opt/yourtj-preview/pr/${PR}/frontend"
@@ -174,14 +164,13 @@ jobs:
           PR="${{ github.event.pull_request.number || github.event.inputs.pr_number }}"
           ssh preview bash -s -- "$PR" <<'EOF'
             PR="$1"
-            curl --fail --silent --show-error --retry 10 --retry-delay 1 --retry-connrefused \
+            curl --fail --silent --show-error --retry 60 --retry-delay 1 --retry-connrefused \
               http://127.0.0.1:8080/pr-${PR}/ >/dev/null
-            curl --fail --silent --show-error --retry 10 --retry-delay 1 --retry-connrefused \
+            curl --fail --silent --show-error --retry 60 --retry-delay 1 --retry-connrefused \
               http://127.0.0.1:8080/pr-${PR}/api/v2/health >/dev/null
           EOF
 
       - name: summary
-        if: always()
         run: |
           PR="${{ github.event.pull_request.number || github.event.inputs.pr_number }}"
           echo "### :rocket: PR Preview Deployed" >> $GITHUB_STEP_SUMMARY
