@@ -28,9 +28,10 @@
 
 ### Partial
 
-- Web 只提供混合的验证码登录/注册表单，没有暴露密码登录和完整找回流程。
-- Web 尚未提供设备中心、全部设备注销和 password login/reset UI；生成类型和 API client 已具备。
-- 未填写 handle 时可能使用邮箱前缀，形成公开身份关联风险。
+- Web 已拆分密码登录、验证码登录、注册和忘记/重置密码，明确发送用途、重发倒计时、密码可见性、
+  中性找回提示和登录后安全返回路径；注册 UI 强制用户主动选择公开 handle。
+- Web 已提供设备中心、单设备/其他设备/全部设备撤销和修改密码；验证码登录允许无密码账号首次
+  设置密码，已有密码不会被验证码覆盖。
 - access 与 refresh token 都保存在 localStorage；富文本上线前必须重新评估 XSS 后果。
 - Web 尚无跨标签页 refresh 协调；没有 recent-auth、条款版本确认、onboarding、导出或自助删除。
 
@@ -130,6 +131,8 @@ Identity crate 拥有 accounts、email codes、password hash、sessions、accoun
 ## 验收基线
 
 - 密码与验证码两种登录都能从 Web 完成，注册和找回路径互不混淆。
+- 注册 UI 不从邮箱、学号或姓名自动生成公开 handle；用户必须显式选择满足规则的 handle。
+- 设备中心区分当前设备，支持撤销单个其他设备、其他全部设备和包括当前设备在内的全部会话。
 - code 跨 purpose、并发重放、过期、超尝试次数均失败且无状态竞争。
 - 外部响应不能可靠区分不存在账号、无密码和错误密码。
 - 密码重置、角色变化、session revoke 和 suspend 后对应旧 access/refresh token 都不可继续使用。

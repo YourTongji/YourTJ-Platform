@@ -2,7 +2,7 @@ import * as React from "react";
 import { toast } from "sonner";
 
 import { api } from "@/lib/api/endpoints";
-import type { Account } from "@/lib/api/types";
+import type { Account, EmailCodePurpose } from "@/lib/api/types";
 import {
   clearAuth,
   readAccessToken,
@@ -15,16 +15,23 @@ interface AuthContextValue {
   account: Account | null;
   isAuthenticated: boolean;
   isLoading: boolean;
-  requestCode: (email: string, captchaToken: string) => Promise<void>;
+  requestCode: (
+    email: string,
+    captchaToken: string,
+    purpose: EmailCodePurpose,
+  ) => Promise<void>;
   verifyEmail: (input: {
     email: string;
     code: string;
+    purpose: EmailCodePurpose;
     handle?: string;
     password?: string;
   }) => Promise<void>;
+  loginWithPassword: (input: { email: string; password: string }) => Promise<void>;
   refreshMe: () => Promise<void>;
   updateProfile: (input: { handle?: string; avatarUrl?: string }) => Promise<void>;
   logout: () => Promise<void>;
+  logoutAll: () => Promise<void>;
 }
 
 const AuthContext = React.createContext<AuthContextValue | null>(null);
@@ -59,12 +66,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       account,
       isAuthenticated: Boolean(account),
       isLoading,
-      requestCode: async (email, captchaToken) => {
-        await api.requestEmailCode(email, captchaToken);
+      requestCode: async (email, captchaToken, purpose) => {
+        await api.requestEmailCode(email, captchaToken, purpose);
         toast.success("验证码已发送");
       },
       verifyEmail: async (input) => {
         const tokens = await api.verifyEmail(input);
+        writeAuth(tokens);
+        setAccount(tokens.account);
+        toast.success("已登录 YourTJ");
+      },
+      loginWithPassword: async (input) => {
+        const tokens = await api.passwordLogin(input);
         writeAuth(tokens);
         setAccount(tokens.account);
         toast.success("已登录 YourTJ");
@@ -83,6 +96,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           clearAuth();
           setAccount(null);
           toast.success("已退出登录");
+        }
+      },
+      logoutAll: async () => {
+        try {
+          await api.logoutAll();
+        } finally {
+          clearAuth();
+          setAccount(null);
+          toast.success("所有设备均已退出登录");
         }
       },
     }),

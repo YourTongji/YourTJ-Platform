@@ -4,6 +4,7 @@ import { toast } from "sonner";
 
 import { PageHeader } from "@/components/common/page-header";
 import { EmptyState } from "@/components/common/states";
+import { SecuritySettings } from "@/components/settings/security-settings";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -103,6 +104,8 @@ export function SettingsPage() {
             </Button>
           </CardContent>
         </Card>
+
+        <SecuritySettings />
       </div>
     </div>
   );
