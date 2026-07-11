@@ -331,6 +331,17 @@ pub async fn resolve_flag(
         .await?;
 
         if newly_deleted.is_some() {
+            let target_type = match flag.target_type.as_str() {
+                "thread" => media::attachments::ForumTargetType::Thread,
+                "comment" => media::attachments::ForumTargetType::Comment,
+                _ => return Err(AppError::Internal(anyhow::anyhow!("invalid flag target type"))),
+            };
+            media::attachments::detach_forum_asset_bindings(
+                connection,
+                target_type,
+                flag.target_id,
+            )
+            .await?;
             if flag.target_type == "comment" {
                 sqlx::query(
                     "UPDATE forum.threads SET reply_count = GREATEST(reply_count - 1, 0) \

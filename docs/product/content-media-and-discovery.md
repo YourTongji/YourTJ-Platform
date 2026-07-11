@@ -66,6 +66,9 @@
   owner API。公开 DTO 只返回匹配正文的 asset id/reference、alt、可选尺寸和派生 URL，不返回 object key、
   hash、owner 或 vendor destination URL。列表 DTO 最多带首张图供 feed card，详情才返回完整有界集合；
   投影与正文不一致时 fail closed，不披露多余 URL。
+- 归档/隐藏保留 binding；作者删除、staff 删除和举报 uphold 会随内容 mutation 原子 detach 并进入 30 天
+  grace。普通 restore 与申诉 overturn 都重新解析 canonical source、验证 owner/clean/version 后原子 rebind，
+  避免治理撤销恢复正文却永久丢失图片。
 - Web CodeMirror 已接 direct-to-OSS 图片上传、持久状态恢复、pending/clean/blocked 状态、引用插入和移除；
   pending 可保存在本人云端草稿，但发布按钮和服务端 binding 都要求 clean。
 - 课程/课评、论坛主题、用户与论坛 discovery object 各有最小化 Meilisearch 候选能力；独立

@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 use shared::{AppError, AppResult};
-use sqlx::{FromRow, PgPool, Postgres, Transaction};
+use sqlx::{FromRow, PgConnection, PgPool, Postgres, Transaction};
 
 /// A Forum content target that can bind clean image assets.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -108,7 +108,7 @@ fn validate_reference_shape(
 }
 
 async fn lock_bindable_uploads(
-    transaction: &mut Transaction<'_, Postgres>,
+    connection: &mut PgConnection,
     account_id: i64,
     target_type: ForumTargetType,
     asset_ids: &[i64],
@@ -122,7 +122,7 @@ async fn lock_bindable_uploads(
          FROM media.uploads WHERE id = ANY($1) ORDER BY id FOR SHARE",
     )
     .bind(asset_ids)
-    .fetch_all(&mut **transaction)
+    .fetch_all(&mut *connection)
     .await?;
     if rows.len() != asset_ids.len() {
         return Err(AppError::NotFound);
@@ -160,7 +160,7 @@ pub async fn validate_owned_forum_draft_assets(
 /// Replace the active binding set after the owning Forum row is locked and mutated. Validation,
 /// detachment, and insertion run in the caller's transaction, so stale edits leave no media state.
 pub async fn sync_forum_asset_bindings(
-    transaction: &mut Transaction<'_, Postgres>,
+    connection: &mut PgConnection,
     account_id: i64,
     target_type: ForumTargetType,
     target_id: i64,
@@ -169,7 +169,7 @@ pub async fn sync_forum_asset_bindings(
 ) -> AppResult<()> {
     validate_reference_shape(target_type, references)?;
     let asset_ids = references.iter().map(|reference| reference.asset_id).collect::<Vec<_>>();
-    lock_bindable_uploads(transaction, account_id, target_type, &asset_ids, true).await?;
+    lock_bindable_uploads(connection, account_id, target_type, &asset_ids, true).await?;
 
     let active = sqlx::query_as::<_, ActiveUsageRow>(
         "SELECT asset_id, position, alt_text FROM media.asset_usages \
@@ -178,7 +178,7 @@ pub async fn sync_forum_asset_bindings(
     )
     .bind(target_type.as_str())
     .bind(target_id)
-    .fetch_all(&mut **transaction)
+    .fetch_all(&mut *connection)
     .await?;
     let desired = references
         .iter()
@@ -201,7 +201,7 @@ pub async fn sync_forum_asset_bindings(
     .bind(target_type.as_str())
     .bind(target_id)
     .bind(content_version)
-    .execute(&mut **transaction)
+    .execute(&mut *connection)
     .await?;
 
     for reference in references {
@@ -218,7 +218,7 @@ pub async fn sync_forum_asset_bindings(
         .bind(reference.position)
         .bind(&reference.alt_text)
         .bind(content_version)
-        .execute(&mut **transaction)
+        .execute(&mut *connection)
         .await?;
     }
     Ok(())
@@ -227,7 +227,7 @@ pub async fn sync_forum_asset_bindings(
 /// Detach every active usage for a soft-deleted Forum target. Objects are only GC candidates after
 /// a grace period; this operation never deletes provider objects.
 pub async fn detach_forum_asset_bindings(
-    transaction: &mut Transaction<'_, Postgres>,
+    connection: &mut PgConnection,
     target_type: ForumTargetType,
     target_id: i64,
 ) -> AppResult<()> {
@@ -239,7 +239,7 @@ pub async fn detach_forum_asset_bindings(
     )
     .bind(target_type.as_str())
     .bind(target_id)
-    .execute(&mut **transaction)
+    .execute(&mut *connection)
     .await?;
     Ok(())
 }

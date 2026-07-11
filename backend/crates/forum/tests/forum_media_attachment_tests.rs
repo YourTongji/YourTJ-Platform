@@ -344,6 +344,179 @@ async fn delete_detaches_with_gc_grace_and_only_one_concurrent_restore_rebinds()
 }
 
 #[tokio::test]
+async fn moderation_delete_and_appeal_restore_keep_media_bindings_reversible() {
+    let (pool, app) = create_test_app().await;
+    let (owner_id, owner_token) = create_test_account(
+        &pool,
+        "forum-image-governance-owner@tongji.edu.cn",
+        "forum-image-governance-owner",
+    )
+    .await;
+    let (moderator_id, moderator_token) = create_test_account(
+        &pool,
+        "forum-image-governance-mod@tongji.edu.cn",
+        "forum-image-governance-mod",
+    )
+    .await;
+    let (reporter_id, reporter_token) = create_test_account(
+        &pool,
+        "forum-image-governance-reporter@tongji.edu.cn",
+        "forum-image-governance-reporter",
+    )
+    .await;
+    sqlx::query("UPDATE identity.accounts SET role = 'mod' WHERE id = $1")
+        .bind(moderator_id)
+        .execute(&pool)
+        .await
+        .expect("promote governance moderator");
+
+    let image_id = seed_upload(&pool, owner_id, "forum_thread", "clean").await;
+    let created = create_thread(
+        &app,
+        &owner_token,
+        json!({
+            "boardId": "1",
+            "title": "治理恢复图片",
+            "body": format!("![治理证据](yourtj-asset:{image_id})"),
+            "contentFormat": "markdown_v1",
+            "attachmentAssetIds": [image_id.to_string()]
+        }),
+    )
+    .await;
+    let thread_id = read_json(created).await["id"]
+        .as_str()
+        .expect("thread id")
+        .parse::<i64>()
+        .expect("numeric thread id");
+
+    for action in ["archive", "unarchive"] {
+        let response = request(
+            &app,
+            Method::POST,
+            &format!("/api/v2/admin/forum/threads/{thread_id}/{action}"),
+            Some(&moderator_token),
+            Some(json!({ "reason": "验证归档不释放仍被内容引用的图片" })),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+    let active_after_archive_cycle: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*)::bigint FROM media.asset_usages \
+         WHERE target_type = 'forum_thread' AND target_id = $1 AND detached_at IS NULL",
+    )
+    .bind(thread_id)
+    .fetch_one(&pool)
+    .await
+    .expect("archive cycle binding");
+    assert_eq!(active_after_archive_cycle, 1);
+
+    for action in ["delete", "restore"] {
+        let response = request(
+            &app,
+            Method::POST,
+            &format!("/api/v2/admin/forum/threads/{thread_id}/{action}"),
+            Some(&moderator_token),
+            Some(json!({ "reason": "验证管理软删除图片绑定生命周期" })),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let active_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*)::bigint FROM media.asset_usages \
+             WHERE target_type = 'forum_thread' AND target_id = $1 AND detached_at IS NULL",
+        )
+        .bind(thread_id)
+        .fetch_one(&pool)
+        .await
+        .expect("admin action binding count");
+        assert_eq!(active_count, if action == "restore" { 1 } else { 0 });
+    }
+
+    let report = request(
+        &app,
+        Method::POST,
+        &format!("/api/v2/forum/posts/{thread_id}/flag"),
+        Some(&reporter_token),
+        Some(json!({
+            "postType": "thread",
+            "reason": "other",
+            "note": "需要工作人员复核"
+        })),
+    )
+    .await;
+    assert_eq!(report.status(), StatusCode::OK);
+    let flag_id: i64 = sqlx::query_scalar(
+        "SELECT id FROM forum.flags WHERE target_type = 'thread' AND target_id = $1 \
+         AND reporter_id = $2 AND status = 'open'",
+    )
+    .bind(thread_id)
+    .bind(reporter_id)
+    .fetch_one(&pool)
+    .await
+    .expect("open media flag");
+    let upheld = request(
+        &app,
+        Method::POST,
+        &format!("/api/v2/admin/forum/flags/{flag_id}/resolve"),
+        Some(&moderator_token),
+        Some(json!({ "action": "uphold", "note": "复核后执行软删除" })),
+    )
+    .await;
+    assert_eq!(upheld.status(), StatusCode::OK);
+    let active_after_uphold: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*)::bigint FROM media.asset_usages \
+         WHERE target_type = 'forum_thread' AND target_id = $1 AND detached_at IS NULL",
+    )
+    .bind(thread_id)
+    .fetch_one(&pool)
+    .await
+    .expect("upheld flag detached binding");
+    assert_eq!(active_after_uphold, 0);
+
+    let (event_id, created_at, target_type, target_id, metadata): (
+        i64,
+        chrono::DateTime<chrono::Utc>,
+        String,
+        String,
+        Option<Value>,
+    ) = sqlx::query_as(
+        "SELECT id, created_at, target_type, target_id, metadata \
+         FROM governance.audit_events WHERE action = 'forum.flag.uphold' \
+         AND target_type = 'forum_content' AND target_id = $1 ORDER BY id DESC LIMIT 1",
+    )
+    .bind(format!("thread:{thread_id}"))
+    .fetch_one(&pool)
+    .await
+    .expect("flag governance event");
+    let mut tx = pool.begin().await.expect("appeal reversal transaction");
+    forum::appeals::overturn_content_for_appeal_tx(
+        &mut tx,
+        event_id,
+        created_at,
+        "forum.flag.uphold",
+        &target_type,
+        &target_id,
+        metadata.as_ref(),
+        "forum_thread",
+        thread_id,
+        "delete",
+        owner_id,
+    )
+    .await
+    .expect("overturn flag restriction");
+    tx.commit().await.expect("commit appeal reversal");
+
+    let restored_asset_id: i64 = sqlx::query_scalar(
+        "SELECT asset_id FROM media.asset_usages \
+         WHERE target_type = 'forum_thread' AND target_id = $1 AND detached_at IS NULL",
+    )
+    .bind(thread_id)
+    .fetch_one(&pool)
+    .await
+    .expect("appeal restored binding");
+    assert_eq!(restored_asset_id, image_id);
+}
+
+#[tokio::test]
 async fn comment_and_cloud_draft_assets_keep_pending_private_until_clean_publish() {
     let (pool, app) = create_test_app().await;
     let (owner_id, owner_token) =

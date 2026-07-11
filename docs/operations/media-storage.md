@@ -37,6 +37,9 @@
 - Media-owned `asset_usages` 在 Forum create/edit 事务中重验 owner、image、usage、clean 和正文有序集合；
   soft delete 只 detach usage 并设置 30 天 GC grace，restore 重新解析正文并 rebind。公开投影只返回派生
   URL、alt、position 和可信时的尺寸，不返回 object key、hash 或 owner metadata。
+- 归档/隐藏不等于删除，仍保留 active usage 以支持长期恢复；作者、staff、举报 uphold 的软删除都会在
+  同一事务 detach，staff restore 和申诉 overturn 都从 canonical Markdown 重新验证 clean owner asset
+  后 rebind。恢复验证失败会整体回滚，不能出现正文已恢复但图片进入 GC 的半完成状态。
 - Admin pending queue 同样不返回 object key、hash 或持久 URL。持有 `moderation.content` 的独立审核员
   必须填写读取原因，先取得 60 秒、仅当前账号可用、一次性 token，再以 header 交给同源 preview
   endpoint；服务端重验 pending/image/MIME/声明字节数，在流出首个 byte 前解析 JPEG/PNG/GIF/WebP
@@ -109,7 +112,8 @@ visibility policy，refcount 只是可重建 cache。Private DM asset
   signature、redirect rejection、intent replay、key/MIME/size mismatch 和 delete-before-block ordering。
 - Handler→DB test 覆盖 profile image 对 pending、他人 clean、本人 clean asset 的拒绝/接受与解绑。
 - Forum handler→DB test 覆盖 exact ordered set、duplicate/missing/extra id、无 alt、远程/data URL、
-  cross-account、pending/blocked、stale edit、revision、delete/restore 与并发 restore；不调用真实 OSS。
+  cross-account、pending/blocked、stale edit、revision、作者/staff/举报 delete、archive、restore、申诉
+  overturn 与并发 restore；不调用真实 OSS。
 - Admin preview integration test 使用 fake object store，覆盖 capability/independent reviewer、一次性 token、
   MIME/byte/dimension-bound same-origin response、replay rejection、`no-store`/`nosniff`、dimension persistence
   和不含 key/URL 的 audit；协议 unit test 覆盖四种允许图片 header 与 pixel limit；Web test 覆盖 reason、

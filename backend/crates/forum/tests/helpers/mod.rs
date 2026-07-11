@@ -272,6 +272,33 @@ async fn run_migrations(pool: &PgPool) {
             .expect("migration 0044 failed");
     }
 
+    let has_pending_badge_mints: bool =
+        sqlx::query_scalar("SELECT to_regclass('platform.pending_mints') IS NOT NULL")
+            .fetch_one(pool)
+            .await
+            .unwrap_or(false);
+    if !has_pending_badge_mints {
+        sqlx::raw_sql(include_str!("../../../../migrations/0008_badge_mint_bridge.sql"))
+            .execute(pool)
+            .await
+            .expect("migration 0008 failed");
+    }
+
+    let has_achievement_operations: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM information_schema.columns \
+         WHERE table_schema = 'platform' AND table_name = 'badges' \
+           AND column_name = 'icon_token')",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or(false);
+    if !has_achievement_operations {
+        sqlx::raw_sql(include_str!("../../../../migrations/0045_achievement_operations.sql"))
+            .execute(pool)
+            .await
+            .expect("migration 0045 failed");
+    }
+
     let has_forum_media_bindings: bool =
         sqlx::query_scalar("SELECT to_regclass('media.asset_usages') IS NOT NULL")
             .fetch_one(pool)
@@ -295,6 +322,18 @@ async fn run_migrations(pool: &PgPool) {
             .execute(pool)
             .await
             .expect("migration 0022 failed");
+    }
+
+    let has_governance_appeals: bool =
+        sqlx::query_scalar("SELECT to_regclass('governance.notices') IS NOT NULL")
+            .fetch_one(pool)
+            .await
+            .unwrap_or(false);
+    if !has_governance_appeals {
+        sqlx::raw_sql(include_str!("../../../../migrations/0047_governance_appeals.sql"))
+            .execute(pool)
+            .await
+            .expect("migration 0047 failed");
     }
 
     let has_verification_credentials: bool =

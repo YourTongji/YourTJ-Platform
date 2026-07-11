@@ -137,12 +137,6 @@ pub async fn admin_thread_action(
                 )
                 .await?;
             }
-            media::attachments::detach_forum_asset_bindings(
-                &mut tx,
-                media::attachments::ForumTargetType::Thread,
-                id,
-            )
-            .await?;
         }
         "unarchive" => {
             if thread.archived_at.is_none() {
@@ -181,6 +175,12 @@ pub async fn admin_thread_action(
                 )
                 .await?;
             }
+            media::attachments::detach_forum_asset_bindings(
+                &mut tx,
+                media::attachments::ForumTargetType::Thread,
+                id,
+            )
+            .await?;
         }
         "restore" => {
             if thread.deleted_at.is_none() {

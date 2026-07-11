@@ -29,6 +29,9 @@ struct ForumContentState {
     created_at: DateTime<Utc>,
     deleted_at: Option<DateTime<Utc>>,
     hidden_at: Option<DateTime<Utc>>,
+    content_body: Option<String>,
+    content_format: String,
+    content_version: i64,
 }
 
 fn classify_event(
@@ -80,14 +83,16 @@ async fn content_state(
         "thread" => format!(
             "SELECT author_id, id AS thread_id, board_id, \
                     status = 'visible' AND archived_at IS NULL AS parent_visible, \
-                    created_at, deleted_at, hidden_at \
+                    created_at, deleted_at, hidden_at, body AS content_body, content_format, \
+                    content_version \
              FROM forum.threads WHERE id = $1{lock_clause}"
         ),
         "comment" => format!(
             "SELECT comment.author_id, comment.thread_id, thread.board_id, \
                     thread.status = 'visible' AND thread.deleted_at IS NULL \
                       AND thread.hidden_at IS NULL AND thread.archived_at IS NULL AS parent_visible, \
-                    comment.created_at, comment.deleted_at, comment.hidden_at \
+                    comment.created_at, comment.deleted_at, comment.hidden_at, \
+                    comment.body AS content_body, comment.content_format, comment.content_version \
              FROM forum.comments comment \
              JOIN forum.threads thread ON thread.id = comment.thread_id \
              WHERE comment.id = $1{lock_clause} OF comment"
@@ -99,6 +104,39 @@ async fn content_state(
         .fetch_optional(connection)
         .await?
         .ok_or(AppError::NotFound)
+}
+
+async fn rebind_restored_attachments(
+    connection: &mut PgConnection,
+    state: &ForumContentState,
+    target_kind: &str,
+    target_id: i64,
+) -> AppResult<()> {
+    let target_type = match target_kind {
+        "thread" => media::attachments::ForumTargetType::Thread,
+        "comment" => media::attachments::ForumTargetType::Comment,
+        _ => return Err(AppError::NotFound),
+    };
+    let references = crate::content_policy::image_references_for_stored_content(
+        state.content_body.as_deref(),
+        crate::dto::ContentFormat::from_db(&state.content_format),
+        target_type,
+    )?;
+    if references.is_empty() {
+        return Ok(());
+    }
+    let author_id = state
+        .author_id
+        .ok_or_else(|| AppError::Conflict("restored content has no attachment owner".into()))?;
+    media::attachments::sync_forum_asset_bindings(
+        connection,
+        author_id,
+        target_type,
+        target_id,
+        state.content_version,
+        &references,
+    )
+    .await
 }
 
 /// Validate that the original governance event still describes an active restriction on
@@ -221,6 +259,9 @@ pub async fn overturn_content_for_appeal_tx(
                 "forum content state no longer matches the appealed disposition".into(),
             ))
         }
+    }
+    if disposition_kind == "delete" {
+        rebind_restored_attachments(connection, &state, canonical_kind, target_id).await?;
     }
     let is_visible_after_reversal = state.parent_visible
         && match disposition_kind {
