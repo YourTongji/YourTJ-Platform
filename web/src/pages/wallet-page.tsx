@@ -17,6 +17,7 @@ import { useAuth } from "@/context/auth-provider";
 import { api } from "@/lib/api/endpoints";
 import type { Product, Purchase, Task } from "@/lib/api/types";
 import { formatDate, formatNumber, shortHash } from "@/lib/format";
+import { randomUuid } from "@/lib/random";
 import {
   buildClientSignedPayload,
   clearLocalWallet,
@@ -305,7 +306,7 @@ function TipPanel() {
   const mutation = useMutation({
     mutationFn: () => {
       const body = { toAccountId, amount, targetType, targetId };
-      return api.tip(body, signIntent("tip", body), `tip:${crypto.randomUUID()}`);
+      return api.tip(body, signIntent("tip", body), `tip:${randomUuid()}`);
     },
     onSuccess: async () => {
       toast.success("打赏成功");
