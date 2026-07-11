@@ -16,7 +16,12 @@ import type {
   AdminTagCreateInput,
   AdminTagUpdateInput,
   Announcement,
-  AnnouncementInput,
+  AdminVersionedArchiveInput,
+  AnnouncementCreateInput,
+  AnnouncementReceipt,
+  AnnouncementReceiptInput,
+  AnnouncementRevision,
+  AnnouncementUpdateInput,
   AuthTokens,
   Board,
   Bookmark,
@@ -43,6 +48,9 @@ import type {
   Page,
   Poll,
   Product,
+  Promotion,
+  PromotionCreateInput,
+  PromotionUpdateInput,
   Purchase,
   Review,
   ReviewReport,
@@ -185,7 +193,22 @@ export const api = {
   },
 
   announcements() {
-    return apiRequest<Announcement[]>("/announcements", { auth: false });
+    return apiRequest<Announcement[]>("/announcements");
+  },
+
+  unreadAnnouncements() {
+    return apiRequest<Announcement[]>("/announcements/unread");
+  },
+
+  recordAnnouncementReceipt(id: string, body: AnnouncementReceiptInput) {
+    return apiRequest<AnnouncementReceipt>(`/announcements/${encodeURIComponent(id)}/receipt`, {
+      method: "POST",
+      body,
+    });
+  },
+
+  promotions(placement?: Promotion["placement"]) {
+    return apiRequest<Promotion[]>("/promotions", { query: { placement } });
   },
 
   settings() {
@@ -875,22 +898,55 @@ export const api = {
     });
   },
 
-  createAdminAnnouncement(body: AnnouncementInput) {
+  createAdminAnnouncement(body: AnnouncementCreateInput) {
     return apiRequest<Announcement>("/admin/announcements", { method: "POST", body });
   },
 
-  updateAdminAnnouncement(id: string, body: AnnouncementInput) {
+  updateAdminAnnouncement(id: string, body: AnnouncementUpdateInput) {
     return apiRequest<Announcement>(`/admin/announcements/${encodeURIComponent(id)}`, {
       method: "PATCH",
       body,
     });
   },
 
-  deleteAdminAnnouncement(id: string, reason: string) {
+  archiveAdminAnnouncement(id: string, body: AdminVersionedArchiveInput) {
     return apiRequest<void>(`/admin/announcements/${encodeURIComponent(id)}`, {
       method: "DELETE",
-      body: { reason },
+      body,
     });
+  },
+
+  adminAnnouncementRevisions(id: string, cursor?: string | null) {
+    return apiRequest<Page<AnnouncementRevision>>(
+      `/admin/announcements/${encodeURIComponent(id)}/revisions`,
+      { query: { cursor, limit: 30 } },
+    );
+  },
+
+  adminPromotions(cursor?: string | null) {
+    return apiRequest<Page<Promotion>>("/admin/promotions", { query: { cursor, limit: 30 } });
+  },
+
+  createAdminPromotion(body: PromotionCreateInput) {
+    return apiRequest<Promotion>("/admin/promotions", { method: "POST", body });
+  },
+
+  updateAdminPromotion(id: string, body: PromotionUpdateInput) {
+    return apiRequest<Promotion>(`/admin/promotions/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body,
+    });
+  },
+
+  archiveAdminPromotion(id: string, body: AdminVersionedArchiveInput) {
+    return apiRequest<void>(`/admin/promotions/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      body,
+    });
+  },
+
+  mediaUrl(id: string) {
+    return apiRequest<UploadUrl>(`/media/${encodeURIComponent(id)}/url`);
   },
 
   adminCourses(cursor?: string | null) {

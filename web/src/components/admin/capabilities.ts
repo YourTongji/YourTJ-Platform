@@ -13,6 +13,7 @@ export const ADMIN_CAPABILITIES = {
   managePlatform: "platform.settings",
   manageActivity: "activity.policy",
   manageAnnouncements: "announcements.manage",
+  managePromotions: "promotions.manage",
   runOperations: "operations.jobs",
 } as const;
 

@@ -42,6 +42,7 @@
 | 私密通信 | DM body、private attachment | participants | staff 仅举报证据、独立 retention |
 | 治理证据 | reports、sanctions、appeals、audit | capability + purpose | 防篡改、访问审计、期限/hold |
 | 运营数据 | job log、metrics、aggregated promo events | operators | 聚合、去标识、有限保留 |
+| 公告 receipt | announcement/revision、seen/dismiss/ack time | 本人、汇总后的公告管理员 | 账号删除级联清除，不记录设备/IP；后台只返回聚合计数 |
 | 积分记录 | ledger、wallet projection | owner/verification policy | ledger 不改写，删除后 tombstone |
 | 交易履约信息 | escrow product `deliveryInfo` | purchase buyer/seller | 不进入公开 listing/search/log；随订单保留与删除策略最小化 |
 
@@ -94,6 +95,8 @@ Legal hold 有合法目的、授权者、范围、到期和审计，不得成为
 
 - Cloudflare Email、Alibaba OSS/CDN、captcha、Meilisearch/Redis 运维都需要数据流和 secret 边界。
 - 任意第三方头像/Markdown 图片会泄露访问者 IP，因此持久媒体只允许平台 asset。
+- 推广保存平台 clean asset id 和站内目标路径，不保存远程图片 URL；当前没有个人级 impression/click
+  tracking，未来效果指标只允许必要的按日聚合。
 - Captcha 只收到完成验证必要的信息，不发送邮箱、正文或私信；其 metadata 保留需进入隐私说明。
 - PR preview 不注入生产邮件/OSS/PII 凭据，不使用生产数据快照。
 

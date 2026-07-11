@@ -45,6 +45,7 @@ pub enum Capability {
     ManagePlatform,
     ManageActivity,
     ManageAnnouncements,
+    ManagePromotions,
     RunOperations,
 }
 
@@ -63,6 +64,7 @@ impl Capability {
             Self::ManagePlatform => "platform.settings",
             Self::ManageActivity => "activity.policy",
             Self::ManageAnnouncements => "announcements.manage",
+            Self::ManagePromotions => "promotions.manage",
             Self::RunOperations => "operations.jobs",
         }
     }
@@ -88,6 +90,7 @@ const ADMIN_CAPABILITIES: &[Capability] = &[
     Capability::ManagePlatform,
     Capability::ManageActivity,
     Capability::ManageAnnouncements,
+    Capability::ManagePromotions,
     Capability::RunOperations,
 ];
 
@@ -177,7 +180,15 @@ mod tests {
         assert!(moderator.has_capability(Capability::ModerateContent));
         assert!(moderator.has_capability(Capability::SilenceUsers));
         assert!(!moderator.has_capability(Capability::ManageActivity));
+        assert!(!moderator.has_capability(Capability::ManagePromotions));
         assert!(!moderator.has_capability(Capability::ChangeRoles));
+    }
+
+    #[test]
+    fn administrator_has_independent_announcement_and_promotion_capabilities() {
+        let administrator = AuthAccount { id: 1, role: "admin".into(), status: "active".into() };
+        assert!(administrator.has_capability(Capability::ManageAnnouncements));
+        assert!(administrator.has_capability(Capability::ManagePromotions));
     }
 
     #[test]

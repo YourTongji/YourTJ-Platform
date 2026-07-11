@@ -65,6 +65,7 @@ media = { version = "0.1.0", path = "crates/media" }
 activity = { version = "0.1.0", path = "crates/activity" }
 governance = { version = "0.1.0", path = "crates/governance" }
 search = { version = "0.1.0", path = "crates/search" }
+platform = { version = "0.1.0", path = "crates/platform" }
 
 [profile.release]
 opt-level = 3

@@ -285,7 +285,7 @@ fn build_router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/api/v2/health", get(health))
-        .merge(crate::platform::routes(state.clone()))
+        .merge(platform::routes(state.clone()))
         .merge(crate::admin::routes(state.clone()))
         .merge(identity::routes(state.clone()))
         .merge(activity::routes(state.clone()))

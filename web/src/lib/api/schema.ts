@@ -4333,7 +4333,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Public announcements */
+        /** Active announcements applicable to the current viewer */
         get: {
             parameters: {
                 query?: never;
@@ -4350,6 +4350,126 @@ export interface paths {
                     };
                     content: {
                         "application/json": components["schemas"]["Announcement"][];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/announcements/unread": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Active current announcement revisions not yet seen by the current account */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Announcement"][];
+                    };
+                };
+                401: components["responses"]["Unauthorized"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/announcements/{id}/receipt": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Record seen, dismissed, or acknowledged state for the current revision */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["AnnouncementReceiptInput"];
+                };
+            };
+            responses: {
+                /** @description recorded */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AnnouncementReceipt"];
+                    };
+                };
+                401: components["responses"]["Unauthorized"];
+                404: components["responses"]["NotFound"];
+                409: components["responses"]["Conflict"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/promotions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Active first-party promotions applicable to the current viewer */
+        get: {
+            parameters: {
+                query?: {
+                    placement?: "home-left-primary" | "home-left-secondary";
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Promotion"][];
                     };
                 };
             };
@@ -5314,7 +5434,7 @@ export interface paths {
             };
         };
         put?: never;
-        /** Publish an announcement */
+        /** Create a draft, scheduled, or published announcement */
         post: {
             parameters: {
                 query?: never;
@@ -5324,7 +5444,7 @@ export interface paths {
             };
             requestBody: {
                 content: {
-                    "application/json": components["schemas"]["AnnouncementInput"];
+                    "application/json": components["schemas"]["AnnouncementCreateInput"];
                 };
             };
             responses: {
@@ -5356,7 +5476,7 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
-        /** Delete an announcement */
+        /** Archive an announcement while retaining revisions and receipts */
         delete: {
             parameters: {
                 query?: never;
@@ -5368,11 +5488,11 @@ export interface paths {
             };
             requestBody: {
                 content: {
-                    "application/json": components["schemas"]["AdminReasonInput"];
+                    "application/json": components["schemas"]["AdminVersionedArchiveInput"];
                 };
             };
             responses: {
-                /** @description deleted */
+                /** @description archived */
                 204: {
                     headers: {
                         [name: string]: unknown;
@@ -5381,11 +5501,12 @@ export interface paths {
                 };
                 403: components["responses"]["Forbidden"];
                 404: components["responses"]["NotFound"];
+                409: components["responses"]["Conflict"];
             };
         };
         options?: never;
         head?: never;
-        /** Update an announcement */
+        /** Update announcement copy, audience, presentation, or scheduling with optimistic concurrency */
         patch: {
             parameters: {
                 query?: never;
@@ -5397,7 +5518,7 @@ export interface paths {
             };
             requestBody: {
                 content: {
-                    "application/json": components["schemas"]["AnnouncementInput"];
+                    "application/json": components["schemas"]["AnnouncementUpdateInput"];
                 };
             };
             responses: {
@@ -5412,6 +5533,190 @@ export interface paths {
                 };
                 403: components["responses"]["Forbidden"];
                 404: components["responses"]["NotFound"];
+                409: components["responses"]["Conflict"];
+            };
+        };
+        trace?: never;
+    };
+    "/admin/announcements/{id}/revisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Immutable announcement mutation history */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description Opaque pagination cursor */
+                    cursor?: components["parameters"]["Cursor"];
+                    limit?: components["parameters"]["Limit"];
+                };
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AnnouncementRevisionPage"];
+                    };
+                };
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/promotions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List first-party promotions for administration */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description Opaque pagination cursor */
+                    cursor?: components["parameters"]["Cursor"];
+                    limit?: components["parameters"]["Limit"];
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["PromotionPage"];
+                    };
+                };
+                403: components["responses"]["Forbidden"];
+            };
+        };
+        put?: never;
+        /** Create a first-party promotion with an optional clean platform asset reference */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["PromotionCreateInput"];
+                };
+            };
+            responses: {
+                /** @description created */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Promotion"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                403: components["responses"]["Forbidden"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/promotions/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Archive a promotion */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["AdminVersionedArchiveInput"];
+                };
+            };
+            responses: {
+                /** @description archived */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+                409: components["responses"]["Conflict"];
+            };
+        };
+        options?: never;
+        head?: never;
+        /** Update a promotion with optimistic concurrency */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["PromotionUpdateInput"];
+                };
+            };
+            responses: {
+                /** @description updated */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Promotion"];
+                    };
+                };
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+                409: components["responses"]["Conflict"];
             };
         };
         trace?: never;
@@ -7199,16 +7504,139 @@ export interface components {
             value: string;
             reason: string;
         };
+        AnnouncementReceipt: {
+            revision: number;
+            firstSeenAt?: number | null;
+            dismissedAt?: number | null;
+            acknowledgedAt?: number | null;
+        };
+        AnnouncementReceiptSummary: {
+            seenCount: number;
+            dismissedCount: number;
+            acknowledgedCount: number;
+        };
         Announcement: {
             id: string;
             title: string;
             body?: string | null;
+            /** @enum {string} */
+            status: "draft" | "scheduled" | "published" | "archived";
+            /** @enum {string} */
+            effectiveState: "draft" | "scheduled" | "active" | "expired" | "archived";
+            /** @enum {string} */
+            presentation: "card" | "banner";
+            /** @enum {string} */
+            severity: "info" | "success" | "warning" | "critical";
+            priority: number;
+            /** @enum {string} */
+            audience: "all" | "authenticated" | "staff";
+            requiresAck: boolean;
+            version: number;
+            revision: number;
+            startsAt?: number | null;
+            endsAt?: number | null;
+            publishedAt?: number | null;
+            archivedAt?: number | null;
             createdAt: number;
+            updatedAt: number;
+            receipt?: components["schemas"]["AnnouncementReceipt"] | null;
+            receiptSummary?: components["schemas"]["AnnouncementReceiptSummary"] | null;
         };
-        AnnouncementInput: {
+        AnnouncementCreateInput: {
             title: string;
             body?: string | null;
+            /** @enum {string} */
+            status: "draft" | "scheduled" | "published";
+            /** @enum {string} */
+            presentation: "card" | "banner";
+            /** @enum {string} */
+            severity: "info" | "success" | "warning" | "critical";
+            priority: number;
+            /** @enum {string} */
+            audience: "all" | "authenticated" | "staff";
+            requiresAck: boolean;
+            startsAt?: number | null;
+            endsAt?: number | null;
             reason: string;
+        };
+        AnnouncementUpdateInput: components["schemas"]["AnnouncementCreateInput"] & {
+            expectedVersion: number;
+            /** @description Re-present this update to users who already saw the current revision. */
+            bumpRevision: boolean;
+        };
+        AdminVersionedArchiveInput: {
+            expectedVersion: number;
+            reason: string;
+        };
+        AnnouncementReceiptInput: {
+            revision: number;
+            /** @enum {string} */
+            action: "seen" | "dismiss" | "acknowledge";
+        };
+        AnnouncementRevision: {
+            announcementId: string;
+            version: number;
+            revision: number;
+            title: string;
+            body?: string | null;
+            /** @enum {string} */
+            status: "draft" | "scheduled" | "published" | "archived";
+            /** @enum {string} */
+            presentation: "card" | "banner";
+            /** @enum {string} */
+            severity: "info" | "success" | "warning" | "critical";
+            priority: number;
+            /** @enum {string} */
+            audience: "all" | "authenticated" | "staff";
+            requiresAck: boolean;
+            startsAt?: number | null;
+            endsAt?: number | null;
+            createdAt: number;
+        };
+        Promotion: {
+            id: string;
+            /** @enum {string} */
+            placement: "home-left-primary" | "home-left-secondary";
+            title: string;
+            body?: string | null;
+            ctaLabel?: string | null;
+            /** @description Same-origin relative application path. */
+            targetUrl: string;
+            assetId?: string | null;
+            /** @enum {string} */
+            status: "draft" | "scheduled" | "published" | "paused" | "archived";
+            /** @enum {string} */
+            effectiveState: "draft" | "scheduled" | "active" | "paused" | "expired" | "archived";
+            priority: number;
+            /** @enum {string} */
+            audience: "all" | "authenticated" | "staff";
+            version: number;
+            startsAt?: number | null;
+            endsAt?: number | null;
+            archivedAt?: number | null;
+            createdAt: number;
+            updatedAt: number;
+        };
+        PromotionCreateInput: {
+            /** @enum {string} */
+            placement: "home-left-primary" | "home-left-secondary";
+            title: string;
+            body?: string | null;
+            ctaLabel?: string | null;
+            /** @description Same-origin relative application path. */
+            targetUrl: string;
+            assetId?: string | null;
+            /** @enum {string} */
+            status: "draft" | "scheduled" | "published" | "paused";
+            priority: number;
+            /** @enum {string} */
+            audience: "all" | "authenticated" | "staff";
+            startsAt?: number | null;
+            endsAt?: number | null;
+            reason: string;
+        };
+        PromotionUpdateInput: components["schemas"]["PromotionCreateInput"] & {
+            expectedVersion: number;
         };
         AdminCourseCreateInput: {
             code: string;
@@ -7622,6 +8050,12 @@ export interface components {
         };
         AnnouncementPage: components["schemas"]["Page"] & {
             items?: components["schemas"]["Announcement"][];
+        };
+        AnnouncementRevisionPage: components["schemas"]["Page"] & {
+            items?: components["schemas"]["AnnouncementRevision"][];
+        };
+        PromotionPage: components["schemas"]["Page"] & {
+            items?: components["schemas"]["Promotion"][];
         };
     };
     responses: {

@@ -45,11 +45,12 @@
 | `platform.settings` | — | yes | 当前 generic settings |
 | `activity.policy` | — | yes | 活跃权重和历史 |
 | `announcements.manage` | — | yes | 当前公告管理 |
+| `promotions.manage` | — | yes | 自营推广、排期、站内目标和 clean asset reference |
 | `operations.jobs` | — | yes | selection sync/reindex triggers |
 
 用户角色没有 staff capability。没有 capability 可以查看任意校园邮箱/DM、编辑 wallet balance 或
-append 任意 ledger。推广、认证徽章、PII reveal 和 credit integrity 若上线，应使用独立 capability，
-不能塞进过宽的 `community.manage`。
+append 任意 ledger。推广已经使用独立 `promotions.manage`；认证徽章、PII reveal 和 credit integrity
+若上线也必须使用独立 capability，不能塞进过宽的 `community.manage`。
 
 ## 授权规则
 

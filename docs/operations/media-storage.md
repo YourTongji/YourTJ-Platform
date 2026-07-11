@@ -22,6 +22,8 @@
   不返回；当前生成的是 direct OSS URL，不是 private signed/CDN URL。
 - Staff approve 将 `pending -> clean`。Block 会先永久删除 OSS object，删除成功后才事务提交
   `pending -> blocked` 与 governance audit；删除失败时 row 保持 pending。
+- Platform promotion 保存可空 `asset_id`，创建或替换时只接受当前管理员拥有的 clean image；公开卡片
+  不保存或接受任意图片 URL。登录用户仍通过 media URL authorization 读取，匿名素材交付尚未开放。
 
 管理 UI 必须如实说明 block 会永久删除 object，不能继续显示“不会自动删除”。
 

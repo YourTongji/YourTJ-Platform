@@ -6,6 +6,7 @@ import { Link, Outlet, useLocation, useNavigate } from "react-router";
 import { SearchDialog } from "@/components/layout/search-dialog";
 import { RealtimeRefresh } from "@/components/notifications/realtime-refresh";
 import { Brand, SiteSidebar } from "@/components/layout/site-navigation";
+import { AnnouncementModalQueue } from "@/components/announcements/announcement-modal-queue";
 import { PageTransition } from "@/components/common/page-transition";
 import { RouteLoadingState } from "@/components/common/route-loading-state";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -214,6 +215,7 @@ export function AppLayout() {
         </div>
       </div>
       <SearchDialog open={searchOpen} onOpenChange={setSearchOpen} />
+      <AnnouncementModalQueue />
     </TooltipProvider>
   );
 }

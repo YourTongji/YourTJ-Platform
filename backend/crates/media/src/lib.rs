@@ -18,9 +18,25 @@ mod repo;
 
 use axum::routing::{get, post};
 use axum::{Extension, Router};
-use shared::AppState;
+use shared::{AppResult, AppState};
+use sqlx::PgPool;
 
 pub use quarantine::UploadObjectStore;
+
+/// Return whether an upload is a clean image owned by the specified account.
+///
+/// Business domains use this purpose-limited check before persisting an asset reference. They never
+/// read media tables directly or accept a client-supplied object URL.
+pub async fn is_clean_image_owned_by(
+    pool: &PgPool,
+    upload_id: i64,
+    account_id: i64,
+) -> AppResult<bool> {
+    let upload = repo::find_upload(pool, upload_id).await?;
+    Ok(upload.is_some_and(|row| {
+        row.account_id == account_id && row.kind == "image" && row.status == "clean"
+    }))
+}
 
 /// All routes owned by the media domain.
 pub fn routes(state: AppState) -> Router {

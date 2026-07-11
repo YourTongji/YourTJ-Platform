@@ -19,6 +19,8 @@
 - 管理员可邀请校园邮箱用户，用户仍需证明邮箱所有权；可改 lower-role、禁言/封禁和撤销会话。
 - forum/review/media/reported-DM 有独立审核面；主题/评论支持多种可逆状态动作。
 - board、tag、watched word、course、activity policy、announcement、settings 和 job trigger 有后台入口。
+- 推广有独立 `promotions.manage`、站内安全链接、clean owned asset、状态/排期/受众/排序后台与审计；
+  公告后台覆盖 revision、receipt summary 和不可变 mutation history。
 - governance audit 记录多域 staff/system 事件；论坛自动隐藏与 staff 隐藏有不同 provenance。
 
 ### Partial
@@ -27,7 +29,7 @@
 - 缺账号停用/删除/恢复/purge、当事人通知、申诉和独立复核。
 - generic settings 只有 string key/value；job trigger 无 durable 状态、进度、失败日志或重试。
 - 成就徽章后端存在但管理 UI 不完整；认证/特殊徽章尚未建模。
-- 社区推广位、公告 receipt、批量审核、只读积分完整性与服务健康视图缺失。
+- 推广的曝光/点击聚合、公告 receipt 保留策略、批量审核、只读积分完整性与服务健康视图缺失。
 - 高风险角色/永久封禁/PII 操作没有 recent-auth 或双人确认。
 
 ## Trust level 与当前自动规则
@@ -156,7 +158,7 @@ sanction、trust-level rate limit 和 watched words，尚未接入同一 captcha
 | Moderation | forum/review/DM reports、内容恢复 | `moderation.content` |
 | Media | scan/flag queue、approve/block、asset lookup | `moderation.content` |
 | Community | boards、tags、watched words | `community.manage` |
-| Promotions | placement、素材、排期、受众、状态 | 独立 promotion capability |
+| Promotions | placement、clean asset、站内目标、排期、受众、状态 | `promotions.manage` |
 | Badges | 成就定义、授予/撤销；认证签发/撤销 | 独立 badge/verification capabilities |
 | Announcements | draft、排期、发布、revision、receipt summary | `announcements.manage` |
 | Policies | 社区规则、隐私政策、条款的 draft/review/publish/version/acceptance | 独立 `policies.manage` |

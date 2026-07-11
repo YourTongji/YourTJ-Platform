@@ -4,7 +4,6 @@
 mod admin;
 mod bootstrap;
 mod onebox;
-mod platform;
 mod tip_targets;
 
 #[tokio::main]

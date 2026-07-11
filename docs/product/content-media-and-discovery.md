@@ -32,6 +32,9 @@
   courses/reviews/threads，每类都由 owner domain 回 PostgreSQL 重建，Web 可到达对应 canonical route。
 - 课程管理 mutation 会在事务提交后 reconcile 单个 course document；后台提供 course/review/forum
   重建入口。任务仍是进程内 202 job，没有 durable progress/retry，因此可靠投影闭环仍为 `Partial`。
+- 首页左侧推广由 platform API 返回真实自营内容；支持两个 placement、状态/排期、受众、priority、
+  optimistic version、独立 capability、reason/audit 和后台 UI。目标只接受安全站内相对路径，素材只
+  接受当前操作者拥有的 clean image asset id，不保存图片 URL。
 
 ### Partial
 
@@ -45,7 +48,8 @@
   具体内容，因此“基础上传成功”不等于媒体产品闭环。
 - 聚合搜索已有稳定三类结果、有效 type filter 和独立 Web 综合结果页；仍缺每类 cursor、用户/板块/tag
   结果、highlight/纠错、局部失败，以及 transactional outbox 驱动的索引可靠更新。
-- 左侧社区推广位硬编码，没有管理模型。
+- 推广尚无通用 `asset_usages` binding/GC、匿名 clean 图片交付和按日聚合 impression/click；这些缺口
+  不影响无图片卡片和登录用户通过 media 授权 URL 显示 clean asset。
 
 ## 内容类型与格式
 
@@ -199,15 +203,17 @@ Feed 卡片只显示真实作者、正文摘要、asset、viewer state 和计数
 
 ## 社区推广位
 
-推广位不能继续硬编码。后台模型至少包含：placement、title、description、CTA、target URL、
+推广位已经改为后台模型和 API 驱动，包含 placement、title、description、CTA、target URL、
 image asset、starts/ends at、priority、audience、status、created/updated by 和 audit reason。
 
 - 初始 placement 明确为 `home-left-primary`、`home-left-secondary`；新增 placement 先定义尺寸、
   fallback、响应式行为和无推广空态。
 - 状态机为 `draft -> scheduled -> published -> paused -> archived`，排期结束自动不再返回，但保留审计。
 - 同一 placement 可有多个候选，但返回顺序固定为 priority desc、startsAt desc、id asc；priority
-  相同时后台警告重叠，不能依赖数据库自然顺序。
-- URL 只允许安全协议和受控域名/明确外链提示；图片必须是 clean asset。
+  相同也不能依赖数据库自然顺序。Web 每个 placement 只渲染排序后的首个候选；排期重叠预警仍为
+  `Partial`，运营发布前需要检查列表中的 placement、有效期和 priority。
+- 第一阶段 URL 只允许 `/` 开头、非 `//`、非 `/api` 的站内应用路径；商业外链未开放。图片必须是
+  当前操作者拥有的 clean image asset，业务只保存 asset id。
 - 排期和优先级由后端决定，Web 只渲染当前 placement 的已发布结果。
 - 第一阶段仅允许自营校园/社区信息；商业广告需新的合规、审核与计费决策。
 - 只记录必要的按日聚合 impression/click，不采集跨站追踪标识。

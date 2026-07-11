@@ -13,6 +13,9 @@ import "@/styles/index.css";
 const AdminPage = React.lazy(async () => ({
   default: (await import("@/pages/admin-page")).AdminPage,
 }));
+const AnnouncementsPage = React.lazy(async () => ({
+  default: (await import("@/pages/announcements-page")).AnnouncementsPage,
+}));
 const BookmarksPage = React.lazy(async () => ({
   default: (await import("@/pages/bookmarks-page")).BookmarksPage,
 }));
@@ -77,6 +80,7 @@ const router = createBrowserRouter(
         { path: "schedule", element: <SchedulePage /> },
         { path: "search", element: <SearchPage /> },
         { path: "wallet", element: <WalletPage /> },
+        { path: "announcements", element: <AnnouncementsPage /> },
         { path: "notifications", element: <NotificationsPage /> },
         { path: "messages", element: <MessagesPage /> },
         { path: "bookmarks", element: <BookmarksPage /> },

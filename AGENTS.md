@@ -44,6 +44,7 @@ backend/crates/
   media/      OSS upload intents, callbacks, quarantine, and asset status.
   activity/   contribution events, daily projections, and scoring policy.
   governance/ append-only cross-domain staff/system audit events.
+  platform/   announcements, per-account receipts, first-party promotions, runtime settings.
   search/     typed federated search orchestration; owns no business tables.
   shared/     config, the AppError type, pagination. Dependency-light; compiled by everyone.
   e2e/        executable cross-domain journey-test harness; never production business logic.
@@ -57,8 +58,9 @@ backend/crates/
 - Put new HTTP routes in the owning domain crate's `routes()`; `api` only `.merge()`s them.
 - Cross-domain read surfaces such as `search` compose owner-provided public APIs; they do not bypass
   boundaries with cross-schema SQL or expose raw search-index documents.
-- Existing platform/admin SQL in `api` is architecture debt, not a pattern to extend. New
-  announcements, promotions, badges, settings, or durable jobs need a clear owning domain/read model.
+- Existing admin/onebox SQL in `api` is architecture debt, not a pattern to extend. Announcements,
+  promotions, and settings are owned by `platform`; new badges or durable jobs need the same clear
+  owning domain/read model.
 
 ---
 

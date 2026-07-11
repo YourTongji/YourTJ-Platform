@@ -701,21 +701,148 @@ components:
       properties:
         value: { type: string, maxLength: 20000 }
         reason: { type: string, minLength: 3, maxLength: 500 }
+    AnnouncementReceipt:
+      type: object
+      required: [revision]
+      properties:
+        revision: { type: integer, minimum: 1 }
+        firstSeenAt: { type: integer, nullable: true }
+        dismissedAt: { type: integer, nullable: true }
+        acknowledgedAt: { type: integer, nullable: true }
+    AnnouncementReceiptSummary:
+      type: object
+      required: [seenCount, dismissedCount, acknowledgedCount]
+      properties:
+        seenCount: { type: integer, minimum: 0 }
+        dismissedCount: { type: integer, minimum: 0 }
+        acknowledgedCount: { type: integer, minimum: 0 }
     Announcement:
       type: object
-      required: [id, title, createdAt]
+      required: [id, title, status, effectiveState, presentation, severity, priority, audience, requiresAck, version, revision, createdAt, updatedAt]
       properties:
         id: { type: string }
         title: { type: string }
         body: { type: string, nullable: true }
+        status: { type: string, enum: [draft, scheduled, published, archived] }
+        effectiveState: { type: string, enum: [draft, scheduled, active, expired, archived] }
+        presentation: { type: string, enum: [card, banner] }
+        severity: { type: string, enum: [info, success, warning, critical] }
+        priority: { type: integer, minimum: -1000, maximum: 1000 }
+        audience: { type: string, enum: [all, authenticated, staff] }
+        requiresAck: { type: boolean }
+        version: { type: integer, minimum: 1 }
+        revision: { type: integer, minimum: 1 }
+        startsAt: { type: integer, nullable: true }
+        endsAt: { type: integer, nullable: true }
+        publishedAt: { type: integer, nullable: true }
+        archivedAt: { type: integer, nullable: true }
         createdAt: { type: integer }
-    AnnouncementInput:
+        updatedAt: { type: integer }
+        receipt:
+          allOf: [{ $ref: "#/components/schemas/AnnouncementReceipt" }]
+          nullable: true
+        receiptSummary:
+          allOf: [{ $ref: "#/components/schemas/AnnouncementReceiptSummary" }]
+          nullable: true
+    AnnouncementCreateInput:
       type: object
-      required: [title, reason]
+      required: [title, status, presentation, severity, priority, audience, requiresAck, reason]
       properties:
         title: { type: string, minLength: 1, maxLength: 200 }
         body: { type: string, nullable: true, maxLength: 20000 }
+        status: { type: string, enum: [draft, scheduled, published] }
+        presentation: { type: string, enum: [card, banner] }
+        severity: { type: string, enum: [info, success, warning, critical] }
+        priority: { type: integer, minimum: -1000, maximum: 1000 }
+        audience: { type: string, enum: [all, authenticated, staff] }
+        requiresAck: { type: boolean }
+        startsAt: { type: integer, nullable: true }
+        endsAt: { type: integer, nullable: true }
         reason: { type: string, minLength: 3, maxLength: 500 }
+    AnnouncementUpdateInput:
+      allOf:
+        - $ref: "#/components/schemas/AnnouncementCreateInput"
+        - type: object
+          required: [expectedVersion, bumpRevision]
+          properties:
+            expectedVersion: { type: integer, minimum: 1 }
+            bumpRevision:
+              type: boolean
+              description: Re-present this update to users who already saw the current revision.
+    AdminVersionedArchiveInput:
+      type: object
+      required: [expectedVersion, reason]
+      properties:
+        expectedVersion: { type: integer, minimum: 1 }
+        reason: { type: string, minLength: 3, maxLength: 500 }
+    AnnouncementReceiptInput:
+      type: object
+      required: [revision, action]
+      properties:
+        revision: { type: integer, minimum: 1 }
+        action: { type: string, enum: [seen, dismiss, acknowledge] }
+    AnnouncementRevision:
+      type: object
+      required: [announcementId, version, revision, title, status, presentation, severity, priority, audience, requiresAck, createdAt]
+      properties:
+        announcementId: { type: string }
+        version: { type: integer, minimum: 1 }
+        revision: { type: integer, minimum: 1 }
+        title: { type: string }
+        body: { type: string, nullable: true }
+        status: { type: string, enum: [draft, scheduled, published, archived] }
+        presentation: { type: string, enum: [card, banner] }
+        severity: { type: string, enum: [info, success, warning, critical] }
+        priority: { type: integer }
+        audience: { type: string, enum: [all, authenticated, staff] }
+        requiresAck: { type: boolean }
+        startsAt: { type: integer, nullable: true }
+        endsAt: { type: integer, nullable: true }
+        createdAt: { type: integer }
+    Promotion:
+      type: object
+      required: [id, placement, title, targetUrl, status, effectiveState, priority, audience, version, createdAt, updatedAt]
+      properties:
+        id: { type: string }
+        placement: { type: string, enum: [home-left-primary, home-left-secondary] }
+        title: { type: string }
+        body: { type: string, nullable: true }
+        ctaLabel: { type: string, nullable: true }
+        targetUrl: { type: string, description: Same-origin relative application path. }
+        assetId: { type: string, nullable: true }
+        status: { type: string, enum: [draft, scheduled, published, paused, archived] }
+        effectiveState: { type: string, enum: [draft, scheduled, active, paused, expired, archived] }
+        priority: { type: integer, minimum: -1000, maximum: 1000 }
+        audience: { type: string, enum: [all, authenticated, staff] }
+        version: { type: integer, minimum: 1 }
+        startsAt: { type: integer, nullable: true }
+        endsAt: { type: integer, nullable: true }
+        archivedAt: { type: integer, nullable: true }
+        createdAt: { type: integer }
+        updatedAt: { type: integer }
+    PromotionCreateInput:
+      type: object
+      required: [placement, title, targetUrl, status, priority, audience, reason]
+      properties:
+        placement: { type: string, enum: [home-left-primary, home-left-secondary] }
+        title: { type: string, minLength: 1, maxLength: 120 }
+        body: { type: string, nullable: true, maxLength: 500 }
+        ctaLabel: { type: string, nullable: true, maxLength: 40 }
+        targetUrl: { type: string, minLength: 1, maxLength: 2048, description: Same-origin relative application path. }
+        assetId: { type: string, nullable: true }
+        status: { type: string, enum: [draft, scheduled, published, paused] }
+        priority: { type: integer, minimum: -1000, maximum: 1000 }
+        audience: { type: string, enum: [all, authenticated, staff] }
+        startsAt: { type: integer, nullable: true }
+        endsAt: { type: integer, nullable: true }
+        reason: { type: string, minLength: 3, maxLength: 500 }
+    PromotionUpdateInput:
+      allOf:
+        - $ref: "#/components/schemas/PromotionCreateInput"
+        - type: object
+          required: [expectedVersion]
+          properties:
+            expectedVersion: { type: integer, minimum: 1 }
     AdminCourseCreateInput:
       type: object
       required: [code, name, reason]
@@ -1227,6 +1354,14 @@ components:
       allOf:
         - $ref: "#/components/schemas/Page"
         - { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/Announcement" } } } }
+    AnnouncementRevisionPage:
+      allOf:
+        - $ref: "#/components/schemas/Page"
+        - { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/AnnouncementRevision" } } } }
+    PromotionPage:
+      allOf:
+        - $ref: "#/components/schemas/Page"
+        - { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/Promotion" } } } }
 
 paths:
   # ============ auth & identity ============
@@ -1996,7 +2131,57 @@ paths:
         "200": { description: ok }
         "400": { $ref: "#/components/responses/BadRequest" }
   /announcements:
-    get: { tags: [platform], security: [], summary: Public announcements, responses: { "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Announcement" } } } } } } }
+    get:
+      tags: [platform]
+      security: [{ bearer: [] }, {}]
+      summary: Active announcements applicable to the current viewer
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Announcement" }
+  /announcements/unread:
+    get:
+      tags: [platform]
+      summary: Active current announcement revisions not yet seen by the current account
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Announcement" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /announcements/{id}/receipt:
+    post:
+      tags: [platform]
+      summary: Record seen, dismissed, or acknowledged state for the current revision
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/AnnouncementReceiptInput" } } } }
+      responses:
+        "200": { description: recorded, content: { application/json: { schema: { $ref: "#/components/schemas/AnnouncementReceipt" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /promotions:
+    get:
+      tags: [platform]
+      security: [{ bearer: [] }, {}]
+      summary: Active first-party promotions applicable to the current viewer
+      parameters:
+        - { name: placement, in: query, schema: { type: string, enum: [home-left-primary, home-left-secondary] } }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Promotion" }
   /settings:
     get: { tags: [platform], security: [], summary: Public runtime settings, responses: { "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Setting" } } } } } } }
   /onebox:
@@ -2160,22 +2345,55 @@ paths:
       responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/AnnouncementPage" } } } }, "403": { $ref: "#/components/responses/Forbidden" } }
     post:
       tags: [admin]
-      summary: Publish an announcement
-      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/AnnouncementInput" } } } }
+      summary: Create a draft, scheduled, or published announcement
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/AnnouncementCreateInput" } } } }
       responses: { "201": { description: created, content: { application/json: { schema: { $ref: "#/components/schemas/Announcement" } } } }, "403": { $ref: "#/components/responses/Forbidden" } }
   /admin/announcements/{id}:
     patch:
       tags: [admin]
-      summary: Update an announcement
+      summary: Update announcement copy, audience, presentation, or scheduling with optimistic concurrency
       parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
-      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/AnnouncementInput" } } } }
-      responses: { "200": { description: updated, content: { application/json: { schema: { $ref: "#/components/schemas/Announcement" } } } }, "403": { $ref: "#/components/responses/Forbidden" }, "404": { $ref: "#/components/responses/NotFound" } }
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/AnnouncementUpdateInput" } } } }
+      responses: { "200": { description: updated, content: { application/json: { schema: { $ref: "#/components/schemas/Announcement" } } } }, "403": { $ref: "#/components/responses/Forbidden" }, "404": { $ref: "#/components/responses/NotFound" }, "409": { $ref: "#/components/responses/Conflict" } }
     delete:
       tags: [admin]
-      summary: Delete an announcement
+      summary: Archive an announcement while retaining revisions and receipts
       parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
-      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/AdminReasonInput" } } } }
-      responses: { "204": { description: deleted }, "403": { $ref: "#/components/responses/Forbidden" }, "404": { $ref: "#/components/responses/NotFound" } }
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/AdminVersionedArchiveInput" } } } }
+      responses: { "204": { description: archived }, "403": { $ref: "#/components/responses/Forbidden" }, "404": { $ref: "#/components/responses/NotFound" }, "409": { $ref: "#/components/responses/Conflict" } }
+  /admin/announcements/{id}/revisions:
+    get:
+      tags: [admin]
+      summary: Immutable announcement mutation history
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { $ref: "#/components/parameters/Cursor" }
+        - { $ref: "#/components/parameters/Limit" }
+      responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/AnnouncementRevisionPage" } } } }, "403": { $ref: "#/components/responses/Forbidden" }, "404": { $ref: "#/components/responses/NotFound" } }
+  /admin/promotions:
+    get:
+      tags: [admin]
+      summary: List first-party promotions for administration
+      parameters: [{ $ref: "#/components/parameters/Cursor" }, { $ref: "#/components/parameters/Limit" }]
+      responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/PromotionPage" } } } }, "403": { $ref: "#/components/responses/Forbidden" } }
+    post:
+      tags: [admin]
+      summary: Create a first-party promotion with an optional clean platform asset reference
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/PromotionCreateInput" } } } }
+      responses: { "201": { description: created, content: { application/json: { schema: { $ref: "#/components/schemas/Promotion" } } } }, "400": { $ref: "#/components/responses/BadRequest" }, "403": { $ref: "#/components/responses/Forbidden" } }
+  /admin/promotions/{id}:
+    patch:
+      tags: [admin]
+      summary: Update a promotion with optimistic concurrency
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/PromotionUpdateInput" } } } }
+      responses: { "200": { description: updated, content: { application/json: { schema: { $ref: "#/components/schemas/Promotion" } } } }, "403": { $ref: "#/components/responses/Forbidden" }, "404": { $ref: "#/components/responses/NotFound" }, "409": { $ref: "#/components/responses/Conflict" } }
+    delete:
+      tags: [admin]
+      summary: Archive a promotion
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/AdminVersionedArchiveInput" } } } }
+      responses: { "204": { description: archived }, "403": { $ref: "#/components/responses/Forbidden" }, "404": { $ref: "#/components/responses/NotFound" }, "409": { $ref: "#/components/responses/Conflict" } }
   /admin/media/uploads:
     get:
       tags: [admin, media]

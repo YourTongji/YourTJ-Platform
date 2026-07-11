@@ -109,10 +109,10 @@ function NoticeCard({ announcements }: { announcements: Announcement[] }) {
       </CardHeader>
       <CardContent className="space-y-4 p-4">
         {announcements.slice(0, 2).map((announcement) => (
-          <div key={announcement.id} className="border-l-2 border-primary pl-3">
+          <Link key={announcement.id} to="/announcements" className="block border-l-2 border-primary pl-3 hover:text-primary">
             <p className="line-clamp-1 text-xs font-medium text-[#3d4947] dark:text-foreground">{announcement.title}</p>
-            <p className="mt-1 text-[10px] text-[#9ca3af]">{formatDate(announcement.createdAt)}</p>
-          </div>
+            <p className="mt-1 text-[10px] text-[#9ca3af]">版本 {announcement.revision} · {formatDate(announcement.createdAt)}</p>
+          </Link>
         ))}
         {announcements.length === 0 ? <p className="text-xs text-[#9ca3af]">暂无校园公告</p> : null}
       </CardContent>

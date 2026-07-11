@@ -18,7 +18,7 @@ export function HomePage() {
     queryFn: () => api.threads({ feed: feedMode }),
   });
   const announcements = useQuery({
-    queryKey: ["home", "announcements"],
+    queryKey: ["announcements", "active"],
     queryFn: api.announcements,
   });
   const activity = useQuery({
