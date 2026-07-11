@@ -28,12 +28,14 @@
   clean OSS asset id，公开 URL 是状态校验后的派生值。
 - 人工认证默认私密；公开 profile 只返回 definition 允许且 grant 明确公开的有效 label/说明/有效期，
   不返回 issuer、reason、evidence reference 或内部 grant id。
+- 账号搜索只索引已验证、discoverable 且非 `only_me` 账号的 id、handle 和可选 display name；响应
+  回表重验 active/suspension、profile visibility、block/mute 与 clean avatar，不索引或返回邮箱、bio、
+  relationship 私密名单和内部治理字段。
 
 ### Partial
 
-- Activity/mention privacy、user search discoverability 和 public profile 搜索引擎索引政策尚未完成。
-- 第一阶段 discoverability 只控制第三方关系列表并作为未来账号搜索事实源；精确 handle 直达仍由
-  profile visibility 决定。
+- Activity/mention privacy 和 public profile 的外部搜索引擎索引政策尚未完成；精确 handle 直达仍由
+  profile visibility 决定，不因站内 discoverability 关闭而伪装成账号不存在。
 - `deleted` 数据库状态不等于跨域匿名化、purge 或备份过期。
 - 无自助 export、deactivate、delete、recover 或 retention worker。
 - OSS、搜索索引、缓存、日志、备份、审计与积分的删除语义没有完整编排。
@@ -82,6 +84,8 @@
 - privacy policy：仅 owner 写，服务端读取；导出应包含，删除时 cascade，不进入公开 DTO 或日志。
 - follow：关系列表按 owner policy 和 discoverability 输出；账号导出包含自己的 incoming/outgoing
   关系，账号删除时 cascade，计数是可重建 projection。
+- 站内用户搜索文档是可全量重建的最小公开身份投影；owner 关闭 discoverability/only_me 后触发删除，
+  stale hit 仍会在 PostgreSQL 回表时丢弃。账号删除编排必须清除索引和相关 cache。
 - mute/block：仅发起者的安全设置与服务端 policy 可读；不得在通知、分析或公开 profile 暗示具体
   名单。账号导出可包含自己创建的关系，删除时 cascade。
 - OSS asset：profile 只持有引用；blocked/pending asset 不派生 URL。解绑后的 object retention、

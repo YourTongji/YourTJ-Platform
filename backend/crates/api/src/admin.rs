@@ -277,7 +277,7 @@ pub async fn reviews_reindex_handler(
     ))
 }
 
-/// POST /api/v2/admin/forum/reindex — rebuild forum_threads Meilisearch index
+/// POST /api/v2/admin/forum/reindex — rebuild community content and discovery indices.
 pub async fn forum_reindex_handler(
     headers: HeaderMap,
     State(state): State<AppState>,
@@ -302,8 +302,13 @@ pub async fn forum_reindex_handler(
     let job_id_response = job_id.clone();
 
     tokio::spawn(async move {
-        if let Err(e) = forum::meili::reindex_forum(&pool, &meili_url, &meili_key).await {
-            tracing::error!(error = %e, %job_id, "forum reindex failed");
+        let result = tokio::try_join!(
+            forum::meili::reindex_forum(&pool, &meili_url, &meili_key),
+            forum::discovery::reindex_discovery(&pool, &meili_url, &meili_key),
+            identity::public_search::reindex_users(&pool, &meili_url, &meili_key),
+        );
+        if let Err(error) = result {
+            tracing::error!(%error, %job_id, "community search reindex failed");
         }
     });
 

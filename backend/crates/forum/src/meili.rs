@@ -82,6 +82,7 @@ pub struct ForumThreadDoc {
 #[derive(Debug, FromRow)]
 struct ForumThreadDocumentRow {
     id: i64,
+    author_id: i64,
     title: String,
     body: Option<String>,
     content_format: String,
@@ -123,12 +124,21 @@ pub async fn load_public_thread_documents(
     pool: &PgPool,
     thread_ids: &[i64],
 ) -> AppResult<Vec<ForumThreadDoc>> {
+    load_visible_thread_documents(pool, thread_ids, None).await
+}
+
+async fn load_visible_thread_documents(
+    pool: &PgPool,
+    thread_ids: &[i64],
+    viewer_id: Option<i64>,
+) -> AppResult<Vec<ForumThreadDoc>> {
     if thread_ids.is_empty() {
         return Ok(Vec::new());
     }
 
     let rows = sqlx::query_as::<_, ForumThreadDocumentRow>(
-        "SELECT thread.id, thread.title, thread.body, thread.content_format, board.slug AS board, \
+        "SELECT thread.id, thread.author_id, thread.title, thread.body, \
+                thread.content_format, board.slug AS board, \
                 ARRAY(SELECT tag.slug FROM forum.thread_tags thread_tag \
                       JOIN forum.tags tag ON tag.id = thread_tag.tag_id \
                       WHERE thread_tag.thread_id = thread.id ORDER BY tag.name) AS tags, \
@@ -140,18 +150,21 @@ pub async fn load_public_thread_documents(
          WHERE thread.id = ANY($1) AND thread.status = 'visible' \
            AND thread.deleted_at IS NULL AND thread.hidden_at IS NULL \
            AND thread.archived_at IS NULL \
+           AND ($2::bigint IS NULL OR NOT forum.user_content_hidden($2, thread.author_id)) \
          ORDER BY thread.id",
     )
     .bind(thread_ids)
+    .bind(viewer_id)
     .fetch_all(pool)
     .await?;
 
-    Ok(rows.into_iter().map(ForumThreadDoc::from).collect())
+    filter_active_author_documents(pool, rows).await
 }
 
 async fn load_all_public_thread_documents(pool: &PgPool) -> AppResult<Vec<ForumThreadDoc>> {
     let rows = sqlx::query_as::<_, ForumThreadDocumentRow>(
-        "SELECT thread.id, thread.title, thread.body, thread.content_format, board.slug AS board, \
+        "SELECT thread.id, thread.author_id, thread.title, thread.body, \
+                thread.content_format, board.slug AS board, \
                 ARRAY(SELECT tag.slug FROM forum.thread_tags thread_tag \
                       JOIN forum.tags tag ON tag.id = thread_tag.tag_id \
                       WHERE thread_tag.thread_id = thread.id ORDER BY tag.name) AS tags, \
@@ -167,7 +180,25 @@ async fn load_all_public_thread_documents(pool: &PgPool) -> AppResult<Vec<ForumT
     .fetch_all(pool)
     .await?;
 
-    Ok(rows.into_iter().map(ForumThreadDoc::from).collect())
+    filter_active_author_documents(pool, rows).await
+}
+
+async fn filter_active_author_documents(
+    pool: &PgPool,
+    rows: Vec<ForumThreadDocumentRow>,
+) -> AppResult<Vec<ForumThreadDoc>> {
+    let author_ids = rows.iter().map(|row| row.author_id).collect::<Vec<_>>();
+    let active_author_ids =
+        identity::public_accounts::find_public_accounts_by_ids(pool, &author_ids)
+            .await?
+            .into_iter()
+            .map(|account| account.id)
+            .collect::<HashSet<_>>();
+    Ok(rows
+        .into_iter()
+        .filter(|row| active_author_ids.contains(&row.author_id))
+        .map(ForumThreadDoc::from)
+        .collect())
 }
 
 async fn add_thread_document(client: &Client, document: &ForumThreadDoc) -> AppResult<()> {
@@ -268,6 +299,7 @@ pub async fn search_threads(
     meili_key: &str,
     query: &str,
     limit: usize,
+    viewer_id: Option<i64>,
 ) -> AppResult<Vec<ForumThreadDoc>> {
     if limit == 0 {
         return Ok(Vec::new());
@@ -297,7 +329,7 @@ pub async fn search_threads(
     };
 
     let candidate_ids = candidate_thread_ids(&hits);
-    let documents = load_public_thread_documents(pool, &candidate_ids).await?;
+    let documents = load_visible_thread_documents(pool, &candidate_ids, viewer_id).await?;
     Ok(order_public_documents(&candidate_ids, documents, limit))
 }
 

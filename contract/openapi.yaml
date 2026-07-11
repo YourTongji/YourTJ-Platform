@@ -504,13 +504,45 @@ components:
         voteCount: { type: integer }
         createdAt: { type: integer }
         status: { type: string, enum: [visible] }
+    UserSearchHit:
+      type: object
+      required: [id, handle, displayName, avatarUrl, role, followerCount, following]
+      properties:
+        id: { type: string }
+        handle: { type: string }
+        displayName: { type: string, nullable: true }
+        avatarUrl: { type: string, nullable: true }
+        role: { type: string, enum: [user, mod, admin] }
+        followerCount: { type: integer, minimum: 0 }
+        following: { type: boolean }
+    BoardSearchHit:
+      type: object
+      required: [id, slug, name, description, threadCount]
+      properties:
+        id: { type: string }
+        slug: { type: string }
+        name: { type: string }
+        description: { type: string, nullable: true }
+        threadCount: { type: integer, minimum: 0 }
+    TagSearchHit:
+      type: object
+      required: [id, slug, name, description, threadCount]
+      properties:
+        id: { type: string }
+        slug: { type: string }
+        name: { type: string }
+        description: { type: string, nullable: true }
+        threadCount: { type: integer, minimum: 0 }
     SearchResult:
       type: object
-      required: [courses, reviews, threads]
+      required: [courses, reviews, threads, users, boards, tags]
       properties:
         courses: { type: array, items: { $ref: "#/components/schemas/CourseSearchHit" } }
         reviews: { type: array, items: { $ref: "#/components/schemas/ReviewSearchHit" } }
         threads: { type: array, items: { $ref: "#/components/schemas/ThreadSearchHit" } }
+        users: { type: array, items: { $ref: "#/components/schemas/UserSearchHit" } }
+        boards: { type: array, items: { $ref: "#/components/schemas/BoardSearchHit" } }
+        tags: { type: array, items: { $ref: "#/components/schemas/TagSearchHit" } }
 
     # ---- selection (选课/PK) ----
     Calendar: { type: object, properties: { id: { type: string }, name: { type: string }, isCurrent: { type: boolean } } }
@@ -573,19 +605,24 @@ components:
       default: plain_v1
     Thread:
       type: object
+      required: [id, boardId, authorHandle, title, bodyExcerpt, replyCount, voteCount, hotScore, status, createdAt, lastActivityAt, tags, viewerVote, isBookmarked]
       properties:
         id: { type: string }
         boardId: { type: string }
         authorHandle: { type: string }
         title: { type: string }
+        bodyExcerpt: { type: string, nullable: true }
         replyCount: { type: integer }
         voteCount: { type: integer }
-        hotScore: { type: number }
+        hotScore: { type: number, nullable: true }
+        status: { type: string, enum: [visible] }
         createdAt: { type: integer }
         lastActivityAt: { type: integer }
         tags: { type: array, items: { type: string } }
+        viewerVote: { type: string, enum: [up, down], nullable: true }
+        isBookmarked: { type: boolean }
     ThreadFeed:
-      allOf: [{ $ref: "#/components/schemas/Thread" }, { type: object, properties: { status: { type: string }, unreadCount: { type: integer, nullable: true } } }]
+      allOf: [{ $ref: "#/components/schemas/Thread" }, { type: object, properties: { unreadCount: { type: integer, nullable: true } } }]
     ThreadDetail:
       type: object
       required: [id, boardId, authorHandle, authorId, title, body, contentFormat, replyCount, voteCount, hotScore, tags, status, pinnedAt, pinnedGlobally, featuredAt, closedAt, archivedAt, deletedAt, editedAt, hiddenAt, createdAt, lastActivityAt, solvedAnswerId, viewerVote, isBookmarked, myLastReadCommentId, mySubscriptionLevel, poll]
@@ -2307,11 +2344,11 @@ paths:
   /search:
     get:
       tags: [search]
-      security: []
-      summary: Typed federated search across courses, reviews, and forum threads
+      security: [{}, { bearer: [] }]
+      summary: Privacy-safe typed federated search across catalogue and community objects
       parameters:
         - { name: q, in: query, required: true, schema: { type: string, minLength: 2, maxLength: 100 } }
-        - { name: type, in: query, schema: { type: string, enum: [course, teacher, review, thread, all], default: all } }
+        - { name: type, in: query, schema: { type: string, enum: [course, teacher, review, thread, user, board, tag, all], default: all } }
         - { name: limit, in: query, schema: { type: integer, default: 10, minimum: 1, maximum: 30 } }
       responses:
         "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/SearchResult" } } } }
@@ -2477,11 +2514,11 @@ paths:
     get:
       tags: [forum]
       security: [{}, { bearer: [] }]
-      summary: Thread feed (hot/new/subscriptions/unread)
+      summary: Thread feed (hot/new/subscriptions/following/unread)
       parameters:
         - { name: board, in: query, schema: { type: string } }
         - { name: tag, in: query, description: Exact tag slug, schema: { type: string, minLength: 1, maxLength: 64 } }
-        - { name: sort, in: query, schema: { type: string, enum: [hot, new, subscriptions, unread], default: new } }
+        - { name: sort, in: query, schema: { type: string, enum: [hot, new, subscriptions, following, unread], default: new } }
         - { $ref: "#/components/parameters/Cursor" }
         - { $ref: "#/components/parameters/Limit" }
       responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/ThreadFeedPage" } } } } }
@@ -3150,7 +3187,7 @@ paths:
   /admin/reviews/reindex:
     post: { tags: [admin], summary: Rebuild the Meilisearch review index, requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/AdminReasonInput" } } } }, responses: { "202": { description: queued } } }
   /admin/forum/reindex:
-    post: { tags: [admin], summary: Rebuild the Meilisearch forum index, requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/AdminReasonInput" } } } }, responses: { "202": { description: queued } } }
+    post: { tags: [admin], summary: Rebuild thread, public user, board, and tag search indices, requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/AdminReasonInput" } } } }, responses: { "202": { description: queued } } }
   /admin/forum/boards:
     post: { tags: [admin], summary: Create board, requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/AdminBoardCreateInput" } } } }, responses: { "201": { description: created, content: { application/json: { schema: { $ref: "#/components/schemas/Board" } } } } } }
   /admin/forum/boards/{id}:

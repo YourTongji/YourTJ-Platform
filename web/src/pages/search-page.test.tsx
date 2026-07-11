@@ -59,6 +59,29 @@ describe("SearchPage", () => {
         createdAt: 1_700_000_000,
         status: "visible",
       }] : [],
+      users: scope === "all" || scope === "user" ? [{
+        id: "4",
+        handle: "alice",
+        displayName: "Alice",
+        avatarUrl: null,
+        role: "user",
+        followerCount: 18,
+        following: true,
+      }] : [],
+      boards: scope === "all" || scope === "board" ? [{
+        id: "5",
+        slug: "study",
+        name: "学习交流",
+        description: "课程和作业讨论",
+        threadCount: 24,
+      }] : [],
+      tags: scope === "all" || scope === "tag" ? [{
+        id: "6",
+        slug: "algorithm",
+        name: "算法",
+        description: null,
+        threadCount: 9,
+      }] : [],
     }));
   });
 
@@ -68,6 +91,9 @@ describe("SearchPage", () => {
 
     expect((await screen.findAllByRole("link", { name: /算法设计/ }))[0]).toHaveAttribute("href", "/courses/1");
     expect(screen.getByRole("link", { name: /算法作业讨论/ })).toHaveAttribute("href", "/forum/threads/3");
+    expect(screen.getByRole("link", { name: /Alice/ })).toHaveAttribute("href", "/profile/alice");
+    expect(screen.getByRole("link", { name: /学习交流/ })).toHaveAttribute("href", "/forum?board=5");
+    expect(screen.getByRole("link", { name: /#算法/ })).toHaveAttribute("href", "/forum?tag=algorithm");
 
     await user.click(screen.getByRole("button", { name: "社区帖子" }));
     await waitFor(() => expect(apiMocks.search).toHaveBeenLastCalledWith("算法", "thread", 30));

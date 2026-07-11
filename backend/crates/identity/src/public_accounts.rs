@@ -21,6 +21,7 @@ pub struct PublicAccount {
     pub following_visibility: String,
     pub discoverable: bool,
     pub dm_policy: String,
+    pub is_campus_verified: bool,
     pub created_at: DateTime<Utc>,
 }
 
@@ -44,7 +45,8 @@ pub async fn find_public_account_by_handle(
                 COALESCE(privacy.followers_visibility, 'followers') AS followers_visibility, \
                 COALESCE(privacy.following_visibility, 'followers') AS following_visibility, \
                 COALESCE(privacy.discoverable, TRUE) AS discoverable, \
-                COALESCE(privacy.dm_policy, 'following') AS dm_policy, account.created_at \
+                COALESCE(privacy.dm_policy, 'following') AS dm_policy, \
+                account.email_verified_at IS NOT NULL AS is_campus_verified, account.created_at \
          FROM identity.accounts AS account \
          LEFT JOIN identity.profiles AS profile ON profile.account_id = account.id \
          LEFT JOIN identity.profile_privacy AS privacy ON privacy.account_id = account.id \
@@ -88,7 +90,8 @@ pub async fn find_public_accounts_by_ids(
                 COALESCE(privacy.followers_visibility, 'followers') AS followers_visibility, \
                 COALESCE(privacy.following_visibility, 'followers') AS following_visibility, \
                 COALESCE(privacy.discoverable, TRUE) AS discoverable, \
-                COALESCE(privacy.dm_policy, 'following') AS dm_policy, account.created_at \
+                COALESCE(privacy.dm_policy, 'following') AS dm_policy, \
+                account.email_verified_at IS NOT NULL AS is_campus_verified, account.created_at \
          FROM identity.accounts AS account \
          LEFT JOIN identity.profiles AS profile ON profile.account_id = account.id \
          LEFT JOIN identity.profile_privacy AS privacy ON privacy.account_id = account.id \

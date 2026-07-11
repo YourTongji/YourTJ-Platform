@@ -10,11 +10,11 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { ThreadFeed } from "@/lib/api/types";
 import { formatNumber, formatRelativeTime } from "@/lib/format";
 
-export type CommunityFeedMode = "hot" | "new" | "subscriptions";
+export type CommunityFeedMode = "hot" | "new" | "following" | "subscriptions";
 
 function FeedSkeleton() {
   return (
@@ -79,6 +79,11 @@ function PostCard({ thread }: { thread: ThreadFeed }) {
           <h2 className="mt-3 line-clamp-2 text-lg font-semibold leading-7 text-foreground transition-colors group-hover:text-primary">
             {thread.title || "未命名社区讨论"}
           </h2>
+          {thread.bodyExcerpt ? (
+            <p className="mt-2 line-clamp-2 text-sm leading-6 text-muted-foreground">
+              {thread.bodyExcerpt}
+            </p>
+          ) : null}
         </Link>
 
         <div className="mt-3 flex items-center gap-5 border-t border-border/70 pt-3 text-xs text-muted-foreground">
@@ -115,8 +120,12 @@ export function CommunityFeed({
 }) {
   return (
     <section aria-label="社区信息流">
-      <div className="mb-6 flex h-10 items-start justify-between border-b border-border/50">
-        <Tabs value={mode} onValueChange={(value) => onModeChange(value as CommunityFeedMode)}>
+      <Tabs
+        value={mode}
+        onValueChange={(value) => onModeChange(value as CommunityFeedMode)}
+        className="gap-0"
+      >
+        <div className="mb-6 flex h-10 items-start justify-between border-b border-border/50">
           <TabsList className="h-auto gap-4 rounded-none bg-transparent p-0">
             <TabsTrigger
               value="hot"
@@ -131,6 +140,13 @@ export function CommunityFeed({
               最新
             </TabsTrigger>
             <TabsTrigger
+              value="following"
+              disabled={!isAuthenticated}
+              className="h-10 rounded-none border-b-2 border-transparent px-0 pb-3 pt-0 text-sm shadow-none data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none"
+            >
+              关注
+            </TabsTrigger>
+            <TabsTrigger
               value="subscriptions"
               disabled={!isAuthenticated}
               className="h-10 rounded-none border-b-2 border-transparent px-0 pb-3 pt-0 text-sm shadow-none data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none"
@@ -138,30 +154,32 @@ export function CommunityFeed({
               订阅
             </TabsTrigger>
           </TabsList>
-        </Tabs>
-      </div>
-
-      {isLoading ? (
-        <FeedSkeleton />
-      ) : error ? (
-        <ErrorState title="社区动态加载失败" error={error} onRetry={onRetry} />
-      ) : items.length === 0 ? (
-        <EmptyState
-          title="还没有社区动态"
-          description="去社区发布第一条讨论吧。"
-          action={
-            <Button asChild size="sm" className="rounded-full px-4">
-              <Link to="/forum">进入社区</Link>
-            </Button>
-          }
-        />
-      ) : (
-        <div className="space-y-4">
-          {items.map((thread, index) => (
-            <PostCard key={thread.id ?? `${thread.title}-${index}`} thread={thread} />
-          ))}
         </div>
-      )}
+
+        <TabsContent value={mode}>
+          {isLoading ? (
+            <FeedSkeleton />
+          ) : error ? (
+            <ErrorState title="社区动态加载失败" error={error} onRetry={onRetry} />
+          ) : items.length === 0 ? (
+            <EmptyState
+              title="还没有社区动态"
+              description="去社区发布第一条讨论吧。"
+              action={
+                <Button asChild size="sm" className="rounded-full px-4">
+                  <Link to="/forum">进入社区</Link>
+                </Button>
+              }
+            />
+          ) : (
+            <div className="space-y-4">
+              {items.map((thread, index) => (
+                <PostCard key={thread.id ?? `${thread.title}-${index}`} thread={thread} />
+              ))}
+            </div>
+          )}
+        </TabsContent>
+      </Tabs>
     </section>
   );
 }

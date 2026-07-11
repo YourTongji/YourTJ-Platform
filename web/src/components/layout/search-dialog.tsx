@@ -1,9 +1,10 @@
 import { useQuery } from "@tanstack/react-query";
-import { BookOpen, MessageCircle, MessageSquare, Search } from "lucide-react";
+import { BookOpen, Hash, LayoutGrid, MessageCircle, MessageSquare, Search, UserRound } from "lucide-react";
 import * as React from "react";
 import { Link } from "react-router";
 
 import { Badge } from "@/components/ui/badge";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -38,7 +39,7 @@ export function SearchDialog({
               autoFocus
               aria-label="搜索关键词"
               className="pl-9"
-              placeholder="搜索课程、老师、点评、帖子"
+              placeholder="搜索课程、帖子、用户、板块或标签"
             />
           </div>
         </DialogHeader>
@@ -146,6 +147,71 @@ export function SearchDialog({
                   ))}
                   {result.data?.threads.length === 0 ? (
                     <p className="rounded-md border border-dashed p-3 text-sm text-muted-foreground">没有帖子结果</p>
+                  ) : null}
+                </div>
+              </section>
+              <section>
+                <div className="mb-2 flex items-center gap-2 text-sm font-medium">
+                  <UserRound className="h-4 w-4 text-primary" aria-hidden="true" />
+                  用户
+                </div>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {(result.data?.users ?? []).slice(0, 4).map((user) => (
+                    <Link
+                      key={user.id}
+                      to={`/profile/${encodeURIComponent(user.handle)}`}
+                      onClick={() => onOpenChange(false)}
+                      className="flex items-center gap-3 rounded-md border p-3 transition-colors hover:bg-accent"
+                    >
+                      <Avatar className="size-9 border">
+                        {user.avatarUrl ? <AvatarImage src={user.avatarUrl} alt="" /> : null}
+                        <AvatarFallback>{user.handle.slice(0, 1).toUpperCase()}</AvatarFallback>
+                      </Avatar>
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-medium">{user.displayName ?? user.handle}</p>
+                        <p className="truncate text-xs text-muted-foreground">@{user.handle}</p>
+                      </div>
+                    </Link>
+                  ))}
+                  {result.data?.users.length === 0 ? (
+                    <p className="rounded-md border border-dashed p-3 text-sm text-muted-foreground">没有用户结果</p>
+                  ) : null}
+                </div>
+              </section>
+              <section>
+                <div className="mb-2 flex items-center gap-4 text-sm font-medium">
+                  <span className="inline-flex items-center gap-2">
+                    <LayoutGrid className="h-4 w-4 text-primary" aria-hidden="true" />
+                    板块
+                  </span>
+                  <span className="inline-flex items-center gap-2">
+                    <Hash className="h-4 w-4 text-primary" aria-hidden="true" />
+                    标签
+                  </span>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {(result.data?.boards ?? []).slice(0, 4).map((board) => (
+                    <Link
+                      key={`board-${board.id}`}
+                      to={`/forum?board=${encodeURIComponent(board.id)}`}
+                      onClick={() => onOpenChange(false)}
+                      className="rounded-full border px-3 py-1.5 text-sm transition-colors hover:bg-accent"
+                    >
+                      {board.name}
+                    </Link>
+                  ))}
+                  {(result.data?.tags ?? []).slice(0, 6).map((tag) => (
+                    <Link
+                      key={`tag-${tag.id}`}
+                      to={`/forum?tag=${encodeURIComponent(tag.slug)}`}
+                      onClick={() => onOpenChange(false)}
+                      className="rounded-full border px-3 py-1.5 text-sm transition-colors hover:bg-accent"
+                    >
+                      #{tag.name}
+                    </Link>
+                  ))}
+                  {(result.data?.boards.length ?? 0) + (result.data?.tags.length ?? 0) === 0 ? (
+                    <p className="rounded-md border border-dashed p-3 text-sm text-muted-foreground">没有板块或标签结果</p>
                   ) : null}
                 </div>
               </section>

@@ -6,7 +6,7 @@
 >
 > 负责人：Forum/Reviews/Media/Courses/Web maintainers、Product owner
 >
-> 最近核验：2026-07-11，`origin/main@ed8a06c`
+> 最近核验：2026-07-12，`contract/openapi.yaml` 与 owner-domain tests
 
 本规范覆盖主题、评论、课评、Markdown、草稿、OSS 资产、互动状态、feed、聚合搜索和社区
 推广位。核心原则是先定义内容与媒体边界，再选择编辑器和推荐算法。
@@ -23,6 +23,10 @@
   sequence；评论引用只允许同一主题下仍可用的评论。
 - 主题列表返回 canonical tag slug，并支持板块内或全局 exact-tag filter；`subscriptions` feed
   使用 thread 订阅覆盖 board 订阅的明确优先级，muted 可覆盖 board watching/tracking。
+- `following` feed 直接读取 `forum.user_follows`，按主题创建时间和 id 使用稳定 cursor；板块/tag
+  过滤、active/suspension、block/mute 与公开内容状态在服务端生效，不再复用 subscription 语义。
+- 所有主题列表返回同一 canonical Markdown 纯文本摘要及批量 viewer vote/bookmark state；首页与论坛页
+  只展示这些服务端事实，不从数组位置或本地假数据推断摘要和互动状态。
 - 主题/评论详情返回当前用户 vote/bookmark 状态；主题同时返回有效 subscription、read position 和
   poll selections。vote、bookmark、subscription 和 poll vote 均有幂等撤销路径，计数与 activity
   在同一事务内校正。
@@ -43,10 +47,12 @@
   UI 展示加载/保存/失败状态，跨设备冲突必须显式选择云端或当前版本，发布后幂等删除草稿。
 - 服务端使用 pulldown-cmark event stream 执行独立 profile：拒绝 raw HTML、非 HTTP(S)/站内链接和
   未绑定图片，限制节点、嵌套和链接数；mention 跳过代码节点，搜索/通知不再截取 raw Markdown。
-- 课程/课评与论坛各有 Meilisearch 候选能力；独立 `search` domain 返回 typed
-  courses/reviews/threads，每类都由 owner domain 回 PostgreSQL 重建，Web 可到达对应 canonical route。
-- 课程管理 mutation 会在事务提交后 reconcile 单个 course document；后台提供 course/review/forum
-  重建入口。任务仍是进程内 202 job，没有 durable progress/retry，因此可靠投影闭环仍为 `Partial`。
+- 课程/课评、论坛主题、用户与论坛 discovery object 各有最小化 Meilisearch 候选能力；独立
+  `search` domain 返回 typed courses/reviews/threads/users/boards/tags，每类都由 owner domain 回
+  PostgreSQL 重建并保持候选顺序，Web 综合页与全局搜索框可到达对应 canonical route。
+- 课程管理、账号 handle/profile/privacy 和 board/tag mutation 会在提交后 reconcile 对应最小文档；
+  后台 forum rebuild 同时重建 thread、identity user 与 forum discovery index。任务仍是进程内 202 job，
+  没有 durable progress/retry，因此可靠投影闭环仍为 `Partial`。
 - 首页左侧推广由 platform API 返回真实自营内容；支持两个 placement、状态/排期、受众、priority、
   optimistic version、独立 capability、reason/audit 和后台 UI。目标只接受安全站内相对路径，素材只
   接受当前操作者拥有的 clean image asset id，不保存图片 URL。
@@ -59,12 +65,12 @@
   `contentVersion/expectedVersion` 乐观冲突检测，搜索/通知等事务外副作用也没有 durable outbox。
 - drafts 的 OpenAPI、Rust response 和 Web 已统一为 bounded typed payload、完整对象响应、owner scope、
   50 条上限与 CAS version；互动 DTO 仍缺服务端 `canEdit`、`canDelete`、`canModerate` 能力字段。
-- 首页已移除固定摘要、按 index 伪造徽章和无行为的收藏/分享/筛选/频道按钮；但首页 feed 仍没有
-  canonical 正文摘要、列表级 viewer state、用户 following 或推荐模型。
+- 首页已移除固定摘要、按 index 伪造徽章和无行为的收藏/分享/筛选/频道按钮，并已接 canonical
+  摘要、列表级 viewer state 与用户 following；`hot` 仍是热榜而不是个性化 recommended 模型。
 - Avatar/banner 已完成 owner 上传、审核状态恢复、clean binding 和解除绑定；主题/评论等 UGC 仍没有
   asset binding，且 scanner/变体/EXIF/GC 尚未完成，因此 profile 子链路完成不等于媒体产品闭环。
-- 聚合搜索已有稳定三类结果、有效 type filter 和独立 Web 综合结果页；仍缺每类 cursor、用户/板块/tag
-  结果、highlight/纠错、局部失败，以及 transactional outbox 驱动的索引可靠更新。
+- 聚合搜索已有六类 typed 结果、有效 type filter、独立 Web 综合结果页与全局搜索入口；仍缺每类
+  cursor、highlight/纠错、局部失败，以及 transactional outbox 驱动的索引可靠更新。
 - 推广尚无通用 `asset_usages` binding/GC、匿名 clean 图片交付和按日聚合 impression/click；这些缺口
   不影响无图片卡片和登录用户通过 media 授权 URL 显示 clean asset。
 
@@ -220,8 +226,10 @@ Feed 卡片只显示真实作者、正文摘要、asset、viewer state 和计数
 - PostgreSQL 重验权限、status、deleted/hidden/archived 状态；索引文档不能成为隐私事实源。
 - 查询日志最小化、限定保留；是否用于推荐属于 `Decision needed`。
 
-当前 `/api/v2/search` 支持 `course | teacher | review | thread | all`，其中 teacher 是课程文档的
-检索入口，不产生不完整的独立 teacher DTO；query 长度 2–100，单类 limit 1–30。索引内部
+当前 `/api/v2/search` 支持 `course | teacher | review | thread | user | board | tag | all`，其中
+teacher 是课程文档的检索入口，不产生不完整的独立 teacher DTO；query 长度 2–100，单类 limit
+1–30。user 结果只允许已验证、discoverable、当前 viewer 可见且未被 block/mute 的 active 账号；
+board/tag 返回当前公开对象和实时计数。索引内部
 `course-<id>` / `review-<id>` 前缀不得出现在 HTTP 结果，隐藏课评以及 hidden/deleted/archived/pending
 主题即使仍有陈旧 hit 也必须在回表阶段丢弃。
 

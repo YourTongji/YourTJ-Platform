@@ -1,4 +1,4 @@
-//! Federated public search across courses, course reviews, and forum threads.
+//! Federated public search across catalogue, community content, and discovery objects.
 //!
 //! Search engines provide ranked candidate IDs only. Each owning domain must
 //! reconstruct hits from PostgreSQL and enforce current visibility before this
@@ -22,6 +22,9 @@ enum SearchScope {
     Teacher,
     Review,
     Thread,
+    User,
+    Board,
+    Tag,
 }
 
 impl SearchScope {
@@ -32,7 +35,12 @@ impl SearchScope {
             "teacher" => Ok(Self::Teacher),
             "review" => Ok(Self::Review),
             "thread" => Ok(Self::Thread),
-            _ => Err("type must be course, teacher, review, thread, or all".into()),
+            "user" => Ok(Self::User),
+            "board" => Ok(Self::Board),
+            "tag" => Ok(Self::Tag),
+            _ => {
+                Err("type must be course, teacher, review, thread, user, board, tag, or all".into())
+            }
         }
     }
 
@@ -46,6 +54,18 @@ impl SearchScope {
 
     fn includes_threads(self) -> bool {
         matches!(self, Self::All | Self::Thread)
+    }
+
+    fn includes_users(self) -> bool {
+        matches!(self, Self::All | Self::User)
+    }
+
+    fn includes_boards(self) -> bool {
+        matches!(self, Self::All | Self::Board)
+    }
+
+    fn includes_tags(self) -> bool {
+        matches!(self, Self::All | Self::Tag)
     }
 }
 
@@ -92,6 +112,9 @@ pub struct SearchResultDto {
     pub courses: Vec<courses::public_search::CourseSearchHit>,
     pub reviews: Vec<reviews::search::ReviewSearchHit>,
     pub threads: Vec<forum::meili::ForumThreadDoc>,
+    pub users: Vec<forum::discovery::UserSearchHit>,
+    pub boards: Vec<forum::discovery::BoardSearchHit>,
+    pub tags: Vec<forum::discovery::TagSearchHit>,
 }
 
 fn rate_limit_key(headers: &HeaderMap) -> String {
@@ -142,11 +165,65 @@ async fn search_reviews_if(
 async fn search_threads_if(
     state: &AppState,
     search: &ValidatedSearch<'_>,
+    viewer_id: Option<i64>,
 ) -> AppResult<Vec<forum::meili::ForumThreadDoc>> {
     if !search.scope.includes_threads() {
         return Ok(Vec::new());
     }
     forum::meili::search_threads(
+        &state.db,
+        &state.meili_url,
+        &state.meili_master_key,
+        search.query,
+        search.limit,
+        viewer_id,
+    )
+    .await
+}
+
+async fn search_users_if(
+    state: &AppState,
+    search: &ValidatedSearch<'_>,
+    viewer_id: Option<i64>,
+) -> AppResult<Vec<forum::discovery::UserSearchHit>> {
+    if !search.scope.includes_users() {
+        return Ok(Vec::new());
+    }
+    let candidates = identity::public_search::search_user_ids(
+        &state.meili_url,
+        &state.meili_master_key,
+        search.query,
+        search.limit,
+    )
+    .await?;
+    forum::discovery::load_user_hits(&state.db, &candidates, viewer_id, search.limit).await
+}
+
+async fn search_boards_if(
+    state: &AppState,
+    search: &ValidatedSearch<'_>,
+) -> AppResult<Vec<forum::discovery::BoardSearchHit>> {
+    if !search.scope.includes_boards() {
+        return Ok(Vec::new());
+    }
+    forum::discovery::search_boards(
+        &state.db,
+        &state.meili_url,
+        &state.meili_master_key,
+        search.query,
+        search.limit,
+    )
+    .await
+}
+
+async fn search_tags_if(
+    state: &AppState,
+    search: &ValidatedSearch<'_>,
+) -> AppResult<Vec<forum::discovery::TagSearchHit>> {
+    if !search.scope.includes_tags() {
+        return Ok(Vec::new());
+    }
+    forum::discovery::search_tags(
         &state.db,
         &state.meili_url,
         &state.meili_master_key,
@@ -162,6 +239,15 @@ async fn global_search(
     Query(params): Query<SearchQuery>,
 ) -> AppResult<Json<SearchResultDto>> {
     let search = validate_query(&params).map_err(AppError::BadRequest)?;
+    let viewer = identity::auth_middleware::authenticate_optional(
+        &headers,
+        &state.db,
+        &state.jwt_secret,
+        state.redis.as_ref(),
+    )
+    .await
+    .map_err(|_| AppError::Unauthorized)?;
+    let viewer_id = viewer.as_ref().map(|account| account.id);
     shared::ratelimit::check_token_bucket(
         state.redis.as_ref(),
         "search",
@@ -171,12 +257,22 @@ async fn global_search(
     )
     .await?;
 
-    let (courses, reviews, threads) = tokio::join!(
+    let (courses, reviews, threads, users, boards, tags) = tokio::join!(
         search_courses_if(&state, &search),
         search_reviews_if(&state, &search),
-        search_threads_if(&state, &search),
+        search_threads_if(&state, &search, viewer_id),
+        search_users_if(&state, &search, viewer_id),
+        search_boards_if(&state, &search),
+        search_tags_if(&state, &search),
     );
-    Ok(Json(SearchResultDto { courses: courses?, reviews: reviews?, threads: threads? }))
+    Ok(Json(SearchResultDto {
+        courses: courses?,
+        reviews: reviews?,
+        threads: threads?,
+        users: users?,
+        boards: boards?,
+        tags: tags?,
+    }))
 }
 
 /// Routes owned by the federated search domain.
@@ -213,6 +309,9 @@ mod tests {
         assert!(SearchScope::All.includes_courses());
         assert!(SearchScope::All.includes_reviews());
         assert!(SearchScope::All.includes_threads());
+        assert!(SearchScope::All.includes_users());
+        assert!(SearchScope::All.includes_boards());
+        assert!(SearchScope::All.includes_tags());
 
         assert!(SearchScope::Teacher.includes_courses());
         assert!(!SearchScope::Teacher.includes_reviews());
@@ -221,6 +320,11 @@ mod tests {
         assert!(SearchScope::Review.includes_reviews());
         assert!(!SearchScope::Review.includes_courses());
         assert!(!SearchScope::Review.includes_threads());
+
+        assert!(SearchScope::User.includes_users());
+        assert!(!SearchScope::User.includes_threads());
+        assert!(SearchScope::Board.includes_boards());
+        assert!(SearchScope::Tag.includes_tags());
 
         assert!(SearchScope::Thread.includes_threads());
         assert!(!SearchScope::Thread.includes_courses());

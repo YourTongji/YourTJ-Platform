@@ -1,9 +1,36 @@
 use shared::AppResult;
 use sqlx::{PgPool, Postgres, QueryBuilder};
 
+use crate::dto::ContentFormat;
 use crate::models::{ThreadRowJoined, ThreadRowJoinedFull};
 
 use super::{base64_decode_i64, base64_encode_i64, decode_hot_cursor, encode_hot_cursor};
+
+/// Build canonical bounded body excerpts for a batch of thread summaries.
+pub async fn get_thread_body_excerpts(
+    pool: &PgPool,
+    thread_ids: &[i64],
+) -> AppResult<std::collections::HashMap<i64, String>> {
+    if thread_ids.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+    let rows: Vec<(i64, Option<String>, String)> =
+        sqlx::query_as("SELECT id, body, content_format FROM forum.threads WHERE id = ANY($1)")
+            .bind(thread_ids)
+            .fetch_all(pool)
+            .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(thread_id, body, format)| {
+            let excerpt = crate::content_policy::plain_text_projection(
+                body.as_deref().unwrap_or_default(),
+                ContentFormat::from_db(&format),
+                280,
+            );
+            (thread_id, excerpt)
+        })
+        .collect())
+}
 
 /// List threads for a board with cursor pagination.
 ///
@@ -556,7 +583,7 @@ fn decode_subscription_feed_cursor(
 /// List threads covered by an effective watching/tracking subscription.
 ///
 /// A thread-level subscription overrides its board-level fallback.
-pub async fn list_threads_feed_following(
+pub async fn list_threads_feed_subscriptions(
     pool: &PgPool,
     account_id: i64,
     board_id: Option<i64>,
@@ -606,6 +633,168 @@ pub async fn list_threads_feed_following(
     let next_cursor = has_more.then(|| items.last().map(encode_subscription_feed_cursor)).flatten();
 
     Ok((items, next_cursor))
+}
+
+fn encode_following_feed_cursor(row: &ThreadRowJoined) -> String {
+    encode_following_feed_cursor_parts(row.created_at, row.id)
+}
+
+fn encode_following_feed_cursor_parts(
+    created_at: chrono::DateTime<chrono::Utc>,
+    thread_id: i64,
+) -> String {
+    super::base64_encode_str(&format!("{}|{thread_id}", created_at.timestamp_micros()))
+}
+
+fn decode_following_feed_cursor(cursor: &str) -> AppResult<(chrono::DateTime<chrono::Utc>, i64)> {
+    let decoded = super::base64_decode_str(cursor)
+        .map_err(|_| shared::AppError::BadRequest("invalid cursor".into()))?;
+    let (micros, thread_id) = decoded
+        .split_once('|')
+        .ok_or_else(|| shared::AppError::BadRequest("invalid cursor".into()))?;
+    let created_at = micros
+        .parse::<i64>()
+        .ok()
+        .and_then(chrono::DateTime::from_timestamp_micros)
+        .ok_or_else(|| shared::AppError::BadRequest("invalid cursor".into()))?;
+    let thread_id = thread_id
+        .parse::<i64>()
+        .map_err(|_| shared::AppError::BadRequest("invalid cursor".into()))?;
+    Ok((created_at, thread_id))
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct FollowingThreadCandidate {
+    id: i64,
+    board_id: i64,
+    author_id: i64,
+    title: String,
+    body: Option<String>,
+    reply_count: i32,
+    vote_count: i32,
+    hot_score: Option<f64>,
+    status: String,
+    created_at: chrono::DateTime<chrono::Utc>,
+    last_activity_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl FollowingThreadCandidate {
+    fn into_joined(self, author_handle: String) -> ThreadRowJoined {
+        ThreadRowJoined {
+            id: self.id,
+            board_id: self.board_id,
+            author_id: self.author_id,
+            title: self.title,
+            body: self.body,
+            reply_count: self.reply_count,
+            vote_count: self.vote_count,
+            hot_score: self.hot_score,
+            status: self.status,
+            created_at: self.created_at,
+            last_activity_at: self.last_activity_at,
+            author_handle,
+        }
+    }
+}
+
+/// List public threads authored by accounts the viewer currently follows.
+///
+/// PostgreSQL follow facts are authoritative. The read applies account lifecycle,
+/// active suspension, block, mute, and content visibility before pagination.
+pub async fn list_threads_feed_following(
+    pool: &PgPool,
+    account_id: i64,
+    board_id: Option<i64>,
+    tag_slug: Option<&str>,
+    cursor: Option<&str>,
+    limit: i64,
+) -> AppResult<(Vec<ThreadRowJoined>, Option<String>)> {
+    let page_size = limit.clamp(1, 100);
+    let mut scan_cursor = cursor.map(decode_following_feed_cursor).transpose()?;
+    let mut rows = Vec::with_capacity((page_size + 1) as usize);
+    let mut scanned = 0usize;
+    const MAX_CANDIDATES_PER_PAGE: usize = 1_000;
+
+    while rows.len() <= page_size as usize && scanned < MAX_CANDIDATES_PER_PAGE {
+        let remaining = page_size as usize + 1 - rows.len();
+        let candidate_limit = (remaining.saturating_mul(4)).clamp(20, 100);
+        let candidate_limit = candidate_limit.min(MAX_CANDIDATES_PER_PAGE - scanned);
+        let mut query = QueryBuilder::<Postgres>::new(
+            "SELECT thread.id, thread.board_id, thread.author_id, thread.title, thread.body, \
+                    thread.reply_count, thread.vote_count, thread.hot_score, thread.status, \
+                    thread.created_at, thread.last_activity_at \
+             FROM forum.threads thread \
+             WHERE EXISTS (SELECT 1 FROM forum.user_follows follow \
+                           WHERE follow.follower_id = ",
+        );
+        query
+            .push_bind(account_id)
+            .push(
+                " AND follow.followed_id = thread.author_id) \
+                   AND thread.status = 'visible' AND thread.deleted_at IS NULL \
+                   AND thread.hidden_at IS NULL AND thread.archived_at IS NULL \
+                   AND NOT forum.user_content_hidden(",
+            )
+            .push_bind(account_id)
+            .push(", thread.author_id)");
+        if let Some(board_id) = board_id {
+            query.push(" AND thread.board_id = ").push_bind(board_id);
+        }
+        if let Some(tag_slug) = tag_slug {
+            query
+                .push(
+                    " AND EXISTS (SELECT 1 FROM forum.thread_tags thread_tag \
+                                  JOIN forum.tags tag ON tag.id = thread_tag.tag_id \
+                                  WHERE thread_tag.thread_id = thread.id AND tag.slug = ",
+                )
+                .push_bind(tag_slug)
+                .push(")");
+        }
+        if let Some((created_at, thread_id)) = scan_cursor {
+            query
+                .push(" AND (thread.created_at, thread.id) < (")
+                .push_bind(created_at)
+                .push(", ")
+                .push_bind(thread_id)
+                .push(")");
+        }
+        query.push(" ORDER BY thread.created_at DESC, thread.id DESC LIMIT ");
+        query.push_bind(candidate_limit as i64);
+        let candidates = query.build_query_as::<FollowingThreadCandidate>().fetch_all(pool).await?;
+        if candidates.is_empty() {
+            break;
+        }
+        scanned += candidates.len();
+        scan_cursor = candidates.last().map(|candidate| (candidate.created_at, candidate.id));
+        let author_ids = candidates.iter().map(|candidate| candidate.author_id).collect::<Vec<_>>();
+        let handles = identity::public_accounts::find_public_accounts_by_ids(pool, &author_ids)
+            .await?
+            .into_iter()
+            .map(|account| (account.id, account.handle))
+            .collect::<std::collections::HashMap<_, _>>();
+        let candidate_count = candidates.len();
+        rows.extend(candidates.into_iter().filter_map(|candidate| {
+            handles.get(&candidate.author_id).cloned().map(|handle| candidate.into_joined(handle))
+        }));
+        if candidate_count < candidate_limit {
+            break;
+        }
+    }
+
+    let has_more = rows.len() > page_size as usize;
+    if has_more {
+        rows.truncate(page_size as usize);
+    }
+    let next_cursor = if has_more {
+        rows.last().map(encode_following_feed_cursor)
+    } else if scanned >= MAX_CANDIDATES_PER_PAGE {
+        scan_cursor.map(|(created_at, thread_id)| {
+            encode_following_feed_cursor_parts(created_at, thread_id)
+        })
+    } else {
+        None
+    };
+    Ok((rows, next_cursor))
 }
 
 /// Find a single thread by id, joined with author handle (full columns).

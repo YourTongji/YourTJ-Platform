@@ -49,12 +49,16 @@ pub(crate) fn thread_to_dto(row: &crate::models::ThreadRowJoined) -> ThreadDto {
         board_id: row.board_id.to_string(),
         author_handle: row.author_handle.clone(),
         title: row.title.clone(),
+        body_excerpt: None,
         reply_count: row.reply_count,
         vote_count: row.vote_count,
         hot_score: row.hot_score,
+        status: row.status.clone(),
         tags: vec![],
         created_at: row.created_at.timestamp(),
         last_activity_at: row.last_activity_at.timestamp(),
+        viewer_vote: None,
+        is_bookmarked: false,
         unread_count: None,
     }
 }

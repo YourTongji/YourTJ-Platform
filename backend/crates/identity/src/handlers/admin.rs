@@ -279,6 +279,7 @@ pub async fn change_role(
     )
     .await?;
     tx.commit().await?;
+    crate::public_search::reconcile_user_in_background(&state, account_id);
     let updated = repo::find_admin_user(&state.db, account_id).await?.ok_or(AppError::NotFound)?;
     Ok(Json(admin_user_dto(updated)))
 }
@@ -415,6 +416,7 @@ async fn create_sanction(
     .await?;
     tx.commit().await?;
     invalidate_sanction_cache(state, account_id).await;
+    crate::public_search::reconcile_user_in_background(state, account_id);
     Ok(())
 }
 
@@ -490,6 +492,7 @@ pub async fn unsanction_user(
     .await?;
     tx.commit().await?;
     invalidate_sanction_cache(&state, account_id).await;
+    crate::public_search::reconcile_user_in_background(&state, account_id);
     Ok(StatusCode::NO_CONTENT)
 }
 

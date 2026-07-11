@@ -54,6 +54,35 @@ describe("SearchDialog", () => {
           status: "visible",
         },
       ],
+      users: [
+        {
+          id: "41",
+          handle: "alice",
+          displayName: "Alice",
+          avatarUrl: null,
+          role: "user",
+          followerCount: 12,
+          following: true,
+        },
+      ],
+      boards: [
+        {
+          id: "51",
+          slug: "study",
+          name: "学习交流",
+          description: null,
+          threadCount: 20,
+        },
+      ],
+      tags: [
+        {
+          id: "61",
+          slug: "algorithm",
+          name: "算法",
+          description: null,
+          threadCount: 8,
+        },
+      ],
     });
   });
 
@@ -79,6 +108,9 @@ describe("SearchDialog", () => {
       "href",
       "/forum/threads/31",
     );
+    expect(screen.getByRole("link", { name: /Alice/ })).toHaveAttribute("href", "/profile/alice");
+    expect(screen.getByRole("link", { name: "学习交流" })).toHaveAttribute("href", "/forum?board=51");
+    expect(screen.getByRole("link", { name: "#算法" })).toHaveAttribute("href", "/forum?tag=algorithm");
     await expectNoAccessibilityViolations(document.body);
   });
 });

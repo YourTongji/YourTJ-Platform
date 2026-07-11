@@ -108,8 +108,9 @@ pub use thread_state::{
     unhide_thread, unpin_thread,
 };
 pub use threads::{
-    create_thread, fetch_threads_by_ids, find_thread, find_thread_for_moderation, list_threads,
-    list_threads_by_tag, list_threads_feed, list_threads_feed_following, update_thread,
+    create_thread, fetch_threads_by_ids, find_thread, find_thread_for_moderation,
+    get_thread_body_excerpts, list_threads, list_threads_by_tag, list_threads_feed,
+    list_threads_feed_following, list_threads_feed_subscriptions, update_thread,
 };
 pub use viewer_state::{get_post_viewer_states, PostViewerState};
 pub use votes::{

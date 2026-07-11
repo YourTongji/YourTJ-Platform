@@ -411,12 +411,12 @@ export const api = {
 
   search(
     q: string,
-    type: "course" | "teacher" | "review" | "thread" | "all" = "all",
+    type: "course" | "teacher" | "review" | "thread" | "user" | "board" | "tag" | "all" = "all",
     limit = 12,
   ) {
     return apiRequest<SearchResult>("/search", {
       query: { q, type, limit },
-      auth: false,
+      auth: "optional",
     });
   },
 
@@ -498,7 +498,7 @@ export const api = {
   threads(query: {
     board?: string;
     tag?: string;
-    feed?: "hot" | "new" | "subscriptions" | "unread";
+    feed?: "hot" | "new" | "subscriptions" | "following" | "unread";
     cursor?: string | null;
   }) {
     return apiRequest<Page<ThreadFeed>>("/forum/threads", {

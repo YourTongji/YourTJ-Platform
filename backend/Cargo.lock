@@ -1286,6 +1286,7 @@ dependencies = [
  "hex",
  "hmac",
  "jsonwebtoken",
+ "meilisearch-sdk",
  "redis",
  "ring",
  "serde",
@@ -2343,11 +2344,15 @@ dependencies = [
  "courses",
  "forum",
  "hex",
+ "identity",
  "reviews",
  "serde",
+ "serde_json",
  "sha2",
  "shared",
+ "sqlx",
  "tokio",
+ "tower",
 ]
 
 [[package]]

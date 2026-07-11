@@ -12,6 +12,11 @@ import { api } from "@/lib/api/endpoints";
 export function HomePage() {
   const [feedMode, setFeedMode] = React.useState<CommunityFeedMode>("hot");
   const { account } = useAuth();
+  React.useEffect(() => {
+    if (!account && (feedMode === "following" || feedMode === "subscriptions")) {
+      setFeedMode("hot");
+    }
+  }, [account, feedMode]);
   const activityRange = React.useMemo(() => getTwentyWeekActivityRange(), []);
   const threads = useQuery({
     queryKey: ["home", "threads", feedMode],

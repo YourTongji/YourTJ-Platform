@@ -6,7 +6,7 @@
 >
 > 负责人：Platform maintainers、Domain maintainers
 >
-> 最近核验：2026-07-12，`codex/x-community-complete`
+> 最近核验：2026-07-12，`contract/openapi.yaml`、migrations 与 owner-domain tests
 
 本规范说明产品规则如何落实为 HTTP 契约、migration、domain API、事务和可重建投影。它不复制
 完整 OpenAPI 或 DDL。
@@ -71,14 +71,21 @@ Fresh database 必须只通过 sqlx migration ledger 建立。普通启动、CI 
 - 索引只包含搜索所需最小字段；返回前应用 status、visibility、privacy、block/mute policy。
 - 联邦搜索由 `search` crate 编排 typed section；owner domain 从索引取得 ranked candidate id 后，
   用自己的 public API 批量回表并保持候选顺序。聚合层不读取外域表，也不序列化 Meilisearch hit。
-- `/api/v2/search` 的 `type` 在后端决定实际查询域；course/review/thread 每类独立有界，ID 必须是
-  可直接用于 canonical route 的业务 ID，不带内部 index prefix。
+- `/api/v2/search` 的 `type` 在后端决定实际查询域；course/review/thread/user/board/tag 每类独立
+  有界，ID 必须可直接用于 canonical route，不带内部 index prefix。可选 bearer 用于应用校园资料与
+  viewer relationship policy；匿名响应始终使用更窄的 public 可见范围。
 - Meilisearch document primary key 只能使用其允许的字母数字、`-`、`_` 字符；当前内部前缀为
-  `course-<id>` / `review-<id>`，HTTP DTO 始终去掉前缀。改变前缀必须配套 full reindex。
+  `course-<id>` / `review-<id>` / `board-<id>` / `tag-<id>`；用户索引使用公开 account id。HTTP DTO
+  始终去掉内部前缀。改变前缀必须配套 full reindex。
 - Full reindex 等待 clear task 成功后再 add，并观察 add 结果。
 - Hot/search counter 使用增量/投影，读路径避免全表聚合；定期 reconciliation 纠偏。
 - `forum.user_follows` 是关系事实；`forum.user_social_stats` 是 trigger 同事务维护的可重建计数投影。
   Follow 与 block 对同一账号对使用相同 transaction advisory lock，防止 block 与并发 follow 双写穿透。
+- Following feed 不复用 board/thread subscription：Forum 先按 follow/content/block/mute 事实取得有界
+  候选，再通过 Identity public account API 批量过滤 lifecycle/suspension 并取得 handle；cursor 使用
+  `(created_at, thread_id)`，不得依赖已删除的 cursor row。
+- 用户搜索索引由 Identity 维护，只存 id/handle/display name；Forum 通过 Identity public account API、
+  自己的 relationship/count projection 和 Media public API 组装最终 hit。聚合 `search` crate 不跨域 SQL。
 - Redis cache key 版本化或短 TTL，mutation 精确 bump 相关 version；缓存故障不改变业务写入事实。
 - 不使用 `LIKE %q%` 作为热点中文聚合搜索降级，除非产品/性能测试定义了严格有界范围。
 

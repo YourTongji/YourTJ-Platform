@@ -496,7 +496,7 @@ async fn archived_threads_are_excluded_from_every_feed() {
     for uri in [
         "/api/v2/forum/boards/1/threads",
         "/api/v2/forum/threads",
-        "/api/v2/forum/threads?sort=following",
+        "/api/v2/forum/threads?sort=subscriptions",
         "/api/v2/forum/threads?sort=unread",
     ] {
         let response = app

@@ -14,16 +14,35 @@ use crate::repo::base64_encode_i64;
 
 use super::{default_limit, default_sort, thread_to_detail_dto, thread_to_dto};
 
-pub(crate) async fn hydrate_thread_tags(
+pub(crate) async fn hydrate_thread_summaries(
     pool: &sqlx::PgPool,
+    viewer_id: Option<i64>,
     threads: &mut [ThreadDto],
 ) -> AppResult<()> {
     let thread_ids =
         threads.iter().filter_map(|thread| thread.id.parse::<i64>().ok()).collect::<Vec<_>>();
-    let mut tags = repo::get_thread_tag_slugs_batch(pool, &thread_ids).await?;
+    let (mut tags, mut excerpts, mut viewer_states) = tokio::try_join!(
+        repo::get_thread_tag_slugs_batch(pool, &thread_ids),
+        repo::get_thread_body_excerpts(pool, &thread_ids),
+        async {
+            match viewer_id {
+                Some(account_id) => {
+                    repo::get_post_viewer_states(pool, account_id, "thread", &thread_ids).await
+                }
+                None => Ok(std::collections::HashMap::new()),
+            }
+        },
+    )?;
     for thread in threads {
         if let Ok(thread_id) = thread.id.parse::<i64>() {
             thread.tags = tags.remove(&thread_id).unwrap_or_default();
+            thread.body_excerpt = excerpts
+                .remove(&thread_id)
+                .and_then(|excerpt| (!excerpt.is_empty()).then_some(excerpt));
+            if let Some(state) = viewer_states.remove(&thread_id) {
+                thread.viewer_vote = state.vote;
+                thread.is_bookmarked = state.is_bookmarked;
+            }
         }
     }
     Ok(())
@@ -165,7 +184,7 @@ pub async fn list_threads(
         )
         .await?;
         let mut items = rows.iter().map(thread_to_dto).collect::<Vec<_>>();
-        hydrate_thread_tags(&state.db, &mut items).await?;
+        hydrate_thread_summaries(&state.db, current_user_id, &mut items).await?;
         return Ok(Json(Page::new(items, next_cursor)));
     }
 
@@ -182,7 +201,7 @@ pub async fn list_threads(
         )
         .await?;
         let mut items: Vec<ThreadDto> = rows.iter().map(thread_to_dto).collect();
-        hydrate_thread_tags(&state.db, &mut items).await?;
+        hydrate_thread_summaries(&state.db, current_user_id, &mut items).await?;
         Ok(Json(Page::new(items, next_cursor)))
     } else {
         let generation = crate::cache::board_generation(state.redis.as_ref(), board_id).await;
@@ -199,7 +218,7 @@ pub async fn list_threads(
                 )
                 .await?;
                 let mut items: Vec<ThreadDto> = rows.iter().map(thread_to_dto).collect();
-                hydrate_thread_tags(&state.db, &mut items).await?;
+                hydrate_thread_summaries(&state.db, None, &mut items).await?;
                 Ok::<_, AppError>(Page::new(items, next_cursor))
             })
             .await?;
@@ -214,7 +233,12 @@ pub async fn list_threads_feed(
     Query(q): Query<ThreadFeedQuery>,
 ) -> AppResult<Json<Page<ThreadDto>>> {
     if !matches!(q.sort.as_str(), "hot" | "new" | "subscriptions" | "following" | "unread") {
-        return Err(AppError::BadRequest("sort must be hot/new/subscriptions/unread".into()));
+        return Err(AppError::BadRequest(
+            "sort must be hot/new/subscriptions/following/unread".into(),
+        ));
+    }
+    if !(1..=100).contains(&q.limit) {
+        return Err(AppError::BadRequest("limit must be between 1 and 100".into()));
     }
     let board_id = q
         .board
@@ -261,7 +285,7 @@ pub async fn list_threads_feed(
                 thread
             })
             .collect::<Vec<_>>();
-        hydrate_thread_tags(&state.db, &mut items).await?;
+        hydrate_thread_summaries(&state.db, Some(auth.id), &mut items).await?;
         let next_str = next_cursor.map(|c| c.to_string());
         return Ok(Json(Page::new(items, next_str)));
     }
@@ -291,7 +315,7 @@ pub async fn list_threads_feed(
 
                     let rows = repo::fetch_threads_by_ids(&state.db, &ids, current_user_id).await?;
                     let mut items: Vec<ThreadDto> = rows.iter().map(thread_to_dto).collect();
-                    hydrate_thread_tags(&state.db, &mut items).await?;
+                    hydrate_thread_summaries(&state.db, current_user_id, &mut items).await?;
                     let next = if ids.len() as i64 >= q.limit {
                         Some(base64_encode_i64(q.limit))
                     } else {
@@ -304,7 +328,7 @@ pub async fn list_threads_feed(
         // Fall through to DB if Redis is unavailable or ZSET is empty
     }
 
-    if matches!(q.sort.as_str(), "subscriptions" | "following") {
+    if q.sort == "subscriptions" {
         let auth = identity::auth_middleware::authenticate(
             &headers,
             &state.db,
@@ -327,10 +351,10 @@ pub async fn list_threads_feed(
             )
             .await?;
             let mut items = rows.iter().map(thread_to_dto).collect::<Vec<_>>();
-            hydrate_thread_tags(&state.db, &mut items).await?;
+            hydrate_thread_summaries(&state.db, Some(auth.id), &mut items).await?;
             return Ok(Json(Page::new(items, next_cursor)));
         }
-        let (rows, next_cursor) = repo::list_threads_feed_following(
+        let (rows, next_cursor) = repo::list_threads_feed_subscriptions(
             &state.db,
             auth.id,
             board_id,
@@ -339,7 +363,30 @@ pub async fn list_threads_feed(
         )
         .await?;
         let mut items: Vec<ThreadDto> = rows.iter().map(thread_to_dto).collect();
-        hydrate_thread_tags(&state.db, &mut items).await?;
+        hydrate_thread_summaries(&state.db, Some(auth.id), &mut items).await?;
+        return Ok(Json(Page::new(items, next_cursor)));
+    }
+
+    if q.sort == "following" {
+        let auth = identity::auth_middleware::authenticate(
+            &headers,
+            &state.db,
+            &state.jwt_secret,
+            state.redis.as_ref(),
+        )
+        .await
+        .map_err(|_| AppError::Unauthorized)?;
+        let (rows, next_cursor) = repo::list_threads_feed_following(
+            &state.db,
+            auth.id,
+            board_id,
+            tag,
+            q.cursor.as_deref(),
+            q.limit,
+        )
+        .await?;
+        let mut items = rows.iter().map(thread_to_dto).collect::<Vec<_>>();
+        hydrate_thread_summaries(&state.db, Some(auth.id), &mut items).await?;
         return Ok(Json(Page::new(items, next_cursor)));
     }
 
@@ -367,7 +414,7 @@ pub async fn list_threads_feed(
         )
         .await?;
         let mut items = rows.iter().map(thread_to_dto).collect::<Vec<_>>();
-        hydrate_thread_tags(&state.db, &mut items).await?;
+        hydrate_thread_summaries(&state.db, current_user_id, &mut items).await?;
         return Ok(Json(Page::new(items, next_cursor)));
     }
 
@@ -383,7 +430,7 @@ pub async fn list_threads_feed(
         )
         .await?;
         let mut items: Vec<ThreadDto> = rows.iter().map(thread_to_dto).collect();
-        hydrate_thread_tags(&state.db, &mut items).await?;
+        hydrate_thread_summaries(&state.db, current_user_id, &mut items).await?;
         Ok(Json(Page::new(items, next_cursor)))
     } else {
         let generation = crate::cache::global_feed_generation(state.redis.as_ref()).await;
@@ -405,7 +452,7 @@ pub async fn list_threads_feed(
                 )
                 .await?;
                 let mut items: Vec<ThreadDto> = rows.iter().map(thread_to_dto).collect();
-                hydrate_thread_tags(&state.db, &mut items).await?;
+                hydrate_thread_summaries(&state.db, None, &mut items).await?;
                 Ok::<_, AppError>(Page::new(items, next_cursor))
             })
             .await?;

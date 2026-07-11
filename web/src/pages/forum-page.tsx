@@ -15,7 +15,7 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogT
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { useAuth } from "@/context/auth-provider";
 import { api } from "@/lib/api/endpoints";
@@ -27,6 +27,10 @@ const MarkdownEditor = React.lazy(() =>
     default: module.MarkdownEditor,
   })),
 );
+
+type ForumFeed = "hot" | "new" | "subscriptions" | "following" | "unread";
+const forumFeedOptions: ForumFeed[] = ["hot", "new", "subscriptions", "following", "unread"];
+const authenticatedFeeds: ForumFeed[] = ["subscriptions", "following", "unread"];
 
 function ThreadCard({ thread, boards }: { thread: ThreadFeed; boards: Board[] }) {
   const board = boards.find((item) => item.id === thread.boardId);
@@ -43,6 +47,11 @@ function ThreadCard({ thread, boards }: { thread: ThreadFeed; boards: Board[] })
                 {thread.unreadCount ? <Badge>{thread.unreadCount} 未读</Badge> : null}
               </div>
               <h2 className="line-clamp-2 text-lg font-semibold">{thread.title}</h2>
+              {thread.bodyExcerpt ? (
+                <p className="mt-2 line-clamp-2 text-sm leading-6 text-muted-foreground">
+                  {thread.bodyExcerpt}
+                </p>
+              ) : null}
               <div className="mt-3 flex flex-wrap gap-1.5">
                 {(thread.tags ?? []).map((tag) => (
                   <Badge key={tag} variant="secondary">#{tag}</Badge>
@@ -252,9 +261,13 @@ function CreateThreadDialog({ boards }: { boards: Board[] }) {
 export function ForumPage() {
   const { isAuthenticated } = useAuth();
   const [params, setParams] = useSearchParams();
-  const feed =
-    (params.get("feed") as "hot" | "new" | "subscriptions" | "unread" | null) ??
-    "hot";
+  const requestedFeed = params.get("feed");
+  const selectedFeed = forumFeedOptions.includes(requestedFeed as ForumFeed)
+    ? requestedFeed as ForumFeed
+    : "hot";
+  const feed = !isAuthenticated && authenticatedFeeds.includes(selectedFeed)
+    ? "hot"
+    : selectedFeed;
   const board = params.get("board") ?? "all";
   const tag = params.get("tag") ?? "all";
   const boards = useQuery({ queryKey: ["forum", "boards"], queryFn: api.boards });
@@ -293,16 +306,19 @@ export function ForumPage() {
       />
 
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_18rem]">
-        <div>
+        <Tabs
+          value={feed}
+          onValueChange={(value) => update({ feed: value })}
+          className="gap-0"
+        >
           <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-            <Tabs value={feed} onValueChange={(value) => update({ feed: value })}>
               <TabsList>
                 <TabsTrigger value="hot">热门</TabsTrigger>
                 <TabsTrigger value="new">最新</TabsTrigger>
+                <TabsTrigger value="following" disabled={!isAuthenticated}>关注</TabsTrigger>
                 <TabsTrigger value="subscriptions" disabled={!isAuthenticated}>订阅</TabsTrigger>
                 <TabsTrigger value="unread" disabled={!isAuthenticated}>未读</TabsTrigger>
               </TabsList>
-            </Tabs>
             <Select value={board} onValueChange={(value) => update({ board: value })}>
               <SelectTrigger className="w-full md:w-56">
                 <SelectValue placeholder="全部板块" />
@@ -318,20 +334,22 @@ export function ForumPage() {
             </Select>
           </div>
 
-          {threads.isLoading ? (
-            <LoadingState />
-          ) : threads.isError ? (
-            <ErrorState error={threads.error} onRetry={() => void threads.refetch()} />
-          ) : (threads.data?.items ?? []).length === 0 ? (
-            <EmptyState title="还没有帖子" description="切换板块或发布第一条讨论。" />
-          ) : (
-            <div className="space-y-3">
-              {(threads.data?.items ?? []).map((thread) => (
-                <ThreadCard key={thread.id} thread={thread} boards={boardItems} />
-              ))}
-            </div>
-          )}
-        </div>
+          <TabsContent value={feed}>
+            {threads.isLoading ? (
+              <LoadingState />
+            ) : threads.isError ? (
+              <ErrorState error={threads.error} onRetry={() => void threads.refetch()} />
+            ) : (threads.data?.items ?? []).length === 0 ? (
+              <EmptyState title="还没有帖子" description="切换板块或发布第一条讨论。" />
+            ) : (
+              <div className="space-y-3">
+                {(threads.data?.items ?? []).map((thread) => (
+                  <ThreadCard key={thread.id} thread={thread} boards={boardItems} />
+                ))}
+              </div>
+            )}
+          </TabsContent>
+        </Tabs>
 
         <aside className="space-y-4">
           <Card>

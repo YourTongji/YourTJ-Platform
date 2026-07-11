@@ -16,6 +16,7 @@ mod ledger;
 mod password;
 pub mod profiles;
 pub mod public_accounts;
+pub mod public_search;
 mod repo;
 pub mod sanctions;
 

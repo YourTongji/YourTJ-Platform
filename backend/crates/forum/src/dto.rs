@@ -56,12 +56,16 @@ pub struct ThreadDto {
     pub board_id: String,
     pub author_handle: String,
     pub title: String,
+    pub body_excerpt: Option<String>,
     pub reply_count: i32,
     pub vote_count: i32,
     pub hot_score: Option<f64>,
+    pub status: String,
     pub tags: Vec<String>,
     pub created_at: i64,
     pub last_activity_at: i64,
+    pub viewer_vote: Option<String>,
+    pub is_bookmarked: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unread_count: Option<i32>,
 }

@@ -6,7 +6,7 @@
 >
 > 负责人：Platform maintainers
 >
-> 最近核验：2026-07-11，`origin/main@33584db`
+> 最近核验：2026-07-12，`contract/openapi.yaml` 与 deploy workflows
 
 本文件描述仓库当前 GitHub Actions 行为，不把目标 Aliyun 架构写成已上线生产事实。Workflow
 或服务器脚本变化时必须在同一 PR 更新本 runbook。
@@ -81,6 +81,12 @@ GET /api/v2/health    -> backend health
 
 还需执行本次变更的关键 smoke journey。当前 workflow 缺完整 main health gate、自动 rollback 和
 release manifest；失败时不要仅依赖 summary 判断“已部署”。
+
+新增或改变社区搜索文档后，部署完成还需要由具备 `operations.jobs` 的管理员以
+`{"reason":"deploy <revision> community search schema"}` 请求体触发
+`POST /api/v2/admin/forum/reindex`。该任务会重建 thread、public user、board 和 tag index；返回
+`202` 只表示已入当前进程任务，operator 必须检查后端日志并实际搜索已有账号/板块/tag，不能把
+queued 当成功。现阶段没有 durable job status/retry，因此多实例发布时只触发一次，并在失败后显式重试。
 
 ## 关闭、过期与清理
 

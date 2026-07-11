@@ -368,6 +368,7 @@ pub async fn verify_email(
     };
 
     ensure_login_allowed(&state, &account).await?;
+    crate::public_search::reconcile_user_in_background(&state, account.id);
 
     Ok(Json(issue_tokens(&state, &account, device_label(&headers).as_deref()).await?))
 }
@@ -614,6 +615,7 @@ pub async fn update_me(
         body.handle.as_deref(),
     )
     .await?;
+    crate::public_search::reconcile_user_in_background(&state, auth.id);
 
     Ok(Json(row_to_dto(&row)))
 }
@@ -661,6 +663,7 @@ pub async fn replace_my_profile(
         website.as_deref(),
     )
     .await?;
+    crate::public_search::reconcile_user_in_background(&state, auth.id);
     Ok(Json(profile_to_dto(profile)))
 }
 
@@ -706,6 +709,7 @@ pub async fn replace_my_privacy(
         &body.dm_policy,
     )
     .await?;
+    crate::public_search::reconcile_user_in_background(&state, auth.id);
     Ok(Json(privacy_to_dto(privacy)))
 }
 

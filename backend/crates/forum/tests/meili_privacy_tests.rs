@@ -43,6 +43,8 @@ async fn public_search_reconstructs_hits_and_omits_every_non_public_thread_state
     let (pool, _) = create_test_app().await;
     let (author_id, _) =
         create_test_account(&pool, "search-author@tongji.edu.cn", "search_author").await;
+    let (viewer_id, _) =
+        create_test_account(&pool, "search-viewer@tongji.edu.cn", "search_viewer").await;
 
     let visible_id = seed_thread(&pool, author_id, "visible", "visible", false, false, false).await;
     let hidden_id = seed_thread(&pool, author_id, "hidden", "visible", true, false, false).await;
@@ -94,15 +96,32 @@ async fn public_search_reconstructs_hits_and_omits_every_non_public_thread_state
     });
 
     let results =
-        forum::meili::search_threads(&pool, &format!("http://{address}"), "", "visible", 10)
+        forum::meili::search_threads(&pool, &format!("http://{address}"), "", "visible", 10, None)
             .await
             .expect("search public threads");
-    server.abort();
-
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].id, visible_id.to_string());
     assert_eq!(results[0].title, "visible");
     assert_eq!(results[0].body_excerpt, "body for visible");
     assert_eq!(results[0].tags, ["privacy"]);
     assert_eq!(results[0].author_handle, "search_author");
+
+    sqlx::query("INSERT INTO forum.user_mutes (account_id, muted_account_id) VALUES ($1, $2)")
+        .bind(viewer_id)
+        .bind(author_id)
+        .execute(&pool)
+        .await
+        .expect("mute search author");
+    let muted_results = forum::meili::search_threads(
+        &pool,
+        &format!("http://{address}"),
+        "",
+        "visible",
+        10,
+        Some(viewer_id),
+    )
+    .await
+    .expect("search muted threads");
+    assert!(muted_results.is_empty());
+    server.abort();
 }

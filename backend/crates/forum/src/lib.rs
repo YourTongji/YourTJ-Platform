@@ -8,6 +8,7 @@ pub mod badges;
 mod cache;
 mod content_policy;
 pub mod digest;
+pub mod discovery;
 mod dto;
 mod error;
 mod handlers;
@@ -20,6 +21,7 @@ mod sanctions;
 pub mod sse;
 pub mod tip_targets;
 pub mod trust_levels;
+mod user_discovery;
 pub mod watched_words;
 
 use axum::routing::{delete, get, patch, post, put};

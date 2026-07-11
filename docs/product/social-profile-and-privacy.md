@@ -34,12 +34,14 @@
   不改变资料访问、follow 或直接互动权限。
 - board/thread 支持 watching、tracking、muted subscription；thread direct subscription 覆盖 board
   fallback，删除 direct override 后恢复 board 语义，列表和 feed 使用稳定 cursor。
+- 用户搜索以 `discoverable` 和已验证校园身份作为候选门槛，响应时重新应用 active/suspension、
+  profile visibility、block/mute 与 clean avatar policy；匿名只看 public profile，校园登录用户可看
+  public/campus，`only_me` 和 `discoverable=false` 不进入第三方搜索结果。
 
 ### Partial
 
 - 暂无 remove-follower、handle history/cooldown/redirect、公开 activity/media/likes tabs。
-- activity/mention 隐私和 user search 尚未实现；`discoverable` 目前用于第三方关系列表并为未来账号搜索
-  提供相同的服务端事实源。
+- activity/mention 隐私仍未实现；public profile 是否允许外部搜索引擎索引仍需独立政策。
 - 第一阶段不做私密账号与 pending request；若未来引入，必须增加显式状态机和通知/反滥用策略。
 - Avatar/banner 已有 owner+clean binding 和上传状态 UI，但图片 scanner、变体、EXIF 清理和 orphan GC
   仍是媒体链路缺口；当前依赖独立 staff 人工审核，Web 不再提供任意 URL 输入。
@@ -148,6 +150,10 @@ Forum 拥有 follow/block/mute 与计数投影；Identity 拥有账号、owner-e
 Media 验证 owner+clean image 后调用 Identity 的受限 asset binding API；Platform 拥有成就和人工认证
 的定义与授予历史。Forum 只通过 Platform public API 获取公开成就与最小公开认证投影，不跨 schema
 SQL。HTTP shape 以 OpenAPI 为准。
+
+Identity 同时维护最小化的用户搜索候选文档，只包含 account id、handle 和可选 display name；Forum
+通过 Identity public account API 取回当前可见资料，再叠加自己的 follow/block/mute、计数和 Media
+派生 URL。搜索聚合层不得跨域读取账号表，也不得把索引 hit 原样返回。
 
 头像和 banner 只保存 clean media asset reference。服务端生成可用 URL，客户端不得提交任意
 第三方 URL 作为权威字段。上传 intent 会持久化可选的 `profile_avatar/profile_banner` usage，使待审

@@ -2085,12 +2085,12 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Typed federated search across courses, reviews, and forum threads */
+        /** Privacy-safe typed federated search across catalogue and community objects */
         get: {
             parameters: {
                 query: {
                     q: string;
-                    type?: "course" | "teacher" | "review" | "thread" | "all";
+                    type?: "course" | "teacher" | "review" | "thread" | "user" | "board" | "tag" | "all";
                     limit?: number;
                 };
                 header?: never;
@@ -3094,14 +3094,14 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Thread feed (hot/new/subscriptions/unread) */
+        /** Thread feed (hot/new/subscriptions/following/unread) */
         get: {
             parameters: {
                 query?: {
                     board?: string;
                     /** @description Exact tag slug */
                     tag?: string;
-                    sort?: "hot" | "new" | "subscriptions" | "unread";
+                    sort?: "hot" | "new" | "subscriptions" | "following" | "unread";
                     /** @description Opaque pagination cursor */
                     cursor?: components["parameters"]["Cursor"];
                     limit?: components["parameters"]["Limit"];
@@ -6966,7 +6966,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Rebuild the Meilisearch forum index */
+        /** Rebuild thread */
         post: {
             parameters: {
                 query?: never;
@@ -8727,10 +8727,37 @@ export interface components {
             /** @enum {string} */
             status: "visible";
         };
+        UserSearchHit: {
+            id: string;
+            handle: string;
+            displayName: string | null;
+            avatarUrl: string | null;
+            /** @enum {string} */
+            role: "user" | "mod" | "admin";
+            followerCount: number;
+            following: boolean;
+        };
+        BoardSearchHit: {
+            id: string;
+            slug: string;
+            name: string;
+            description: string | null;
+            threadCount: number;
+        };
+        TagSearchHit: {
+            id: string;
+            slug: string;
+            name: string;
+            description: string | null;
+            threadCount: number;
+        };
         SearchResult: {
             courses: components["schemas"]["CourseSearchHit"][];
             reviews: components["schemas"]["ReviewSearchHit"][];
             threads: components["schemas"]["ThreadSearchHit"][];
+            users: components["schemas"]["UserSearchHit"][];
+            boards: components["schemas"]["BoardSearchHit"][];
+            tags: components["schemas"]["TagSearchHit"][];
         };
         Calendar: {
             id?: string;
@@ -8807,19 +8834,24 @@ export interface components {
          */
         ContentFormat: "plain_v1" | "markdown_v1";
         Thread: {
-            id?: string;
-            boardId?: string;
-            authorHandle?: string;
-            title?: string;
-            replyCount?: number;
-            voteCount?: number;
-            hotScore?: number;
-            createdAt?: number;
-            lastActivityAt?: number;
-            tags?: string[];
+            id: string;
+            boardId: string;
+            authorHandle: string;
+            title: string;
+            bodyExcerpt: string | null;
+            replyCount: number;
+            voteCount: number;
+            hotScore: number | null;
+            /** @enum {string} */
+            status: "visible";
+            createdAt: number;
+            lastActivityAt: number;
+            tags: string[];
+            /** @enum {string|null} */
+            viewerVote: "up" | "down" | null;
+            isBookmarked: boolean;
         };
         ThreadFeed: components["schemas"]["Thread"] & {
-            status?: string;
             unreadCount?: number | null;
         };
         ThreadDetail: {

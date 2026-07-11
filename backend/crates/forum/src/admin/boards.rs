@@ -133,6 +133,11 @@ pub async fn create_board(
     )
     .await?;
     tx.commit().await?;
+    crate::discovery::reconcile_entity_in_background(
+        &state,
+        crate::discovery::DiscoveryEntityKind::Board,
+        row.id,
+    );
 
     Ok((
         StatusCode::CREATED,
@@ -231,6 +236,11 @@ pub async fn update_board(
     )
     .await?;
     tx.commit().await?;
+    crate::discovery::reconcile_entity_in_background(
+        &state,
+        crate::discovery::DiscoveryEntityKind::Board,
+        board_id,
+    );
 
     Ok(Json(board_to_dto(
         &row,
@@ -307,6 +317,11 @@ pub async fn delete_board(
     )
     .await?;
     tx.commit().await?;
+    crate::discovery::reconcile_entity_in_background(
+        &state,
+        crate::discovery::DiscoveryEntityKind::Board,
+        board_id,
+    );
 
     Ok(Json(json!({"ok": true})))
 }
