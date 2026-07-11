@@ -50,6 +50,23 @@ async fn update_comment_request(
         .expect("comment update response")
 }
 
+async fn list_comments_request(
+    app: &axum::Router,
+    thread_id: i64,
+    token: Option<&str>,
+) -> axum::response::Response {
+    let mut request = Request::builder()
+        .method(Method::GET)
+        .uri(format!("/api/v2/forum/threads/{thread_id}/comments"));
+    if let Some(token) = token {
+        request = request.header(header::AUTHORIZATION, format!("Bearer {token}"));
+    }
+    app.clone()
+        .oneshot(request.body(Body::empty()).expect("build comments list request"))
+        .await
+        .expect("comments list response")
+}
+
 async fn admin_comment_action_request(
     app: &axum::Router,
     comment_id: i64,
@@ -214,6 +231,84 @@ async fn markdown_comment_format_is_explicit_and_rejects_raw_html() {
 }
 
 #[tokio::test]
+async fn concurrent_comment_edits_reject_stale_writes_atomically() {
+    let (pool, app) = create_test_app().await;
+    let (author_id, token) =
+        create_test_account(&pool, "comment-cas@tongji.edu.cn", "comment-cas").await;
+    let thread_id = seed_thread(&pool, author_id).await;
+    let comment_id = seed_comment(&pool, thread_id, author_id, "original", None).await;
+    sqlx::query(
+        "UPDATE forum.comments SET created_at = now() - interval '10 minutes' WHERE id = $1",
+    )
+    .bind(comment_id)
+    .execute(&pool)
+    .await
+    .expect("age concurrent comment");
+
+    let first = update_comment_request(
+        &app,
+        comment_id,
+        &token,
+        json!({ "body": "first edit", "expectedVersion": 1 }),
+    );
+    let second = update_comment_request(
+        &app,
+        comment_id,
+        &token,
+        json!({ "body": "second edit", "expectedVersion": 1 }),
+    );
+    let (first_response, second_response) = tokio::join!(first, second);
+    let (success_response, conflict_response) = if first_response.status() == StatusCode::OK {
+        (first_response, second_response)
+    } else {
+        (second_response, first_response)
+    };
+    assert_eq!(success_response.status(), StatusCode::OK);
+    assert_eq!(conflict_response.status(), StatusCode::CONFLICT);
+    assert_eq!(read_json(success_response).await["contentVersion"], 2);
+    let conflict = read_json(conflict_response).await;
+    assert_eq!(conflict["error"]["code"], "VERSION_CONFLICT");
+    assert_eq!(conflict["error"]["details"]["currentVersion"], 2);
+
+    let canonical: (String, i64) =
+        sqlx::query_as("SELECT body, content_version FROM forum.comments WHERE id = $1")
+            .bind(comment_id)
+            .fetch_one(&pool)
+            .await
+            .expect("canonical comment after concurrent edits");
+    assert!(matches!(canonical.0.as_str(), "first edit" | "second edit"));
+    assert_eq!(canonical.1, 2);
+    let revisions: Vec<(i32, String)> = sqlx::query_as(
+        "SELECT seq, old_body FROM forum.post_revisions \
+         WHERE post_type = 'comment' AND post_id = $1 ORDER BY seq",
+    )
+    .bind(comment_id)
+    .fetch_all(&pool)
+    .await
+    .expect("comment revisions after concurrent edits");
+    assert_eq!(revisions, vec![(1, "original".into())]);
+
+    let legacy_writer_version: i64 = sqlx::query_scalar(
+        "UPDATE forum.comments SET body = 'legacy writer edit' WHERE id = $1 \
+         RETURNING content_version",
+    )
+    .bind(comment_id)
+    .fetch_one(&pool)
+    .await
+    .expect("legacy comment writer version bump");
+    assert_eq!(legacy_writer_version, 3);
+    let stale_after_legacy = update_comment_request(
+        &app,
+        comment_id,
+        &token,
+        json!({ "body": "must conflict", "expectedVersion": 2 }),
+    )
+    .await;
+    assert_eq!(stale_after_legacy.status(), StatusCode::CONFLICT);
+    assert_eq!(read_json(stale_after_legacy).await["error"]["details"]["currentVersion"], 3);
+}
+
+#[tokio::test]
 async fn test_create_top_level_comment() {
     let (pool, app) = create_test_app().await;
     let (author_id, token) = create_test_account(&pool, "eve@tongji.edu.cn", "eve").await;
@@ -259,6 +354,83 @@ async fn test_create_top_level_comment() {
     .await
     .unwrap();
     assert_eq!(activity_count, 1);
+}
+
+#[tokio::test]
+async fn comment_permissions_are_server_authoritative_and_hierarchy_aware() {
+    let (pool, app) = create_test_app().await;
+    let (author_id, author_token) = create_test_account(
+        &pool,
+        "comment-permission-author@tongji.edu.cn",
+        "comment-permission-author",
+    )
+    .await;
+    let (moderator_id, moderator_token) = create_test_account(
+        &pool,
+        "comment-permission-mod@tongji.edu.cn",
+        "comment-permission-mod",
+    )
+    .await;
+    let (admin_id, _) = create_test_account(
+        &pool,
+        "comment-permission-admin@tongji.edu.cn",
+        "comment-permission-admin",
+    )
+    .await;
+    sqlx::query(
+        "UPDATE identity.accounts SET role = CASE \
+         WHEN id = $1 THEN 'mod'::identity.account_role \
+         WHEN id = $2 THEN 'admin'::identity.account_role ELSE role END",
+    )
+    .bind(moderator_id)
+    .bind(admin_id)
+    .execute(&pool)
+    .await
+    .expect("seed comment permission roles");
+    let thread_id = seed_thread(&pool, author_id).await;
+    let comment_id = seed_comment(&pool, thread_id, author_id, "author reply", None).await;
+    let admin_comment_id = seed_comment(&pool, thread_id, admin_id, "admin reply", None).await;
+    let comment_id_string = comment_id.to_string();
+    let admin_comment_id_string = admin_comment_id.to_string();
+
+    let anonymous = read_json(list_comments_request(&app, thread_id, None).await).await;
+    let anonymous_comment = anonymous["items"]
+        .as_array()
+        .expect("anonymous comments")
+        .iter()
+        .find(|item| item["id"].as_str() == Some(comment_id_string.as_str()))
+        .expect("anonymous author comment");
+    assert_eq!(anonymous_comment["contentVersion"], 1);
+    assert_eq!(anonymous_comment["canEdit"], false);
+    assert_eq!(anonymous_comment["canDelete"], false);
+    assert_eq!(anonymous_comment["canModerate"], false);
+
+    let author = read_json(list_comments_request(&app, thread_id, Some(&author_token)).await).await;
+    let author_comment = author["items"]
+        .as_array()
+        .expect("author comments")
+        .iter()
+        .find(|item| item["id"].as_str() == Some(comment_id_string.as_str()))
+        .expect("author-owned comment");
+    assert_eq!(author_comment["canEdit"], true);
+    assert_eq!(author_comment["canDelete"], true);
+    assert_eq!(author_comment["canModerate"], false);
+
+    let moderator =
+        read_json(list_comments_request(&app, thread_id, Some(&moderator_token)).await).await;
+    let items = moderator["items"].as_array().expect("moderator comments");
+    let user_comment = items
+        .iter()
+        .find(|item| item["id"].as_str() == Some(comment_id_string.as_str()))
+        .expect("moderatable comment");
+    let protected_comment = items
+        .iter()
+        .find(|item| item["id"].as_str() == Some(admin_comment_id_string.as_str()))
+        .expect("protected comment");
+    assert_eq!(user_comment["canEdit"], false);
+    assert_eq!(user_comment["canDelete"], false);
+    assert_eq!(user_comment["canModerate"], true);
+    assert_eq!(protected_comment["canModerate"], false);
 }
 
 #[tokio::test]

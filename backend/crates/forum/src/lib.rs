@@ -6,6 +6,7 @@
 mod admin;
 pub mod badges;
 mod cache;
+mod content_permissions;
 mod content_policy;
 pub mod digest;
 pub mod discovery;

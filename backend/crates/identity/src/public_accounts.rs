@@ -1,5 +1,7 @@
 //! Privacy-safe account directory queries for other domains.
 
+use std::collections::HashMap;
+
 use chrono::{DateTime, Utc};
 use shared::AppResult;
 use sqlx::{FromRow, PgConnection, PgPool};
@@ -157,6 +159,25 @@ pub async fn find_account_role_by_id(
             .fetch_optional(connection)
             .await?;
     Ok(role)
+}
+
+/// Batch-load role-only projections for cross-domain authorization displays.
+///
+/// This intentionally includes lifecycle-closed accounts: content authored before an
+/// account closes still participates in the same moderation hierarchy. No PII is selected.
+pub async fn find_account_roles_by_ids(
+    pool: &PgPool,
+    account_ids: &[i64],
+) -> AppResult<HashMap<i64, String>> {
+    if account_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let rows: Vec<(i64, String)> =
+        sqlx::query_as("SELECT id, role::text FROM identity.accounts WHERE id = ANY($1)")
+            .bind(account_ids)
+            .fetch_all(pool)
+            .await?;
+    Ok(rows.into_iter().collect())
 }
 
 /// Lock and return the role/status needed for a cross-domain privileged mutation.

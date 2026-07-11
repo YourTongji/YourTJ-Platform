@@ -6,7 +6,7 @@
 >
 > 负责人：Product design、Web maintainers
 >
-> 最近核验：2026-07-11，`origin/main@ed8a06c`
+> 最近核验：2026-07-12，`codex/x-content-versioning`
 
 YourTJ Community Web 的 Figma 第三版是当前视觉方向来源：
 [Figma node 106:2](https://www.figma.com/design/dndgylImv8ZuVAXg9uWU3y/YourTJ-Community-Web?node-id=106-2)。
@@ -72,6 +72,8 @@ empty、error、success 和 permission-denied。Mutation：
 
 - 防重复提交并显示进度；失败保留用户输入和可重试路径。
 - Optimistic update 有 rollback/服务端校正，不把局部 toast 当持久成功事实。
+- 作者编辑器遇到版本冲突时保留本地输入，以可朗读 alert 同时提供“载入线上版本”和“基于最新版重试”；
+  refetch 不得自动替换正在编辑的内容。
 - Destructive action 展示 target、影响、可恢复性和 reason；确认不能只靠红色。
 - Skeleton 与最终布局尺寸接近，避免大幅 layout shift。
 

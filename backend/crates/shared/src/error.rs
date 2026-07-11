@@ -27,6 +27,9 @@ pub enum AppError {
     #[error("conflict: {0}")]
     Conflict(String),
 
+    #[error("content changed since it was loaded")]
+    OptimisticLockConflict { current_version: i64 },
+
     #[error("rate limited")]
     RateLimited,
 
@@ -47,6 +50,7 @@ impl AppError {
             AppError::Forbidden => (StatusCode::FORBIDDEN, "FORBIDDEN"),
             AppError::BadRequest(_) => (StatusCode::BAD_REQUEST, "BAD_REQUEST"),
             AppError::Conflict(_) => (StatusCode::CONFLICT, "CONFLICT"),
+            AppError::OptimisticLockConflict { .. } => (StatusCode::CONFLICT, "VERSION_CONFLICT"),
             AppError::RateLimited => (StatusCode::TOO_MANY_REQUESTS, "RATE_LIMITED"),
             AppError::ServiceUnavailable => {
                 (StatusCode::SERVICE_UNAVAILABLE, "SERVICE_UNAVAILABLE")
@@ -66,7 +70,19 @@ impl IntoResponse for AppError {
             }
             other => other.to_string(),
         };
-        (status, Json(json!({ "error": { "code": code, "message": message } }))).into_response()
+        let details = match self {
+            AppError::OptimisticLockConflict { current_version } => {
+                Some(json!({ "currentVersion": current_version }))
+            }
+            _ => None,
+        };
+        let body = match details {
+            Some(details) => {
+                json!({ "error": { "code": code, "message": message, "details": details } })
+            }
+            None => json!({ "error": { "code": code, "message": message } }),
+        };
+        (status, Json(body)).into_response()
     }
 }
 

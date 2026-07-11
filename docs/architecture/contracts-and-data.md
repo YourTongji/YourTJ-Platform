@@ -97,6 +97,15 @@ Fresh database 必须只通过 sqlx migration ledger 建立。普通启动、CI 
 - Forum draft 使用 `thread`/`comment` discriminated payload 和稳定 account-owned key；服务端限制 key、
   target 与内容大小。`version=1` 起步，保存以 `expectedVersion` compare-and-swap，账号行锁把 50 条上限
   检查与创建串行化；409 由用户显式解决，不能用 last-write-wins 静默覆盖另一设备。
+- Forum 已发布主题/评论的 canonical row 使用正整数 `contentVersion`。PATCH 以 `expectedVersion` 做
+  compare-and-swap；锁定后的旧 source、revision insert、canonical update 与版本递增位于同一事务，
+  stale write 返回 `409 VERSION_CONFLICT` 和当前版本。历史写入依靠数据库默认版本 1；migration 的
+  source-column trigger 会为未显式写版本的旧 backend 单步递增，新 backend 显式 `+1` 时不重复递增，
+  因而滚动窗口也不会绕过版本线。legacy 客户端省略 expectedVersion 只按 1 尝试，已修改内容会安全
+  冲突而非静默覆盖。滚动发布先执行 additive migration，再部署读取新列的应用版本。
+- Public list/detail DTO 的 `canEdit/canDelete/canModerate` 是 viewer-specific read model。Forum 结合
+  canonical 状态、作者关系和 Identity 的 role-only batch projection 计算；Web 只能用它改善可用性，
+  mutation handler 仍独立执行 owner/capability/role hierarchy 授权。
 - 服务端通过 pulldown-cmark event stream 验证 canonical source，限制结构/链接，拒绝 raw HTML、
   非安全 URL 和未绑定图片；mention/search/notification projection 从解析事件生成。客户端 preview
   不构成安全边界。

@@ -49,6 +49,22 @@ async fn update_thread_request(
         .expect("thread update response")
 }
 
+async fn get_thread_request(
+    app: &axum::Router,
+    thread_id: i64,
+    token: Option<&str>,
+) -> axum::response::Response {
+    let mut request =
+        Request::builder().method(Method::GET).uri(format!("/api/v2/forum/threads/{thread_id}"));
+    if let Some(token) = token {
+        request = request.header(header::AUTHORIZATION, format!("Bearer {token}"));
+    }
+    app.clone()
+        .oneshot(request.body(Body::empty()).expect("build thread detail request"))
+        .await
+        .expect("thread detail response")
+}
+
 async fn admin_thread_action_request(
     app: &axum::Router,
     thread_id: i64,
@@ -154,6 +170,73 @@ async fn test_create_thread_returns_detail_dto() {
     .unwrap();
     assert_eq!(activity_count, 1);
     assert_eq!(board_thread_count(&pool, 1).await, 1);
+}
+
+#[tokio::test]
+async fn thread_permissions_are_server_authoritative_in_detail_and_list_dtos() {
+    let (pool, app) = create_test_app().await;
+    let (author_id, author_token) =
+        create_test_account(&pool, "permission-author@tongji.edu.cn", "permission-author").await;
+    let (moderator_id, moderator_token) =
+        create_test_account(&pool, "permission-mod@tongji.edu.cn", "permission-mod").await;
+    let (admin_id, _) =
+        create_test_account(&pool, "permission-admin@tongji.edu.cn", "permission-admin").await;
+    sqlx::query(
+        "UPDATE identity.accounts SET role = CASE \
+         WHEN id = $1 THEN 'mod'::identity.account_role \
+         WHEN id = $2 THEN 'admin'::identity.account_role ELSE role END",
+    )
+    .bind(moderator_id)
+    .bind(admin_id)
+    .execute(&pool)
+    .await
+    .expect("seed content permission roles");
+    let thread_id = seed_thread(&pool, author_id, "Permission truth", Some("body")).await;
+    let admin_thread_id = seed_thread(&pool, admin_id, "Protected author", None).await;
+
+    let anonymous = read_json(get_thread_request(&app, thread_id, None).await).await;
+    assert_eq!(anonymous["contentVersion"], 1);
+    assert_eq!(anonymous["canEdit"], false);
+    assert_eq!(anonymous["canDelete"], false);
+    assert_eq!(anonymous["canModerate"], false);
+
+    let author = read_json(get_thread_request(&app, thread_id, Some(&author_token)).await).await;
+    assert_eq!(author["canEdit"], true);
+    assert_eq!(author["canDelete"], true);
+    assert_eq!(author["canModerate"], false);
+
+    let moderator =
+        read_json(get_thread_request(&app, thread_id, Some(&moderator_token)).await).await;
+    assert_eq!(moderator["canEdit"], false);
+    assert_eq!(moderator["canDelete"], false);
+    assert_eq!(moderator["canModerate"], true);
+    let protected =
+        read_json(get_thread_request(&app, admin_thread_id, Some(&moderator_token)).await).await;
+    assert_eq!(protected["canModerate"], false);
+
+    let list_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/api/v2/forum/threads?sort=new")
+                .header(header::AUTHORIZATION, format!("Bearer {moderator_token}"))
+                .body(Body::empty())
+                .expect("build thread list request"),
+        )
+        .await
+        .expect("thread list response");
+    assert_eq!(list_response.status(), StatusCode::OK);
+    let list = read_json(list_response).await;
+    let thread_id_string = thread_id.to_string();
+    let user_thread = list["items"]
+        .as_array()
+        .expect("thread list items")
+        .iter()
+        .find(|item| item["id"].as_str() == Some(thread_id_string.as_str()))
+        .expect("user-authored thread in list");
+    assert_eq!(user_thread["contentVersion"], 1);
+    assert_eq!(user_thread["canModerate"], true);
 }
 
 #[tokio::test]
@@ -781,7 +864,7 @@ async fn queued_thread_edit_removes_public_counter_and_activity() {
 }
 
 #[tokio::test]
-async fn concurrent_thread_edits_allocate_serial_revision_sequences() {
+async fn concurrent_thread_edits_reject_stale_writes_without_revision_gaps() {
     let (pool, app) = create_test_app().await;
     let (author_id, token) = create_test_account(
         &pool,
@@ -798,11 +881,31 @@ async fn concurrent_thread_edits_allocate_serial_revision_sequences() {
     .await
     .expect("age concurrent thread");
 
-    let first = update_thread_request(&app, thread_id, &token, json!({ "body": "first edit" }));
-    let second = update_thread_request(&app, thread_id, &token, json!({ "body": "second edit" }));
+    let first = update_thread_request(
+        &app,
+        thread_id,
+        &token,
+        json!({ "body": "first edit", "expectedVersion": 1 }),
+    );
+    let second = update_thread_request(
+        &app,
+        thread_id,
+        &token,
+        json!({ "body": "second edit", "expectedVersion": 1 }),
+    );
     let (first_response, second_response) = tokio::join!(first, second);
-    assert_eq!(first_response.status(), StatusCode::OK);
-    assert_eq!(second_response.status(), StatusCode::OK);
+    let (success_response, conflict_response) = if first_response.status() == StatusCode::OK {
+        (first_response, second_response)
+    } else {
+        (second_response, first_response)
+    };
+    assert_eq!(success_response.status(), StatusCode::OK);
+    assert_eq!(conflict_response.status(), StatusCode::CONFLICT);
+    let success = read_json(success_response).await;
+    let conflict = read_json(conflict_response).await;
+    assert_eq!(success["contentVersion"], 2);
+    assert_eq!(conflict["error"]["code"], "VERSION_CONFLICT");
+    assert_eq!(conflict["error"]["details"]["currentVersion"], 2);
 
     let revisions: Vec<(i32, String)> = sqlx::query_as(
         "SELECT seq, old_body FROM forum.post_revisions \
@@ -812,10 +915,58 @@ async fn concurrent_thread_edits_allocate_serial_revision_sequences() {
     .fetch_all(&pool)
     .await
     .expect("concurrent revisions");
-    assert_eq!(revisions.len(), 2);
+    assert_eq!(revisions.len(), 1);
     assert_eq!(revisions[0], (1, "original".into()));
-    assert_eq!(revisions[1].0, 2);
-    assert!(matches!(revisions[1].1.as_str(), "first edit" | "second edit"));
+
+    let legacy_retry =
+        update_thread_request(&app, thread_id, &token, json!({ "body": "legacy retry" })).await;
+    assert_eq!(legacy_retry.status(), StatusCode::CONFLICT);
+    assert_eq!(read_json(legacy_retry).await["error"]["details"]["currentVersion"], 2);
+
+    let resolved = update_thread_request(
+        &app,
+        thread_id,
+        &token,
+        json!({ "body": "resolved edit", "expectedVersion": 2 }),
+    )
+    .await;
+    assert_eq!(resolved.status(), StatusCode::OK);
+    assert_eq!(read_json(resolved).await["contentVersion"], 3);
+    let canonical: (String, i64) =
+        sqlx::query_as("SELECT body, content_version FROM forum.threads WHERE id = $1")
+            .bind(thread_id)
+            .fetch_one(&pool)
+            .await
+            .expect("canonical thread after conflict recovery");
+    assert_eq!(canonical, ("resolved edit".into(), 3));
+    let revision_sequences: Vec<i32> = sqlx::query_scalar(
+        "SELECT seq FROM forum.post_revisions \
+         WHERE post_type = 'thread' AND post_id = $1 ORDER BY seq",
+    )
+    .bind(thread_id)
+    .fetch_all(&pool)
+    .await
+    .expect("revision sequence after conflict recovery");
+    assert_eq!(revision_sequences, vec![1, 2]);
+
+    let legacy_writer_version: i64 = sqlx::query_scalar(
+        "UPDATE forum.threads SET body = 'legacy writer edit' WHERE id = $1 \
+         RETURNING content_version",
+    )
+    .bind(thread_id)
+    .fetch_one(&pool)
+    .await
+    .expect("legacy thread writer version bump");
+    assert_eq!(legacy_writer_version, 4);
+    let stale_after_legacy = update_thread_request(
+        &app,
+        thread_id,
+        &token,
+        json!({ "body": "must conflict", "expectedVersion": 3 }),
+    )
+    .await;
+    assert_eq!(stale_after_legacy.status(), StatusCode::CONFLICT);
+    assert_eq!(read_json(stale_after_legacy).await["error"]["details"]["currentVersion"], 4);
 }
 
 #[tokio::test]

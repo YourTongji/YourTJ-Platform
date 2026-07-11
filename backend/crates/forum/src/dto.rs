@@ -57,6 +57,8 @@ pub struct ThreadDto {
     pub author_handle: String,
     pub title: String,
     pub body_excerpt: Option<String>,
+    #[serde(default = "legacy_content_version")]
+    pub content_version: i64,
     pub reply_count: i32,
     pub vote_count: i32,
     pub hot_score: Option<f64>,
@@ -66,6 +68,12 @@ pub struct ThreadDto {
     pub last_activity_at: i64,
     pub viewer_vote: Option<String>,
     pub is_bookmarked: bool,
+    #[serde(default)]
+    pub can_edit: bool,
+    #[serde(default)]
+    pub can_delete: bool,
+    #[serde(default)]
+    pub can_moderate: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unread_count: Option<i32>,
 }
@@ -81,6 +89,8 @@ pub struct ThreadDetailDto {
     pub title: String,
     pub body: Option<String>,
     pub content_format: ContentFormat,
+    #[serde(default = "legacy_content_version")]
+    pub content_version: i64,
     pub reply_count: i32,
     pub vote_count: i32,
     pub hot_score: Option<f64>,
@@ -102,6 +112,12 @@ pub struct ThreadDetailDto {
     pub my_last_read_comment_id: Option<String>,
     pub my_subscription_level: Option<String>,
     pub poll: Option<PollDto>,
+    #[serde(default)]
+    pub can_edit: bool,
+    #[serde(default)]
+    pub can_delete: bool,
+    #[serde(default)]
+    pub can_moderate: bool,
 }
 
 /// POST /forum/threads
@@ -131,6 +147,7 @@ pub struct CommentDto {
     pub author_id: String,
     pub body: String,
     pub content_format: ContentFormat,
+    pub content_version: i64,
     pub vote_count: i32,
     pub viewer_vote: Option<String>,
     pub is_bookmarked: bool,
@@ -140,6 +157,9 @@ pub struct CommentDto {
     pub created_at: i64,
     pub quoted_comment_id: Option<String>,
     pub is_solved: bool,
+    pub can_edit: bool,
+    pub can_delete: bool,
+    pub can_moderate: bool,
 }
 
 /// POST /forum/threads/{thread_id}/comments
@@ -363,6 +383,8 @@ pub struct DraftDto {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadUpdateInput {
+    #[serde(default = "legacy_content_version")]
+    pub expected_version: i64,
     pub title: Option<String>,
     pub body: Option<String>,
     pub content_format: Option<ContentFormat>,
@@ -374,9 +396,15 @@ pub struct ThreadUpdateInput {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CommentUpdateInput {
+    #[serde(default = "legacy_content_version")]
+    pub expected_version: i64,
     pub body: String,
     #[serde(default)]
     pub content_format: ContentFormat,
+}
+
+const fn legacy_content_version() -> i64 {
+    1
 }
 
 /// Revision history entry.

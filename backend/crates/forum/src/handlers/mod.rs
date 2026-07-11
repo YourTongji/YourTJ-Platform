@@ -50,6 +50,7 @@ pub(crate) fn thread_to_dto(row: &crate::models::ThreadRowJoined) -> ThreadDto {
         author_handle: row.author_handle.clone(),
         title: row.title.clone(),
         body_excerpt: None,
+        content_version: row.content_version,
         reply_count: row.reply_count,
         vote_count: row.vote_count,
         hot_score: row.hot_score,
@@ -59,6 +60,9 @@ pub(crate) fn thread_to_dto(row: &crate::models::ThreadRowJoined) -> ThreadDto {
         last_activity_at: row.last_activity_at.timestamp(),
         viewer_vote: None,
         is_bookmarked: false,
+        can_edit: false,
+        can_delete: false,
+        can_moderate: false,
         unread_count: None,
     }
 }
@@ -72,6 +76,7 @@ pub(crate) fn thread_to_detail_dto(row: &crate::models::ThreadRowJoinedFull) -> 
         title: row.title.clone(),
         body: row.body.clone(),
         content_format: crate::dto::ContentFormat::from_db(&row.content_format),
+        content_version: row.content_version,
         reply_count: row.reply_count,
         vote_count: row.vote_count,
         hot_score: row.hot_score,
@@ -93,6 +98,9 @@ pub(crate) fn thread_to_detail_dto(row: &crate::models::ThreadRowJoinedFull) -> 
         my_last_read_comment_id: None,
         my_subscription_level: None,
         poll: None,
+        can_edit: false,
+        can_delete: false,
+        can_moderate: false,
     }
 }
 
@@ -109,6 +117,7 @@ pub(crate) fn comment_to_dto(
         author_id: row.author_id.to_string(),
         body: row.body.clone(),
         content_format: crate::dto::ContentFormat::from_db(&row.content_format),
+        content_version: row.content_version,
         vote_count: row.vote_count,
         viewer_vote: None,
         is_bookmarked: false,
@@ -118,6 +127,9 @@ pub(crate) fn comment_to_dto(
         created_at: row.created_at.timestamp(),
         quoted_comment_id: row.quoted_comment_id.map(|v| v.to_string()),
         is_solved: Some(row.id) == solved_comment_id,
+        can_edit: false,
+        can_delete: false,
+        can_moderate: false,
     }
 }
 

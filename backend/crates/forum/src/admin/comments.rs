@@ -57,7 +57,18 @@ pub async fn get_comment_for_moderation(
             .fetch_optional(&state.db)
             .await?
             .flatten();
-    Ok(Json(crate::handlers::comment_to_dto(&comment, solved_comment_id)))
+    let parent_allows_edit =
+        crate::repo::thread_allows_comment_edits(&state.db, comment.thread_id).await?;
+    let mut dto = crate::handlers::comment_to_dto(&comment, solved_comment_id);
+    crate::content_permissions::hydrate_comments(
+        &state.db,
+        Some(&auth),
+        std::slice::from_ref(&comment),
+        parent_allows_edit,
+        std::slice::from_mut(&mut dto),
+    )
+    .await?;
+    Ok(Json(dto))
 }
 
 /// POST /api/v2/admin/forum/comments/{id}/{action}

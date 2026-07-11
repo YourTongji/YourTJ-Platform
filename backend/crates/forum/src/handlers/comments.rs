@@ -92,6 +92,15 @@ pub async fn list_comments(
     if let Some(account_id) = current_user_id {
         hydrate_comment_viewer_states(&state.db, account_id, &mut items).await?;
     }
+    let parent_allows_edit = repo::thread_allows_comment_edits(&state.db, thread_id).await?;
+    crate::content_permissions::hydrate_comments(
+        &state.db,
+        current_account.as_ref(),
+        &rows,
+        parent_allows_edit,
+        &mut items,
+    )
+    .await?;
     Ok(Json(Page::new(items, next_cursor)))
 }
 
@@ -357,7 +366,16 @@ pub async fn create_comment(
     }
     crate::cache::invalidate_thread_by_id(state.redis.as_ref(), &state.db, thread_id).await;
 
-    Ok((StatusCode::CREATED, Json(comment_to_dto(&row, None))))
+    let mut dto = comment_to_dto(&row, None);
+    crate::content_permissions::hydrate_comments(
+        &state.db,
+        Some(&auth),
+        std::slice::from_ref(&row),
+        true,
+        std::slice::from_mut(&mut dto),
+    )
+    .await?;
+    Ok((StatusCode::CREATED, Json(dto)))
 }
 
 /// PATCH /api/v2/forum/comments/{id} — auth required (author only)
@@ -375,6 +393,9 @@ pub async fn update_comment(
     )
     .await
     .map_err(|_r| AppError::Unauthorized)?;
+    if body.expected_version < 1 {
+        return Err(AppError::BadRequest("expectedVersion must be a positive integer".into()));
+    }
     let prepared = crate::content_policy::prepare_comment_update(body)?;
     crate::sanctions::require_can_post(state.redis.as_ref(), &state.db, auth.id).await?;
 
@@ -386,6 +407,7 @@ pub async fn update_comment(
         auth.id,
         &prepared.input.body,
         prepared.input.content_format.as_str(),
+        prepared.input.expected_version,
         prepared.is_queued,
     )
     .await?;
@@ -403,6 +425,14 @@ pub async fn update_comment(
 
     let mut dto = comment_to_dto(&row, solved_comment_id);
     hydrate_comment_viewer_states(&state.db, auth.id, std::slice::from_mut(&mut dto)).await?;
+    crate::content_permissions::hydrate_comments(
+        &state.db,
+        Some(&auth),
+        std::slice::from_ref(&row),
+        true,
+        std::slice::from_mut(&mut dto),
+    )
+    .await?;
     Ok(Json(dto))
 }
 

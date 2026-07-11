@@ -605,13 +605,14 @@ components:
       default: plain_v1
     Thread:
       type: object
-      required: [id, boardId, authorHandle, title, bodyExcerpt, replyCount, voteCount, hotScore, status, createdAt, lastActivityAt, tags, viewerVote, isBookmarked]
+      required: [id, boardId, authorHandle, title, bodyExcerpt, contentVersion, replyCount, voteCount, hotScore, status, createdAt, lastActivityAt, tags, viewerVote, isBookmarked, canEdit, canDelete, canModerate]
       properties:
         id: { type: string }
         boardId: { type: string }
         authorHandle: { type: string }
         title: { type: string }
         bodyExcerpt: { type: string, nullable: true }
+        contentVersion: { type: integer, format: int64, minimum: 1 }
         replyCount: { type: integer }
         voteCount: { type: integer }
         hotScore: { type: number, nullable: true }
@@ -621,11 +622,14 @@ components:
         tags: { type: array, items: { type: string } }
         viewerVote: { type: string, enum: [up, down], nullable: true }
         isBookmarked: { type: boolean }
+        canEdit: { type: boolean, description: Server-authoritative author edit permission for this viewer. }
+        canDelete: { type: boolean, description: Server-authoritative author delete permission for this viewer. }
+        canModerate: { type: boolean, description: Server-authoritative moderation permission including role hierarchy. }
     ThreadFeed:
       allOf: [{ $ref: "#/components/schemas/Thread" }, { type: object, properties: { unreadCount: { type: integer, nullable: true } } }]
     ThreadDetail:
       type: object
-      required: [id, boardId, authorHandle, authorId, title, body, contentFormat, replyCount, voteCount, hotScore, tags, status, pinnedAt, pinnedGlobally, featuredAt, closedAt, archivedAt, deletedAt, editedAt, hiddenAt, createdAt, lastActivityAt, solvedAnswerId, viewerVote, isBookmarked, myLastReadCommentId, mySubscriptionLevel, poll]
+      required: [id, boardId, authorHandle, authorId, title, body, contentFormat, contentVersion, replyCount, voteCount, hotScore, tags, status, pinnedAt, pinnedGlobally, featuredAt, closedAt, archivedAt, deletedAt, editedAt, hiddenAt, createdAt, lastActivityAt, solvedAnswerId, viewerVote, isBookmarked, myLastReadCommentId, mySubscriptionLevel, poll, canEdit, canDelete, canModerate]
       properties:
         id: { type: string }
         boardId: { type: string }
@@ -634,6 +638,7 @@ components:
         title: { type: string }
         body: { type: string, nullable: true }
         contentFormat: { $ref: "#/components/schemas/ContentFormat" }
+        contentVersion: { type: integer, format: int64, minimum: 1 }
         replyCount: { type: integer }
         voteCount: { type: integer }
         hotScore: { type: number, nullable: true }
@@ -657,6 +662,9 @@ components:
         poll:
           allOf: [{ $ref: "#/components/schemas/Poll" }]
           nullable: true
+        canEdit: { type: boolean, description: Server-authoritative author edit permission for this viewer. }
+        canDelete: { type: boolean, description: Server-authoritative author delete permission for this viewer. }
+        canModerate: { type: boolean, description: Server-authoritative moderation permission including role hierarchy. }
     ThreadInput:
       type: object
       required: [boardId, title]
@@ -670,6 +678,12 @@ components:
     ThreadUpdateInput:
       type: object
       properties:
+        expectedVersion:
+          type: integer
+          format: int64
+          minimum: 1
+          default: 1
+          description: Compare-and-swap version. Legacy omission is treated as version 1 and conflicts once content has changed.
         title: { type: string, minLength: 1, maxLength: 200 }
         body: { type: string, maxLength: 50000 }
         contentFormat:
@@ -703,7 +717,7 @@ components:
         createdAt: { type: integer }
     Comment:
       type: object
-      required: [id, threadId, parentId, path, authorHandle, authorId, body, contentFormat, voteCount, viewerVote, isBookmarked, isDeleted, isHidden, editedAt, createdAt, quotedCommentId, isSolved]
+      required: [id, threadId, parentId, path, authorHandle, authorId, body, contentFormat, contentVersion, voteCount, viewerVote, isBookmarked, isDeleted, isHidden, editedAt, createdAt, quotedCommentId, isSolved, canEdit, canDelete, canModerate]
       properties:
         id: { type: string }
         threadId: { type: string }
@@ -713,6 +727,7 @@ components:
         authorId: { type: string }
         body: { type: string }
         contentFormat: { $ref: "#/components/schemas/ContentFormat" }
+        contentVersion: { type: integer, format: int64, minimum: 1 }
         voteCount: { type: integer }
         viewerVote: { type: string, enum: [up, down], nullable: true }
         isBookmarked: { type: boolean }
@@ -722,6 +737,9 @@ components:
         createdAt: { type: integer }
         quotedCommentId: { type: string, nullable: true }
         isSolved: { type: boolean }
+        canEdit: { type: boolean, description: Server-authoritative author edit permission for this viewer. }
+        canDelete: { type: boolean, description: Server-authoritative author delete permission for this viewer. }
+        canModerate: { type: boolean, description: Server-authoritative moderation permission including role hierarchy. }
     CommentInput:
       type: object
       required: [body]
@@ -734,6 +752,12 @@ components:
       type: object
       required: [body]
       properties:
+        expectedVersion:
+          type: integer
+          format: int64
+          minimum: 1
+          default: 1
+          description: Compare-and-swap version. Legacy omission is treated as version 1 and conflicts once content has changed.
         body: { type: string, minLength: 1, maxLength: 16000 }
         contentFormat: { $ref: "#/components/schemas/ContentFormat" }
     VoteInput:
@@ -2542,7 +2566,7 @@ paths:
       responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/ThreadFeedPage" } } } } }
   /forum/threads/{id}:
     get: { tags: [forum], security: [{}, { bearer: [] }], summary: Thread detail with optional viewer state, parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/ThreadDetail" } } } }, "404": { $ref: "#/components/responses/NotFound" } } }
-    patch: { tags: [forum], summary: Edit thread, parameters: [{ name: id, in: path, required: true, schema: { type: string } }], requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/ThreadUpdateInput" } } } }, responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/ThreadDetail" } } } } } }
+    patch: { tags: [forum], summary: Compare-and-swap edit thread, parameters: [{ name: id, in: path, required: true, schema: { type: string } }], requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/ThreadUpdateInput" } } } }, responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/ThreadDetail" } } } }, "409": { $ref: "#/components/responses/Conflict" } } }
     delete: { tags: [forum], summary: Soft-delete thread, parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { "200": { description: deleted, content: { application/json: { schema: { type: object, required: [ok], properties: { ok: { type: boolean } } } } } } } }
   /forum/threads/{id}/read:
     post: { tags: [forum], summary: Report read position, parameters: [{ name: id, in: path, required: true, schema: { type: string } }], requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/ReadTrackingInput" } } } }, responses: { "204": { description: ok } } }
@@ -2552,7 +2576,7 @@ paths:
     get: { tags: [forum], security: [{}, { bearer: [] }], summary: Comments with optional viewer state, parameters: [{ name: id, in: path, required: true, schema: { type: string } }, { $ref: "#/components/parameters/Cursor" }, { $ref: "#/components/parameters/Limit" }], responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/CommentPage" } } } } } }
     post: { tags: [forum], summary: Add comment, parameters: [{ name: id, in: path, required: true, schema: { type: string } }], requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/CommentInput" } } } }, responses: { "201": { description: created, content: { application/json: { schema: { $ref: "#/components/schemas/Comment" } } } } } }
   /forum/comments/{id}:
-    patch: { tags: [forum], summary: Edit comment, parameters: [{ name: id, in: path, required: true, schema: { type: string } }], requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/CommentUpdateInput" } } } }, responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Comment" } } } } } }
+    patch: { tags: [forum], summary: Compare-and-swap edit comment, parameters: [{ name: id, in: path, required: true, schema: { type: string } }], requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/CommentUpdateInput" } } } }, responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Comment" } } } }, "409": { $ref: "#/components/responses/Conflict" } } }
     delete: { tags: [forum], summary: Soft-delete comment, parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { "200": { description: deleted, content: { application/json: { schema: { type: object, required: [ok], properties: { ok: { type: boolean } } } } } } } }
   /forum/comments/{id}/revisions:
     get: { tags: [forum], summary: Comment revision history, parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/RevisionPage" } } } } } }

@@ -67,7 +67,7 @@ async fn list_threads_new(
 
     let rows = if let Some(cid) = cursor_id {
         sqlx::query_as::<_, ThreadRowJoined>(
-            "SELECT t.id, t.board_id, t.author_id, t.title, t.body, \
+            "SELECT t.id, t.board_id, t.author_id, t.title, t.body, t.content_version, \
                     t.reply_count, t.vote_count, t.hot_score, t.status, \
                     t.created_at, t.last_activity_at, \
                     a.handle AS author_handle \
@@ -88,7 +88,7 @@ async fn list_threads_new(
         .await?
     } else {
         sqlx::query_as::<_, ThreadRowJoined>(
-            "SELECT t.id, t.board_id, t.author_id, t.title, t.body, \
+            "SELECT t.id, t.board_id, t.author_id, t.title, t.body, t.content_version, \
                     t.reply_count, t.vote_count, t.hot_score, t.status, \
                     t.created_at, t.last_activity_at, \
                     a.handle AS author_handle \
@@ -131,7 +131,7 @@ async fn list_threads_hot(
 
     let rows = if let (Some(ch), Some(ci)) = (cursor_hot, cursor_id) {
         sqlx::query_as::<_, ThreadRowJoined>(
-            "SELECT t.id, t.board_id, t.author_id, t.title, t.body, \
+            "SELECT t.id, t.board_id, t.author_id, t.title, t.body, t.content_version, \
                     t.reply_count, t.vote_count, t.hot_score, t.status, \
                     t.created_at, t.last_activity_at, \
                     a.handle AS author_handle \
@@ -155,7 +155,7 @@ async fn list_threads_hot(
         .await?
     } else {
         sqlx::query_as::<_, ThreadRowJoined>(
-            "SELECT t.id, t.board_id, t.author_id, t.title, t.body, \
+            "SELECT t.id, t.board_id, t.author_id, t.title, t.body, t.content_version, \
                     t.reply_count, t.vote_count, t.hot_score, t.status, \
                     t.created_at, t.last_activity_at, \
                     a.handle AS author_handle \
@@ -218,7 +218,7 @@ pub async fn list_threads_by_tag(
 ) -> AppResult<(Vec<ThreadRowJoined>, Option<String>)> {
     let page_size = limit.clamp(1, 100);
     let mut query = QueryBuilder::<Postgres>::new(
-        "SELECT thread.id, thread.board_id, thread.author_id, thread.title, thread.body, \
+        "SELECT thread.id, thread.board_id, thread.author_id, thread.title, thread.body, thread.content_version, \
                 thread.reply_count, thread.vote_count, thread.hot_score, thread.status, \
                 thread.created_at, thread.last_activity_at, account.handle AS author_handle \
          FROM forum.threads thread \
@@ -321,7 +321,7 @@ async fn list_threads_feed_new(
 
     let rows = if let (Some(cid), Some(bid)) = (cursor_id, board_id) {
         sqlx::query_as::<_, ThreadRowJoined>(
-            "SELECT t.id, t.board_id, t.author_id, t.title, t.body, \
+            "SELECT t.id, t.board_id, t.author_id, t.title, t.body, t.content_version, \
                     t.reply_count, t.vote_count, t.hot_score, t.status, \
                     t.created_at, t.last_activity_at, \
                     a.handle AS author_handle \
@@ -342,7 +342,7 @@ async fn list_threads_feed_new(
         .await?
     } else if let (Some(cid), None) = (cursor_id, board_id) {
         sqlx::query_as::<_, ThreadRowJoined>(
-            "SELECT t.id, t.board_id, t.author_id, t.title, t.body, \
+            "SELECT t.id, t.board_id, t.author_id, t.title, t.body, t.content_version, \
                     t.reply_count, t.vote_count, t.hot_score, t.status, \
                     t.created_at, t.last_activity_at, \
                     a.handle AS author_handle \
@@ -362,7 +362,7 @@ async fn list_threads_feed_new(
         .await?
     } else if let (None, Some(bid)) = (cursor_id, board_id) {
         sqlx::query_as::<_, ThreadRowJoined>(
-            "SELECT t.id, t.board_id, t.author_id, t.title, t.body, \
+            "SELECT t.id, t.board_id, t.author_id, t.title, t.body, t.content_version, \
                     t.reply_count, t.vote_count, t.hot_score, t.status, \
                     t.created_at, t.last_activity_at, \
                     a.handle AS author_handle \
@@ -381,7 +381,7 @@ async fn list_threads_feed_new(
         .await?
     } else {
         sqlx::query_as::<_, ThreadRowJoined>(
-            "SELECT t.id, t.board_id, t.author_id, t.title, t.body, \
+            "SELECT t.id, t.board_id, t.author_id, t.title, t.body, t.content_version, \
                     t.reply_count, t.vote_count, t.hot_score, t.status, \
                     t.created_at, t.last_activity_at, \
                     a.handle AS author_handle \
@@ -416,7 +416,7 @@ pub async fn fetch_threads_by_ids(
         return Ok(vec![]);
     }
     let rows: Vec<ThreadRowJoined> = sqlx::query_as(
-        "SELECT t.id, t.board_id, t.author_id, t.title, t.body, \
+        "SELECT t.id, t.board_id, t.author_id, t.title, t.body, t.content_version, \
                 t.reply_count, t.vote_count, t.hot_score, t.status, \
                 t.created_at, t.last_activity_at, \
                 a.handle AS author_handle \
@@ -460,7 +460,7 @@ async fn list_threads_feed_hot(
     let rows = match (board_id, ch, ci) {
         (Some(bid), Some(ch), Some(ci)) => {
             sqlx::query_as::<_, ThreadRowJoined>(
-                "SELECT t.id, t.board_id, t.author_id, t.title, t.body, \
+                "SELECT t.id, t.board_id, t.author_id, t.title, t.body, t.content_version, \
                         t.reply_count, t.vote_count, t.hot_score, t.status, \
                         t.created_at, t.last_activity_at, \
                         a.handle AS author_handle \
@@ -485,7 +485,7 @@ async fn list_threads_feed_hot(
         }
         (None, Some(ch), Some(ci)) => {
             sqlx::query_as::<_, ThreadRowJoined>(
-                "SELECT t.id, t.board_id, t.author_id, t.title, t.body, \
+                "SELECT t.id, t.board_id, t.author_id, t.title, t.body, t.content_version, \
                         t.reply_count, t.vote_count, t.hot_score, t.status, \
                         t.created_at, t.last_activity_at, \
                         a.handle AS author_handle \
@@ -508,7 +508,7 @@ async fn list_threads_feed_hot(
         }
         (Some(bid), _, _) => {
             sqlx::query_as::<_, ThreadRowJoined>(
-                "SELECT t.id, t.board_id, t.author_id, t.title, t.body, \
+                "SELECT t.id, t.board_id, t.author_id, t.title, t.body, t.content_version, \
                         t.reply_count, t.vote_count, t.hot_score, t.status, \
                         t.created_at, t.last_activity_at, \
                         a.handle AS author_handle \
@@ -528,7 +528,7 @@ async fn list_threads_feed_hot(
         }
         (None, _, _) => {
             sqlx::query_as::<_, ThreadRowJoined>(
-                "SELECT t.id, t.board_id, t.author_id, t.title, t.body, \
+                "SELECT t.id, t.board_id, t.author_id, t.title, t.body, t.content_version, \
                         t.reply_count, t.vote_count, t.hot_score, t.status, \
                         t.created_at, t.last_activity_at, \
                         a.handle AS author_handle \
@@ -599,7 +599,7 @@ pub async fn list_threads_feed_subscriptions(
     };
     let page_size = limit.clamp(1, 100);
     let rows = sqlx::query_as::<_, ThreadRowJoined>(
-        "SELECT t.id, t.board_id, t.author_id, t.title, t.body, \
+        "SELECT t.id, t.board_id, t.author_id, t.title, t.body, t.content_version, \
                 t.reply_count, t.vote_count, t.hot_score, t.status, \
                 t.created_at, t.last_activity_at, \
                 a.handle AS author_handle \
@@ -670,6 +670,7 @@ struct FollowingThreadCandidate {
     author_id: i64,
     title: String,
     body: Option<String>,
+    content_version: i64,
     reply_count: i32,
     vote_count: i32,
     hot_score: Option<f64>,
@@ -686,6 +687,7 @@ impl FollowingThreadCandidate {
             author_id: self.author_id,
             title: self.title,
             body: self.body,
+            content_version: self.content_version,
             reply_count: self.reply_count,
             vote_count: self.vote_count,
             hot_score: self.hot_score,
@@ -721,6 +723,7 @@ pub async fn list_threads_feed_following(
         let candidate_limit = candidate_limit.min(MAX_CANDIDATES_PER_PAGE - scanned);
         let mut query = QueryBuilder::<Postgres>::new(
             "SELECT thread.id, thread.board_id, thread.author_id, thread.title, thread.body, \
+                    thread.content_version, \
                     thread.reply_count, thread.vote_count, thread.hot_score, thread.status, \
                     thread.created_at, thread.last_activity_at \
              FROM forum.threads thread \
@@ -800,7 +803,7 @@ pub async fn list_threads_feed_following(
 /// Find a single thread by id, joined with author handle (full columns).
 pub async fn find_thread(pool: &PgPool, id: i64) -> AppResult<Option<ThreadRowJoinedFull>> {
     let row = sqlx::query_as::<_, ThreadRowJoinedFull>(
-        "SELECT t.id, t.board_id, t.author_id, t.title, t.body, t.content_format, \
+        "SELECT t.id, t.board_id, t.author_id, t.title, t.body, t.content_format, t.content_version, \
                 t.reply_count, t.vote_count, t.hot_score, t.status, \
                 t.pinned_at, t.pinned_globally, t.featured_at, t.closed_at, t.archived_at, \
                 t.deleted_at, t.deleted_by, t.edited_at, t.hidden_at, \
@@ -823,7 +826,7 @@ pub async fn find_thread_for_moderation(
     id: i64,
 ) -> AppResult<Option<ThreadRowJoinedFull>> {
     let row = sqlx::query_as::<_, ThreadRowJoinedFull>(
-        "SELECT t.id, t.board_id, t.author_id, t.title, t.body, t.content_format, \
+        "SELECT t.id, t.board_id, t.author_id, t.title, t.body, t.content_format, t.content_version, \
                 t.reply_count, t.vote_count, t.hot_score, t.status, \
                 t.pinned_at, t.pinned_globally, t.featured_at, t.closed_at, t.archived_at, \
                 t.deleted_at, t.deleted_by, t.edited_at, t.hidden_at, \
@@ -858,11 +861,11 @@ pub async fn create_thread(
         "WITH inserted AS ( \
             INSERT INTO forum.threads (board_id, author_id, title, body, content_format, hidden_at) \
             VALUES ($1, $2, $3, $4, $5, CASE WHEN $6 THEN now() ELSE NULL END) \
-            RETURNING id, board_id, author_id, title, body, content_format, reply_count, vote_count, \
+            RETURNING id, board_id, author_id, title, body, content_format, content_version, reply_count, vote_count, \
                       hot_score, status, pinned_at, pinned_globally, featured_at, closed_at, archived_at, \
                       deleted_at, deleted_by, edited_at, hidden_at, solved_answer_id, created_at, last_activity_at \
          ) \
-         SELECT t.id, t.board_id, t.author_id, t.title, t.body, t.content_format, \
+         SELECT t.id, t.board_id, t.author_id, t.title, t.body, t.content_format, t.content_version, \
                 t.reply_count, t.vote_count, t.hot_score, t.status, \
                 t.pinned_at, t.pinned_globally, t.featured_at, t.closed_at, t.archived_at, \
                 t.deleted_at, t.deleted_by, t.edited_at, t.hidden_at, \
@@ -942,7 +945,7 @@ pub async fn update_thread(
 ) -> AppResult<ThreadRowJoinedFull> {
     let mut tx = pool.begin().await?;
     let existing = sqlx::query_as::<_, ThreadRowJoinedFull>(
-        "SELECT t.id, t.board_id, t.author_id, t.title, t.body, t.content_format, \
+        "SELECT t.id, t.board_id, t.author_id, t.title, t.body, t.content_format, t.content_version, \
                 t.reply_count, t.vote_count, t.hot_score, t.status, \
                 t.pinned_at, t.pinned_globally, t.featured_at, t.closed_at, t.archived_at, \
                 t.deleted_at, t.deleted_by, t.edited_at, t.hidden_at, t.solved_answer_id, \
@@ -963,6 +966,11 @@ pub async fn update_thread(
     }
     if existing.archived_at.is_some() {
         return Err(shared::AppError::Conflict("thread is archived".into()));
+    }
+    if input.expected_version != existing.content_version {
+        return Err(shared::AppError::OptimisticLockConflict {
+            current_version: existing.content_version,
+        });
     }
     let locked_board_ids =
         super::boards::lock_boards_for_thread_count(&mut tx, &[existing.board_id]).await?;
@@ -994,14 +1002,15 @@ pub async fn update_thread(
          title = COALESCE($1, title), \
          body = COALESCE($2, body), \
          content_format = COALESCE($3, content_format), \
+         content_version = content_version + 1, \
          edited_at = CASE WHEN $4 THEN now() ELSE edited_at END, \
          hidden_at = CASE WHEN $5 THEN now() ELSE hidden_at END \
-         WHERE id = $6 \
-         RETURNING id, board_id, author_id, title, body, content_format, reply_count, vote_count, \
+         WHERE id = $6 AND content_version = $7 \
+         RETURNING id, board_id, author_id, title, body, content_format, content_version, reply_count, vote_count, \
                    hot_score, status, pinned_at, pinned_globally, featured_at, closed_at, archived_at, \
                    deleted_at, deleted_by, edited_at, hidden_at, solved_answer_id, created_at, last_activity_at \
          ) \
-         SELECT u.id, u.board_id, u.author_id, u.title, u.body, u.content_format, \
+         SELECT u.id, u.board_id, u.author_id, u.title, u.body, u.content_format, u.content_version, \
                 u.reply_count, u.vote_count, u.hot_score, u.status, \
                 u.pinned_at, u.pinned_globally, u.featured_at, u.closed_at, u.archived_at, \
                 u.deleted_at, u.deleted_by, u.edited_at, u.hidden_at, \
@@ -1017,8 +1026,12 @@ pub async fn update_thread(
     .bind(content_changed)
     .bind(is_queued)
     .bind(id)
-    .fetch_one(&mut *tx)
-    .await?;
+    .bind(input.expected_version)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or(shared::AppError::OptimisticLockConflict {
+        current_version: existing.content_version,
+    })?;
 
     if let Some(tag_ids) = tag_ids.as_ref() {
         super::tags::set_thread_tags_tx(&mut tx, id, tag_ids).await?;

@@ -75,7 +75,7 @@ pub use boards::{find_board, list_boards};
 pub use bookmarks::{delete_bookmark, list_bookmarks, upsert_bookmark};
 pub use comments::{
     create_comment, find_comment, find_comment_for_moderation, list_comments, next_sibling_index,
-    update_comment,
+    thread_allows_comment_edits, update_comment,
 };
 pub use drafts::{
     count_drafts, delete_draft, delete_drafts_for_account, draft_exists, get_draft, list_drafts,

@@ -222,6 +222,23 @@ async fn run_migrations(pool: &PgPool) {
             .expect("migration 0041 failed");
     }
 
+    let has_content_versions: bool = sqlx::query_scalar(
+        "SELECT EXISTS( \
+           SELECT 1 FROM information_schema.columns \
+           WHERE table_schema = 'forum' AND table_name = 'threads' \
+             AND column_name = 'content_version' \
+         )",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or(false);
+    if !has_content_versions {
+        sqlx::raw_sql(include_str!("../../../../migrations/0043_forum_content_versions.sql"))
+            .execute(pool)
+            .await
+            .expect("migration 0043 failed");
+    }
+
     let has_governance_schema: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM information_schema.schemata WHERE schema_name = 'governance')",
     )

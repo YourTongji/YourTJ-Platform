@@ -100,7 +100,7 @@ pub async fn list_unread_threads(
             thread
         })
         .collect::<Vec<ThreadDto>>();
-    hydrate_thread_summaries(&state.db, Some(auth.id), &mut items).await?;
+    hydrate_thread_summaries(&state.db, Some(&auth), &rows, &mut items).await?;
     let next_str = next_cursor.map(|c| c.to_string());
 
     Ok(Json(shared::pagination::Page::new(items, next_str)))

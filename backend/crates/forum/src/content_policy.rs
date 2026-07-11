@@ -265,6 +265,11 @@ pub(crate) fn prepare_thread_create(
 pub(crate) fn prepare_thread_update(
     mut input: ThreadUpdateInput,
 ) -> AppResult<PreparedContent<ThreadUpdateInput>> {
+    if input.title.is_none() && input.body.is_none() && input.tags.is_none() {
+        return Err(AppError::BadRequest(
+            "at least one of title, body, or tags is required".into(),
+        ));
+    }
     if let Some(title) = input.title.as_mut() {
         *title = title.trim().to_owned();
         validate_title(title)?;

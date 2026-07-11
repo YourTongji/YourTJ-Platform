@@ -20,7 +20,6 @@ import { Link } from "react-router";
 import { toast } from "sonner";
 
 import { ReasonDialog } from "@/components/admin/admin-primitives";
-import { ADMIN_CAPABILITIES } from "@/components/admin/capabilities";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -39,7 +38,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
-import { useAuth } from "@/context/auth-provider";
 import { api } from "@/lib/api/endpoints";
 import type { Board, Comment, ThreadDetailWithPoll } from "@/lib/api/types";
 
@@ -151,11 +149,6 @@ const commentActionCopy: Record<CommentModerationAction, ActionCopy> = {
     confirmLabel: "恢复公开",
   },
 };
-
-function useHasContentModerationCapability() {
-  const { account } = useAuth();
-  return account?.capabilities?.includes(ADMIN_CAPABILITIES.moderateContent) ?? false;
-}
 
 function StaffTargetLinks({ authorHandle }: { authorHandle?: string }) {
   if (!authorHandle) {
@@ -386,8 +379,9 @@ export function ThreadModerationControls({
   thread: ThreadDetailWithPoll;
   boards: Board[];
 }) {
-  const canModerate = useHasContentModerationCapability();
-  return canModerate && thread.id ? <ThreadModerationMenu thread={thread} boards={boards} /> : null;
+  return thread.canModerate && thread.id ? (
+    <ThreadModerationMenu thread={thread} boards={boards} />
+  ) : null;
 }
 
 export function CommentModerationMenu({ comment, threadId }: { comment: Comment; threadId: string }) {
@@ -476,8 +470,7 @@ export function CommentModerationControls({
   comment: Comment;
   threadId: string;
 }) {
-  const canModerate = useHasContentModerationCapability();
-  return canModerate && comment.id ? (
+  return comment.canModerate && comment.id ? (
     <CommentModerationMenu comment={comment} threadId={threadId} />
   ) : null;
 }

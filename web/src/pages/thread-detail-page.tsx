@@ -10,6 +10,10 @@ import { MarkdownContent } from "@/components/content/markdown-content";
 import { MarkdownEditor } from "@/components/content/markdown-editor";
 import { DraftSyncNotice } from "@/components/forum/draft-sync-notice";
 import {
+  CommentAuthorActions,
+  ThreadAuthorActions,
+} from "@/components/forum/author-content-actions";
+import {
   CommentModerationControls,
   ThreadModerationControls,
 } from "@/components/forum/moderation-controls";
@@ -63,6 +67,7 @@ function CommentCard({ comment, threadId }: { comment: Comment; threadId: string
           </div>
           <div className="flex items-center gap-1">
             <Badge variant="secondary">{comment.voteCount ?? 0}</Badge>
+            <CommentAuthorActions comment={comment} threadId={threadId} />
             <CommentModerationControls comment={comment} threadId={threadId} />
           </div>
         </div>
@@ -344,6 +349,7 @@ export function ThreadDetailPage() {
               <Bookmark className="h-4 w-4" />
               {item.isBookmarked ? "已收藏" : "收藏"}
             </Button>
+            <ThreadAuthorActions thread={item} />
             <ThreadModerationControls thread={item} boards={boards.data ?? []} />
           </>
         }

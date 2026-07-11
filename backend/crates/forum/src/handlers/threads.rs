@@ -3,6 +3,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
 use serde::Deserialize;
 use serde_json::json;
+use shared::auth::AuthAccount;
 use shared::pagination::Page;
 use shared::{AppError, AppResult, AppState};
 
@@ -16,9 +17,11 @@ use super::{default_limit, default_sort, thread_to_detail_dto, thread_to_dto};
 
 pub(crate) async fn hydrate_thread_summaries(
     pool: &sqlx::PgPool,
-    viewer_id: Option<i64>,
+    actor: Option<&AuthAccount>,
+    rows: &[crate::models::ThreadRowJoined],
     threads: &mut [ThreadDto],
 ) -> AppResult<()> {
+    let viewer_id = actor.map(|account| account.id);
     let thread_ids =
         threads.iter().filter_map(|thread| thread.id.parse::<i64>().ok()).collect::<Vec<_>>();
     let (mut tags, mut excerpts, mut viewer_states) = tokio::try_join!(
@@ -33,7 +36,7 @@ pub(crate) async fn hydrate_thread_summaries(
             }
         },
     )?;
-    for thread in threads {
+    for thread in threads.iter_mut() {
         if let Ok(thread_id) = thread.id.parse::<i64>() {
             thread.tags = tags.remove(&thread_id).unwrap_or_default();
             thread.body_excerpt = excerpts
@@ -45,7 +48,7 @@ pub(crate) async fn hydrate_thread_summaries(
             }
         }
     }
-    Ok(())
+    crate::content_permissions::hydrate_thread_summaries(pool, actor, rows, threads).await
 }
 
 /// Load poll data for a thread and attach it to a `ThreadDetailDto`.
@@ -92,12 +95,12 @@ pub(crate) async fn attach_poll_to_detail(
 pub(crate) async fn hydrate_thread_detail(
     pool: &sqlx::PgPool,
     thread_id: i64,
-    account_id: Option<i64>,
+    actor: Option<&AuthAccount>,
     dto: &mut ThreadDetailDto,
 ) -> AppResult<()> {
     dto.tags = repo::get_thread_tag_slugs(pool, thread_id).await?;
-    attach_poll_to_detail(pool, thread_id, account_id, dto).await?;
-    if let Some(account_id) = account_id {
+    attach_poll_to_detail(pool, thread_id, actor.map(|account| account.id), dto).await?;
+    if let Some(account_id) = actor.map(|account| account.id) {
         let mut states =
             repo::get_post_viewer_states(pool, account_id, "thread", &[thread_id]).await?;
         if let Some(state) = states.remove(&thread_id) {
@@ -110,7 +113,7 @@ pub(crate) async fn hydrate_thread_detail(
         dto.my_subscription_level =
             repo::get_thread_subscription(pool, account_id, thread_id).await?;
     }
-    Ok(())
+    crate::content_permissions::hydrate_thread_detail(pool, actor, dto).await
 }
 
 // ---------------------------------------------------------------------------
@@ -154,15 +157,15 @@ pub async fn list_threads(
     let board_id: i64 = board_id_str.parse().map_err(|_| AppError::NotFound)?;
 
     // Try auth — if the user is logged in, filter out ignored authors.
-    let current_user_id: Option<i64> = identity::auth_middleware::authenticate(
+    let current_account = identity::auth_middleware::authenticate(
         &headers,
         &state.db,
         &state.jwt_secret,
         state.redis.as_ref(),
     )
     .await
-    .ok()
-    .map(|a| a.id);
+    .ok();
+    let current_user_id = current_account.as_ref().map(|account| account.id);
 
     if !matches!(q.sort.as_str(), "hot" | "new") {
         return Err(AppError::BadRequest("sort must be hot/new".into()));
@@ -184,7 +187,7 @@ pub async fn list_threads(
         )
         .await?;
         let mut items = rows.iter().map(thread_to_dto).collect::<Vec<_>>();
-        hydrate_thread_summaries(&state.db, current_user_id, &mut items).await?;
+        hydrate_thread_summaries(&state.db, current_account.as_ref(), &rows, &mut items).await?;
         return Ok(Json(Page::new(items, next_cursor)));
     }
 
@@ -201,7 +204,7 @@ pub async fn list_threads(
         )
         .await?;
         let mut items: Vec<ThreadDto> = rows.iter().map(thread_to_dto).collect();
-        hydrate_thread_summaries(&state.db, current_user_id, &mut items).await?;
+        hydrate_thread_summaries(&state.db, current_account.as_ref(), &rows, &mut items).await?;
         Ok(Json(Page::new(items, next_cursor)))
     } else {
         let generation = crate::cache::board_generation(state.redis.as_ref(), board_id).await;
@@ -218,7 +221,7 @@ pub async fn list_threads(
                 )
                 .await?;
                 let mut items: Vec<ThreadDto> = rows.iter().map(thread_to_dto).collect();
-                hydrate_thread_summaries(&state.db, None, &mut items).await?;
+                hydrate_thread_summaries(&state.db, None, &rows, &mut items).await?;
                 Ok::<_, AppError>(Page::new(items, next_cursor))
             })
             .await?;
@@ -285,7 +288,7 @@ pub async fn list_threads_feed(
                 thread
             })
             .collect::<Vec<_>>();
-        hydrate_thread_summaries(&state.db, Some(auth.id), &mut items).await?;
+        hydrate_thread_summaries(&state.db, Some(&auth), &rows, &mut items).await?;
         let next_str = next_cursor.map(|c| c.to_string());
         return Ok(Json(Page::new(items, next_str)));
     }
@@ -303,19 +306,25 @@ pub async fn list_threads_feed(
                     .unwrap_or_default();
 
                 if !ids.is_empty() {
-                    let current_user_id: Option<i64> = identity::auth_middleware::authenticate(
+                    let current_account = identity::auth_middleware::authenticate(
                         &headers,
                         &state.db,
                         &state.jwt_secret,
                         state.redis.as_ref(),
                     )
                     .await
-                    .ok()
-                    .map(|a| a.id);
+                    .ok();
+                    let current_user_id = current_account.as_ref().map(|account| account.id);
 
                     let rows = repo::fetch_threads_by_ids(&state.db, &ids, current_user_id).await?;
                     let mut items: Vec<ThreadDto> = rows.iter().map(thread_to_dto).collect();
-                    hydrate_thread_summaries(&state.db, current_user_id, &mut items).await?;
+                    hydrate_thread_summaries(
+                        &state.db,
+                        current_account.as_ref(),
+                        &rows,
+                        &mut items,
+                    )
+                    .await?;
                     let next = if ids.len() as i64 >= q.limit {
                         Some(base64_encode_i64(q.limit))
                     } else {
@@ -351,7 +360,7 @@ pub async fn list_threads_feed(
             )
             .await?;
             let mut items = rows.iter().map(thread_to_dto).collect::<Vec<_>>();
-            hydrate_thread_summaries(&state.db, Some(auth.id), &mut items).await?;
+            hydrate_thread_summaries(&state.db, Some(&auth), &rows, &mut items).await?;
             return Ok(Json(Page::new(items, next_cursor)));
         }
         let (rows, next_cursor) = repo::list_threads_feed_subscriptions(
@@ -363,7 +372,7 @@ pub async fn list_threads_feed(
         )
         .await?;
         let mut items: Vec<ThreadDto> = rows.iter().map(thread_to_dto).collect();
-        hydrate_thread_summaries(&state.db, Some(auth.id), &mut items).await?;
+        hydrate_thread_summaries(&state.db, Some(&auth), &rows, &mut items).await?;
         return Ok(Json(Page::new(items, next_cursor)));
     }
 
@@ -386,20 +395,20 @@ pub async fn list_threads_feed(
         )
         .await?;
         let mut items = rows.iter().map(thread_to_dto).collect::<Vec<_>>();
-        hydrate_thread_summaries(&state.db, Some(auth.id), &mut items).await?;
+        hydrate_thread_summaries(&state.db, Some(&auth), &rows, &mut items).await?;
         return Ok(Json(Page::new(items, next_cursor)));
     }
 
     // Try auth — if the user is logged in, filter out ignored authors.
-    let current_user_id: Option<i64> = identity::auth_middleware::authenticate(
+    let current_account = identity::auth_middleware::authenticate(
         &headers,
         &state.db,
         &state.jwt_secret,
         state.redis.as_ref(),
     )
     .await
-    .ok()
-    .map(|a| a.id);
+    .ok();
+    let current_user_id = current_account.as_ref().map(|account| account.id);
 
     if let Some(tag) = tag {
         let (rows, next_cursor) = repo::list_threads_by_tag(
@@ -414,7 +423,7 @@ pub async fn list_threads_feed(
         )
         .await?;
         let mut items = rows.iter().map(thread_to_dto).collect::<Vec<_>>();
-        hydrate_thread_summaries(&state.db, current_user_id, &mut items).await?;
+        hydrate_thread_summaries(&state.db, current_account.as_ref(), &rows, &mut items).await?;
         return Ok(Json(Page::new(items, next_cursor)));
     }
 
@@ -430,7 +439,7 @@ pub async fn list_threads_feed(
         )
         .await?;
         let mut items: Vec<ThreadDto> = rows.iter().map(thread_to_dto).collect();
-        hydrate_thread_summaries(&state.db, current_user_id, &mut items).await?;
+        hydrate_thread_summaries(&state.db, current_account.as_ref(), &rows, &mut items).await?;
         Ok(Json(Page::new(items, next_cursor)))
     } else {
         let generation = crate::cache::global_feed_generation(state.redis.as_ref()).await;
@@ -452,7 +461,7 @@ pub async fn list_threads_feed(
                 )
                 .await?;
                 let mut items: Vec<ThreadDto> = rows.iter().map(thread_to_dto).collect();
-                hydrate_thread_summaries(&state.db, None, &mut items).await?;
+                hydrate_thread_summaries(&state.db, None, &rows, &mut items).await?;
                 Ok::<_, AppError>(Page::new(items, next_cursor))
             })
             .await?;
@@ -469,21 +478,20 @@ pub async fn get_thread(
     let id: i64 = id_str.parse().map_err(|_| AppError::NotFound)?;
 
     // Try soft auth — if the user is logged in, show their read position.
-    let current_user_id: Option<i64> = identity::auth_middleware::authenticate(
+    let current_account = identity::auth_middleware::authenticate(
         &headers,
         &state.db,
         &state.jwt_secret,
         state.redis.as_ref(),
     )
     .await
-    .ok()
-    .map(|a| a.id);
+    .ok();
 
-    if let Some(user_id) = current_user_id {
+    if let Some(account) = current_account.as_ref() {
         // Authenticated — skip the cache since the response is user-specific.
         let row = repo::find_thread(&state.db, id).await?.ok_or(AppError::NotFound)?;
         let mut dto = thread_to_detail_dto(&row);
-        hydrate_thread_detail(&state.db, id, Some(user_id), &mut dto).await?;
+        hydrate_thread_detail(&state.db, id, Some(account), &mut dto).await?;
         Ok(Json(dto))
     } else {
         let detail = shared::cache::cached_json(
@@ -636,7 +644,7 @@ pub async fn create_thread(
     }
 
     let mut dto = thread_to_detail_dto(&row);
-    hydrate_thread_detail(&state.db, row.id, Some(auth.id), &mut dto).await?;
+    hydrate_thread_detail(&state.db, row.id, Some(&auth), &mut dto).await?;
 
     crate::cache::invalidate_thread_surfaces(state.redis.as_ref(), row.id, board_id).await;
 
@@ -658,6 +666,9 @@ pub async fn update_thread(
     )
     .await
     .map_err(|_r| AppError::Unauthorized)?;
+    if body.expected_version < 1 {
+        return Err(AppError::BadRequest("expectedVersion must be a positive integer".into()));
+    }
     let prepared = crate::content_policy::prepare_thread_update(body)?;
     let body = prepared.input;
     crate::sanctions::require_can_post(state.redis.as_ref(), &state.db, auth.id).await?;
@@ -691,7 +702,7 @@ pub async fn update_thread(
     crate::cache::invalidate_thread_surfaces(state.redis.as_ref(), id, row.board_id).await;
 
     let mut dto = thread_to_detail_dto(&row);
-    hydrate_thread_detail(&state.db, row.id, Some(auth.id), &mut dto).await?;
+    hydrate_thread_detail(&state.db, row.id, Some(&auth), &mut dto).await?;
     Ok(Json(dto))
 }
 

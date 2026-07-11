@@ -13,6 +13,7 @@ const thread = {
   authorHandle: "alice",
   title: "关注动态",
   bodyExcerpt: "这是从服务端正文投影生成的摘要。",
+  contentVersion: 1,
   replyCount: 3,
   voteCount: 8,
   hotScore: 2,
@@ -22,6 +23,9 @@ const thread = {
   tags: ["campus"],
   viewerVote: "up" as const,
   isBookmarked: true,
+  canEdit: false,
+  canDelete: false,
+  canModerate: false,
 };
 
 describe("CommunityFeed", () => {

@@ -6,7 +6,7 @@
 >
 > 负责人：Security owner、Identity/Governance maintainers
 >
-> 最近核验：2026-07-12，`codex/x-credit-reconciliation`
+> 最近核验：2026-07-12，`codex/x-content-versioning`
 
 后端授权每一个 staff 操作。Web 按 capability 隐藏导航只是可用性和数据最小化措施，绝不是
 安全边界。
@@ -19,6 +19,9 @@
 - identity 用户管理拒绝 self/equal/higher-role target；角色变化、管理员强制注销与 suspension 同时
   撤销 refresh session 和已签发 access JWT。
 - forum/review moderation 通过 identity 的最小角色边界执行作者层级检查。
+- Forum 主题/评论列表和详情返回服务端计算的 author/moderation viewer actions；`canModerate` 同时要求
+  `moderation.content`、非自身目标和 lower-role author。Web 不再仅凭本地 capability 显示治理按钮，
+  但这些字段仍不是写操作授权边界。
 - `governance.audit_events` 是 append-only account/system/service actor 记录；多数管理 mutation
   在业务事务中写入，reported-DM evidence list 也会审计。
 - 人工认证使用独立 `verifications.manage`，拒绝 self/equal/higher-role target；类型创建、授予和撤销
@@ -81,6 +84,8 @@ capability，不能塞进过宽的 `community.manage`。
 - `credit.integrity` 只允许验证和读取持久结果，不授予 wallet update、ledger append 或历史 ledger
   mutation；即使直接构造请求，普通用户和 moderator 也必须被拒绝。
 - 后端 denial 使用统一错误 envelope；客户端不能靠 capability 推断隐藏数据存在。
+- Author edit 以 canonical `contentVersion` 做 compare-and-swap；409 只返回当前版本，不回显新的正文
+  或内部状态。revision 与 canonical mutation 原子，陈旧请求不能留下审计/历史半状态。
 - `verifications.manage` 只允许管理员处理 lower-role account。Definition 只接受受控 category/icon/style；
   grant 默认私密，公开开关不能绕过 definition policy，重复有效 grant 与重复/过期撤销返回 conflict。
 - `badges.manage` 只允许管理员处理 lower-role account。Definition 只接受受控 icon/plain text，stale

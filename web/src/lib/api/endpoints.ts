@@ -521,6 +521,25 @@ export const api = {
     return apiRequest<ThreadDetailWithPoll>(`/forum/threads/${encodeURIComponent(id)}`);
   },
 
+  updateThread(id: string, body: {
+    expectedVersion: number;
+    title?: string;
+    body?: string;
+    contentFormat?: ContentFormat;
+    tags?: string[];
+  }) {
+    return apiRequest<ThreadDetailWithPoll>(`/forum/threads/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body,
+    });
+  },
+
+  deleteThread(id: string) {
+    return apiRequest<{ ok: boolean }>(`/forum/threads/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    });
+  },
+
   comments(threadId: string, cursor?: string | null) {
     return apiRequest<Page<Comment>>(`/forum/threads/${encodeURIComponent(threadId)}/comments`, {
       query: { cursor, limit: 50 },
@@ -536,6 +555,23 @@ export const api = {
     return apiRequest<Comment>(`/forum/threads/${encodeURIComponent(threadId)}/comments`, {
       method: "POST",
       body: { body, contentFormat, parentId },
+    });
+  },
+
+  updateComment(id: string, body: {
+    expectedVersion: number;
+    body: string;
+    contentFormat: ContentFormat;
+  }) {
+    return apiRequest<Comment>(`/forum/comments/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body,
+    });
+  },
+
+  deleteComment(id: string) {
+    return apiRequest<{ ok: boolean }>(`/forum/comments/${encodeURIComponent(id)}`, {
+      method: "DELETE",
     });
   },
 

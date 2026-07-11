@@ -3263,7 +3263,7 @@ export interface paths {
         };
         options?: never;
         head?: never;
-        /** Edit thread */
+        /** Compare-and-swap edit thread */
         patch: {
             parameters: {
                 query?: never;
@@ -3288,6 +3288,7 @@ export interface paths {
                         "application/json": components["schemas"]["ThreadDetail"];
                     };
                 };
+                409: components["responses"]["Conflict"];
             };
         };
         trace?: never;
@@ -3475,7 +3476,7 @@ export interface paths {
         };
         options?: never;
         head?: never;
-        /** Edit comment */
+        /** Compare-and-swap edit comment */
         patch: {
             parameters: {
                 query?: never;
@@ -3500,6 +3501,7 @@ export interface paths {
                         "application/json": components["schemas"]["Comment"];
                     };
                 };
+                409: components["responses"]["Conflict"];
             };
         };
         trace?: never;
@@ -8839,6 +8841,8 @@ export interface components {
             authorHandle: string;
             title: string;
             bodyExcerpt: string | null;
+            /** Format: int64 */
+            contentVersion: number;
             replyCount: number;
             voteCount: number;
             hotScore: number | null;
@@ -8850,6 +8854,12 @@ export interface components {
             /** @enum {string|null} */
             viewerVote: "up" | "down" | null;
             isBookmarked: boolean;
+            /** @description Server-authoritative author edit permission for this viewer. */
+            canEdit: boolean;
+            /** @description Server-authoritative author delete permission for this viewer. */
+            canDelete: boolean;
+            /** @description Server-authoritative moderation permission including role hierarchy. */
+            canModerate: boolean;
         };
         ThreadFeed: components["schemas"]["Thread"] & {
             unreadCount?: number | null;
@@ -8862,6 +8872,8 @@ export interface components {
             title: string;
             body: string | null;
             contentFormat: components["schemas"]["ContentFormat"];
+            /** Format: int64 */
+            contentVersion: number;
             replyCount: number;
             voteCount: number;
             hotScore: number | null;
@@ -8885,6 +8897,12 @@ export interface components {
             /** @enum {string|null} */
             mySubscriptionLevel: "watching" | "tracking" | "muted" | null;
             poll: components["schemas"]["Poll"] | null;
+            /** @description Server-authoritative author edit permission for this viewer. */
+            canEdit: boolean;
+            /** @description Server-authoritative author delete permission for this viewer. */
+            canDelete: boolean;
+            /** @description Server-authoritative moderation permission including role hierarchy. */
+            canModerate: boolean;
         };
         ThreadInput: {
             boardId: string;
@@ -8895,6 +8913,12 @@ export interface components {
             poll?: components["schemas"]["PollInput"];
         };
         ThreadUpdateInput: {
+            /**
+             * Format: int64
+             * @description Compare-and-swap version. Legacy omission is treated as version 1 and conflicts once content has changed.
+             * @default 1
+             */
+            expectedVersion: number;
             title?: string;
             body?: string;
             /** @description Required whenever body is supplied; legacy omission is treated as plain_v1. */
@@ -8933,6 +8957,8 @@ export interface components {
             authorId: string;
             body: string;
             contentFormat: components["schemas"]["ContentFormat"];
+            /** Format: int64 */
+            contentVersion: number;
             voteCount: number;
             /** @enum {string|null} */
             viewerVote: "up" | "down" | null;
@@ -8943,6 +8969,12 @@ export interface components {
             createdAt: number;
             quotedCommentId: string | null;
             isSolved: boolean;
+            /** @description Server-authoritative author edit permission for this viewer. */
+            canEdit: boolean;
+            /** @description Server-authoritative author delete permission for this viewer. */
+            canDelete: boolean;
+            /** @description Server-authoritative moderation permission including role hierarchy. */
+            canModerate: boolean;
         };
         CommentInput: {
             parentId?: string;
@@ -8951,6 +8983,12 @@ export interface components {
             quotedCommentId?: string;
         };
         CommentUpdateInput: {
+            /**
+             * Format: int64
+             * @description Compare-and-swap version. Legacy omission is treated as version 1 and conflicts once content has changed.
+             * @default 1
+             */
+            expectedVersion: number;
             body: string;
             contentFormat?: components["schemas"]["ContentFormat"];
         };
