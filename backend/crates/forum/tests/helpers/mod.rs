@@ -399,6 +399,20 @@ async fn run_migrations(pool: &PgPool) {
             .expect("migration 0026 failed");
     }
 
+    let has_platform_promotions: bool =
+        sqlx::query_scalar("SELECT to_regclass('platform.promotions') IS NOT NULL")
+            .fetch_one(pool)
+            .await
+            .unwrap_or(false);
+    if !has_platform_promotions {
+        sqlx::raw_sql(include_str!(
+            "../../../../migrations/0035_platform_announcements_promotions.sql"
+        ))
+        .execute(pool)
+        .await
+        .expect("migration 0035 failed");
+    }
+
     let has_notification_outbox: bool =
         sqlx::query_scalar("SELECT to_regclass('platform.outbox_events') IS NOT NULL")
             .fetch_one(pool)
@@ -409,6 +423,30 @@ async fn run_migrations(pool: &PgPool) {
             .execute(pool)
             .await
             .expect("migration 0054 failed");
+    }
+
+    let has_media_deletion_jobs: bool =
+        sqlx::query_scalar("SELECT to_regclass('media.object_deletion_jobs') IS NOT NULL")
+            .fetch_one(pool)
+            .await
+            .unwrap_or(false);
+    if !has_media_deletion_jobs {
+        sqlx::raw_sql(include_str!("../../../../migrations/0056_media_moderation_integrity.sql"))
+            .execute(pool)
+            .await
+            .expect("migration 0056 failed");
+    }
+
+    let has_media_retention_bindings: bool =
+        sqlx::query_scalar("SELECT to_regclass('media.asset_bindings') IS NOT NULL")
+            .fetch_one(pool)
+            .await
+            .unwrap_or(false);
+    if !has_media_retention_bindings {
+        sqlx::raw_sql(include_str!("../../../../migrations/0057_media_bindings_retention_gc.sql"))
+            .execute(pool)
+            .await
+            .expect("migration 0057 failed");
     }
 
     let database_name: String = sqlx::query_scalar("SELECT current_database()")

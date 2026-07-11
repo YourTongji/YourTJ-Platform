@@ -20,11 +20,7 @@ pub async fn lock_draft_owner(
     transaction: &mut Transaction<'_, Postgres>,
     account_id: i64,
 ) -> AppResult<()> {
-    sqlx::query("SELECT id FROM identity.accounts WHERE id = $1 FOR UPDATE")
-        .bind(account_id)
-        .fetch_one(&mut **transaction)
-        .await?;
-    Ok(())
+    identity::public_accounts::lock_active_account_for_owned_mutation(transaction, account_id).await
 }
 
 /// Count drafts belonging to an account inside the current transaction.

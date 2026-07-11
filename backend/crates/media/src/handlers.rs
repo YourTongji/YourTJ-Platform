@@ -14,10 +14,11 @@ use serde::Deserialize;
 use shared::pagination::Page;
 use shared::{AppError, AppResult, AppState};
 
+use crate::bindings::{sync_asset_binding, AssetBindingType};
 use crate::deletion::schedule_upload_deletion;
 use crate::dto::{
-    MediaUsage, MyUploadDto, ProfileAssetInput, UploadCredentialsDto, UploadDto, UploadIntentInput,
-    UploadUrlDto,
+    MediaUsage, MyUploadDto, ProfileAssetInput, ReleaseRetentionHoldInput, RetentionHoldInput,
+    UploadCredentialsDto, UploadDto, UploadIntentInput, UploadUrlDto,
 };
 use crate::error::MediaError;
 use crate::models::{ModerationUploadRow, UploadRow};
@@ -57,6 +58,24 @@ pub struct MyUploadListQuery {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct RetentionHoldListQuery {
+    cursor: Option<String>,
+    #[serde(default = "default_limit")]
+    limit: i64,
+    state: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeletionJobListQuery {
+    cursor: Option<String>,
+    #[serde(default = "default_limit")]
+    limit: i64,
+    status: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ModerateUploadInput {
     reason: String,
 }
@@ -91,6 +110,9 @@ fn upload_to_dto(row: &ModerationUploadRow) -> UploadDto {
         image_height: row.image_height,
         approval_requirement: approval_requirement.into(),
         deletion_state: row.deletion_state.clone(),
+        retention_held: row.retention_held,
+        retention_state: row.retention_state.clone(),
+        retention_expires_at: row.retention_expires_at.map(|value| value.timestamp()),
         created_at: row.created_at.timestamp(),
     }
 }
@@ -164,25 +186,27 @@ async fn moderate_upload(
     reason: &str,
 ) -> AppResult<()> {
     let mut tx = state.db.begin().await?;
-    let upload: Option<(String, i64, String, String, bool)> = sqlx::query_as(
-        "SELECT upload.status, upload.account_id, owner.role::text, upload.kind, \
+    let (owner_id, owner) = crate::locking::lock_upload_owner(&mut tx, upload_id).await?;
+    let upload: Option<(String, i64, String, bool)> = sqlx::query_as(
+        "SELECT upload.status, upload.account_id, upload.kind, \
                 EXISTS ( \
                   SELECT 1 FROM media.moderation_evidence evidence \
                   WHERE evidence.upload_id = upload.id \
                     AND evidence.evidence_kind = 'trusted_image_preview' \
                     AND evidence.actor_account_id = $2 \
                 ) \
-         FROM media.uploads upload \
-         JOIN identity.accounts owner ON owner.id = upload.account_id \
-         WHERE upload.id = $1 FOR UPDATE OF upload, owner",
+         FROM media.uploads upload WHERE upload.id = $1",
     )
     .bind(upload_id)
     .bind(auth.id)
     .fetch_optional(&mut *tx)
     .await?;
-    let (current_status, owner_id, owner_role, kind, has_reviewer_evidence) =
+    let (current_status, locked_owner_id, kind, has_reviewer_evidence) =
         upload.ok_or(MediaError::NotFound)?;
-    require_strictly_lower_owner(auth, owner_id, &owner_role)?;
+    if locked_owner_id != owner_id {
+        return Err(AppError::Internal(anyhow::anyhow!("locked media owner changed")));
+    }
+    require_strictly_lower_owner(auth, owner_id, &owner.role)?;
     if current_status != "pending" {
         return Err(AppError::Conflict(format!("upload is already {current_status}")));
     }
@@ -253,21 +277,14 @@ pub async fn upload_credentials(
     let usage = validate_upload_usage(&input.kind, input.usage)?;
     let content_type = oss::validate_content_type(&input.kind, &input.content_type)?;
     let oss_config = require_oss_config(&state)?;
-    let expires_at = oss::upload_intent_expires_at();
     let callback_token = oss::new_callback_token();
-    let intent_id = uuid::Uuid::new_v4();
-    let oss_key = oss::build_oss_key(auth.id, &input.kind, content_type, intent_id);
-    let intent = repo::insert_upload_intent(
+    let intent = crate::reserve_upload_intent(
         &state.db,
-        intent_id,
         auth.id,
         &input.kind,
-        &oss_key,
         content_type,
         usage,
-        oss::OSS_UPLOAD_MAX_BYTES,
         &callback_token,
-        expires_at,
     )
     .await?;
     let provider = AliyunStsProvider::default();
@@ -277,10 +294,21 @@ pub async fn upload_credentials(
         auth.id,
         intent.id,
         &intent.oss_key,
-        &intent.callback_token,
+        &callback_token,
         intent.expires_at,
     )
-    .await?;
+    .await;
+    let creds = match creds {
+        Ok(creds) => creds,
+        Err(error) => {
+            if let Err(revoke_error) =
+                repo::revoke_upload_intent_after_provider_failure(&state.db, intent.id).await
+            {
+                tracing::warn!(?revoke_error, intent_id = %intent.id, "failed to revoke upload intent after STS failure");
+            }
+            return Err(error.into());
+        }
+    };
     Ok(Json(creds))
 }
 
@@ -339,7 +367,7 @@ pub async fn callback(
     if intent.expires_at <= chrono::Utc::now() {
         return Err(MediaError::BadRequest("upload intent expired".into()).into());
     }
-    if intent.callback_token != input.callback_token {
+    if !oss::verify_callback_token_hash(&intent.callback_token_hash, &input.callback_token) {
         return Err(MediaError::BadRequest("upload intent mismatch".into()).into());
     }
     oss::validate_callback_metadata(
@@ -467,9 +495,12 @@ async fn bind_profile_asset(
     .map_err(|_| AppError::Unauthorized)?;
     let asset_id = input.asset_id.parse::<i64>().map_err(|_| AppError::NotFound)?;
     let mut tx = state.db.begin().await?;
-    if !repo::owned_clean_image_exists(&mut tx, auth.id, asset_id).await? {
-        return Err(AppError::NotFound);
-    }
+    identity::public_accounts::lock_active_account_for_owned_mutation(&mut tx, auth.id).await?;
+    let binding_type = match kind {
+        identity::profiles::ProfileAssetKind::Avatar => AssetBindingType::ProfileAvatar,
+        identity::profiles::ProfileAssetKind::Banner => AssetBindingType::ProfileBanner,
+    };
+    sync_asset_binding(&mut tx, auth.id, binding_type, auth.id, Some(asset_id), "replaced").await?;
     identity::profiles::set_profile_asset(&mut tx, auth.id, kind, Some(asset_id)).await?;
     tx.commit().await?;
     Ok(StatusCode::NO_CONTENT)
@@ -489,6 +520,12 @@ async fn clear_profile_asset(
     .await
     .map_err(|_| AppError::Unauthorized)?;
     let mut tx = state.db.begin().await?;
+    identity::public_accounts::lock_active_account_for_owned_mutation(&mut tx, auth.id).await?;
+    let binding_type = match kind {
+        identity::profiles::ProfileAssetKind::Avatar => AssetBindingType::ProfileAvatar,
+        identity::profiles::ProfileAssetKind::Banner => AssetBindingType::ProfileBanner,
+    };
+    sync_asset_binding(&mut tx, auth.id, binding_type, auth.id, None, "cleared").await?;
     identity::profiles::set_profile_asset(&mut tx, auth.id, kind, None).await?;
     tx.commit().await?;
     Ok(StatusCode::NO_CONTENT)
@@ -557,6 +594,131 @@ pub async fn list_uploads(
 
     let items: Vec<UploadDto> = rows.iter().map(upload_to_dto).collect();
     Ok(Json(Page::new(items, next_cursor)))
+}
+
+/// GET /api/v2/admin/media/retention-holds — list operations-only hold details by expiry.
+pub async fn list_retention_holds(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<RetentionHoldListQuery>,
+) -> AppResult<Response> {
+    let auth_context = identity::auth_middleware::authenticate_context(
+        &headers,
+        &state.db,
+        &state.jwt_secret,
+        state.redis.as_ref(),
+    )
+    .await
+    .map_err(|_response| AppError::Unauthorized)?;
+    auth_context
+        .account
+        .require_capability(shared::auth::Capability::RunOperations)
+        .map_err(|_| AppError::Forbidden)?;
+    let limit = validate_page_limit(query.limit)?;
+    let hold_state = query.state.as_deref().unwrap_or("active");
+    let mut transaction = state.db.begin().await?;
+    identity::auth_middleware::require_recent_auth_tx(&auth_context, &mut transaction).await?;
+    let page =
+        crate::retention::list_holds(&mut transaction, hold_state, query.cursor.as_deref(), limit)
+            .await?;
+    governance::record_account_event_tx(
+        &mut transaction,
+        governance::AccountActor {
+            account_id: auth_context.account.id,
+            role: &auth_context.account.role,
+        },
+        "media.retention_hold_inventory.viewed",
+        "media_retention_inventory",
+        hold_state,
+        "authorized media retention inventory viewed",
+        Some(&serde_json::json!({ "resultCount": page.items.len() })),
+    )
+    .await?;
+    transaction.commit().await?;
+    let mut response = Json(page).into_response();
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, header::HeaderValue::from_static("private, no-store"));
+    response.headers_mut().insert(header::PRAGMA, header::HeaderValue::from_static("no-cache"));
+    Ok(response)
+}
+
+/// GET /api/v2/admin/media/deletion-jobs — list durable system deletion work.
+pub async fn list_deletion_jobs(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<DeletionJobListQuery>,
+) -> AppResult<Response> {
+    let auth_context = identity::auth_middleware::authenticate_context(
+        &headers,
+        &state.db,
+        &state.jwt_secret,
+        state.redis.as_ref(),
+    )
+    .await
+    .map_err(|_response| AppError::Unauthorized)?;
+    auth_context
+        .account
+        .require_capability(shared::auth::Capability::RunOperations)
+        .map_err(|_| AppError::Forbidden)?;
+    let limit = validate_page_limit(query.limit)?;
+    let cursor = query
+        .cursor
+        .as_deref()
+        .map(str::parse::<i64>)
+        .transpose()
+        .map_err(|_| AppError::BadRequest("invalid media deletion job cursor".into()))?;
+    let job_status = query.status.as_deref().unwrap_or("dead_letter");
+    let mut transaction = state.db.begin().await?;
+    identity::auth_middleware::require_recent_auth_tx(&auth_context, &mut transaction).await?;
+    let page =
+        crate::deletion::list_system_deletion_jobs(&mut transaction, job_status, cursor, limit)
+            .await?;
+    governance::record_account_event_tx(
+        &mut transaction,
+        governance::AccountActor {
+            account_id: auth_context.account.id,
+            role: &auth_context.account.role,
+        },
+        "media.deletion_job_inventory.viewed",
+        "media_deletion_inventory",
+        job_status,
+        "authorized media deletion inventory viewed",
+        Some(&serde_json::json!({ "resultCount": page.items.len() })),
+    )
+    .await?;
+    transaction.commit().await?;
+    let mut response = Json(page).into_response();
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, header::HeaderValue::from_static("private, no-store"));
+    response.headers_mut().insert(header::PRAGMA, header::HeaderValue::from_static("no-cache"));
+    Ok(response)
+}
+
+/// POST /api/v2/admin/media/deletion-jobs/{id}/retry — requeue one exhausted system job.
+pub async fn retry_deletion_job(
+    State(state): State<AppState>,
+    Path(id_str): Path<String>,
+    headers: HeaderMap,
+    Json(body): Json<ModerateUploadInput>,
+) -> AppResult<StatusCode> {
+    let auth_context = identity::auth_middleware::authenticate_context(
+        &headers,
+        &state.db,
+        &state.jwt_secret,
+        state.redis.as_ref(),
+    )
+    .await
+    .map_err(|_response| AppError::Unauthorized)?;
+    auth_context
+        .account
+        .require_capability(shared::auth::Capability::RunOperations)
+        .map_err(|_| AppError::Forbidden)?;
+    let job_id = id_str.parse::<i64>().map_err(|_| AppError::NotFound)?;
+    let reason = validate_moderation_reason(&body.reason)?;
+    crate::deletion::retry_system_deletion_job(&state.db, &auth_context, job_id, reason).await?;
+    Ok(StatusCode::ACCEPTED)
 }
 
 /// POST /api/v2/admin/media/uploads/{id}/preview-grants — issue one short-lived read grant.
@@ -680,6 +842,61 @@ pub async fn block_upload(
 
     tracing::info!(upload_id = id, moderator_id = auth.id, "upload quarantined for deletion");
     Ok(StatusCode::ACCEPTED)
+}
+
+/// POST /api/v2/admin/media/uploads/{id}/retention-hold — pause deletion for a bounded purpose.
+pub async fn place_retention_hold(
+    State(state): State<AppState>,
+    Path(id_str): Path<String>,
+    headers: HeaderMap,
+    Json(body): Json<RetentionHoldInput>,
+) -> AppResult<StatusCode> {
+    let auth_context = identity::auth_middleware::authenticate_context(
+        &headers,
+        &state.db,
+        &state.jwt_secret,
+        state.redis.as_ref(),
+    )
+    .await
+    .map_err(|_response| AppError::Unauthorized)?;
+    auth_context
+        .account
+        .require_capability(shared::auth::Capability::RunOperations)
+        .map_err(|_| AppError::Forbidden)?;
+    let upload_id = id_str.parse::<i64>().map_err(|_| AppError::NotFound)?;
+    crate::retention::place_hold(&state.db, &auth_context, upload_id, body).await?;
+    Ok(StatusCode::CREATED)
+}
+
+/// DELETE /api/v2/admin/media/uploads/{id}/retention-hold — release a deletion hold.
+pub async fn release_retention_hold(
+    State(state): State<AppState>,
+    Path(id_str): Path<String>,
+    headers: HeaderMap,
+    Json(body): Json<ReleaseRetentionHoldInput>,
+) -> AppResult<StatusCode> {
+    let auth_context = identity::auth_middleware::authenticate_context(
+        &headers,
+        &state.db,
+        &state.jwt_secret,
+        state.redis.as_ref(),
+    )
+    .await
+    .map_err(|_response| AppError::Unauthorized)?;
+    auth_context
+        .account
+        .require_capability(shared::auth::Capability::RunOperations)
+        .map_err(|_| AppError::Forbidden)?;
+    let upload_id = id_str.parse::<i64>().map_err(|_| AppError::NotFound)?;
+    crate::retention::release_hold(
+        &state.db,
+        &auth_context,
+        upload_id,
+        &body.expected_hold_id,
+        &body.reason,
+    )
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[cfg(test)]

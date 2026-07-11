@@ -34,4 +34,7 @@ pub struct ModerationUploadRow {
     pub created_at: DateTime<Utc>,
     pub has_reviewer_evidence: bool,
     pub deletion_state: Option<String>,
+    pub retention_held: bool,
+    pub retention_state: String,
+    pub retention_expires_at: Option<DateTime<Utc>>,
 }

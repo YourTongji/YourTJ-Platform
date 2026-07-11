@@ -59,7 +59,7 @@ PostgreSQL 是业务事实源。Redis 用于限流、缓存和热计数；Meilis
 | `reviews` | 课评、反应、举报与课评审核 | 直接更新 course/identity 私有表 |
 | `credit` | append-only ledger、wallet projection、受控 escrow/tip/bounty | 充值、提现、自由转账 |
 | `forum` | boards、threads、comments、votes、subscriptions、notifications、DM | 校园邮箱与密码 |
-| `media` | upload intent、OSS callback、asset quarantine/status | 任意业务内容本身 |
+| `media` | upload intent、OSS callback、asset status/binding/draft reference、operational hold、durable delete 与 rollout-gated GC | 任意业务内容本身或 legal-hold policy |
 | `activity` | contribution events、daily projection、score policy | 从源表在读路径临时聚合 |
 | `governance` | 跨域 append-only audit、申诉状态/历史、当事人治理通知 | 代替各域原处置状态或自行恢复内容/制裁 |
 | `platform` | 公告、用户 receipt、首页推广、人工认证 definition/grant 与 runtime settings | 业务域外的任意 gateway SQL |

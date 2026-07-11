@@ -162,6 +162,14 @@ pub async fn save_draft_handler(
         body.expected_version,
     )
     .await?;
+    media::attachments::sync_validated_forum_draft_asset_references(
+        &mut transaction,
+        auth.id,
+        &body.draft_key,
+        target_type,
+        &asset_ids,
+    )
+    .await?;
     transaction.commit().await?;
 
     Ok(Json(draft_dto(row)))

@@ -229,6 +229,18 @@ pub async fn run() -> anyhow::Result<()> {
         tokio::spawn(media::run_deletion_worker(worker_state));
         tracing::info!("media object deletion worker scheduled");
     }
+    if state.config.media_retention_gc_enabled {
+        let worker_state = state.clone();
+        tokio::spawn(media::run_retention_gc_worker(worker_state));
+        tracing::info!("media retention GC worker scheduled");
+    } else {
+        tracing::info!("media retention GC worker disabled pending rollout reconciliation");
+    }
+    {
+        let worker_state = state.clone();
+        tokio::spawn(media::run_retention_housekeeping_worker(worker_state));
+        tracing::info!("media retention metadata housekeeping scheduled");
+    }
 
     // 8. Badge credit mint bridge (every 60 seconds).
     {

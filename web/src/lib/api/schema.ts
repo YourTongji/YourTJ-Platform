@@ -5460,7 +5460,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Issue an OSS upload intent and scoped STS credentials */
+        /**
+         * Issue an OSS upload intent and scoped STS credentials
+         * @description The server enforces bounded active intents, rolling daily issuance, live-object, retained-record, and reserved-byte quotas before requesting exact-key STS credentials.
+         */
         post: {
             parameters: {
                 query?: never;
@@ -5485,6 +5488,7 @@ export interface paths {
                 };
                 400: components["responses"]["BadRequest"];
                 401: components["responses"]["Unauthorized"];
+                429: components["responses"]["RateLimited"];
             };
         };
         delete?: never;
@@ -8403,6 +8407,152 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/media/retention-holds": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List detailed media retention holds by nearest expiry
+         * @description Requires operations.jobs and a recent-authenticated revocable session. This purpose-bearing inventory is unavailable to ordinary moderators and is audited on every read.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description Opaque pagination cursor */
+                    cursor?: components["parameters"]["Cursor"];
+                    limit?: components["parameters"]["Limit"];
+                    /** @description Unreleased holds are split by whether expiresAt is in the future. */
+                    state?: "active" | "expired";
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description holds ordered by expiresAt then id */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["MediaRetentionHoldPage"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
+                403: components["responses"]["Forbidden"];
+                428: components["responses"]["RecentAuthRequired"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/media/deletion-jobs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List durable system-owned media deletion jobs
+         * @description Requires operations.jobs and a recent-authenticated revocable session. Moderation-owned deletion work is excluded so system jobs remain operable independently from target role hierarchy; every inventory read is audited.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description Opaque pagination cursor */
+                    cursor?: components["parameters"]["Cursor"];
+                    limit?: components["parameters"]["Limit"];
+                    status?: "queued" | "leased" | "succeeded" | "dead_letter";
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description jobs ordered newest first */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["MediaDeletionJobPage"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
+                403: components["responses"]["Forbidden"];
+                428: components["responses"]["RecentAuthRequired"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/media/deletion-jobs/{id}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Requeue one dead-lettered system media deletion job
+         * @description Requires operations.jobs and recent authentication. Only quarantined, system-owned dead letters can be retried; the operator's reason is stored separately from the job's immutable business purpose.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["AdminReasonInput"];
+                };
+            };
+            responses: {
+                /** @description job requeued */
+                202: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+                409: components["responses"]["Conflict"];
+                428: components["responses"]["RecentAuthRequired"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/media/uploads/{id}/preview-grants": {
         parameters: {
             query?: never;
@@ -8559,7 +8709,7 @@ export interface paths {
         put?: never;
         /**
          * Quarantine an upload and enqueue durable provider deletion
-         * @description Supports pending and already-published clean uploads under strict role hierarchy. The database becomes non-public before any provider I/O; deletion is retried from a durable queue and finalizes the blocked state.
+         * @description Supports pending and already-published clean uploads under strict role hierarchy. The database becomes non-public before any provider I/O; deletion is retried from a durable queue and finalizes the blocked state. An active retention hold does not prevent quarantine, but pauses physical provider deletion until release or expiry.
          */
         post: {
             parameters: {
@@ -8589,6 +8739,88 @@ export interface paths {
             };
         };
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/media/uploads/{id}/retention-hold": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Place a purpose-bound, time-bounded hold that pauses provider deletion
+         * @description Requires operations.jobs and a recent-authenticated revocable session. Fails once provider deletion is leased or complete. expectedHoldId provides compare-and-set semantics so a reviewed hold can be renewed without an unprotected gap or overwriting concurrent work.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["MediaRetentionHoldInput"];
+                };
+            };
+            responses: {
+                /** @description hold placed */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+                409: components["responses"]["Conflict"];
+                428: components["responses"]["RecentAuthRequired"];
+            };
+        };
+        /**
+         * Release the current media retention hold
+         * @description Requires operations.jobs and recent authentication. The release reason and bounded hold metadata are append-only audited.
+         */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["MediaRetentionHoldReleaseInput"];
+                };
+            };
+            responses: {
+                /** @description hold released */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+                409: components["responses"]["Conflict"];
+                428: components["responses"]["RecentAuthRequired"];
+            };
+        };
         options?: never;
         head?: never;
         patch?: never;
@@ -11806,6 +12038,15 @@ export interface components {
              * @enum {string|null}
              */
             deletionState: "queued" | "leased" | "succeeded" | "dead_letter" | null;
+            /** @description Whether a purpose-bound, unexpired operations hold currently pauses deletion. The reason and kind are never disclosed here. */
+            retentionHeld: boolean;
+            /**
+             * @description Presence state of the unreleased operations record; expired records must be reviewed in the operations inventory before replacement or release.
+             * @enum {string}
+             */
+            retentionState: "none" | "active" | "expired";
+            /** @description Unix seconds for the unreleased operations record; null only when retentionState is none. */
+            retentionExpiresAt: number | null;
             createdAt: number;
         };
         /** @description Owner-safe upload status; storage keys, hashes, and object URLs are intentionally omitted. */
@@ -11814,6 +12055,7 @@ export interface components {
             /** @enum {string} */
             kind: "image" | "file";
             usage: components["schemas"]["MediaUsage"] | null;
+            /** @description Zero only after an object was physically deleted and its metadata redacted. */
             bytes: number;
             mime: string;
             /** @enum {string} */
@@ -11877,6 +12119,64 @@ export interface components {
         };
         AdminReasonInput: {
             reason: string;
+        };
+        MediaRetentionHoldInput: {
+            /** @enum {string} */
+            holdKind: "moderation" | "security";
+            /** @description Unix seconds, at least five minutes and no more than 365 days in the future. */
+            expiresAt: number;
+            reason: string;
+            /** @description Null creates only when no unreleased hold exists; a hold id renews exactly that reviewed record or returns conflict. */
+            expectedHoldId: string | null;
+        };
+        MediaRetentionHoldReleaseInput: {
+            /** @description The exact reviewed hold to release. */
+            expectedHoldId: string;
+            reason: string;
+        };
+        /** @description Operations-only retention inventory record. Purpose text and staff identifiers are never exposed through the moderation queue. */
+        MediaRetentionHold: {
+            id: string;
+            uploadId: string;
+            accountId: string;
+            /** @enum {string} */
+            uploadStatus: "pending" | "clean" | "quarantined" | "blocked";
+            /** @enum {string} */
+            holdKind: "moderation" | "security";
+            reason: string;
+            placedBy: string;
+            /** @description Unix seconds */
+            expiresAt: number;
+            /** @description Unix seconds */
+            createdAt: number;
+            isExpired: boolean;
+        };
+        MediaRetentionHoldPage: components["schemas"]["Page"] & {
+            items?: components["schemas"]["MediaRetentionHold"][];
+        };
+        /** @description Operations-only durable system deletion job. Provider object identifiers are deliberately omitted. */
+        MediaDeletionJob: {
+            id: string;
+            uploadId: string;
+            accountId: string;
+            /** @enum {string} */
+            uploadStatus: "pending" | "clean" | "quarantined" | "blocked";
+            /** @enum {string} */
+            requestSource: "retention_gc" | "account_purge" | "intent_cleanup";
+            reason: string;
+            /** @enum {string} */
+            status: "queued" | "leased" | "succeeded" | "dead_letter";
+            attemptCount: number;
+            lastErrorCode: string | null;
+            /** @description Unix seconds */
+            availableAt: number;
+            /** @description Unix seconds */
+            createdAt: number;
+            /** @description Unix seconds */
+            updatedAt: number;
+        };
+        MediaDeletionJobPage: components["schemas"]["Page"] & {
+            items?: components["schemas"]["MediaDeletionJob"][];
         };
         AdminForumFlag: {
             id: string;

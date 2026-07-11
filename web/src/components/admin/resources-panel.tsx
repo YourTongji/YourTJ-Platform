@@ -5,6 +5,7 @@ import {
   Check,
   Eye,
   FileWarning,
+  LockKeyhole,
   Pencil,
   Plus,
   ShieldCheck,
@@ -22,6 +23,8 @@ import {
   ReasonDialog,
 } from "@/components/admin/admin-primitives";
 import { ADMIN_CAPABILITIES, hasCapability } from "@/components/admin/capabilities";
+import { MediaOperations } from "@/components/admin/media-operations";
+import { RecentAuthDialog } from "@/components/auth/recent-auth-dialog";
 import { EmptyState, ErrorState, LoadingState } from "@/components/common/states";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -45,13 +48,23 @@ import type {
 } from "@/lib/api/types";
 import { formatNumber, formatRating, formatUnixTime } from "@/lib/format";
 
-function MediaQueue() {
+function localDateTimeInput(timestamp: number) {
+  const date = new Date(timestamp);
+  const offset = date.getTimezoneOffset() * 60_000;
+  return new Date(timestamp - offset).toISOString().slice(0, 16);
+}
+
+function MediaQueue({ canRunOperations }: { canRunOperations: boolean }) {
   const queryClient = useQueryClient();
   const [cursorStack, setCursorStack] = React.useState<Array<string | null>>([null]);
   const [status, setStatus] = React.useState<"pending" | "clean" | "quarantined" | "blocked">("pending");
   const [decision, setDecision] = React.useState<{ upload: Upload; action: "approve" | "block" } | null>(null);
   const [previewDecision, setPreviewDecision] = React.useState<Upload | null>(null);
   const [previewObject, setPreviewObject] = React.useState<{ uploadId: string; url: string } | null>(null);
+  const [retentionDecision, setRetentionDecision] = React.useState<Upload | null>(null);
+  const [holdKind, setHoldKind] = React.useState<"moderation" | "security">("moderation");
+  const [holdUntil, setHoldUntil] = React.useState(() => localDateTimeInput(Date.now() + 30 * 24 * 60 * 60 * 1000));
+  const [recentAuthRetry, setRecentAuthRetry] = React.useState<(() => void) | null>(null);
   const cursor = cursorStack.at(-1);
   const uploads = useQuery({
     queryKey: ["admin", "media", status, cursor],
@@ -80,6 +93,37 @@ function MediaQueue() {
       await queryClient.invalidateQueries({ queryKey: ["admin", "media"] });
     },
     onError: (error) => toast.error(error instanceof Error ? error.message : "媒体预览失败"),
+  });
+  const retention = useMutation({
+    mutationFn: async ({ upload, reason, kind, expiresAt }: {
+      upload: Upload;
+      reason: string;
+      kind: "moderation" | "security";
+      expiresAt: number;
+    }) => {
+      await api.placeAdminMediaRetentionHold(upload.id, {
+        holdKind: kind,
+        expiresAt,
+        reason,
+        expectedHoldId: null,
+      });
+    },
+    onSuccess: async () => {
+      toast.success("媒体保留已设置");
+      setRetentionDecision(null);
+      await queryClient.invalidateQueries({ queryKey: ["admin", "media"] });
+    },
+    onError: (error, variables) => {
+      if (error instanceof ApiError && (error.status === 428 || error.code === "RECENT_AUTH_REQUIRED")) {
+        setRetentionDecision(null);
+        setRecentAuthRetry(() => () => retention.mutate(variables));
+        return;
+      }
+      if (error instanceof ApiError && error.status === 409) {
+        void queryClient.invalidateQueries({ queryKey: ["admin", "media"] });
+      }
+      toast.error(error instanceof Error ? error.message : "媒体保留操作失败");
+    },
   });
 
   React.useEffect(() => {
@@ -132,6 +176,11 @@ function MediaQueue() {
                 <AdminStatusBadge value={upload.status} />
                 <Badge variant="outline">{upload.kind ?? "file"}</Badge>
                 {upload.deletionState ? <Badge variant="outline">删除 {upload.deletionState}</Badge> : null}
+                {upload.retentionState !== "none" ? (
+                  <Badge variant="outline">
+                    {upload.retentionState === "expired" ? "保留记录已到期，需运维复核" : "保留至"} {upload.retentionState === "active" && upload.retentionExpiresAt ? formatUnixTime(upload.retentionExpiresAt) : ""}
+                  </Badge>
+                ) : null}
                 <span className="text-xs text-muted-foreground">{upload.mime} · {formatNumber(upload.bytes)} B</span>
               </div>
               <p className="mt-2 truncate text-sm">上传 #{upload.id} · 账号 {upload.accountId}</p>
@@ -179,6 +228,19 @@ function MediaQueue() {
               {upload.status === "quarantined" && upload.deletionState === "dead_letter" ? (
                 <Button type="button" variant="destructive" size="sm" onClick={() => setDecision({ upload, action: "block" })}><X className="size-4" />重试删除</Button>
               ) : null}
+              {canRunOperations
+                && upload.retentionState === "none"
+                && upload.status !== "blocked"
+                && upload.deletionState !== "leased"
+                && upload.deletionState !== "succeeded" ? (
+                  <Button type="button" size="sm" variant="outline" onClick={() => {
+                    setHoldKind("moderation");
+                    setHoldUntil(localDateTimeInput(Date.now() + 30 * 24 * 60 * 60 * 1000));
+                    setRetentionDecision(upload);
+                  }}>
+                    <LockKeyhole className="size-4" />设置保留
+                  </Button>
+                ) : null}
             </div>
           </CardContent>
         </Card>
@@ -204,11 +266,70 @@ function MediaQueue() {
         title={decision?.action === "approve" ? "批准媒体对象" : "阻止媒体对象"}
         description={decision?.action === "approve"
           ? "只有完成当前审核员安全预览的图片才能批准；决定和原因会进入治理审计。"
-          : "对象会立即进入不可公开访问的隔离状态，随后由持久任务删除 OSS 对象；失败会自动重试并可人工重新排队。"}
+          : decision?.upload.retentionHeld
+            ? "对象会立即停止公开派生并进入删除队列；当前保留会阻止 worker 物理删除，直到保留被解除或到期。"
+            : "对象会立即进入不可公开访问的隔离状态，随后由持久任务删除 OSS 对象；失败会自动重试并可人工重新排队。"}
         confirmLabel={decision?.action === "approve" ? "确认批准" : "确认阻止"}
         destructive={decision?.action === "block"}
         isPending={moderate.isPending}
         onConfirm={(reason) => decision?.upload.id && moderate.mutate({ id: decision.upload.id, action: decision.action, reason })}
+      />
+      <ReasonDialog
+        open={Boolean(retentionDecision)}
+        onOpenChange={(open) => !open && setRetentionDecision(null)}
+        title="设置媒体保留"
+        description="保留只暂停对象删除，不恢复公开访问。必须选择合法目的和到期时间，最长 365 天。已有保留只能在运维清单核对详情后续期或解除。"
+        confirmLabel="确认设置"
+        isPending={retention.isPending}
+        confirmDisabled={Boolean(retentionDecision) && (
+          !holdUntil
+          || new Date(holdUntil).getTime() < Date.now() + 5 * 60 * 1000
+          || new Date(holdUntil).getTime() > Date.now() + 365 * 24 * 60 * 60 * 1000
+        )}
+        onConfirm={(reason) => {
+          if (!retentionDecision) return;
+          retention.mutate({
+            upload: retentionDecision,
+            reason,
+            kind: holdKind,
+            expiresAt: Math.floor(new Date(holdUntil).getTime() / 1000),
+          });
+        }}
+      >
+        {retentionDecision ? (
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-2">
+              <Label htmlFor="media-hold-kind">保留目的</Label>
+              <Select value={holdKind} onValueChange={(value) => setHoldKind(value as typeof holdKind)}>
+                <SelectTrigger id="media-hold-kind"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="moderation">治理调查</SelectItem>
+                  <SelectItem value="security">安全事件</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="media-hold-until">到期时间</Label>
+              <Input
+                id="media-hold-until"
+                type="datetime-local"
+                value={holdUntil}
+                min={localDateTimeInput(Date.now() + 5 * 60 * 1000)}
+                max={localDateTimeInput(Date.now() + 365 * 24 * 60 * 60 * 1000)}
+                onChange={(event) => setHoldUntil(event.target.value)}
+              />
+            </div>
+          </div>
+        ) : null}
+      </ReasonDialog>
+      <RecentAuthDialog
+        open={recentAuthRetry !== null}
+        onOpenChange={(open) => { if (!open) setRecentAuthRetry(null); }}
+        onVerified={() => {
+          const retry = recentAuthRetry;
+          setRecentAuthRetry(null);
+          retry?.();
+        }}
       />
     </div>
   );
@@ -925,21 +1046,30 @@ export function ResourcesPanel({ capabilities }: { capabilities: Set<string> }) 
   const canModerateMedia = hasCapability(capabilities, ADMIN_CAPABILITIES.moderateContent);
   const canManageCourses = hasCapability(capabilities, ADMIN_CAPABILITIES.manageCourses);
   const canManageCommunity = hasCapability(capabilities, ADMIN_CAPABILITIES.manageCommunity);
-  const defaultTab = canModerateMedia ? "media" : canManageCourses ? "courses" : "community";
+  const canRunOperations = hasCapability(capabilities, ADMIN_CAPABILITIES.runOperations);
+  const defaultTab = canModerateMedia
+    ? "media"
+    : canRunOperations
+      ? "media-operations"
+      : canManageCourses
+        ? "courses"
+        : "community";
 
   return (
     <div className="space-y-5">
       <AdminSectionHeader
         title="内容与资源"
-        description="集中处理待审媒体、课程目录和社区结构。每个标签页只在服务端签发对应能力时出现。"
+        description="集中处理待审媒体、媒体运维、课程目录和社区结构。每个标签页只在服务端签发对应能力时出现。"
       />
       <Tabs defaultValue={defaultTab}>
         <TabsList className="scrollbar-none h-auto max-w-full justify-start overflow-x-auto">
           {canModerateMedia ? <TabsTrigger value="media"><ShieldCheck className="mr-1 size-4" />待审媒体</TabsTrigger> : null}
+          {canRunOperations ? <TabsTrigger value="media-operations"><LockKeyhole className="mr-1 size-4" />媒体运维</TabsTrigger> : null}
           {canManageCourses ? <TabsTrigger value="courses"><BookOpen className="mr-1 size-4" />课程目录</TabsTrigger> : null}
           {canManageCommunity ? <TabsTrigger value="community"><Tags className="mr-1 size-4" />社区结构</TabsTrigger> : null}
         </TabsList>
-        {canModerateMedia ? <TabsContent value="media" className="pt-2"><MediaQueue /></TabsContent> : null}
+        {canModerateMedia ? <TabsContent value="media" className="pt-2"><MediaQueue canRunOperations={canRunOperations} /></TabsContent> : null}
+        {canRunOperations ? <TabsContent value="media-operations" className="pt-2"><MediaOperations /></TabsContent> : null}
         {canManageCourses ? <TabsContent value="courses" className="pt-2"><CoursesList /></TabsContent> : null}
         {canManageCommunity ? <TabsContent value="community" className="pt-2"><CommunityManager /></TabsContent> : null}
       </Tabs>

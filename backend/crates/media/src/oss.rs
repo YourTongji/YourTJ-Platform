@@ -14,6 +14,7 @@ use openssl::sign::Verifier;
 use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
 use serde::Deserialize;
 use sha1::Sha1;
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::dto::UploadCredentialsDto;
@@ -415,6 +416,24 @@ pub fn new_callback_token() -> String {
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
 }
 
+/// Hash an opaque callback bearer before persistence.
+pub fn callback_token_hash(token: &str) -> [u8; 32] {
+    Sha256::digest(token.as_bytes()).into()
+}
+
+/// Compare one presented callback token with its persisted digest in constant time.
+pub fn verify_callback_token_hash(expected_hash: &[u8], presented_token: &str) -> bool {
+    let presented_hash = callback_token_hash(presented_token);
+    if expected_hash.len() != presented_hash.len() {
+        return false;
+    }
+    expected_hash
+        .iter()
+        .zip(presented_hash)
+        .fold(0_u8, |difference, (expected, presented)| difference | (expected ^ presented))
+        == 0
+}
+
 /// Generate real STS credentials constrained to the exact upload key prefix.
 pub async fn generate_sts_credentials(
     provider: &dyn StsProvider,
@@ -674,6 +693,15 @@ fn header_str<'a>(headers: &'a HeaderMap, name: &str) -> Result<&'a str, MediaEr
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn callback_token_is_verified_only_against_its_digest() {
+        let token = new_callback_token();
+        let digest = callback_token_hash(&token);
+        assert!(verify_callback_token_hash(&digest, &token));
+        assert!(!verify_callback_token_hash(&digest, "different-token"));
+        assert!(!verify_callback_token_hash(&digest[..31], &token));
+    }
 
     #[test]
     fn upload_policy_scopes_to_single_object() {

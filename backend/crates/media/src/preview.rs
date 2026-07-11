@@ -22,7 +22,6 @@ const PREVIEW_MAX_PIXELS: u64 = 40_000_000;
 #[derive(Debug, FromRow)]
 struct PreviewableUploadRow {
     account_id: i64,
-    owner_role: String,
     kind: String,
     mime: String,
     bytes: i64,
@@ -33,7 +32,6 @@ struct PreviewableUploadRow {
 struct PreviewGrantRow {
     grant_id: i64,
     account_id: i64,
-    owner_role: String,
     oss_key: String,
     mime: String,
     bytes: i64,
@@ -43,7 +41,6 @@ struct PreviewGrantRow {
 #[derive(Debug, FromRow)]
 struct FinalizePreviewUploadRow {
     account_id: i64,
-    owner_role: String,
     status: String,
     image_width: Option<i32>,
     image_height: Option<i32>,
@@ -88,18 +85,20 @@ pub(crate) async fn create_preview_grant(
     reason: &str,
 ) -> AppResult<ModerationPreviewGrantDto> {
     let mut transaction = state.db.begin().await?;
+    let (owner_id, owner) = crate::locking::lock_upload_owner(&mut transaction, upload_id).await?;
     let upload = sqlx::query_as::<_, PreviewableUploadRow>(
-        "SELECT upload.account_id, owner.role::text AS owner_role, upload.kind, upload.mime, \
+        "SELECT upload.account_id, upload.kind, upload.mime, \
                 upload.bytes, upload.status \
-         FROM media.uploads upload \
-         JOIN identity.accounts owner ON owner.id = upload.account_id \
-         WHERE upload.id = $1 FOR SHARE OF upload, owner",
+         FROM media.uploads upload WHERE upload.id = $1",
     )
     .bind(upload_id)
     .fetch_optional(&mut *transaction)
     .await?
     .ok_or(MediaError::NotFound)?;
-    require_strictly_lower_owner(auth, upload.account_id, &upload.owner_role)?;
+    if upload.account_id != owner_id {
+        return Err(AppError::Internal(anyhow::anyhow!("locked media owner changed")));
+    }
+    require_strictly_lower_owner(auth, owner_id, &owner.role)?;
     validate_previewable_upload(&upload)?;
 
     sqlx::query(
@@ -138,17 +137,17 @@ pub(crate) async fn consume_preview_grant(
 ) -> AppResult<UploadObjectPreview> {
     let token_hash = preview_token_hash(token)?;
     let mut transaction = state.db.begin().await?;
+    let (owner_id, owner) = crate::locking::lock_upload_owner(&mut transaction, upload_id).await?;
     let grant = sqlx::query_as::<_, PreviewGrantRow>(
-        "SELECT preview_grant.id AS grant_id, upload.account_id, owner.role::text AS owner_role, \
+        "SELECT preview_grant.id AS grant_id, upload.account_id, \
                 upload.oss_key, upload.mime, upload.bytes, preview_grant.reason \
          FROM media.moderation_preview_grants preview_grant \
          JOIN media.uploads upload ON upload.id = preview_grant.upload_id \
-         JOIN identity.accounts owner ON owner.id = upload.account_id \
          WHERE preview_grant.token_hash = $1 AND preview_grant.upload_id = $2 \
            AND preview_grant.moderator_account_id = $3 AND preview_grant.consumed_at IS NULL \
            AND preview_grant.expires_at > now() AND upload.status = 'pending' \
            AND upload.kind = 'image' AND upload.bytes BETWEEN 1 AND $4 \
-         FOR UPDATE OF preview_grant, upload, owner",
+         FOR UPDATE OF preview_grant",
     )
     .bind(token_hash)
     .bind(upload_id)
@@ -157,7 +156,10 @@ pub(crate) async fn consume_preview_grant(
     .fetch_optional(&mut *transaction)
     .await?
     .ok_or(AppError::NotFound)?;
-    require_strictly_lower_owner(auth, grant.account_id, &grant.owner_role)?;
+    if grant.account_id != owner_id {
+        return Err(AppError::Internal(anyhow::anyhow!("locked media owner changed")));
+    }
+    require_strictly_lower_owner(auth, owner_id, &owner.role)?;
     if oss::validate_content_type("image", &grant.mime).is_err() {
         return Err(AppError::NotFound);
     }
@@ -198,18 +200,20 @@ pub(crate) async fn consume_preview_grant(
     let preview_height = i32::try_from(preview.image_height)
         .map_err(|_| AppError::BadRequest("invalid preview height".into()))?;
     let mut transaction = state.db.begin().await?;
+    let (owner_id, owner) = crate::locking::lock_upload_owner(&mut transaction, upload_id).await?;
     let upload = sqlx::query_as::<_, FinalizePreviewUploadRow>(
-        "SELECT upload.account_id, owner.role::text AS owner_role, upload.status, \
+        "SELECT upload.account_id, upload.status, \
                 upload.image_width, upload.image_height \
-         FROM media.uploads upload \
-         JOIN identity.accounts owner ON owner.id = upload.account_id \
-         WHERE upload.id = $1 FOR UPDATE OF upload, owner",
+         FROM media.uploads upload WHERE upload.id = $1",
     )
     .bind(upload_id)
     .fetch_optional(&mut *transaction)
     .await?
     .ok_or(MediaError::NotFound)?;
-    require_strictly_lower_owner(auth, upload.account_id, &upload.owner_role)?;
+    if upload.account_id != owner_id {
+        return Err(AppError::Internal(anyhow::anyhow!("locked media owner changed")));
+    }
+    require_strictly_lower_owner(auth, owner_id, &owner.role)?;
     if upload.status != "pending" {
         return Err(AppError::Conflict("upload left the pending review state".into()));
     }

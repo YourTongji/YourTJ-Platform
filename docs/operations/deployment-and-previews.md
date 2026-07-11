@@ -105,6 +105,44 @@ PolarDB production。
 `202` 只表示已入当前进程任务，operator 必须检查后端日志并实际搜索已有账号/板块/tag，不能把
 queued 当成功。现阶段没有 durable job status/retry，因此多实例发布时只触发一次，并在失败后显式重试。
 
+## Media migration `0057` 的 gated rollout
+
+`0057` 的 profile/promotion/draft trigger 在 backfill 前安装，保护 source snapshot 的引用完整性；它还
+允许 deletion job 使用 system actor，并把 upload-intent callback secret 从 plaintext column 切换为
+SHA-256 digest-only。旧 API 仍访问 plaintext column，旧 deletion/lifecycle worker 也不理解新 actor/gate/
+terminal progress，因此 `0057` 是 application-level breaking cutover，不能新旧进程混跑。Hash backfill
+允许新版验证迁移前已经签发的 callback token；maintenance gap 内已写 OSS 但 callback 未落库的 object
+仍可能 orphan，必须由 exact-key cleanup 和发布后 reconciliation 收敛。
+
+通用 media GC 与账号 purge system enqueue 由 `MEDIA_RETENTION_GC_ENABLED` 共同控制，默认 `false`。
+代码合并、migration 成功或 main staging 部署都不等于已经启用。部署必须：
+
+1. 保持该 flag 为 `false`，先停止签发新 upload credential，同时保持旧 callback endpoint 可用。等待至少
+   15 分钟 STS/intent TTL + 10 分钟 cleanup safety buffer；或用数据库 active intent、gateway in-flight
+   callback 与 provider callback 指标权威确认 outstanding intents/callbacks 为零。
+2. 再 drain/停止全部旧 callback/API/writer image 与旧 deletion/lifecycle worker；确认没有进程仍访问
+   callback plaintext column、写业务引用或消费队列。
+3. 以 migration owner 执行 `0057`，再部署全部 binding-aware writer 与新版 worker。
+4. 从仓库根目录运行 DB preflight：
+
+   ```bash
+   psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f backend/ops/check_media_retention_references.sql
+   ```
+
+5. SQL 中 profile/promotion/draft drift、deletion anomaly 和 redaction anomaly 必须为零，但这只是 DB
+   preflight。另行对所有 retained thread/comment canonical Markdown 与 `asset_usages` 做 exact reference
+   reconciliation，并对 DB exact key 与 OSS object inventory 做双向 reconciliation；两项也必须无未处置
+   drift。单个 SQL 通过不得作为启用依据。
+6. 三项硬门槛全部通过后才设置 `MEDIA_RETENTION_GC_ENABLED=true` 并重启/滚动新版进程。核对 startup
+   log 与 clean candidate、queue/lease/succeeded/dead-letter、账号 purge progress，并抽样确认 live
+   reference、future grace 与 operational hold 行为。
+
+新版 moderation deletion worker 和未 callback intent 的 exact-key housekeeping 独立运行，不受 GC flag
+影响；已消费 intent credential 30 天、preview grant expiry+1 天、detached binding grace、credential
+attempt 48 小时和 synthetic cleanup tombstone 的清理也独立。Operations hold/retry/succeeded-job/redacted-evidence
+的 365 天 purge 使用另一个默认关闭的 `MEDIA_OPERATIONS_HISTORY_PURGE_ENABLED`，只有 privacy/legal
+owner 批准后才能启用，不能与 GC rollout 捆绑授权。详细回滚和核验见[媒体存储 runbook](media-storage.md)。
+
 ## 关闭、过期与清理
 
 - 未合并 PR 关闭时 workflow 停止容器、删除 image/frontend 和 preview database。
@@ -117,6 +155,10 @@ queued 当成功。现阶段没有 durable job status/retry，因此多实例发
 - Migration 必须 forward-compatible；preview 成功不代表 shared main data 可以安全回滚。
 - `0055` 只增加 append-only truncate trigger/privilege deny，无数据 backfill。回退应用时保留 trigger；
   不通过 drop trigger 或清空 audit/appeal history 伪造 schema rollback。
+- `0057` 删除 callback plaintext column 并扩展 media deletion job 以支持 system actor，不能回滚到旧 API。
+  运行时回滚先把
+  `MEDIA_RETENTION_GC_ENABLED=false`，由新版 deletion worker 排空或保留已存在的 system job。队列仍有
+  system actor 时不得恢复旧 worker；trigger/backfill/redacted tombstone 保持 forward-only。
 - Web/API breaking change 使用 additive contract、双读/双写或明确 cutover，避免前后端窗口不兼容。
 - 当前回滚依赖重新部署已知良好 revision；没有自动 release promotion/rollback。执行前确认 migration
   和外部副作用允许回退。

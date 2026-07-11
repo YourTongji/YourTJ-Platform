@@ -57,8 +57,9 @@
   尚未形成 reaction/media 的独立 read model。
 - Public profile 是否允许外部搜索引擎索引仍需独立政策。
 - 第一阶段不做私密账号与 follow pending request；DM message request 使用独立状态机，二者不得混用。
-- Avatar/banner 已有 owner+clean binding 和上传状态 UI，但图片 scanner、变体、EXIF 清理和 orphan GC
-  仍是媒体链路缺口；当前依赖独立 staff 人工审核，Web 不再提供任意 URL 输入。
+- Avatar/banner 已有 owner+clean binding、上传状态 UI、解绑 grace 与 retention-aware GC 代码/测试，但
+  GC 默认 rollout flag 关闭，不能声称目标环境已运行；图片 scanner、变体和 EXIF 清理仍是媒体链路
+  缺口。当前依赖独立 staff 人工审核，Web 不再提供任意 URL 输入。
 - 旧 `/me/ignores` 作为 block-by-id 兼容 alias 保留，新客户端只使用 handle-based block API。
 
 ## 四种关系不得混用

@@ -42,6 +42,8 @@ pub struct Config {
     pub oss_access_key_secret: String,
     pub oss_role_arn: String,
     pub oss_callback_base_url: String,
+    pub media_retention_gc_enabled: bool,
+    pub media_operations_history_purge_enabled: bool,
     pub email_encryption_active_version: u8,
     pub email_encryption_active_aead_hex: String,
     pub email_encryption_active_blind_hex: String,
@@ -98,6 +100,11 @@ impl Config {
             oss_access_key_secret: env_or_default("OSS_ACCESS_KEY_SECRET", ""),
             oss_role_arn: env_or_default("OSS_ROLE_ARN", ""),
             oss_callback_base_url: env_or_default("OSS_CALLBACK_BASE_URL", ""),
+            media_retention_gc_enabled: env_or_default_bool("MEDIA_RETENTION_GC_ENABLED", false)?,
+            media_operations_history_purge_enabled: env_or_default_bool(
+                "MEDIA_OPERATIONS_HISTORY_PURGE_ENABLED",
+                false,
+            )?,
             email_encryption_active_version: env_or_default_u64(
                 "EMAIL_ENCRYPTION_ACTIVE_VERSION",
                 0,
@@ -191,6 +198,15 @@ fn env_or_default(key: &str, default: &str) -> String {
 
 fn env_or_default_u64(key: &str, default: u64) -> u64 {
     std::env::var(key).ok().and_then(|v| v.parse().ok()).unwrap_or(default)
+}
+
+fn env_or_default_bool(key: &str, default: bool) -> anyhow::Result<bool> {
+    match std::env::var(key) {
+        Ok(value) if matches!(value.to_ascii_lowercase().as_str(), "1" | "true") => Ok(true),
+        Ok(value) if matches!(value.to_ascii_lowercase().as_str(), "0" | "false") => Ok(false),
+        Ok(value) => anyhow::bail!("invalid {key}: {value}"),
+        Err(_) => Ok(default),
+    }
 }
 
 fn non_empty(value: Option<String>) -> Option<String> {

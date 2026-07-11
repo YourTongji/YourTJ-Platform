@@ -67,6 +67,9 @@ import type {
   LedgerEntry,
   LedgerVerify,
   Major,
+  MediaDeletionJob,
+  MediaRetentionHold,
+  MediaRetentionHoldInput,
   MediaUsage,
   ModerationPreviewGrant,
   Notification,
@@ -1582,6 +1585,48 @@ export const api = {
       method: "POST",
       body: { reason },
     });
+  },
+
+  placeAdminMediaRetentionHold(
+    id: string,
+    body: MediaRetentionHoldInput,
+  ) {
+    return apiRequest<void>(
+      `/admin/media/uploads/${encodeURIComponent(id)}/retention-hold`,
+      { method: "POST", body },
+    );
+  },
+
+  releaseAdminMediaRetentionHold(id: string, expectedHoldId: string, reason: string) {
+    return apiRequest<void>(
+      `/admin/media/uploads/${encodeURIComponent(id)}/retention-hold`,
+      { method: "DELETE", body: { expectedHoldId, reason } },
+    );
+  },
+
+  adminMediaRetentionHolds(
+    cursor?: string | null,
+    state: "active" | "expired" = "active",
+  ) {
+    return apiRequest<Page<MediaRetentionHold>>("/admin/media/retention-holds", {
+      query: { cursor, limit: 30, state },
+    });
+  },
+
+  adminMediaDeletionJobs(
+    cursor?: string | null,
+    status: "queued" | "leased" | "succeeded" | "dead_letter" = "dead_letter",
+  ) {
+    return apiRequest<Page<MediaDeletionJob>>("/admin/media/deletion-jobs", {
+      query: { cursor, limit: 30, status },
+    });
+  },
+
+  retryAdminMediaDeletionJob(id: string, reason: string) {
+    return apiRequest<void>(
+      `/admin/media/deletion-jobs/${encodeURIComponent(id)}/retry`,
+      { method: "POST", body: { reason } },
+    );
   },
 
   createAdminBoard(body: AdminBoardCreateInput) {

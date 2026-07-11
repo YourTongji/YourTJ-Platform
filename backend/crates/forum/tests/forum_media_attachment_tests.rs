@@ -751,6 +751,7 @@ async fn comment_and_cloud_draft_assets_keep_pending_private_until_clean_publish
         create_test_account(&pool, "forum-comment-other@tongji.edu.cn", "forum-comment-other")
             .await;
     let pending_id = seed_upload(&pool, owner_id, "forum_comment", "pending").await;
+    let quarantined_id = seed_upload(&pool, owner_id, "forum_comment", "quarantined").await;
     let clean_id = seed_upload(&pool, owner_id, "forum_comment", "clean").await;
     let replacement_id = seed_upload(&pool, owner_id, "forum_comment", "clean").await;
     let other_id = seed_upload(&pool, other_id, "forum_comment", "clean").await;
@@ -783,9 +784,70 @@ async fn comment_and_cloud_draft_assets_keep_pending_private_until_clean_publish
     )
     .await;
     assert_eq!(draft.status(), StatusCode::OK);
+    let draft_reference: (i64, String, i16) = sqlx::query_as(
+        "SELECT asset_id, target_type, position FROM media.draft_asset_references \
+         WHERE account_id = $1 AND draft_key = $2",
+    )
+    .bind(owner_id)
+    .bind(format!("comment:{thread_id}"))
+    .fetch_one(&pool)
+    .await
+    .expect("pending draft asset reference");
+    assert_eq!(draft_reference, (pending_id, "forum_comment".into(), 0));
     let other_draft =
         request(&app, Method::PUT, "/api/v2/me/drafts", Some(&other_token), Some(draft_body)).await;
     assert_eq!(other_draft.status(), StatusCode::NOT_FOUND);
+    let quarantined_draft = request(
+        &app,
+        Method::PUT,
+        "/api/v2/me/drafts",
+        Some(&owner_token),
+        Some(json!({
+            "draftKey": format!("comment:{thread_id}"),
+            "expectedVersion": 1,
+            "payload": {
+                "kind": "comment",
+                "threadId": thread_id,
+                "body": format!("![已隔离](yourtj-asset:{quarantined_id})"),
+                "contentFormat": "markdown_v1",
+                "parentId": null,
+                "attachmentAssetIds": [quarantined_id.to_string()]
+            }
+        })),
+    )
+    .await;
+    assert_eq!(quarantined_draft.status(), StatusCode::NOT_FOUND);
+
+    let updated_draft = request(
+        &app,
+        Method::PUT,
+        "/api/v2/me/drafts",
+        Some(&owner_token),
+        Some(json!({
+            "draftKey": format!("comment:{thread_id}"),
+            "expectedVersion": 1,
+            "payload": {
+                "kind": "comment",
+                "threadId": thread_id,
+                "body": format!("![替换](yourtj-asset:{replacement_id})"),
+                "contentFormat": "markdown_v1",
+                "parentId": null,
+                "attachmentAssetIds": [replacement_id.to_string()]
+            }
+        })),
+    )
+    .await;
+    assert_eq!(updated_draft.status(), StatusCode::OK);
+    let replaced_draft_asset: i64 = sqlx::query_scalar(
+        "SELECT asset_id FROM media.draft_asset_references \
+         WHERE account_id = $1 AND draft_key = $2",
+    )
+    .bind(owner_id)
+    .bind(format!("comment:{thread_id}"))
+    .fetch_one(&pool)
+    .await
+    .expect("replaced draft asset reference");
+    assert_eq!(replaced_draft_asset, replacement_id);
 
     let pending_publish = request(
         &app,
@@ -909,4 +971,91 @@ async fn comment_and_cloud_draft_assets_keep_pending_private_until_clean_publish
     )
     .await;
     assert_eq!(cross_account.status(), StatusCode::NOT_FOUND);
+
+    let deleted_draft = request(
+        &app,
+        Method::DELETE,
+        &format!("/api/v2/me/drafts/comment:{thread_id}"),
+        Some(&owner_token),
+        None,
+    )
+    .await;
+    assert_eq!(deleted_draft.status(), StatusCode::NO_CONTENT);
+    let draft_reference_count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM media.draft_asset_references \
+         WHERE account_id = $1 AND draft_key = $2",
+    )
+    .bind(owner_id)
+    .bind(format!("comment:{thread_id}"))
+    .fetch_one(&pool)
+    .await
+    .expect("deleted draft reference count");
+    assert_eq!(draft_reference_count, 0);
+}
+
+#[tokio::test]
+async fn draft_save_waiting_behind_account_deletion_rechecks_owner_state() {
+    let (pool, app) = create_test_app().await;
+    let (owner_id, owner_token) = create_test_account(
+        &pool,
+        "forum-draft-delete-race@tongji.edu.cn",
+        "forum-draft-delete-race",
+    )
+    .await;
+    let asset_id = seed_upload(&pool, owner_id, "forum_thread", "pending").await;
+    let mut deletion_transaction = pool.begin().await.expect("begin account deletion fixture");
+    sqlx::query("UPDATE identity.accounts SET status = 'deleted' WHERE id = $1")
+        .bind(owner_id)
+        .execute(&mut *deletion_transaction)
+        .await
+        .expect("stage account deletion");
+
+    let save_app = app.clone();
+    let save_task = tokio::spawn(async move {
+        request(
+            &save_app,
+            Method::PUT,
+            "/api/v2/me/drafts",
+            Some(&owner_token),
+            Some(json!({
+                "draftKey": "thread:new",
+                "expectedVersion": 0,
+                "payload": {
+                    "kind": "thread",
+                    "boardId": null,
+                    "title": "must not survive account purge",
+                    "body": format!("![draft](yourtj-asset:{asset_id})"),
+                    "contentFormat": "markdown_v1",
+                    "tags": [],
+                    "pollQuestion": "",
+                    "pollOptions": [],
+                    "attachmentAssetIds": [asset_id.to_string()]
+                }
+            })),
+        )
+        .await
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    assert!(!save_task.is_finished(), "draft save should wait on the account lifecycle lock");
+    deletion_transaction.commit().await.expect("commit account deletion fixture");
+    let response = tokio::time::timeout(std::time::Duration::from_secs(3), save_task)
+        .await
+        .expect("draft save completes after account deletion")
+        .expect("join blocked draft save");
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let draft_count: i64 =
+        sqlx::query_scalar("SELECT count(*)::bigint FROM forum.drafts WHERE account_id = $1")
+            .bind(owner_id)
+            .fetch_one(&pool)
+            .await
+            .expect("draft count after account deletion race");
+    assert_eq!(draft_count, 0);
+    let reference_count: i64 = sqlx::query_scalar(
+        "SELECT count(*)::bigint FROM media.draft_asset_references WHERE account_id = $1",
+    )
+    .bind(owner_id)
+    .fetch_one(&pool)
+    .await
+    .expect("draft reference count after account deletion race");
+    assert_eq!(reference_count, 0);
 }

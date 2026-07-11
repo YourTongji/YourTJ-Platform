@@ -530,6 +530,8 @@ async fn promotions_require_admin_capability_safe_links_and_owned_clean_assets()
     let pool = test_pool().await;
     let suffix = uuid::Uuid::new_v4().simple().to_string();
     let (admin_id, admin_token) = account(&pool, &suffix, "admin").await;
+    let (second_admin_id, second_admin_token) =
+        account(&pool, &format!("second-admin-{suffix}"), "admin").await;
     let (_moderator_id, moderator_token) = account(&pool, &format!("mod-{suffix}"), "mod").await;
     let asset_id: i64 = sqlx::query_scalar(
         "INSERT INTO media.uploads \
@@ -543,6 +545,18 @@ async fn promotions_require_admin_capability_safe_links_and_owned_clean_assets()
     .fetch_one(&pool)
     .await
     .expect("insert clean promotion asset");
+    let replacement_asset_id: i64 = sqlx::query_scalar(
+        "INSERT INTO media.uploads \
+         (account_id, kind, oss_key, url, bytes, mime, sha256, status) \
+         VALUES ($1, 'image', $2, $3, 128, 'image/png', $4, 'clean') RETURNING id",
+    )
+    .bind(second_admin_id)
+    .bind(format!("test/promotions/{suffix}-replacement.png"))
+    .bind(format!("https://controlled.invalid/{suffix}-replacement.png"))
+    .bind("b".repeat(64))
+    .fetch_one(&pool)
+    .await
+    .expect("insert replacement promotion asset");
     let app = platform::routes(test_state(pool.clone()));
 
     let denied = app
@@ -616,6 +630,15 @@ async fn promotions_require_admin_capability_safe_links_and_owned_clean_assets()
         created_ids
             .push(read_json(response).await["id"].as_str().expect("promotion id").to_owned());
     }
+    let active_bindings: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM media.asset_bindings \
+         WHERE asset_id = $1 AND target_type = 'platform_promotion' AND detached_at IS NULL",
+    )
+    .bind(asset_id)
+    .fetch_one(&pool)
+    .await
+    .expect("active promotion media bindings");
+    assert_eq!(active_bindings, 3);
 
     let public = app
         .clone()
@@ -861,6 +884,101 @@ async fn promotions_require_admin_capability_safe_links_and_owned_clean_assets()
     .await
     .expect("retained promotion aggregates");
     assert_eq!(retained_metrics, (1, 1));
+
+    let promotion_id = created_ids[0].parse::<i64>().expect("numeric promotion id");
+    let text_only = app
+        .clone()
+        .oneshot(json_request(
+            Method::PATCH,
+            format!("/api/v2/admin/promotions/{promotion_id}"),
+            Some(&second_admin_token),
+            json!({
+                "placement": "home-left-primary",
+                "title": format!("Text-only update by another operator {suffix}"),
+                "body": "The existing asset remains owned by the original operator",
+                "ctaLabel": "查看详情",
+                "targetUrl": "/forum",
+                "assetId": asset_id.to_string(),
+                "status": "published",
+                "priority": 1000,
+                "audience": "all",
+                "reason": "verify text updates do not reauthorize an unchanged asset",
+                "expectedVersion": 1
+            }),
+        ))
+        .await
+        .expect("cross-operator text-only promotion update");
+    assert_eq!(text_only.status(), StatusCode::OK);
+    let active_after_text_update: i64 = sqlx::query_scalar(
+        "SELECT count(*)::bigint FROM media.asset_bindings \
+         WHERE target_type = 'platform_promotion' AND target_id = $1 AND detached_at IS NULL",
+    )
+    .bind(promotion_id)
+    .fetch_one(&pool)
+    .await
+    .expect("promotion binding after text update");
+    assert_eq!(active_after_text_update, 1);
+
+    for (expected_version, next_asset_id, reason) in [
+        (2, Some(replacement_asset_id), "replace promotion media with an owned clean asset"),
+        (3, None, "clear promotion media while preserving a deletion grace"),
+        (4, Some(replacement_asset_id), "restore promotion media before archival"),
+    ] {
+        let updated = app
+            .clone()
+            .oneshot(json_request(
+                Method::PATCH,
+                format!("/api/v2/admin/promotions/{promotion_id}"),
+                Some(&second_admin_token),
+                json!({
+                    "placement": "home-left-primary",
+                    "title": format!("Promotion media lifecycle {suffix}"),
+                    "body": "A bounded first-party campus message",
+                    "ctaLabel": "查看详情",
+                    "targetUrl": "/forum",
+                    "assetId": next_asset_id.map(|id| id.to_string()),
+                    "status": "published",
+                    "priority": 1000,
+                    "audience": "all",
+                    "reason": reason,
+                    "expectedVersion": expected_version
+                }),
+            ))
+            .await
+            .expect("promotion media lifecycle update");
+        assert_eq!(updated.status(), StatusCode::OK);
+    }
+    let archived = app
+        .clone()
+        .oneshot(json_request(
+            Method::DELETE,
+            format!("/api/v2/admin/promotions/{promotion_id}"),
+            Some(&second_admin_token),
+            json!({
+                "expectedVersion": 5,
+                "reason": "archive promotion and detach its final media binding"
+            }),
+        ))
+        .await
+        .expect("archive promotion media lifecycle fixture");
+    assert_eq!(archived.status(), StatusCode::NO_CONTENT);
+    let binding_history: Vec<(i64, i64, String, bool)> = sqlx::query_as(
+        "SELECT asset_id, owner_account_id, detached_reason, gc_eligible_at > detached_at \
+         FROM media.asset_bindings \
+         WHERE target_type = 'platform_promotion' AND target_id = $1 ORDER BY id",
+    )
+    .bind(promotion_id)
+    .fetch_all(&pool)
+    .await
+    .expect("promotion media binding history");
+    assert_eq!(
+        binding_history,
+        vec![
+            (asset_id, admin_id, "replaced".into(), true),
+            (replacement_asset_id, second_admin_id, "cleared".into(), true),
+            (replacement_asset_id, second_admin_id, "archived".into(), true),
+        ]
+    );
 
     let audit_count: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM governance.audit_events \

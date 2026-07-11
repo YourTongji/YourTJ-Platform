@@ -6,7 +6,7 @@
 >
 > 负责人：Security owner、Identity/Governance maintainers
 >
-> 最近核验：2026-07-12，migrations `0047`、`0048`、`0054`、`0055` 与 governance/identity/outbox integration tests
+> 最近核验：2026-07-12，migrations `0047`、`0048`、`0054`、`0055`、`0057` 与 governance/identity/outbox/media integration tests
 
 后端授权每一个 staff 操作。Web 按 capability 隐藏导航只是可用性和数据最小化措施，绝不是
 安全边界。
@@ -36,6 +36,10 @@
   和 recusal 在 SQL cursor/limit 之前生效，不通过取页后的内存过滤隐藏空页。
 - Identity 可签发 `scope=appeal` 的短期 access JWT；普通 auth middleware 明确拒绝任何 scoped token，
   只有本人申诉/治理通知路由使用专门认证函数。受 suspension 影响的账号仍可申诉，deleted 账号拒绝。
+- Media operations inventory 与 moderation queue 分权：`moderation.content` 处理 lower-role 内容；
+  `operations.jobs` 只在 recent-auth 后读取 no-store operational hold/system deletion job；每次分页读取
+  都审计。CAS 续期/解除 hold 或理由化重排 system dead letter 同样 recent-auth，审计不包含 provider
+  key、URL 或 hash。
 
 ### Partial
 
@@ -65,7 +69,7 @@
 | `promotions.manage` | — | yes | 自营推广、排期、站内目标和 clean asset reference |
 | `badges.manage` | — | yes | versioned 成就定义、lower-role 人工授予/撤销与事件历史 |
 | `verifications.manage` | — | yes | typed 身份/特殊认证定义、低角色账号授予历史与撤销 |
-| `operations.jobs` | — | yes | selection sync/reindex triggers |
+| `operations.jobs` | — | yes | selection sync/reindex；敏感 no-store media operations inventory、operational hold CAS 与 system deletion dead-letter retry |
 | `credit.integrity` | — | yes | 运行和读取只读 ledger/wallet reconciliation |
 
 用户角色没有 staff capability。没有 capability 可以查看任意校园邮箱/DM、编辑 wallet balance 或
@@ -88,6 +92,14 @@ capability，不能塞进过宽的 `community.manage`。
   状态。高风险 mutation 在自身业务事务内锁定并重验 session，与并发 session revoke 形成
   明确先后顺序；不允许在事务外检查后带着 TOCTOU 窗口写入。refresh rotation 可携带原
   freshness 但不延长时间；legacy JWT fail closed。
+- Media operational hold 只接受 `moderation/security` purpose。Hold inventory、创建、续期/替换和解除
+  要求 `operations.jobs` 与当前 session recent-auth；`expectedHoldId` 必须表达 create-if-none 或刚查看的
+  exact hold，陈旧操作返回 conflict，不能先解除再创建留下删除窗口。Inventory 响应为
+  `private, no-store`，读取动作也写 audit；普通 moderation queue 不披露 reason/kind/actor。
+- Media system deletion-job inventory 同样是 `private, no-store`；每页读取要求 `operations.jobs`、当前
+  session recent-auth，并在读取事务写 result count audit。只有 non-moderation dead letter 可在 reason 和
+  当前 job/upload 状态重验后重排。Retry reason 写独立 event，不改写原始 system purpose，并与
+  append-only audit 同事务。
 - Reported-DM 只开放 participant 报告的最小 evidence，读取动作本身写 audit。
 - 内容打赏的 recipient 必须由内容 owner domain 解析为当前可见 target 的 author，再由 identity
   目的限定接口确认账号 active 且无有效 suspend；拒绝 self-tip 和客户端伪造 recipient。
@@ -143,6 +155,9 @@ reference 或实际证据内容。
 - 申诉终态和 owner-domain reversal 位于同一 PostgreSQL transaction；论坛/课评只恢复被原事件精确
   改变的状态，账号 amendment 只允许缩短制裁。后续治理事件冲突、投影修复或 audit/notice 失败时回滚。
 - Durable job 的 requested/started/succeeded/failed 使用同一 correlation id，不能只审计“按钮被点”。
+- Provider 删除成功后，Media redacts object key/URL/hash/size/MIME/usage/dimensions；稳定 upload id 与
+  purpose-limited audit 继续用于关联。Media operations 表中的 hold/retry/succeeded-job/redacted-evidence
+  365 天 purge 默认关闭，不能宣称 staff id 已清；governance actor audit 不属于该 purge，其保留期仍需批准。
 - 有界的 rejected/failed privileged attempts 需要安全事件策略，避免既无审计又被攻击者刷爆。
 - Audit export 加 watermark、purpose、rate limit、expiry 和下载审计。
 

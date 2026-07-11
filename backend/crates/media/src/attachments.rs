@@ -143,7 +143,11 @@ async fn lock_bindable_uploads(
         row.account_id != account_id
             || row.kind != "image"
             || row.usage.as_deref() != Some(target_type.as_str())
-            || (clean_only && row.status != "clean")
+            || if clean_only {
+                row.status != "clean"
+            } else {
+                !matches!(row.status.as_str(), "pending" | "clean" | "blocked")
+            }
     }) {
         return Err(AppError::NotFound);
     }
@@ -167,6 +171,47 @@ pub async fn validate_owned_forum_draft_assets(
         return Err(AppError::BadRequest("draft attachment ids must be unique".into()));
     }
     lock_bindable_uploads(transaction, account_id, target_type, asset_ids, false).await
+}
+
+/// Replace the GC-protecting reference set after the owning draft row is saved in the same
+/// transaction. The caller must first use [`validate_owned_forum_draft_assets`], which keeps every
+/// referenced upload locked until this write commits.
+pub async fn sync_validated_forum_draft_asset_references(
+    connection: &mut PgConnection,
+    account_id: i64,
+    draft_key: &str,
+    target_type: ForumTargetType,
+    asset_ids: &[i64],
+) -> AppResult<()> {
+    if asset_ids.len() > target_type.max_images()
+        || asset_ids.iter().any(|asset_id| *asset_id <= 0)
+        || asset_ids.iter().copied().collect::<HashSet<_>>().len() != asset_ids.len()
+    {
+        return Err(AppError::BadRequest("invalid draft attachment ids".into()));
+    }
+    sqlx::query(
+        "DELETE FROM media.draft_asset_references \
+         WHERE account_id = $1 AND draft_key = $2",
+    )
+    .bind(account_id)
+    .bind(draft_key)
+    .execute(&mut *connection)
+    .await?;
+    for (position, asset_id) in asset_ids.iter().enumerate() {
+        sqlx::query(
+            "INSERT INTO media.draft_asset_references \
+             (account_id, draft_key, asset_id, target_type, position) \
+             VALUES ($1, $2, $3, $4, $5)",
+        )
+        .bind(account_id)
+        .bind(draft_key)
+        .bind(asset_id)
+        .bind(target_type.as_str())
+        .bind(i16::try_from(position).map_err(|error| AppError::Internal(error.into()))?)
+        .execute(&mut *connection)
+        .await?;
+    }
+    Ok(())
 }
 
 /// Replace the active binding set after the owning Forum row is locked and mutated. Validation,

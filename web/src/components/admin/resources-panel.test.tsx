@@ -12,6 +12,11 @@ const apiMocks = vi.hoisted(() => ({
   createPreviewGrant: vi.fn(),
   preview: vi.fn(),
   moderate: vi.fn(),
+  placeRetentionHold: vi.fn(),
+  releaseRetentionHold: vi.fn(),
+  listRetentionHolds: vi.fn(),
+  listDeletionJobs: vi.fn(),
+  retryDeletionJob: vi.fn(),
 }));
 const originalCreateObjectURL = URL.createObjectURL;
 const originalRevokeObjectURL = URL.revokeObjectURL;
@@ -23,7 +28,16 @@ vi.mock("@/lib/api/endpoints", () => ({
     createAdminMediaPreviewGrant: apiMocks.createPreviewGrant,
     adminMediaPreview: apiMocks.preview,
     moderateAdminMediaUpload: apiMocks.moderate,
+    placeAdminMediaRetentionHold: apiMocks.placeRetentionHold,
+    releaseAdminMediaRetentionHold: apiMocks.releaseRetentionHold,
+    adminMediaRetentionHolds: apiMocks.listRetentionHolds,
+    adminMediaDeletionJobs: apiMocks.listDeletionJobs,
+    retryAdminMediaDeletionJob: apiMocks.retryDeletionJob,
   },
+}));
+
+vi.mock("@/components/auth/recent-auth-dialog", () => ({
+  RecentAuthDialog: ({ open }: { open: boolean }) => open ? <div role="dialog">重新验证身份</div> : null,
 }));
 
 const upload = {
@@ -38,6 +52,9 @@ const upload = {
   imageHeight: null,
   approvalRequirement: "image_preview" as const,
   deletionState: null,
+  retentionHeld: false,
+  retentionState: "none" as const,
+  retentionExpiresAt: null,
   createdAt: 1_700_000_000,
 };
 
@@ -61,6 +78,11 @@ describe("ResourcesPanel media moderation", () => {
       return new Blob(["png"], { type: "image/png" });
     });
     apiMocks.moderate.mockReset().mockResolvedValue({ ok: true });
+    apiMocks.placeRetentionHold.mockReset().mockResolvedValue(undefined);
+    apiMocks.releaseRetentionHold.mockReset().mockResolvedValue(undefined);
+    apiMocks.listRetentionHolds.mockReset().mockResolvedValue({ items: [], nextCursor: null, hasMore: false });
+    apiMocks.listDeletionJobs.mockReset().mockResolvedValue({ items: [], nextCursor: null, hasMore: false });
+    apiMocks.retryDeletionJob.mockReset().mockResolvedValue(undefined);
     Object.defineProperty(URL, "createObjectURL", {
       configurable: true,
       value: vi.fn(() => "blob:moderation-preview"),
@@ -138,5 +160,107 @@ describe("ResourcesPanel media moderation", () => {
 
     await user.click(screen.getByRole("button", { name: "已发布" }));
     await waitFor(() => expect(apiMocks.listUploads).toHaveBeenCalledWith(null, "clean"));
+  });
+
+  it("lets operations staff place a bounded hold without exposing its purpose in the queue", async () => {
+    const user = userEvent.setup();
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    const view = render(
+      <QueryClientProvider client={queryClient}>
+        <ResourcesPanel capabilities={new Set(["moderation.content", "operations.jobs"])} />
+      </QueryClientProvider>,
+    );
+
+    await user.click(await screen.findByRole("button", { name: "设置保留" }));
+    expect(screen.getByLabelText("保留目的")).toBeInTheDocument();
+    expect((screen.getByLabelText("到期时间") as HTMLInputElement).value).toMatch(
+      /^\d{4}-\d{2}-\d{2}T/,
+    );
+    await user.type(screen.getByLabelText("操作原因"), "调查关联安全事件并保全证据");
+    await user.click(screen.getByRole("button", { name: "确认设置" }));
+
+    await waitFor(() => expect(apiMocks.placeRetentionHold).toHaveBeenCalledTimes(1));
+    const [uploadId, body] = apiMocks.placeRetentionHold.mock.calls[0];
+    expect(uploadId).toBe("42");
+    expect(body).toMatchObject({
+      holdKind: "moderation",
+      reason: "调查关联安全事件并保全证据",
+      expectedHoldId: null,
+    });
+    expect(body.expiresAt).toEqual(expect.any(Number));
+    expect(view.container).not.toHaveTextContent("调查关联安全事件并保全证据");
+  });
+
+  it("does not release an undisclosed hold from the ordinary moderation queue", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    apiMocks.listUploads.mockResolvedValue({
+      items: [{
+        ...upload,
+        retentionHeld: true,
+        retentionState: "active" as const,
+        retentionExpiresAt: Math.floor(Date.now() / 1000) + 86_400,
+      }],
+      nextCursor: null,
+      hasMore: false,
+    });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <ResourcesPanel capabilities={new Set(["moderation.content", "operations.jobs"])} />
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByText(/保留至/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "解除保留" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "设置保留" })).not.toBeInTheDocument();
+  });
+
+  it("routes an expired hold record to operations instead of creating over it", async () => {
+    const user = userEvent.setup();
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    apiMocks.listUploads.mockResolvedValue({
+      items: [{
+        ...upload,
+        retentionState: "expired" as const,
+        retentionExpiresAt: Math.floor(Date.now() / 1000) - 3_600,
+      }],
+      nextCursor: null,
+      hasMore: false,
+    });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <ResourcesPanel capabilities={new Set(["moderation.content", "operations.jobs"])} />
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByText("保留记录已到期，需运维复核")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "设置保留" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("tab", { name: "媒体运维" }));
+    expect(await screen.findByRole("heading", { name: "媒体保留清单" })).toBeInTheDocument();
+  });
+
+  it("opens the operations inventory by default for an operations-only account", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <ResourcesPanel capabilities={new Set(["operations.jobs"])} />
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByRole("heading", { name: "媒体保留清单" })).toBeInTheDocument();
+    await waitFor(() => {
+      expect(apiMocks.listRetentionHolds).toHaveBeenCalledWith(null, "active");
+      expect(apiMocks.listDeletionJobs).toHaveBeenCalledWith(null, "dead_letter");
+    });
   });
 });

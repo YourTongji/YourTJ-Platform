@@ -548,6 +548,15 @@ async fn admin_create(
     .bind(now)
     .fetch_one(&mut *tx)
     .await?;
+    media::sync_asset_binding(
+        &mut tx,
+        account.id,
+        media::AssetBindingType::PlatformPromotion,
+        record.id,
+        record.asset_id,
+        "replaced",
+    )
+    .await?;
     let metadata = serde_json::json!({
         "placement": record.placement,
         "status": record.status,
@@ -648,6 +657,17 @@ async fn admin_update(
     .fetch_optional(&mut *tx)
     .await?
     .ok_or_else(|| AppError::Conflict("promotion was changed by another operator".into()))?;
+    if record.asset_id != current.asset_id {
+        media::sync_asset_binding(
+            &mut tx,
+            account.id,
+            media::AssetBindingType::PlatformPromotion,
+            promotion_id,
+            record.asset_id,
+            "replaced",
+        )
+        .await?;
+    }
     let metadata = serde_json::json!({
         "oldStatus": current.status,
         "newStatus": record.status,
@@ -701,6 +721,15 @@ async fn admin_archive(
     if affected != 1 {
         return Err(AppError::Conflict("promotion was changed by another operator".into()));
     }
+    media::sync_asset_binding(
+        &mut tx,
+        account.id,
+        media::AssetBindingType::PlatformPromotion,
+        promotion_id,
+        None,
+        "archived",
+    )
+    .await?;
     governance::record_account_event_tx(
         &mut tx,
         AccountActor { account_id: account.id, role: &account.role },

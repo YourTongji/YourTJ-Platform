@@ -3,7 +3,7 @@
 use std::collections::{HashMap, HashSet};
 
 use chrono::{DateTime, Utc};
-use shared::AppResult;
+use shared::{AppError, AppResult};
 use sqlx::{FromRow, PgConnection, PgPool};
 
 /// Public account fields that may be shared with another domain or anonymous client.
@@ -290,7 +290,7 @@ pub async fn find_account_role_by_id(
     let role =
         sqlx::query_scalar("SELECT role::text FROM identity.accounts WHERE id = $1 FOR SHARE")
             .bind(account_id)
-            .fetch_optional(connection)
+            .fetch_optional(&mut *connection)
             .await?;
     Ok(role)
 }
@@ -326,6 +326,52 @@ pub async fn find_account_authorization_state_by_id(
     .fetch_optional(connection)
     .await?;
     Ok(account)
+}
+
+/// Exclusively lock the minimal account authorization state for a cross-domain mutation.
+pub async fn lock_account_authorization_state_by_id(
+    connection: &mut PgConnection,
+    account_id: i64,
+) -> AppResult<Option<AccountAuthorizationState>> {
+    let account = sqlx::query_as::<_, AccountAuthorizationState>(
+        "SELECT role::text, status::text FROM identity.accounts WHERE id = $1 FOR UPDATE",
+    )
+    .bind(account_id)
+    .fetch_optional(connection)
+    .await?;
+    Ok(account)
+}
+
+/// Serialize an account-owned mutation with lifecycle transitions and recheck writability.
+pub async fn lock_active_account_for_owned_mutation(
+    connection: &mut PgConnection,
+    account_id: i64,
+) -> AppResult<()> {
+    let status: Option<String> =
+        sqlx::query_scalar("SELECT status::text FROM identity.accounts WHERE id = $1 FOR UPDATE")
+            .bind(account_id)
+            .fetch_optional(&mut *connection)
+            .await?;
+    match status.as_deref() {
+        Some("active") => {}
+        Some(_) => return Err(AppError::Forbidden),
+        None => return Err(AppError::NotFound),
+    }
+    let is_suspended: bool = sqlx::query_scalar(
+        "SELECT EXISTS( \
+           SELECT 1 FROM identity.sanctions sanction \
+           WHERE sanction.account_id = $1 AND sanction.kind = 'suspend' \
+             AND sanction.revoked_at IS NULL AND sanction.starts_at <= now() \
+             AND (sanction.ends_at IS NULL OR sanction.ends_at > now()) \
+         )",
+    )
+    .bind(account_id)
+    .fetch_one(&mut *connection)
+    .await?;
+    if is_suspended {
+        return Err(AppError::Forbidden);
+    }
+    Ok(())
 }
 
 /// Lock active, non-suspended accounts before a cross-domain direct interaction.

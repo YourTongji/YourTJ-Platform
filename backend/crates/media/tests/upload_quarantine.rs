@@ -860,6 +860,19 @@ async fn profile_images_require_an_owned_clean_oss_asset() {
     .fetch_one(&pool)
     .await
     .expect("seed clean profile image");
+    let replacement_upload_id: i64 = sqlx::query_scalar(
+        "INSERT INTO media.uploads \
+         (account_id, kind, oss_key, url, bytes, mime, sha256, status, usage) \
+         VALUES ($1, 'image', $2, $3, 20, 'image/png', $4, 'clean', 'profile_avatar') \
+         RETURNING id",
+    )
+    .bind(owner_id)
+    .bind(format!("uploads/{owner_id}/image/{suffix}-replacement.png"))
+    .bind(format!("https://cdn.example.test/{suffix}-replacement.png"))
+    .bind("e".repeat(64))
+    .fetch_one(&pool)
+    .await
+    .expect("seed replacement profile image");
     let pending_upload_id: i64 = sqlx::query_scalar(
         "INSERT INTO media.uploads \
          (account_id, kind, oss_key, url, bytes, mime, sha256, usage) \
@@ -903,7 +916,7 @@ async fn profile_images_require_an_owned_clean_oss_asset() {
     assert_eq!(list_response.status(), StatusCode::OK);
     let list_json = response_json(list_response).await;
     let items = list_json["items"].as_array().expect("owned upload items");
-    assert_eq!(items.len(), 2);
+    assert_eq!(items.len(), 3);
     assert_eq!(items[0]["id"], pending_upload_id.to_string());
     assert_eq!(items[0]["status"], "pending");
     assert_eq!(items[0]["usage"], "profile_avatar");
@@ -968,8 +981,44 @@ async fn profile_images_require_an_owned_clean_oss_asset() {
             .await
             .expect("stored avatar asset");
     assert_eq!(stored_asset_id, Some(clean_upload_id));
+    let active_binding: (i64, i64, String) = sqlx::query_as(
+        "SELECT asset_id, owner_account_id, target_type FROM media.asset_bindings \
+         WHERE target_type = 'profile_avatar' AND target_id = $1 AND detached_at IS NULL",
+    )
+    .bind(owner_id)
+    .fetch_one(&pool)
+    .await
+    .expect("active profile media binding");
+    assert_eq!(active_binding, (clean_upload_id, owner_id, "profile_avatar".into()));
+
+    let replace_response = app
+        .clone()
+        .oneshot(request(
+            Method::PUT,
+            "/api/v2/me/profile/avatar".into(),
+            &token,
+            Body::from(format!(r#"{{"assetId":"{replacement_upload_id}"}}"#)),
+        ))
+        .await
+        .expect("profile replacement response");
+    assert_eq!(replace_response.status(), StatusCode::NO_CONTENT);
+    let binding_lifecycle: Vec<(i64, Option<String>, bool)> = sqlx::query_as(
+        "SELECT asset_id, detached_reason, \
+                detached_at IS NULL OR gc_eligible_at > detached_at \
+         FROM media.asset_bindings WHERE target_type = 'profile_avatar' AND target_id = $1 \
+         ORDER BY id",
+    )
+    .bind(owner_id)
+    .fetch_all(&pool)
+    .await
+    .expect("profile replacement binding lifecycle");
+    assert_eq!(
+        binding_lifecycle,
+        vec![(clean_upload_id, Some("replaced".into()), true), (replacement_upload_id, None, true)]
+    );
 
     let clear_response = app
+        .clone()
         .oneshot(request(Method::DELETE, "/api/v2/me/profile/avatar".into(), &token, Body::empty()))
         .await
         .expect("profile clear response");
@@ -981,9 +1030,63 @@ async fn profile_images_require_an_owned_clean_oss_asset() {
             .await
             .expect("cleared avatar asset");
     assert!(cleared_asset_id.is_none());
+    let detached_binding: (String, bool) = sqlx::query_as(
+        "SELECT detached_reason, gc_eligible_at > now() FROM media.asset_bindings \
+         WHERE target_type = 'profile_avatar' AND target_id = $1 AND asset_id = $2",
+    )
+    .bind(owner_id)
+    .bind(replacement_upload_id)
+    .fetch_one(&pool)
+    .await
+    .expect("detached profile media binding");
+    assert_eq!(detached_binding, ("cleared".into(), true));
 
+    let mut deletion_transaction = pool.begin().await.expect("begin profile deletion race");
+    sqlx::query("UPDATE identity.accounts SET status = 'deleted' WHERE id = $1")
+        .bind(owner_id)
+        .execute(&mut *deletion_transaction)
+        .await
+        .expect("stage profile owner deletion");
+    let race_app = app.clone();
+    let race_token = token.clone();
+    let race_task = tokio::spawn(async move {
+        race_app
+            .oneshot(request(
+                Method::PUT,
+                "/api/v2/me/profile/avatar".into(),
+                &race_token,
+                Body::from(format!(r#"{{"assetId":"{clean_upload_id}"}}"#)),
+            ))
+            .await
+            .expect("profile mutation waiting behind account deletion")
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    assert!(!race_task.is_finished(), "profile mutation should wait on account lifecycle lock");
+    deletion_transaction.commit().await.expect("commit profile owner deletion");
+    let raced_response = tokio::time::timeout(std::time::Duration::from_secs(3), race_task)
+        .await
+        .expect("profile mutation completes after account deletion")
+        .expect("join profile deletion race");
+    assert_eq!(raced_response.status(), StatusCode::FORBIDDEN);
+    let active_after_deletion: i64 = sqlx::query_scalar(
+        "SELECT count(*)::bigint FROM media.asset_bindings \
+         WHERE target_type = 'profile_avatar' AND target_id = $1 AND detached_at IS NULL",
+    )
+    .bind(owner_id)
+    .fetch_one(&pool)
+    .await
+    .expect("active profile binding after account deletion");
+    assert_eq!(active_after_deletion, 0);
+
+    sqlx::query(
+        "DELETE FROM media.asset_bindings WHERE target_type = 'profile_avatar' AND target_id = $1",
+    )
+    .bind(owner_id)
+    .execute(&pool)
+    .await
+    .ok();
     sqlx::query("DELETE FROM media.uploads WHERE id = ANY($1)")
-        .bind(vec![clean_upload_id, pending_upload_id, other_upload_id])
+        .bind(vec![clean_upload_id, replacement_upload_id, pending_upload_id, other_upload_id])
         .execute(&pool)
         .await
         .ok();
