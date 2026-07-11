@@ -4,6 +4,7 @@ import * as React from "react";
 import { Link, Outlet, useLocation, useNavigate } from "react-router";
 
 import { SearchDialog } from "@/components/layout/search-dialog";
+import { RealtimeRefresh } from "@/components/notifications/realtime-refresh";
 import { Brand, SiteSidebar } from "@/components/layout/site-navigation";
 import { PageTransition } from "@/components/common/page-transition";
 import { RouteLoadingState } from "@/components/common/route-loading-state";
@@ -73,6 +74,7 @@ export function AppLayout() {
 
   return (
     <TooltipProvider>
+      <RealtimeRefresh isAuthenticated={isAuthenticated} />
       <div className="min-h-screen bg-background">
         <header className="sticky top-0 z-40 h-16 border-b border-border/60 bg-white/95 backdrop-blur dark:bg-card/95">
           <div className="relative mx-auto flex h-full max-w-[1280px] items-center gap-3 px-4 sm:px-6">

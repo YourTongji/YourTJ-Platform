@@ -92,9 +92,11 @@ pub async fn handle_sse_stream(State(state): State<AppState>, headers: HeaderMap
     // Wrap the broadcast receiver in a stream, filter by account, and map to
     // SSE Event structs.
     let stream = BroadcastStream::new(rx)
-        .filter(move |result| matches!(result, Ok(payload) if payload.account_id == account_id))
-        .map(|result| {
-            let payload = result.expect("already filtered for Ok");
+        .filter_map(move |result| match result {
+            Ok(payload) if payload.account_id == account_id => Some(payload),
+            _ => None,
+        })
+        .map(|payload| {
             let data = serde_json::to_string(&payload.payload).unwrap_or_default();
             Ok::<_, std::convert::Infallible>(Event::default().event(payload.event_type).data(data))
         });

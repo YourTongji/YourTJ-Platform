@@ -19,6 +19,8 @@
   写入点会创建通知；后端有 SSE 基础。
 - 通知列表支持有界 cursor pagination、数据库 unread filter、逐条/批量/全部已读；Web 有全局未读
   角标、全部/未读筛选、加载更多，以及内容/私信等已知事件的安全站内 target。
+- Web 使用带 Authorization header 的 fetch stream 消费 SSE，收到 typed event 后只失效通知/私信
+  query 并回源 API；断线指数退避重连，不把瞬时 payload 当 durable 事实。
 - 后端已有每 7 天调度的 digest worker；它是发送骨架，不代表偏好、投递与运营闭环完成。
 - 公告有管理员 CRUD、理由和审计，首页显示最近标题。
 - 私信有 canonical 1:1 conversation、分页 inbox/messages、单调 read pointer、准确未读、
@@ -29,7 +31,7 @@
 ### Partial
 
 - Web 偏好保存 `emailPush/webPush`，后端按事件 key 判断；多数事件不尊重偏好。
-- 旧 badge、部分治理和 comment vote 通知仍缺可到达 target；Web 尚无 SSE 客户端。
+- 旧 badge、部分治理和 comment vote 通知仍缺可到达 target。
 - SSE 只适合单实例，没有 Redis bridge 或 durable event delivery。
 - Digest 缺稳定 event×channel preference、delivery status/retry 与运营验证，Web 也没有对应设置。
 - 公告缺 publish 状态、排期、严重度、展示方式、受众、revision 和用户 receipt。
