@@ -9,7 +9,7 @@ use hmac::{Hmac, Mac};
 use openssl::hash::MessageDigest;
 use openssl::pkey::PKey;
 use openssl::sign::Verifier;
-use percent_encoding::{utf8_percent_encode, AsciiSet, CONTROLS};
+use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
 use serde::Deserialize;
 use sha1::Sha1;
 use uuid::Uuid;
@@ -24,7 +24,7 @@ const OSS_PUBLIC_KEY_MAX_BYTES: usize = 16 * 1024;
 const OSS_HTTP_TIMEOUT_SECONDS: u64 = 5;
 const OSS_CALLBACK_PUBLIC_KEY_HOST: &str = "gosspublic.alicdn.com";
 const PERCENT_ENCODE_SET: &AsciiSet =
-    &CONTROLS.add(b' ').add(b'!').add(b'\'').add(b'(').add(b')').add(b'*');
+    &NON_ALPHANUMERIC.remove(b'-').remove(b'_').remove(b'.').remove(b'~');
 
 type HmacSha1 = Hmac<Sha1>;
 
@@ -450,6 +450,12 @@ mod tests {
         assert!(policy.contains("acs:oss:*:*:yourtj/uploads/42/image/file.png"));
         assert!(!policy.contains("uploads/43"));
         assert!(policy.contains("oss:ContentLength"));
+    }
+
+    #[test]
+    fn sts_percent_encoding_uses_rfc3986_unreserved_set() {
+        assert_eq!(percent_encode("AZaz09-_.~"), "AZaz09-_.~");
+        assert_eq!(percent_encode(" +/=:{}\""), "%20%2B%2F%3D%3A%7B%7D%22");
     }
 
     #[test]
