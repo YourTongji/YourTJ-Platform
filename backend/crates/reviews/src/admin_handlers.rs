@@ -9,7 +9,7 @@ use serde::Deserialize;
 use shared::pagination::Page;
 use shared::{AppResult, AppState};
 
-use crate::dto::{ReportDto, ReviewDto, ReviewInput};
+use crate::dto::{ReportDto, ReviewDto};
 use crate::repo;
 
 // ---------------------------------------------------------------------------
@@ -26,12 +26,21 @@ pub struct AdminListReviewsQuery {
 #[derive(Debug, Deserialize)]
 pub struct AdminListReportsQuery {
     pub status: Option<String>,
+    pub cursor: Option<i64>,
+    pub limit: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResolveReportInput {
-    pub note: Option<String>,
+    pub action: String,
+    pub note: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdminReasonInput {
+    pub reason: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -53,6 +62,14 @@ async fn bump_review_cache(state: &AppState, review_id: i64) {
     }
 }
 
+fn validate_reason(reason: &str, maximum: usize) -> AppResult<&str> {
+    let reason = reason.trim();
+    if reason.chars().count() < 3 || reason.chars().count() > maximum {
+        return Err(shared::AppError::BadRequest(format!("reason must be 3–{maximum} characters")));
+    }
+    Ok(reason)
+}
+
 // ---------------------------------------------------------------------------
 // Handlers
 // ---------------------------------------------------------------------------
@@ -72,51 +89,27 @@ pub async fn admin_list_reviews(
     )
     .await
     .map_err(|_r| shared::AppError::Unauthorized)?;
-    auth.require_mod().map_err(|_| shared::AppError::Forbidden)?;
+    auth.require_capability(shared::auth::Capability::ModerateContent)
+        .map_err(|_| shared::AppError::Forbidden)?;
 
-    let page =
-        repo::admin_list_reviews(&state.db, params.status.as_deref(), params.cursor, params.limit)
-            .await?;
-    Ok(Json(page))
-}
-
-/// PATCH /admin/reviews/{id} — mod can edit any review.
-pub async fn admin_edit_review(
-    State(state): State<AppState>,
-    Path(review_id): Path<i64>,
-    headers: HeaderMap,
-    Json(body): Json<ReviewInput>,
-) -> AppResult<Json<ReviewDto>> {
-    let auth = identity::auth_middleware::authenticate(
-        &headers,
+    let status = params.status.as_deref().unwrap_or("all");
+    if !matches!(status, "visible" | "hidden" | "pending" | "all") {
+        return Err(shared::AppError::BadRequest("invalid review status".into()));
+    }
+    if params.cursor.is_some_and(|cursor| cursor <= 0) {
+        return Err(shared::AppError::BadRequest("cursor must be a positive integer".into()));
+    }
+    if params.limit.is_some_and(|limit| !(1..=100).contains(&limit)) {
+        return Err(shared::AppError::BadRequest("limit must be between 1 and 100".into()));
+    }
+    let page = repo::admin_list_reviews(
         &state.db,
-        &state.jwt_secret,
-        state.redis.as_ref(),
-    )
-    .await
-    .map_err(|_r| shared::AppError::Unauthorized)?;
-    auth.require_mod().map_err(|_| shared::AppError::Forbidden)?;
-
-    let dto = repo::admin_edit_review(
-        &state.db,
-        review_id,
-        body.rating,
-        body.comment.as_deref(),
-        body.semester.as_deref(),
-        body.score.as_deref(),
+        (status != "all").then_some(status),
+        params.cursor,
+        params.limit,
     )
     .await?;
-
-    bump_review_cache(&state, review_id).await;
-    courses::meili::sync_review_to_meili(
-        &state.meili_url,
-        &state.meili_master_key,
-        review_id,
-        &state.db,
-    )
-    .await;
-
-    Ok(Json(dto))
+    Ok(Json(page))
 }
 
 /// DELETE /admin/reviews/{id} — soft-delete a review.
@@ -124,6 +117,7 @@ pub async fn admin_delete_review(
     State(state): State<AppState>,
     Path(review_id): Path<i64>,
     headers: HeaderMap,
+    Json(body): Json<AdminReasonInput>,
 ) -> AppResult<StatusCode> {
     let auth = identity::auth_middleware::authenticate(
         &headers,
@@ -133,9 +127,11 @@ pub async fn admin_delete_review(
     )
     .await
     .map_err(|_r| shared::AppError::Unauthorized)?;
-    auth.require_mod().map_err(|_| shared::AppError::Forbidden)?;
+    auth.require_capability(shared::auth::Capability::ModerateContent)
+        .map_err(|_| shared::AppError::Forbidden)?;
 
-    repo::admin_soft_delete_review(&state.db, review_id).await?;
+    let reason = validate_reason(&body.reason, 500)?;
+    repo::admin_soft_delete_review(&state.db, review_id, auth.id, &auth.role, reason).await?;
 
     bump_review_cache(&state, review_id).await;
     courses::meili::sync_review_to_meili(
@@ -154,6 +150,7 @@ pub async fn admin_toggle_review(
     State(state): State<AppState>,
     Path(review_id): Path<i64>,
     headers: HeaderMap,
+    Json(body): Json<AdminReasonInput>,
 ) -> AppResult<Json<serde_json::Value>> {
     let auth = identity::auth_middleware::authenticate(
         &headers,
@@ -163,9 +160,11 @@ pub async fn admin_toggle_review(
     )
     .await
     .map_err(|_r| shared::AppError::Unauthorized)?;
-    auth.require_mod().map_err(|_| shared::AppError::Forbidden)?;
+    auth.require_capability(shared::auth::Capability::ModerateContent)
+        .map_err(|_| shared::AppError::Forbidden)?;
 
-    repo::admin_toggle_review_visibility(&state.db, review_id).await?;
+    let reason = validate_reason(&body.reason, 500)?;
+    repo::admin_toggle_review_visibility(&state.db, review_id, auth.id, &auth.role, reason).await?;
 
     bump_review_cache(&state, review_id).await;
     courses::meili::sync_review_to_meili(
@@ -184,7 +183,7 @@ pub async fn admin_list_reports(
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(params): Query<AdminListReportsQuery>,
-) -> AppResult<Json<Vec<ReportDto>>> {
+) -> AppResult<Json<Page<ReportDto>>> {
     let auth = identity::auth_middleware::authenticate(
         &headers,
         &state.db,
@@ -193,10 +192,21 @@ pub async fn admin_list_reports(
     )
     .await
     .map_err(|_r| shared::AppError::Unauthorized)?;
-    auth.require_mod().map_err(|_| shared::AppError::Forbidden)?;
+    auth.require_capability(shared::auth::Capability::ModerateContent)
+        .map_err(|_| shared::AppError::Forbidden)?;
 
-    let items = repo::list_reports(&state.db, params.status.as_deref()).await?;
-    Ok(Json(items))
+    let status = params.status.as_deref().unwrap_or("open");
+    if !matches!(status, "open" | "upheld" | "rejected" | "ignored" | "all") {
+        return Err(shared::AppError::BadRequest("invalid report status".into()));
+    }
+    let page = repo::list_reports(
+        &state.db,
+        (status != "all").then_some(status),
+        params.cursor,
+        params.limit.unwrap_or(20),
+    )
+    .await?;
+    Ok(Json(page))
 }
 
 /// POST /admin/reports/{id}/resolve — resolve a report.
@@ -205,7 +215,7 @@ pub async fn admin_resolve_report(
     Path(report_id): Path<i64>,
     headers: HeaderMap,
     Json(body): Json<ResolveReportInput>,
-) -> AppResult<Json<serde_json::Value>> {
+) -> AppResult<Json<ReportDto>> {
     let auth = identity::auth_middleware::authenticate(
         &headers,
         &state.db,
@@ -214,9 +224,28 @@ pub async fn admin_resolve_report(
     )
     .await
     .map_err(|_r| shared::AppError::Unauthorized)?;
-    auth.require_mod().map_err(|_| shared::AppError::Forbidden)?;
+    auth.require_capability(shared::auth::Capability::ModerateContent)
+        .map_err(|_| shared::AppError::Forbidden)?;
 
-    repo::resolve_report(&state.db, report_id, body.note.as_deref()).await?;
-
-    Ok(Json(serde_json::json!({ "ok": true })))
+    if !matches!(body.action.as_str(), "uphold" | "reject" | "ignore") {
+        return Err(shared::AppError::BadRequest(
+            "action must be uphold, reject, or ignore".into(),
+        ));
+    }
+    let note = validate_reason(&body.note, 1000)?;
+    let report =
+        repo::resolve_report(&state.db, report_id, &body.action, note, auth.id, &auth.role).await?;
+    if report.status == "upheld" {
+        if let Ok(review_id) = report.review_id.parse::<i64>() {
+            bump_review_cache(&state, review_id).await;
+            courses::meili::sync_review_to_meili(
+                &state.meili_url,
+                &state.meili_master_key,
+                review_id,
+                &state.db,
+            )
+            .await;
+        }
+    }
+    Ok(Json(report))
 }

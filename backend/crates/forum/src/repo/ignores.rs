@@ -2,8 +2,17 @@
 //!
 //! All functions take `&PgPool` and return `AppResult` so callers can use `?`.
 
+use chrono::{DateTime, Utc};
 use shared::AppResult;
 use sqlx::PgPool;
+
+#[derive(Debug, sqlx::FromRow)]
+pub struct IgnoredUserRow {
+    pub account_id: i64,
+    pub handle: String,
+    pub avatar_url: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
 
 /// Insert an ignore relationship. Silently succeeds on duplicate (ON CONFLICT DO NOTHING).
 pub async fn insert_ignore(
@@ -51,6 +60,30 @@ pub async fn list_ignored_ids(pool: &PgPool, account_id: i64) -> AppResult<Vec<i
     .fetch_all(pool)
     .await?;
     Ok(rows.into_iter().map(|(id,)| id).collect())
+}
+
+/// Return a bounded page of ignored public profiles for account settings UI.
+pub async fn list_ignored_users(
+    pool: &PgPool,
+    account_id: i64,
+    cursor: Option<i64>,
+    limit: i64,
+) -> AppResult<Vec<IgnoredUserRow>> {
+    let rows = sqlx::query_as::<_, IgnoredUserRow>(
+        "SELECT ignored.id AS account_id, ignored.handle::text, ignored.avatar_url, \
+                relation.created_at \
+         FROM forum.user_ignores relation \
+         JOIN identity.accounts ignored ON ignored.id = relation.ignored_account_id \
+         WHERE relation.account_id = $1 \
+           AND ($2::bigint IS NULL OR relation.ignored_account_id < $2) \
+         ORDER BY relation.ignored_account_id DESC LIMIT $3",
+    )
+    .bind(account_id)
+    .bind(cursor)
+    .bind(limit.clamp(1, 100) + 1)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
 }
 
 /// Convenience alias — same as `list_ignored_ids` but with a name that makes

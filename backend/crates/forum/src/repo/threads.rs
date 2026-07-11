@@ -47,6 +47,7 @@ async fn list_threads_new(
              FROM forum.threads t \
              JOIN identity.accounts a ON a.id = t.author_id \
              WHERE t.board_id = $1 AND t.deleted_at IS NULL AND t.hidden_at IS NULL \
+               AND t.archived_at IS NULL \
                AND t.created_at < (SELECT created_at FROM forum.threads WHERE id = $3) \
                AND ($4::bigint IS NULL OR t.author_id <> ALL( \
                     SELECT ignored_account_id FROM forum.user_ignores WHERE account_id = $4 \
@@ -69,6 +70,7 @@ async fn list_threads_new(
              FROM forum.threads t \
              JOIN identity.accounts a ON a.id = t.author_id \
              WHERE t.board_id = $1 AND t.deleted_at IS NULL AND t.hidden_at IS NULL \
+               AND t.archived_at IS NULL \
                AND ($3::bigint IS NULL OR t.author_id <> ALL( \
                     SELECT ignored_account_id FROM forum.user_ignores WHERE account_id = $3 \
                )) \
@@ -114,6 +116,7 @@ async fn list_threads_hot(
              JOIN identity.accounts a ON a.id = t.author_id \
              WHERE t.board_id = $1 \
                AND t.deleted_at IS NULL AND t.hidden_at IS NULL \
+               AND t.archived_at IS NULL \
                AND (COALESCE(t.hot_score, 0) < $3 \
                     OR (COALESCE(t.hot_score, 0) = $3 AND t.id < $4)) \
                AND ($5::bigint IS NULL OR t.author_id <> ALL( \
@@ -138,6 +141,7 @@ async fn list_threads_hot(
              FROM forum.threads t \
              JOIN identity.accounts a ON a.id = t.author_id \
              WHERE t.board_id = $1 AND t.deleted_at IS NULL AND t.hidden_at IS NULL \
+               AND t.archived_at IS NULL \
                AND ($3::bigint IS NULL OR t.author_id <> ALL( \
                     SELECT ignored_account_id FROM forum.user_ignores WHERE account_id = $3 \
                )) \
@@ -202,6 +206,7 @@ async fn list_threads_feed_new(
              FROM forum.threads t \
              JOIN identity.accounts a ON a.id = t.author_id \
              WHERE t.board_id = $1 AND t.deleted_at IS NULL AND t.hidden_at IS NULL \
+               AND t.archived_at IS NULL \
                AND t.created_at < (SELECT created_at FROM forum.threads WHERE id = $3) \
                AND ($4::bigint IS NULL OR t.author_id <> ALL( \
                     SELECT ignored_account_id FROM forum.user_ignores WHERE account_id = $4 \
@@ -224,6 +229,7 @@ async fn list_threads_feed_new(
              FROM forum.threads t \
              JOIN identity.accounts a ON a.id = t.author_id \
              WHERE t.deleted_at IS NULL AND t.hidden_at IS NULL \
+               AND t.archived_at IS NULL \
                AND t.created_at < (SELECT created_at FROM forum.threads WHERE id = $2) \
                AND ($3::bigint IS NULL OR t.author_id <> ALL( \
                     SELECT ignored_account_id FROM forum.user_ignores WHERE account_id = $3 \
@@ -245,6 +251,7 @@ async fn list_threads_feed_new(
              FROM forum.threads t \
              JOIN identity.accounts a ON a.id = t.author_id \
              WHERE t.board_id = $1 AND t.deleted_at IS NULL AND t.hidden_at IS NULL \
+               AND t.archived_at IS NULL \
                AND ($3::bigint IS NULL OR t.author_id <> ALL( \
                     SELECT ignored_account_id FROM forum.user_ignores WHERE account_id = $3 \
                )) \
@@ -265,6 +272,7 @@ async fn list_threads_feed_new(
              FROM forum.threads t \
              JOIN identity.accounts a ON a.id = t.author_id \
              WHERE t.deleted_at IS NULL AND t.hidden_at IS NULL \
+               AND t.archived_at IS NULL \
                AND ($2::bigint IS NULL OR t.author_id <> ALL( \
                     SELECT ignored_account_id FROM forum.user_ignores WHERE account_id = $2 \
                )) \
@@ -301,6 +309,7 @@ pub async fn fetch_threads_by_ids(
          FROM forum.threads t \
          JOIN identity.accounts a ON a.id = t.author_id \
          WHERE t.id = ANY($1) AND t.deleted_at IS NULL AND t.hidden_at IS NULL \
+           AND t.archived_at IS NULL \
            AND ($2::bigint IS NULL OR t.author_id <> ALL( \
                 SELECT ignored_account_id FROM forum.user_ignores WHERE account_id = $2 \
            ))",
@@ -347,6 +356,7 @@ async fn list_threads_feed_hot(
                  JOIN identity.accounts a ON a.id = t.author_id \
                  WHERE t.board_id = $1 \
                    AND t.deleted_at IS NULL AND t.hidden_at IS NULL \
+                   AND t.archived_at IS NULL \
                    AND (COALESCE(t.hot_score, 0) < $3 \
                         OR (COALESCE(t.hot_score, 0) = $3 AND t.id < $4)) \
                    AND ($5::bigint IS NULL OR t.author_id <> ALL( \
@@ -372,6 +382,7 @@ async fn list_threads_feed_hot(
                  FROM forum.threads t \
                  JOIN identity.accounts a ON a.id = t.author_id \
                  WHERE t.deleted_at IS NULL AND t.hidden_at IS NULL \
+                   AND t.archived_at IS NULL \
                    AND (COALESCE(t.hot_score, 0) < $2 \
                         OR (COALESCE(t.hot_score, 0) = $2 AND t.id < $3)) \
                    AND ($4::bigint IS NULL OR t.author_id <> ALL( \
@@ -396,6 +407,7 @@ async fn list_threads_feed_hot(
                  FROM forum.threads t \
                  JOIN identity.accounts a ON a.id = t.author_id \
                  WHERE t.board_id = $1 AND t.deleted_at IS NULL AND t.hidden_at IS NULL \
+                   AND t.archived_at IS NULL \
                    AND ($3::bigint IS NULL OR t.author_id <> ALL( \
                         SELECT ignored_account_id FROM forum.user_ignores WHERE account_id = $3 \
                    )) \
@@ -417,6 +429,7 @@ async fn list_threads_feed_hot(
                  FROM forum.threads t \
                  JOIN identity.accounts a ON a.id = t.author_id \
                  WHERE t.deleted_at IS NULL AND t.hidden_at IS NULL \
+                   AND t.archived_at IS NULL \
                    AND ($2::bigint IS NULL OR t.author_id <> ALL( \
                         SELECT ignored_account_id FROM forum.user_ignores WHERE account_id = $2 \
                    )) \
@@ -460,7 +473,7 @@ pub async fn list_threads_feed_following(
          JOIN identity.accounts a ON a.id = t.author_id \
          JOIN forum.subscriptions s ON s.target_type = 'thread' AND s.target_id = t.id \
          WHERE s.account_id = $1 AND s.level IN ('watching', 'tracking') \
-           AND t.deleted_at IS NULL \
+           AND t.deleted_at IS NULL AND t.hidden_at IS NULL AND t.archived_at IS NULL \
            AND t.id > $2 \
          ORDER BY t.last_activity_at DESC \
          LIMIT $3",
@@ -498,17 +511,42 @@ pub async fn find_thread(pool: &PgPool, id: i64) -> AppResult<Option<ThreadRowJo
     Ok(row)
 }
 
+/// Find a thread for staff recovery, including hidden and soft-deleted rows.
+pub async fn find_thread_for_moderation(
+    pool: &PgPool,
+    id: i64,
+) -> AppResult<Option<ThreadRowJoinedFull>> {
+    let row = sqlx::query_as::<_, ThreadRowJoinedFull>(
+        "SELECT t.id, t.board_id, t.author_id, t.title, t.body, \
+                t.reply_count, t.vote_count, t.hot_score, t.status, \
+                t.pinned_at, t.pinned_globally, t.featured_at, t.closed_at, t.archived_at, \
+                t.deleted_at, t.deleted_by, t.edited_at, t.hidden_at, \
+                t.solved_answer_id, t.created_at, t.last_activity_at, \
+                a.handle AS author_handle \
+         FROM forum.threads t \
+         JOIN identity.accounts a ON a.id = t.author_id \
+         WHERE t.id = $1",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row)
+}
+
 /// Insert a new thread. Returns the created thread joined with author handle (full columns).
 pub async fn create_thread(
     pool: &PgPool,
     board_id: i64,
     author_id: i64,
     input: &crate::dto::ThreadInput,
+    is_hidden: bool,
 ) -> AppResult<ThreadRowJoinedFull> {
+    let mut tx = pool.begin().await?;
+    let board_ids = super::boards::lock_boards_for_thread_count(&mut tx, &[board_id]).await?;
     let row = sqlx::query_as::<_, ThreadRowJoinedFull>(
         "WITH inserted AS ( \
-            INSERT INTO forum.threads (board_id, author_id, title, body) \
-            VALUES ($1, $2, $3, $4) \
+            INSERT INTO forum.threads (board_id, author_id, title, body, hidden_at) \
+            VALUES ($1, $2, $3, $4, CASE WHEN $5 THEN now() ELSE NULL END) \
             RETURNING id, board_id, author_id, title, body, reply_count, vote_count, \
                       hot_score, status, pinned_at, pinned_globally, featured_at, closed_at, archived_at, \
                       deleted_at, deleted_by, edited_at, hidden_at, solved_answer_id, created_at, last_activity_at \
@@ -527,8 +565,21 @@ pub async fn create_thread(
     .bind(author_id)
     .bind(&input.title)
     .bind(&input.body)
-    .fetch_one(pool)
+    .bind(is_hidden)
+    .fetch_one(&mut *tx)
     .await?;
+    if !is_hidden {
+        activity::contributions::activate_contribution(
+            &mut tx,
+            author_id,
+            activity::contributions::ActivityKind::Thread,
+            &format!("forum_thread:{}", row.id),
+            row.created_at,
+        )
+        .await?;
+    }
+    super::boards::refresh_board_thread_counts(&mut tx, &board_ids).await?;
+    tx.commit().await?;
     Ok(row)
 }
 

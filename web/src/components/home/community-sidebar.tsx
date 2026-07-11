@@ -1,17 +1,24 @@
 import { BellRing, CalendarCheck2, Flame, Leaf, RefreshCw, TrendingUp } from "lucide-react";
 import { Link } from "react-router";
 
+import { ActivityHeatmap } from "@/components/activity/activity-heatmap";
 import { TeaBadge } from "@/components/common/tea-badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
-import type { Account, Announcement, ThreadFeed } from "@/lib/api/types";
+import type { Account, ActivityCalendar, Announcement, ThreadFeed } from "@/lib/api/types";
 import { formatDate, formatNumber } from "@/lib/format";
 
-function MissionCard({ account }: { account: Account | null }) {
+interface ActivityState {
+  calendar?: ActivityCalendar;
+  isLoading: boolean;
+  error?: unknown;
+  onRetry: () => void;
+}
+
+function MissionCard({ account, activity }: { account: Account | null; activity: ActivityState }) {
   const level = Math.max(0, Math.min(account?.trustLevel ?? 0, 6));
   const progress = (level / 6) * 100;
-  const reachedCells = Math.round((level / 6) * 140);
 
   return (
     <Card className="min-h-[452px] rounded-xl">
@@ -48,41 +55,13 @@ function MissionCard({ account }: { account: Account | null }) {
 
         <div className="my-5 border-t border-border/70" />
 
-        <div className="flex items-center justify-between text-xs">
-          <span className="font-medium">等级成长</span>
-          <span className="text-[10px] text-muted-foreground">当前 Lv.{level}</span>
-        </div>
-        <div className="mt-3 grid grid-cols-20 gap-0.5" aria-label={`等级成长进度 ${level} / 6`}>
-          {Array.from({ length: 140 }, (_, index) => {
-            const isReached = index < reachedCells;
-            const intensity = index % 4;
-            return (
-              <span
-                key={index}
-                className={
-                  isReached
-                    ? intensity === 0
-                      ? "aspect-square rounded-[1px] bg-primary/35"
-                      : intensity === 1
-                        ? "aspect-square rounded-[1px] bg-primary/55"
-                        : intensity === 2
-                          ? "aspect-square rounded-[1px] bg-primary/75"
-                          : "aspect-square rounded-[1px] bg-primary"
-                    : "aspect-square rounded-[1px] bg-muted"
-                }
-              />
-            );
-          })}
-        </div>
-        <div className="mt-2 flex items-center justify-end gap-1.5 text-[9px] text-muted-foreground">
-          <span>起步</span>
-          <span className="size-2.5 rounded-[1px] bg-muted" />
-          <span className="size-2.5 rounded-[1px] bg-primary/35" />
-          <span className="size-2.5 rounded-[1px] bg-primary/55" />
-          <span className="size-2.5 rounded-[1px] bg-primary/75" />
-          <span className="size-2.5 rounded-[1px] bg-primary" />
-          <span>进阶</span>
-        </div>
+        <ActivityHeatmap
+          isAuthenticated={Boolean(account)}
+          calendar={activity.calendar}
+          isLoading={activity.isLoading}
+          error={activity.error}
+          onRetry={activity.onRetry}
+        />
       </CardContent>
     </Card>
   );
@@ -143,16 +122,18 @@ function NoticeCard({ announcements }: { announcements: Announcement[] }) {
 
 export function CommunitySidebar({
   account,
+  activity,
   threads,
   announcements,
 }: {
   account: Account | null;
+  activity: ActivityState;
   threads: ThreadFeed[];
   announcements: Announcement[];
 }) {
   return (
     <aside className="space-y-6">
-      <MissionCard account={account} />
+      <MissionCard account={account} activity={activity} />
       <HotTopicsCard threads={threads} />
       <NoticeCard announcements={announcements} />
     </aside>

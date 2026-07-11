@@ -4,15 +4,18 @@
 //! established pattern: extract `State<AppState>`, authenticate, validate,
 //! call repo/oss, build DTO, return `AppResult<Json<…>>`.
 
+use std::sync::Arc;
+
 use axum::extract::{OriginalUri, Path, Query, State};
 use axum::http::{HeaderMap, Uri};
-use axum::Json;
+use axum::{Extension, Json};
 use serde::Deserialize;
 use shared::pagination::Page;
 use shared::{AppError, AppResult, AppState};
 
 use crate::dto::{UploadCredentialsDto, UploadDto, UploadIntentInput, UploadUrlDto};
 use crate::oss::{self, AliyunStsProvider, OssConfig};
+use crate::quarantine::{quarantine_upload, require_independent_moderator, UploadObjectStore};
 use crate::repo;
 use crate::{error::MediaError, models::UploadRow};
 
@@ -32,6 +35,12 @@ pub struct UploadListQuery {
     cursor: Option<String>,
     #[serde(default = "default_limit")]
     limit: i64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModerateUploadInput {
+    reason: String,
 }
 
 fn default_limit() -> i64 {
@@ -67,6 +76,64 @@ fn validate_upload_kind(kind: &str) -> AppResult<()> {
         Ok(())
     } else {
         Err(MediaError::BadRequest("invalid upload kind".into()).into())
+    }
+}
+
+fn validate_moderation_reason(reason: &str) -> AppResult<&str> {
+    let reason = reason.trim();
+    if !(3..=500).contains(&reason.chars().count()) {
+        return Err(AppError::BadRequest("reason must be 3–500 characters".into()));
+    }
+    Ok(reason)
+}
+
+async fn moderate_upload(
+    state: &AppState,
+    auth: &shared::AuthAccount,
+    upload_id: i64,
+    new_status: &str,
+    reason: &str,
+) -> AppResult<()> {
+    let mut tx = state.db.begin().await?;
+    let upload: Option<(String, i64)> =
+        sqlx::query_as("SELECT status, account_id FROM media.uploads WHERE id = $1 FOR UPDATE")
+            .bind(upload_id)
+            .fetch_optional(&mut *tx)
+            .await?;
+    let (current_status, owner_id) = upload.ok_or(MediaError::NotFound)?;
+    require_independent_moderator(auth, owner_id)?;
+    if current_status != "pending" {
+        return Err(AppError::Conflict(format!("upload is already {current_status}")));
+    }
+    sqlx::query("UPDATE media.uploads SET status = $1 WHERE id = $2")
+        .bind(new_status)
+        .bind(upload_id)
+        .execute(&mut *tx)
+        .await?;
+    let metadata = serde_json::json!({ "oldStatus": current_status, "newStatus": new_status });
+    governance::record_account_event_tx(
+        &mut tx,
+        governance::AccountActor { account_id: auth.id, role: &auth.role },
+        if new_status == "clean" { "media.upload.approved" } else { "media.upload.blocked" },
+        "upload",
+        &upload_id.to_string(),
+        reason,
+        Some(&metadata),
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+fn can_read_upload_url(auth: &shared::AuthAccount, upload: &UploadRow) -> bool {
+    match upload.status.as_str() {
+        "clean" => true,
+        "pending" => {
+            upload.account_id == auth.id
+                || auth.has_capability(shared::auth::Capability::ModerateContent)
+        }
+        "blocked" => false,
+        _ => false,
     }
 }
 
@@ -227,7 +294,7 @@ pub async fn get_url(
     Path(id_str): Path<String>,
     headers: HeaderMap,
 ) -> AppResult<Json<UploadUrlDto>> {
-    let _auth = identity::auth_middleware::authenticate(
+    let auth = identity::auth_middleware::authenticate(
         &headers,
         &state.db,
         &state.jwt_secret,
@@ -238,6 +305,9 @@ pub async fn get_url(
 
     let id: i64 = id_str.parse().map_err(|_| AppError::NotFound)?;
     let row = repo::find_upload(&state.db, id).await?.ok_or(MediaError::NotFound)?;
+    if !can_read_upload_url(&auth, &row) {
+        return Err(MediaError::NotFound.into());
+    }
 
     let oss_config = require_oss_config(&state)?;
     let url = oss::generate_url(&oss_config, &row.oss_key);
@@ -263,7 +333,8 @@ pub async fn list_uploads(
     )
     .await
     .map_err(|_r| AppError::Unauthorized)?;
-    auth.require_mod().map_err(|_| AppError::Forbidden)?;
+    auth.require_capability(shared::auth::Capability::ModerateContent)
+        .map_err(|_| AppError::Forbidden)?;
 
     let (rows, next_cursor) = repo::list_pending(&state.db, q.cursor.as_deref(), q.limit).await?;
 
@@ -276,6 +347,7 @@ pub async fn approve_upload(
     State(state): State<AppState>,
     Path(id_str): Path<String>,
     headers: HeaderMap,
+    Json(body): Json<ModerateUploadInput>,
 ) -> AppResult<Json<serde_json::Value>> {
     let auth = identity::auth_middleware::authenticate(
         &headers,
@@ -285,16 +357,12 @@ pub async fn approve_upload(
     )
     .await
     .map_err(|_r| AppError::Unauthorized)?;
-    auth.require_mod().map_err(|_| AppError::Forbidden)?;
+    auth.require_capability(shared::auth::Capability::ModerateContent)
+        .map_err(|_| AppError::Forbidden)?;
 
     let id: i64 = id_str.parse().map_err(|_| AppError::NotFound)?;
-    let row = repo::find_upload(&state.db, id).await?.ok_or(MediaError::NotFound)?;
-
-    if row.status != "pending" {
-        return Err(AppError::BadRequest(format!("upload is already {}", row.status)));
-    }
-
-    repo::update_status(&state.db, id, "clean").await?;
+    let reason = validate_moderation_reason(&body.reason)?;
+    moderate_upload(&state, &auth, id, "clean", reason).await?;
     tracing::info!(upload_id = id, moderator_id = auth.id, "upload approved");
 
     Ok(Json(serde_json::json!({ "ok": true })))
@@ -303,8 +371,10 @@ pub async fn approve_upload(
 /// POST /api/v2/admin/media/uploads/{id}/block — block a pending upload
 pub async fn block_upload(
     State(state): State<AppState>,
+    Extension(object_store): Extension<Arc<dyn UploadObjectStore>>,
     Path(id_str): Path<String>,
     headers: HeaderMap,
+    Json(body): Json<ModerateUploadInput>,
 ) -> AppResult<Json<serde_json::Value>> {
     let auth = identity::auth_middleware::authenticate(
         &headers,
@@ -314,21 +384,71 @@ pub async fn block_upload(
     )
     .await
     .map_err(|_r| AppError::Unauthorized)?;
-    auth.require_mod().map_err(|_| AppError::Forbidden)?;
+    auth.require_capability(shared::auth::Capability::ModerateContent)
+        .map_err(|_| AppError::Forbidden)?;
 
     let id: i64 = id_str.parse().map_err(|_| AppError::NotFound)?;
-    let row = repo::find_upload(&state.db, id).await?.ok_or(MediaError::NotFound)?;
-
-    if row.status != "pending" {
-        return Err(AppError::BadRequest(format!("upload is already {}", row.status)));
-    }
-
-    // Update status to blocked.
-    repo::update_status(&state.db, id, "blocked").await?;
-
-    // Deferred: Delete the object from OSS when real integration is wired (issue #oss-delete).
-    // oss::delete_object(&oss_config, &row.oss_key).await?;
+    let reason = validate_moderation_reason(&body.reason)?;
+    quarantine_upload(&state, &auth, id, reason, object_store.as_ref()).await?;
 
     tracing::info!(upload_id = id, moderator_id = auth.id, "upload blocked");
     Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::Utc;
+    use shared::AuthAccount;
+
+    use super::{can_read_upload_url, UploadRow};
+    use crate::quarantine::require_independent_moderator;
+
+    fn account(id: i64, role: &str) -> AuthAccount {
+        AuthAccount { id, role: role.into(), status: "active".into() }
+    }
+
+    fn upload(account_id: i64, status: &str) -> UploadRow {
+        UploadRow {
+            id: 1,
+            account_id,
+            kind: "image".into(),
+            oss_key: "uploads/1/image/file.png".into(),
+            url: "https://example.invalid/file.png".into(),
+            bytes: 10,
+            mime: "image/png".into(),
+            sha256: "a".repeat(64),
+            status: status.into(),
+            created_at: Utc::now(),
+        }
+    }
+
+    #[test]
+    fn pending_url_is_limited_to_owner_or_staff() {
+        let pending = upload(10, "pending");
+        assert!(can_read_upload_url(&account(10, "user"), &pending));
+        assert!(!can_read_upload_url(&account(11, "user"), &pending));
+        assert!(can_read_upload_url(&account(11, "mod"), &pending));
+    }
+
+    #[test]
+    fn blocked_url_is_never_returned_even_to_staff() {
+        let blocked = upload(10, "blocked");
+        assert!(!can_read_upload_url(&account(10, "user"), &blocked));
+        assert!(!can_read_upload_url(&account(11, "admin"), &blocked));
+    }
+
+    #[test]
+    fn clean_url_is_available_to_authenticated_accounts() {
+        let clean = upload(10, "clean");
+        assert!(can_read_upload_url(&account(11, "user"), &clean));
+    }
+
+    #[test]
+    fn staff_cannot_moderate_their_own_upload() {
+        assert!(matches!(
+            require_independent_moderator(&account(10, "admin"), 10),
+            Err(shared::AppError::Forbidden)
+        ));
+        assert!(require_independent_moderator(&account(11, "mod"), 10).is_ok());
+    }
 }

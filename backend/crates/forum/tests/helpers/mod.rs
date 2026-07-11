@@ -44,13 +44,18 @@ async fn run_migrations(pool: &PgPool) {
     .await
     .unwrap_or(false);
     if is_fresh {
-        let migrations: [&str; 6] = [
+        let migrations: [&str; 11] = [
             include_str!("../../../../migrations/0001_init.sql"),
             include_str!("../../../../migrations/0002_escrow_selection.sql"),
             include_str!("../../../../migrations/0003_platform.sql"),
             include_str!("../../../../migrations/0004_review_remediation.sql"),
             include_str!("../../../../migrations/0005_forum_parity.sql"),
             include_str!("../../../../migrations/0006_forum_f2_f3.sql"),
+            include_str!("../../../../migrations/0020_activity.sql"),
+            include_str!("../../../../migrations/0021_dm_moderation.sql"),
+            include_str!("../../../../migrations/0022_governance.sql"),
+            include_str!("../../../../migrations/0025_moderation_state.sql"),
+            include_str!("../../../../migrations/0026_forum_flag_attempts.sql"),
         ];
         for (i, sql) in migrations.iter().enumerate() {
             sqlx::raw_sql(sql)
@@ -58,6 +63,83 @@ async fn run_migrations(pool: &PgPool) {
                 .await
                 .unwrap_or_else(|_| panic!("migration {:03} failed", i + 1));
         }
+    }
+
+    let has_activity_schema: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM information_schema.schemata WHERE schema_name = 'activity')",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or(false);
+    if !has_activity_schema {
+        sqlx::raw_sql(include_str!("../../../../migrations/0020_activity.sql"))
+            .execute(pool)
+            .await
+            .expect("migration 0020 failed");
+    }
+
+    let has_dm_moderation: bool = sqlx::query_scalar(
+        "SELECT EXISTS( \
+           SELECT 1 FROM information_schema.columns \
+           WHERE table_schema = 'forum' AND table_name = 'dm_conversations' \
+             AND column_name = 'account_low_id' \
+         )",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or(false);
+    if !has_dm_moderation {
+        sqlx::raw_sql(include_str!("../../../../migrations/0021_dm_moderation.sql"))
+            .execute(pool)
+            .await
+            .expect("migration 0021 failed");
+    }
+
+    let has_governance_schema: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM information_schema.schemata WHERE schema_name = 'governance')",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or(false);
+    if !has_governance_schema {
+        sqlx::raw_sql(include_str!("../../../../migrations/0022_governance.sql"))
+            .execute(pool)
+            .await
+            .expect("migration 0022 failed");
+    }
+
+    let has_moderation_state: bool = sqlx::query_scalar(
+        "SELECT EXISTS( \
+           SELECT 1 FROM information_schema.columns \
+           WHERE table_schema = 'forum' AND table_name = 'flags' \
+             AND column_name = 'resolution_note' \
+         )",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or(false);
+    if !has_moderation_state {
+        sqlx::raw_sql(include_str!("../../../../migrations/0025_moderation_state.sql"))
+            .execute(pool)
+            .await
+            .expect("migration 0025 failed");
+    }
+
+    let has_open_flag_index: bool = sqlx::query_scalar(
+        "SELECT EXISTS( \
+           SELECT 1 FROM pg_indexes \
+           WHERE schemaname = 'forum' AND tablename = 'flags' \
+             AND indexname = 'flags_one_open_report_per_reporter' \
+         )",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or(false);
+    if !has_open_flag_index {
+        sqlx::raw_sql(include_str!("../../../../migrations/0026_forum_flag_attempts.sql"))
+            .execute(pool)
+            .await
+            .expect("migration 0026 failed");
     }
 
     // Clean test data from previous runs (always run, even if migrations were skipped).

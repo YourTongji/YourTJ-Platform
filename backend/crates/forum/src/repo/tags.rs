@@ -38,7 +38,7 @@ pub async fn find_tag_by_slug(pool: &PgPool, slug: &str) -> AppResult<Option<Tag
 
 /// Create a new tag.
 pub async fn create_tag(
-    pool: &PgPool,
+    executor: impl sqlx::PgExecutor<'_>,
     slug: &str,
     name: &str,
     description: Option<&str>,
@@ -50,14 +50,14 @@ pub async fn create_tag(
     .bind(slug)
     .bind(name)
     .bind(description)
-    .fetch_one(pool)
+    .fetch_one(executor)
     .await?;
     Ok(row)
 }
 
 /// Update a tag.
 pub async fn update_tag(
-    pool: &PgPool,
+    executor: impl sqlx::PgExecutor<'_>,
     id: i64,
     slug: Option<&str>,
     name: Option<&str>,
@@ -75,14 +75,14 @@ pub async fn update_tag(
     .bind(name)
     .bind(description.flatten())
     .bind(id)
-    .fetch_one(pool)
+    .fetch_one(executor)
     .await?;
     Ok(row)
 }
 
 /// Delete a tag.
-pub async fn delete_tag(pool: &PgPool, id: i64) -> AppResult<()> {
-    sqlx::query("DELETE FROM forum.tags WHERE id = $1").bind(id).execute(pool).await?;
+pub async fn delete_tag(executor: impl sqlx::PgExecutor<'_>, id: i64) -> AppResult<()> {
+    sqlx::query("DELETE FROM forum.tags WHERE id = $1").bind(id).execute(executor).await?;
     Ok(())
 }
 

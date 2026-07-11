@@ -13,7 +13,7 @@ pub enum ReviewsError {
     #[error("you can only edit your own review")]
     NotOwnReview,
 
-    #[error("you have already reported this review")]
+    #[error("you already have an open report for this review")]
     AlreadyReported,
 
     #[error("rating must be between 0 and 5")]

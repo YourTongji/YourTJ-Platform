@@ -6,7 +6,7 @@ use sqlx::PgPool;
 
 /// Insert a mod action row. Must be called within the same transaction as the operation.
 pub async fn insert_mod_action(
-    pool: &PgPool,
+    executor: impl sqlx::PgExecutor<'_>,
     actor_id: i64,
     action: &str,
     target_type: &str,
@@ -24,7 +24,7 @@ pub async fn insert_mod_action(
     .bind(target_id)
     .bind(reason)
     .bind(metadata)
-    .execute(pool)
+    .execute(executor)
     .await?;
     Ok(())
 }

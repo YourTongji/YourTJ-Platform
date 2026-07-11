@@ -5,7 +5,7 @@
 //! awards are driven by forum actions.
 
 use axum::extract::{Path, State};
-use axum::http::HeaderMap;
+use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -34,6 +34,7 @@ pub struct CreateBadgeInput {
     pub icon_url: Option<String>,
     #[serde(default)]
     pub mint_amount: i64,
+    pub reason: String,
 }
 
 /// Input for featuring a thread.
@@ -41,6 +42,15 @@ pub struct CreateBadgeInput {
 #[serde(rename_all = "camelCase")]
 pub struct FeatureThreadInput {
     pub featured: bool,
+    pub reason: String,
+}
+
+fn validate_reason(reason: &str) -> AppResult<&str> {
+    let reason = reason.trim();
+    if !(3..=500).contains(&reason.chars().count()) {
+        return Err(AppError::BadRequest("reason must be 3–500 characters".into()));
+    }
+    Ok(reason)
 }
 
 // ---------------------------------------------------------------------------
@@ -60,7 +70,8 @@ pub async fn list_badges(
     )
     .await
     .map_err(|_| AppError::Unauthorized)?;
-    auth.require_mod().map_err(|_| AppError::Forbidden)?;
+    auth.require_capability(shared::auth::Capability::ManageCommunity)
+        .map_err(|_| AppError::Forbidden)?;
 
     #[derive(sqlx::FromRow)]
     struct BadgeRow {
@@ -101,7 +112,7 @@ pub async fn create_badge(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(body): Json<CreateBadgeInput>,
-) -> AppResult<Json<BadgeDto>> {
+) -> AppResult<(StatusCode, Json<BadgeDto>)> {
     let auth = identity::auth_middleware::authenticate(
         &headers,
         &state.db,
@@ -110,14 +121,20 @@ pub async fn create_badge(
     )
     .await
     .map_err(|_| AppError::Unauthorized)?;
-    auth.require_mod().map_err(|_| AppError::Forbidden)?;
+    auth.require_capability(shared::auth::Capability::ManageCommunity)
+        .map_err(|_| AppError::Forbidden)?;
 
-    // Validate slug format.
-    if body.slug.is_empty() {
-        return Err(AppError::BadRequest("slug is required".into()));
+    let slug = body.slug.trim();
+    let name = body.name.trim();
+    let reason = validate_reason(&body.reason)?;
+    if slug.is_empty() || slug.chars().count() > 64 {
+        return Err(AppError::BadRequest("slug must be 1–64 characters".into()));
     }
-    if body.name.is_empty() {
-        return Err(AppError::BadRequest("name is required".into()));
+    if name.is_empty() || name.chars().count() > 100 {
+        return Err(AppError::BadRequest("name must be 1–100 characters".into()));
+    }
+    if !(0..=100_000).contains(&body.mint_amount) {
+        return Err(AppError::BadRequest("mintAmount must be between 0 and 100000".into()));
     }
 
     #[derive(sqlx::FromRow)]
@@ -131,36 +148,51 @@ pub async fn create_badge(
         created_at: chrono::DateTime<chrono::Utc>,
     }
 
+    let mut tx = state.db.begin().await?;
     let row: BadgeRow = sqlx::query_as(
         "INSERT INTO platform.badges (slug, name, description, icon_url, mint_amount) \
          VALUES ($1, $2, $3, $4, $5) \
          RETURNING id, slug, name, description, icon_url, mint_amount, created_at",
     )
-    .bind(&body.slug)
-    .bind(&body.name)
+    .bind(slug)
+    .bind(name)
     .bind(&body.description)
     .bind(&body.icon_url)
     .bind(body.mint_amount)
-    .fetch_one(&state.db)
+    .fetch_one(&mut *tx)
     .await
     .map_err(|e| {
         if let sqlx::Error::Database(ref db_err) = e {
             if db_err.constraint() == Some("badges_slug_key") {
-                return AppError::Conflict(format!("badge slug '{}' already exists", body.slug));
+                return AppError::Conflict(format!("badge slug '{slug}' already exists"));
             }
         }
         AppError::from(e)
     })?;
 
-    Ok(Json(BadgeDto {
-        id: row.id.to_string(),
-        slug: row.slug,
-        name: row.name,
-        description: row.description,
-        icon_url: row.icon_url,
-        mint_amount: row.mint_amount,
-        created_at: row.created_at.timestamp(),
-    }))
+    governance::record_account_event_tx(
+        &mut tx,
+        governance::AccountActor { account_id: auth.id, role: &auth.role },
+        "platform.badge.created",
+        "badge",
+        &row.id.to_string(),
+        reason,
+        None,
+    )
+    .await?;
+    tx.commit().await?;
+    Ok((
+        StatusCode::CREATED,
+        Json(BadgeDto {
+            id: row.id.to_string(),
+            slug: row.slug,
+            name: row.name,
+            description: row.description,
+            icon_url: row.icon_url,
+            mint_amount: row.mint_amount,
+            created_at: row.created_at.timestamp(),
+        }),
+    ))
 }
 
 /// POST /api/v2/admin/forum/threads/{id}/feature — feature/unfeature a thread
@@ -181,12 +213,19 @@ pub async fn feature_thread(
     )
     .await
     .map_err(|_| AppError::Unauthorized)?;
-    auth.require_mod().map_err(|_| AppError::Forbidden)?;
+    auth.require_capability(shared::auth::Capability::ManageCommunity)
+        .map_err(|_| AppError::Forbidden)?;
 
     let id: i64 = id_str.parse().map_err(|_| AppError::NotFound)?;
-
-    // Fetch thread to verify existence and get author.
-    let thread = crate::repo::find_thread(&state.db, id).await?.ok_or(AppError::NotFound)?;
+    let reason = validate_reason(&body.reason)?;
+    let mut tx = state.db.begin().await?;
+    let thread: (i64, i64) =
+        sqlx::query_as("SELECT author_id, board_id FROM forum.threads WHERE id = $1 FOR UPDATE")
+            .bind(id)
+            .fetch_optional(&mut *tx)
+            .await?
+            .ok_or(AppError::NotFound)?;
+    super::require_lower_author_role(&mut tx, &auth, Some(thread.0)).await?;
 
     if body.featured {
         // Set featured_at timestamp on the thread.
@@ -194,42 +233,47 @@ pub async fn feature_thread(
             "UPDATE forum.threads SET featured_at = now() WHERE id = $1 AND featured_at IS NULL",
         )
         .bind(id)
-        .execute(&state.db)
+        .execute(&mut *tx)
         .await?;
-
-        // Log mod action.
-        crate::repo::insert_mod_action(&state.db, auth.id, "feature", "thread", id, None, None)
-            .await?;
-
-        // Award quality-author badge (fire-and-forget).
-        let pool = state.db.clone();
-        let author_id = thread.author_id;
-        let awarded_by = auth.id;
-        tokio::spawn(async move {
-            match crate::badges::award_quality_author_badge(&pool, author_id, awarded_by).await {
-                Ok(newly_awarded) => {
-                    if newly_awarded {
-                        tracing::info!(author_id, "quality-author badge awarded");
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!(error = %e, author_id, "failed to award quality-author badge");
-                }
-            }
-        });
     } else {
         // Unfeature: clear featured_at.
         sqlx::query("UPDATE forum.threads SET featured_at = NULL WHERE id = $1")
             .bind(id)
-            .execute(&state.db)
-            .await?;
-
-        crate::repo::insert_mod_action(&state.db, auth.id, "unfeature", "thread", id, None, None)
+            .execute(&mut *tx)
             .await?;
     }
 
-    // Bump cache.
-    shared::cache::bump_version_silent(state.redis.as_ref(), "board", &id.to_string()).await;
+    let action = if body.featured { "feature" } else { "unfeature" };
+    crate::repo::insert_mod_action(&mut *tx, auth.id, action, "thread", id, Some(reason), None)
+        .await?;
+    governance::record_account_event_tx(
+        &mut tx,
+        governance::AccountActor { account_id: auth.id, role: &auth.role },
+        &format!("forum.thread.{action}"),
+        "thread",
+        &id.to_string(),
+        reason,
+        None,
+    )
+    .await?;
+    tx.commit().await?;
+
+    if body.featured {
+        let pool = state.db.clone();
+        let author_id = thread.0;
+        let awarded_by = auth.id;
+        tokio::spawn(async move {
+            match crate::badges::award_quality_author_badge(&pool, author_id, awarded_by).await {
+                Ok(true) => tracing::info!(author_id, "quality-author badge awarded"),
+                Ok(false) => {}
+                Err(error) => {
+                    tracing::warn!(?error, author_id, "failed to award quality-author badge");
+                }
+            }
+        });
+    }
+
+    crate::cache::invalidate_thread_surfaces(state.redis.as_ref(), id, thread.1).await;
 
     Ok(Json(json!({"ok": true})))
 }

@@ -1,0 +1,555 @@
+//! Staff account directory, invitation, session, and sanction workflows.
+
+use axum::extract::{Path, Query, State};
+use axum::http::{HeaderMap, StatusCode};
+use axum::Json;
+use chrono::{DateTime, Utc};
+use governance::AccountActor;
+use serde::Deserialize;
+use shared::auth::Capability;
+use shared::{AppError, AppResult, AppState, AuthAccount, Page};
+
+use crate::dto::{
+    AdminReasonInput, AdminUserDto, AdminUserInviteInput, AdminUserRoleInput, SanctionDto,
+    SanctionInput, UnsanctionInput,
+};
+use crate::repo;
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdminUsersQuery {
+    q: Option<String>,
+    role: Option<String>,
+    status: Option<String>,
+    cursor: Option<String>,
+    limit: Option<i64>,
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct SanctionRow {
+    id: i64,
+    account_id: i64,
+    kind: String,
+    reason: String,
+    issued_by: Option<i64>,
+    starts_at: DateTime<Utc>,
+    ends_at: Option<DateTime<Utc>>,
+    revoked_at: Option<DateTime<Utc>>,
+    created_at: DateTime<Utc>,
+}
+
+fn admin_user_dto(row: repo::AdminUserRow) -> AdminUserDto {
+    AdminUserDto {
+        id: row.id.to_string(),
+        handle: row.handle,
+        avatar_url: row.avatar_url,
+        role: row.role,
+        status: row.status,
+        trust_level: row.trust_level,
+        last_active_at: row.last_active_at.map(|timestamp| timestamp.timestamp()),
+        created_at: row.created_at.timestamp(),
+    }
+}
+
+async fn authenticate(headers: &HeaderMap, state: &AppState) -> AppResult<AuthAccount> {
+    crate::auth_middleware::authenticate(
+        headers,
+        &state.db,
+        &state.jwt_secret,
+        state.redis.as_ref(),
+    )
+    .await
+    .map_err(|_| AppError::Unauthorized)
+}
+
+fn parse_id(value: &str, field: &str) -> AppResult<i64> {
+    value.parse().map_err(|_| AppError::BadRequest(format!("invalid {field}")))
+}
+
+fn validate_reason(reason: &str) -> AppResult<&str> {
+    let reason = reason.trim();
+    if !(3..=500).contains(&reason.chars().count()) {
+        return Err(AppError::BadRequest("reason must be 3–500 characters".into()));
+    }
+    Ok(reason)
+}
+
+fn validate_directory_filter(value: Option<&str>, allowed: &[&str], name: &str) -> AppResult<()> {
+    if value.is_some_and(|value| !allowed.contains(&value)) {
+        return Err(AppError::BadRequest(format!("invalid {name}")));
+    }
+    Ok(())
+}
+
+fn role_rank(role: &str) -> i8 {
+    match role {
+        "admin" => 2,
+        "mod" => 1,
+        _ => 0,
+    }
+}
+
+fn require_lower_role(actor: &AuthAccount, target_id: i64, target_role: &str) -> AppResult<()> {
+    if actor.id == target_id || role_rank(&actor.role) <= role_rank(target_role) {
+        return Err(AppError::Forbidden);
+    }
+    Ok(())
+}
+
+fn sanction_end(timestamp: Option<i64>) -> AppResult<Option<DateTime<Utc>>> {
+    timestamp
+        .map(|timestamp| {
+            DateTime::from_timestamp(timestamp, 0)
+                .filter(|ends_at| *ends_at > Utc::now())
+                .ok_or_else(|| AppError::BadRequest("endsAt must be a future timestamp".into()))
+        })
+        .transpose()
+}
+
+async fn invalidate_sanction_cache(state: &AppState, account_id: i64) {
+    let Some(redis) = &state.redis else {
+        return;
+    };
+    let Ok(mut connection) = redis.get().await else {
+        return;
+    };
+    let silence_key = format!("identity:silence:{account_id}");
+    let suspend_key = format!("identity:suspend:{account_id}");
+    let result: redis::RedisResult<()> =
+        redis::cmd("DEL").arg(silence_key).arg(suspend_key).query_async(&mut connection).await;
+    if let Err(error) = result {
+        tracing::warn!(?error, account_id, "failed to invalidate sanction cache");
+    }
+}
+
+/// GET /api/v2/admin/users — privacy-safe user search for staff.
+pub async fn list_users(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<AdminUsersQuery>,
+) -> AppResult<Json<Page<AdminUserDto>>> {
+    let auth = authenticate(&headers, &state).await?;
+    auth.require_capability(Capability::SearchUsers).map_err(|_| AppError::Forbidden)?;
+    validate_directory_filter(query.role.as_deref(), &["user", "mod", "admin"], "role")?;
+    validate_directory_filter(
+        query.status.as_deref(),
+        &["active", "suspended", "deleted"],
+        "status",
+    )?;
+    let cursor = query.cursor.as_deref().map(|cursor| parse_id(cursor, "cursor")).transpose()?;
+    let limit = query.limit.unwrap_or(30).clamp(1, 100);
+    let query_text = query.q.as_deref().map(str::trim).filter(|query| !query.is_empty());
+    if query_text.is_some_and(|query| query.chars().count() > 100) {
+        return Err(AppError::BadRequest("q must be at most 100 characters".into()));
+    }
+    let rows = repo::list_admin_users(
+        &state.db,
+        cursor,
+        limit,
+        query_text,
+        query.role.as_deref(),
+        query.status.as_deref(),
+    )
+    .await?;
+    let has_more = rows.len() > limit as usize;
+    let visible_rows = if has_more { &rows[..limit as usize] } else { &rows };
+    let next_cursor = has_more.then(|| visible_rows.last().map(|row| row.id.to_string())).flatten();
+    let items = visible_rows.iter().map(|row| admin_user_dto(row.to_owned())).collect();
+    Ok(Json(Page::new(items, next_cursor)))
+}
+
+/// POST /api/v2/admin/users — provision an unverified campus invitation.
+pub async fn invite_user(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<AdminUserInviteInput>,
+) -> AppResult<(StatusCode, Json<AdminUserDto>)> {
+    let auth = authenticate(&headers, &state).await?;
+    auth.require_capability(Capability::InviteUsers).map_err(|_| AppError::Forbidden)?;
+    let reason = validate_reason(&body.reason)?;
+    let email = body.email.trim().to_lowercase();
+    if !email.ends_with("@tongji.edu.cn") {
+        return Err(crate::error::IdentityError::InvalidEmailDomain.into());
+    }
+    let handle = body.handle.trim().to_lowercase();
+    super::validate_handle(&handle)?;
+    if repo::find_account_by_email(&state.db, state.email_encryption.as_ref(), &email)
+        .await?
+        .is_some()
+    {
+        return Err(crate::error::IdentityError::EmailAlreadyUsed.into());
+    }
+    let handle_exists: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM identity.accounts WHERE handle = $1)")
+            .bind(&handle)
+            .fetch_one(&state.db)
+            .await?;
+    if handle_exists {
+        return Err(crate::error::IdentityError::HandleTaken.into());
+    }
+
+    let mut tx = state.db.begin().await?;
+    let account = repo::insert_invited_account(
+        &mut tx,
+        state.email_encryption.as_ref(),
+        &email,
+        &handle,
+        "user",
+        auth.id,
+    )
+    .await?;
+    let metadata = serde_json::json!({ "role": "user" });
+    governance::record_account_event_tx(
+        &mut tx,
+        AccountActor { account_id: auth.id, role: &auth.role },
+        "identity.user.invited",
+        "account",
+        &account.id.to_string(),
+        reason,
+        Some(&metadata),
+    )
+    .await?;
+    tx.commit().await?;
+
+    shared::email::send_email(
+        &state.config,
+        &email,
+        "YourTJ 社区邀请",
+        "管理员已为您预留 YourTJ 账号。请使用校园邮箱验证码完成所有权验证和首次登录。",
+    )
+    .await;
+    let row = repo::find_admin_user(&state.db, account.id).await?.ok_or(AppError::NotFound)?;
+    Ok((StatusCode::CREATED, Json(admin_user_dto(row))))
+}
+
+/// PATCH /api/v2/admin/users/{id}/role — change role with hierarchy protection.
+pub async fn change_role(
+    State(state): State<AppState>,
+    Path(account_id): Path<String>,
+    headers: HeaderMap,
+    Json(body): Json<AdminUserRoleInput>,
+) -> AppResult<Json<AdminUserDto>> {
+    let auth = authenticate(&headers, &state).await?;
+    auth.require_capability(Capability::ChangeRoles).map_err(|_| AppError::Forbidden)?;
+    let reason = validate_reason(&body.reason)?;
+    if !matches!(body.role.as_str(), "user" | "mod") {
+        return Err(AppError::BadRequest(
+            "role changes support only user/mod; administrator provisioning is out of band".into(),
+        ));
+    }
+    let account_id = parse_id(&account_id, "account id")?;
+    let mut tx = state.db.begin().await?;
+    let old_role: String =
+        sqlx::query_scalar("SELECT role::text FROM identity.accounts WHERE id = $1 FOR UPDATE")
+            .bind(account_id)
+            .fetch_optional(&mut *tx)
+            .await?
+            .ok_or(AppError::NotFound)?;
+    require_lower_role(&auth, account_id, &old_role)?;
+    if old_role == body.role {
+        return Err(AppError::Conflict("account already has that role".into()));
+    }
+    sqlx::query(
+        "UPDATE identity.accounts SET role = $1::identity.account_role, updated_at = now() \
+         WHERE id = $2",
+    )
+    .bind(&body.role)
+    .bind(account_id)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "UPDATE identity.sessions SET revoked_at = now() \
+         WHERE account_id = $1 AND revoked_at IS NULL",
+    )
+    .bind(account_id)
+    .execute(&mut *tx)
+    .await?;
+    let metadata = serde_json::json!({ "oldRole": old_role, "newRole": body.role });
+    governance::record_account_event_tx(
+        &mut tx,
+        AccountActor { account_id: auth.id, role: &auth.role },
+        "identity.user.role_changed",
+        "account",
+        &account_id.to_string(),
+        reason,
+        Some(&metadata),
+    )
+    .await?;
+    tx.commit().await?;
+    let updated = repo::find_admin_user(&state.db, account_id).await?.ok_or(AppError::NotFound)?;
+    Ok(Json(admin_user_dto(updated)))
+}
+
+/// POST /api/v2/admin/users/{id}/sessions/revoke — force sign-out on every device.
+pub async fn revoke_sessions(
+    State(state): State<AppState>,
+    Path(account_id): Path<String>,
+    headers: HeaderMap,
+    Json(body): Json<AdminReasonInput>,
+) -> AppResult<StatusCode> {
+    let auth = authenticate(&headers, &state).await?;
+    auth.require_capability(Capability::SuspendUsers).map_err(|_| AppError::Forbidden)?;
+    let reason = validate_reason(&body.reason)?;
+    let account_id = parse_id(&account_id, "account id")?;
+    let mut tx = state.db.begin().await?;
+    let target_role: String =
+        sqlx::query_scalar("SELECT role::text FROM identity.accounts WHERE id = $1 FOR UPDATE")
+            .bind(account_id)
+            .fetch_optional(&mut *tx)
+            .await?
+            .ok_or(AppError::NotFound)?;
+    require_lower_role(&auth, account_id, &target_role)?;
+    let revoked = sqlx::query(
+        "UPDATE identity.sessions SET revoked_at = now() \
+         WHERE account_id = $1 AND revoked_at IS NULL",
+    )
+    .bind(account_id)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+    let metadata = serde_json::json!({ "revokedSessionCount": revoked });
+    governance::record_account_event_tx(
+        &mut tx,
+        AccountActor { account_id: auth.id, role: &auth.role },
+        "identity.user.sessions_revoked",
+        "account",
+        &account_id.to_string(),
+        reason,
+        Some(&metadata),
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn create_sanction(
+    state: &AppState,
+    auth: &AuthAccount,
+    account_id: i64,
+    kind: &str,
+    body: SanctionInput,
+) -> AppResult<()> {
+    let capability =
+        if kind == "suspend" { Capability::SuspendUsers } else { Capability::SilenceUsers };
+    auth.require_capability(capability).map_err(|_| AppError::Forbidden)?;
+    let reason = validate_reason(&body.reason)?;
+    let ends_at = sanction_end(body.ends_at)?;
+    if kind == "silence" && auth.role == "mod" {
+        let maximum_end = Utc::now() + chrono::Duration::days(30);
+        if !matches!(ends_at.as_ref(), Some(ends_at) if *ends_at <= maximum_end) {
+            return Err(AppError::BadRequest(
+                "moderator silence requires a future endsAt no more than 30 days away".into(),
+            ));
+        }
+    }
+    let mut tx = state.db.begin().await?;
+    let target_role: String =
+        sqlx::query_scalar("SELECT role::text FROM identity.accounts WHERE id = $1 FOR UPDATE")
+            .bind(account_id)
+            .fetch_optional(&mut *tx)
+            .await?
+            .ok_or(AppError::NotFound)?;
+    require_lower_role(auth, account_id, &target_role)?;
+    let already_active: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM identity.sanctions \
+         WHERE account_id = $1 AND kind = $2 AND revoked_at IS NULL \
+           AND (ends_at IS NULL OR ends_at > now()))",
+    )
+    .bind(account_id)
+    .bind(kind)
+    .fetch_one(&mut *tx)
+    .await?;
+    if already_active {
+        return Err(AppError::Conflict(format!("account already has an active {kind}")));
+    }
+    let sanction_id: i64 = sqlx::query_scalar(
+        "INSERT INTO identity.sanctions (account_id, kind, reason, issued_by, ends_at) \
+         VALUES ($1, $2, $3, $4, $5) RETURNING id",
+    )
+    .bind(account_id)
+    .bind(kind)
+    .bind(reason)
+    .bind(auth.id)
+    .bind(ends_at)
+    .fetch_one(&mut *tx)
+    .await?;
+    if kind == "suspend" {
+        sqlx::query(
+            "UPDATE identity.sessions SET revoked_at = now() \
+             WHERE account_id = $1 AND revoked_at IS NULL",
+        )
+        .bind(account_id)
+        .execute(&mut *tx)
+        .await?;
+    }
+    let metadata = serde_json::json!({
+        "kind": kind,
+        "endsAt": ends_at.map(|timestamp| timestamp.timestamp()),
+    });
+    governance::record_account_event_tx(
+        &mut tx,
+        AccountActor { account_id: auth.id, role: &auth.role },
+        "identity.user.sanctioned",
+        "sanction",
+        &sanction_id.to_string(),
+        reason,
+        Some(&metadata),
+    )
+    .await?;
+    tx.commit().await?;
+    invalidate_sanction_cache(state, account_id).await;
+    Ok(())
+}
+
+/// POST /api/v2/admin/users/{id}/silence — prevent community writes.
+pub async fn silence_user(
+    State(state): State<AppState>,
+    Path(account_id): Path<String>,
+    headers: HeaderMap,
+    Json(body): Json<SanctionInput>,
+) -> AppResult<StatusCode> {
+    let auth = authenticate(&headers, &state).await?;
+    let account_id = parse_id(&account_id, "account id")?;
+    create_sanction(&state, &auth, account_id, "silence", body).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// POST /api/v2/admin/users/{id}/suspend — prevent authentication and revoke sessions.
+pub async fn suspend_user(
+    State(state): State<AppState>,
+    Path(account_id): Path<String>,
+    headers: HeaderMap,
+    Json(body): Json<SanctionInput>,
+) -> AppResult<StatusCode> {
+    let auth = authenticate(&headers, &state).await?;
+    let account_id = parse_id(&account_id, "account id")?;
+    create_sanction(&state, &auth, account_id, "suspend", body).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// POST /api/v2/admin/users/{id}/unsanction — revoke a sanction without erasing history.
+pub async fn unsanction_user(
+    State(state): State<AppState>,
+    Path(account_id): Path<String>,
+    headers: HeaderMap,
+    Json(body): Json<UnsanctionInput>,
+) -> AppResult<StatusCode> {
+    let auth = authenticate(&headers, &state).await?;
+    let account_id = parse_id(&account_id, "account id")?;
+    let sanction_id = parse_id(&body.sanction_id, "sanctionId")?;
+    let reason = validate_reason(&body.reason)?;
+    let mut tx = state.db.begin().await?;
+    let sanction: Option<(String, String, String)> = sqlx::query_as(
+        "SELECT sanctions.kind, sanctions.reason, accounts.role::text \
+         FROM identity.sanctions sanctions \
+         JOIN identity.accounts accounts ON accounts.id = sanctions.account_id \
+         WHERE sanctions.id = $1 AND sanctions.account_id = $2 \
+           AND sanctions.revoked_at IS NULL FOR UPDATE",
+    )
+    .bind(sanction_id)
+    .bind(account_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let (kind, original_reason, target_role) = sanction.ok_or(AppError::NotFound)?;
+    let capability =
+        if kind == "suspend" { Capability::SuspendUsers } else { Capability::SilenceUsers };
+    auth.require_capability(capability).map_err(|_| AppError::Forbidden)?;
+    require_lower_role(&auth, account_id, &target_role)?;
+    sqlx::query("UPDATE identity.sanctions SET revoked_at = now(), revoked_by = $1 WHERE id = $2")
+        .bind(auth.id)
+        .bind(sanction_id)
+        .execute(&mut *tx)
+        .await?;
+    let metadata = serde_json::json!({ "kind": kind, "originalReason": original_reason });
+    governance::record_account_event_tx(
+        &mut tx,
+        AccountActor { account_id: auth.id, role: &auth.role },
+        "identity.user.sanction_revoked",
+        "sanction",
+        &sanction_id.to_string(),
+        reason,
+        Some(&metadata),
+    )
+    .await?;
+    tx.commit().await?;
+    invalidate_sanction_cache(&state, account_id).await;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// GET /api/v2/admin/users/{id}/sanctions — return sanction history for a user.
+pub async fn list_user_sanctions(
+    State(state): State<AppState>,
+    Path(account_id): Path<String>,
+    headers: HeaderMap,
+) -> AppResult<Json<Vec<SanctionDto>>> {
+    let auth = authenticate(&headers, &state).await?;
+    auth.require_capability(Capability::SearchUsers).map_err(|_| AppError::Forbidden)?;
+    let account_id = parse_id(&account_id, "account id")?;
+    let account_exists: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM identity.accounts WHERE id = $1)")
+            .bind(account_id)
+            .fetch_one(&state.db)
+            .await?;
+    if !account_exists {
+        return Err(AppError::NotFound);
+    }
+    let rows: Vec<SanctionRow> = sqlx::query_as(
+        "SELECT id, account_id, kind, reason, issued_by, starts_at, ends_at, revoked_at, created_at \
+         FROM identity.sanctions WHERE account_id = $1 ORDER BY id DESC",
+    )
+    .bind(account_id)
+    .fetch_all(&state.db)
+    .await?;
+    let items = rows
+        .into_iter()
+        .map(|row| SanctionDto {
+            id: row.id.to_string(),
+            account_id: row.account_id.to_string(),
+            kind: row.kind,
+            reason: row.reason,
+            issued_by: row.issued_by.map(|id| id.to_string()),
+            starts_at: row.starts_at.timestamp(),
+            ends_at: row.ends_at.map(|timestamp| timestamp.timestamp()),
+            revoked_at: row.revoked_at.map(|timestamp| timestamp.timestamp()),
+            created_at: row.created_at.timestamp(),
+        })
+        .collect();
+    Ok(Json(items))
+}
+
+#[cfg(test)]
+mod tests {
+    use shared::AuthAccount;
+
+    use super::{require_lower_role, role_rank, validate_reason};
+
+    #[test]
+    fn role_hierarchy_orders_user_mod_admin() {
+        assert!(role_rank("user") < role_rank("mod"));
+        assert!(role_rank("mod") < role_rank("admin"));
+    }
+
+    #[test]
+    fn moderator_can_act_only_on_lower_role() {
+        let moderator = AuthAccount { id: 10, role: "mod".into(), status: "active".into() };
+        assert!(require_lower_role(&moderator, 11, "user").is_ok());
+        assert!(require_lower_role(&moderator, 12, "mod").is_err());
+        assert!(require_lower_role(&moderator, 13, "admin").is_err());
+    }
+
+    #[test]
+    fn staff_cannot_act_on_themselves() {
+        let administrator = AuthAccount { id: 10, role: "admin".into(), status: "active".into() };
+        assert!(require_lower_role(&administrator, 10, "user").is_err());
+    }
+
+    #[test]
+    fn staff_reason_is_trimmed_and_bounded() {
+        assert_eq!(
+            validate_reason("  policy violation  ").expect("valid reason"),
+            "policy violation"
+        );
+        assert!(validate_reason("no").is_err());
+        assert!(validate_reason(&"x".repeat(501)).is_err());
+    }
+}

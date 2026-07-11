@@ -116,11 +116,8 @@ pub struct CommentInput {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VoteInput {
-    pub value: String, // "up" or "down"
-    /// Optional per the API contract (which only requires `value`). When
-    /// omitted the handler infers whether the id is a thread or a comment.
-    #[serde(default)]
-    pub post_type: Option<String>, // "thread" or "comment"
+    pub value: String,     // "up" or "down"
+    pub post_type: String, // "thread" or "comment"
 }
 
 /// Tag DTO.
@@ -183,12 +180,7 @@ pub struct BookmarkDto {
 pub struct FlagInput {
     pub reason: String,
     pub note: Option<String>,
-    #[serde(default = "default_flag_post_type")]
     pub post_type: String,
-}
-
-fn default_flag_post_type() -> String {
-    "thread".into()
 }
 
 /// PUT /api/v2/forum/subscriptions
@@ -343,24 +335,21 @@ pub struct PollInput {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DmConversationInput {
-    pub recipient_id: String,
-}
-
-/// Response from creating/getting a DM conversation.
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DmConversationCreatedDto {
-    pub id: String,
+    pub recipient_handle: String,
 }
 
 /// A DM conversation in the list response.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DmConversationDto {
     pub id: String,
-    pub participant_handle: String,
     pub participant_id: String,
+    pub participant_handle: String,
+    pub participant_avatar_url: Option<String>,
+    pub last_message_excerpt: Option<String>,
     pub last_message_at: i64,
+    pub unread_count: i64,
+    pub created_at: i64,
 }
 
 /// POST /api/v2/forum/dm/conversations/{id}/messages
@@ -378,6 +367,96 @@ pub struct DmMessageDto {
     pub conversation_id: String,
     pub sender_id: String,
     pub sender_handle: String,
+    pub body: String,
+    pub created_at: i64,
+}
+
+/// POST /api/v2/forum/dm/conversations/{id}/read
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DmReadInput {
+    pub last_read_message_id: Option<String>,
+}
+
+/// POST /api/v2/forum/dm/messages/{id}/report
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DmMessageReportInput {
+    pub reason: String,
+    pub note: Option<String>,
+}
+
+/// POST /api/v2/admin/forum/dm/reports/{id}/resolve
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DmReportResolveInput {
+    pub action: String,
+    pub note: Option<String>,
+}
+
+/// A reported DM message exposed only through the scoped moderation queue.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DmMessageReportDto {
+    pub id: String,
+    pub message_id: String,
+    pub conversation_id: String,
+    pub reporter_id: String,
+    pub reporter_handle: String,
+    pub sender_id: String,
+    pub sender_handle: String,
+    pub message_excerpt: String,
+    pub reason: String,
+    pub note: Option<String>,
+    pub status: String,
+    pub handled_by: Option<String>,
+    pub handled_at: Option<i64>,
+    pub created_at: i64,
+}
+
+/// GET /api/v2/users/{handle} — public community profile.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserProfileDto {
+    pub id: String,
+    pub handle: String,
+    pub avatar_url: Option<String>,
+    pub role: String,
+    pub trust_level: i16,
+    pub badges: Vec<UserBadgeDto>,
+    pub thread_count: i32,
+    pub comment_count: i32,
+    pub votes_received: i32,
+    pub created_at: i64,
+}
+
+/// A badge displayed on a public community profile.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserBadgeDto {
+    pub slug: String,
+    pub name: String,
+}
+
+/// GET /api/v2/users/{handle}/threads item.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserThreadDto {
+    pub id: String,
+    pub title: String,
+    pub board_slug: String,
+    pub reply_count: i32,
+    pub vote_count: i32,
+    pub created_at: i64,
+}
+
+/// GET /api/v2/users/{handle}/comments item.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserCommentDto {
+    pub id: String,
+    pub thread_id: String,
+    pub thread_title: String,
     pub body: String,
     pub created_at: i64,
 }

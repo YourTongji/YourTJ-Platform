@@ -73,6 +73,7 @@ pub struct AccountDto {
     pub handle: String,
     pub avatar_url: Option<String>,
     pub role: String,
+    pub capabilities: Vec<String>,
     pub trust_level: i16,
     pub created_at: i64,
 }
@@ -124,47 +125,71 @@ pub struct WalletDto {
     pub balance: i64,
 }
 
-/// GET /api/v2/users/{handle} — public user profile.
+/// A privacy-safe account record for the staff user directory.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct UserProfileDto {
+pub struct AdminUserDto {
+    pub id: String,
     pub handle: String,
     pub avatar_url: Option<String>,
+    pub role: String,
+    pub status: String,
     pub trust_level: i16,
-    pub badges: Vec<UserBadgeDto>,
-    pub thread_count: i32,
-    pub comment_count: i32,
-    pub votes_received: i32,
+    pub last_active_at: Option<i64>,
     pub created_at: i64,
 }
 
-/// A single badge entry inside a user profile.
-#[derive(Debug, Serialize)]
+/// POST /admin/users provisions an unverified campus-email invitation.
+#[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct UserBadgeDto {
-    pub slug: String,
-    pub name: String,
+pub struct AdminUserInviteInput {
+    pub email: String,
+    pub handle: String,
+    pub reason: String,
 }
 
-/// GET /api/v2/users/{handle}/threads — public user activity.
+/// PATCH /admin/users/{id}/role changes a persisted platform role.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdminUserRoleInput {
+    pub role: String,
+    pub reason: String,
+}
+
+/// A mandatory human-readable justification for a privileged action.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdminReasonInput {
+    pub reason: String,
+}
+
+/// A reversible user sanction returned to staff.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct UserThreadDto {
+pub struct SanctionDto {
     pub id: String,
-    pub title: String,
-    pub board_slug: String,
-    pub reply_count: i32,
-    pub vote_count: i32,
+    pub account_id: String,
+    pub kind: String,
+    pub reason: String,
+    pub issued_by: Option<String>,
+    pub starts_at: i64,
+    pub ends_at: Option<i64>,
+    pub revoked_at: Option<i64>,
     pub created_at: i64,
 }
 
-/// GET /api/v2/users/{handle}/comments — public user activity.
-#[derive(Debug, Serialize)]
+/// POST /admin/users/{id}/{silence,suspend} creates a sanction.
+#[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct UserCommentDto {
-    pub id: String,
-    pub thread_id: String,
-    pub thread_title: String,
-    pub body_excerpt: String,
-    pub created_at: i64,
+pub struct SanctionInput {
+    pub reason: String,
+    pub ends_at: Option<i64>,
+}
+
+/// POST /admin/users/{id}/unsanction revokes one active sanction.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UnsanctionInput {
+    pub sanction_id: String,
+    pub reason: String,
 }

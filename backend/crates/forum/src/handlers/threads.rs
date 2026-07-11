@@ -1,5 +1,5 @@
 use axum::extract::{Path, Query, State};
-use axum::http::HeaderMap;
+use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
 use serde::Deserialize;
 use serde_json::json;
@@ -15,7 +15,11 @@ use crate::repo::base64_encode_i64;
 use super::{default_limit, default_sort, thread_to_detail_dto, thread_to_dto};
 
 /// Load poll data for a thread and attach it to a `ThreadDetailDto`.
-async fn attach_poll_to_detail(pool: &sqlx::PgPool, thread_id: i64, dto: &mut ThreadDetailDto) {
+pub(crate) async fn attach_poll_to_detail(
+    pool: &sqlx::PgPool,
+    thread_id: i64,
+    dto: &mut ThreadDetailDto,
+) {
     let poll_result = repo::get_poll(pool, thread_id).await;
     if let Ok(Some(poll_with_opts)) = poll_result {
         let option_dtos: Vec<PollOptionDto> = poll_with_opts
@@ -64,6 +68,54 @@ pub struct ThreadFeedQuery {
     pub limit: i64,
 }
 
+fn validate_thread_input(input: &ThreadInput) -> AppResult<()> {
+    let title_length = input.title.chars().count();
+    if input.title.trim().is_empty() || title_length > 200 {
+        return Err(AppError::BadRequest("title must be 1–200 characters".into()));
+    }
+    if input.body.as_ref().is_some_and(|body| body.chars().count() > 50_000) {
+        return Err(AppError::BadRequest("body must not exceed 50000 characters".into()));
+    }
+    if input.tags.as_ref().is_some_and(|tags| tags.len() > 3) {
+        return Err(AppError::BadRequest("tags must not contain more than 3 items".into()));
+    }
+    if let Some(tags) = input.tags.as_ref() {
+        if tags.iter().any(|tag| tag.trim().is_empty() || tag.chars().count() > 64) {
+            return Err(AppError::BadRequest("each tag must be 1–64 characters".into()));
+        }
+    }
+
+    if let Some(poll) = input.poll.as_ref() {
+        let question_length = poll.question.chars().count();
+        if poll.question.trim().is_empty() || question_length > 500 {
+            return Err(AppError::BadRequest("poll question must be 1–500 characters".into()));
+        }
+        if !(2..=20).contains(&poll.options.len()) {
+            return Err(AppError::BadRequest("poll requires 2–20 options".into()));
+        }
+        let mut normalized_options = std::collections::HashSet::new();
+        for option in &poll.options {
+            let normalized = option.trim().to_lowercase();
+            if normalized.is_empty() || option.chars().count() > 200 {
+                return Err(AppError::BadRequest("poll options must be 1–200 characters".into()));
+            }
+            if !normalized_options.insert(normalized) {
+                return Err(AppError::BadRequest("poll options must be unique".into()));
+            }
+        }
+        if let Some(closes_at) = poll.closes_at {
+            if chrono::DateTime::from_timestamp(closes_at, 0).is_none()
+                || closes_at <= chrono::Utc::now().timestamp()
+            {
+                return Err(AppError::BadRequest(
+                    "poll closesAt must be a future timestamp".into(),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // handlers
 // ---------------------------------------------------------------------------
@@ -103,7 +155,8 @@ pub async fn list_threads(
         let items: Vec<ThreadDto> = rows.iter().map(thread_to_dto).collect();
         Ok(Json(Page::new(items, next_cursor)))
     } else {
-        let cache_id = format!("{board_id}:{}:{}", q.sort, c);
+        let generation = crate::cache::board_generation(state.redis.as_ref(), board_id).await;
+        let cache_id = format!("{board_id}:v{generation}:{}:{}", q.sort, c);
         let page =
             shared::cache::cached_json(state.redis.as_ref(), "board", &cache_id, 60, async {
                 let (rows, next_cursor) = repo::list_threads(
@@ -247,10 +300,15 @@ pub async fn list_threads_feed(
         let items: Vec<ThreadDto> = rows.iter().map(thread_to_dto).collect();
         Ok(Json(Page::new(items, next_cursor)))
     } else {
-        let cache_id =
-            format!("feed:{}:{:?}:{}", q.sort, board_id, q.cursor.as_deref().unwrap_or(""));
+        let generation = crate::cache::global_feed_generation(state.redis.as_ref()).await;
+        let cache_id = format!(
+            "v{generation}:{}:{:?}:{}",
+            q.sort,
+            board_id,
+            q.cursor.as_deref().unwrap_or("")
+        );
         let page =
-            shared::cache::cached_json(state.redis.as_ref(), "board", &cache_id, 60, async {
+            shared::cache::cached_json(state.redis.as_ref(), "forum-feed", &cache_id, 60, async {
                 let (rows, next_cursor) = repo::list_threads_feed(
                     &state.db,
                     board_id,
@@ -322,7 +380,7 @@ pub async fn create_thread(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(body): Json<ThreadInput>,
-) -> AppResult<Json<ThreadDetailDto>> {
+) -> AppResult<(StatusCode, Json<ThreadDetailDto>)> {
     let auth = identity::auth_middleware::authenticate(
         &headers,
         &state.db,
@@ -331,7 +389,7 @@ pub async fn create_thread(
     )
     .await
     .map_err(|_r| AppError::Unauthorized)?;
-
+    validate_thread_input(&body)?;
     // Check that the account is not silenced
     crate::sanctions::require_can_post(state.redis.as_ref(), &state.db, auth.id).await?;
 
@@ -360,6 +418,7 @@ pub async fn create_thread(
     let watched_word_action: Option<String> = body.body.as_ref().and_then(|body_text| {
         crate::watched_words::check_watched_words(body_text).map(|(_matched, action)| action)
     });
+    let is_queued = watched_word_action.as_deref() == Some("queue");
 
     // Block action: reject before insert.
     if watched_word_action.as_deref() == Some("block") {
@@ -367,13 +426,12 @@ pub async fn create_thread(
     }
 
     let board_id: i64 = body.board_id.parse().map_err(|_| AppError::NotFound)?;
-    let row = repo::create_thread(&state.db, board_id, auth.id, &body).await?;
+    let row = repo::create_thread(&state.db, board_id, auth.id, &body, is_queued).await?;
 
     // Store thread tags (request-scope, capped at 3).
     if let Some(ref tag_slugs) = body.tags {
         if !tag_slugs.is_empty() {
-            let capped: Vec<String> = tag_slugs.iter().take(3).cloned().collect();
-            let resolved = repo::resolve_tag_slugs(&state.db, &capped).await?;
+            let resolved = repo::resolve_tag_slugs(&state.db, tag_slugs).await?;
             let tag_ids: Vec<i64> = resolved.into_iter().map(|(id, _)| id).collect();
             repo::set_thread_tags(&state.db, row.id, &tag_ids).await?;
         }
@@ -460,66 +518,24 @@ pub async fn create_thread(
         }
     }
 
-    // Look up board slug for Meilisearch.
-    let board_slug: String = sqlx::query_scalar("SELECT slug FROM forum.boards WHERE id = $1")
-        .bind(board_id)
-        .fetch_one(&state.db)
-        .await
-        .unwrap_or_default();
-
-    // Look up tag slugs for Meilisearch.
-    let tag_slugs = crate::repo::get_thread_tag_slugs(&state.db, row.id).await.unwrap_or_default();
-
-    // Sync to Meilisearch (fire-and-forget).
+    // Re-read canonical visibility and content inside the background index sync.
+    let pool = state.db.clone();
     let meili_url = state.meili_url.clone();
     let meili_key = state.meili_master_key.clone();
     let thread_id = row.id;
-    let thread_title = row.title.clone();
-    let thread_body = row.body.clone().unwrap_or_default();
-    let thread_author = row.author_handle.clone();
-    let thread_reply = row.reply_count;
-    let thread_vote = row.vote_count;
-    let thread_status = row.status.clone();
-    let thread_created = row.created_at.timestamp();
     tokio::spawn(async move {
-        crate::meili::sync_thread_to_meili(
-            &meili_url,
-            &meili_key,
-            &crate::meili::ForumThreadDoc {
-                id: thread_id.to_string(),
-                title: thread_title,
-                body_excerpt: thread_body.chars().take(2048).collect(),
-                board: board_slug,
-                tags: tag_slugs,
-                author_handle: thread_author,
-                reply_count: thread_reply,
-                vote_count: thread_vote,
-                created_at: thread_created,
-                status: thread_status,
-            },
-        )
-        .await;
+        if let Err(error) =
+            crate::meili::reconcile_thread_in_meili(&pool, &meili_url, &meili_key, thread_id).await
+        {
+            tracing::warn!(%error, thread_id, "failed to reconcile created thread in search");
+        }
     });
-
-    // Handle queue action: auto-hide the thread.
-    if watched_word_action.as_deref() == Some("queue") {
-        let _ = sqlx::query("UPDATE forum.threads SET hidden_at = now() WHERE id = $1")
-            .bind(row.id)
-            .execute(&state.db)
-            .await;
-    }
 
     // Create poll if provided.
     if let Some(ref poll_input) = body.poll {
-        if poll_input.options.len() < 2 {
-            return Err(AppError::BadRequest("poll requires at least 2 options".into()));
-        }
-        if poll_input.options.len() > 20 {
-            return Err(AppError::BadRequest("poll cannot have more than 20 options".into()));
-        }
         let closes_at = poll_input
             .closes_at
-            .map(|ts| chrono::DateTime::from_timestamp(ts, 0).unwrap_or(chrono::Utc::now()));
+            .and_then(|timestamp| chrono::DateTime::from_timestamp(timestamp, 0));
         let _poll_id = repo::create_poll(
             &state.db,
             row.id,
@@ -545,15 +561,12 @@ pub async fn create_thread(
         }
     }
 
-    // Bump board cache version.
-    shared::cache::bump_version_opt(state.redis.as_ref(), "board", &board_id.to_string())
-        .await
-        .ok();
+    crate::cache::invalidate_thread_surfaces(state.redis.as_ref(), row.id, board_id).await;
 
-    Ok(Json(dto))
+    Ok((StatusCode::CREATED, Json(dto)))
 }
 
-/// PATCH /api/v2/forum/threads/{id} — auth required (author or mod)
+/// PATCH /api/v2/forum/threads/{id} — auth required (author only)
 pub async fn update_thread(
     State(state): State<AppState>,
     Path(id_str): Path<String>,
@@ -568,6 +581,7 @@ pub async fn update_thread(
     )
     .await
     .map_err(|_r| AppError::Unauthorized)?;
+    crate::sanctions::require_can_post(state.redis.as_ref(), &state.db, auth.id).await?;
 
     shared::ratelimit::check_token_bucket(
         state.redis.as_ref(),
@@ -580,9 +594,9 @@ pub async fn update_thread(
 
     let id: i64 = id_str.parse().map_err(|_| AppError::NotFound)?;
 
-    // Check ownership or mod
+    // Staff moderate through reasoned admin actions; they never overwrite user speech.
     let thread = repo::find_thread(&state.db, id).await?.ok_or(AppError::NotFound)?;
-    if thread.author_id != auth.id && auth.role != "mod" && auth.role != "admin" {
+    if thread.author_id != auth.id {
         return Err(AppError::Forbidden);
     }
 
@@ -601,49 +615,20 @@ pub async fn update_thread(
     let row =
         repo::update_thread(&state.db, id, body.title.as_deref(), body.body.as_deref()).await?;
 
-    // Look up board slug for Meilisearch.
-    let board_slug: String = sqlx::query_scalar("SELECT slug FROM forum.boards WHERE id = $1")
-        .bind(row.board_id)
-        .fetch_one(&state.db)
-        .await
-        .unwrap_or_default();
-
-    // Look up tag slugs for Meilisearch.
-    let tag_slugs = crate::repo::get_thread_tag_slugs(&state.db, row.id).await.unwrap_or_default();
-
-    // Re-sync to Meilisearch (fire-and-forget).
+    // Re-read canonical visibility and content inside the background index sync.
+    let pool = state.db.clone();
     let meili_url = state.meili_url.clone();
     let meili_key = state.meili_master_key.clone();
     let thread_id = row.id;
-    let thread_title = row.title.clone();
-    let thread_body = row.body.clone().unwrap_or_default();
-    let thread_author = row.author_handle.clone();
-    let thread_reply = row.reply_count;
-    let thread_vote = row.vote_count;
-    let thread_status = row.status.clone();
-    let thread_created = row.created_at.timestamp();
     tokio::spawn(async move {
-        crate::meili::sync_thread_to_meili(
-            &meili_url,
-            &meili_key,
-            &crate::meili::ForumThreadDoc {
-                id: thread_id.to_string(),
-                title: thread_title,
-                body_excerpt: thread_body.chars().take(2048).collect(),
-                board: board_slug,
-                tags: tag_slugs,
-                author_handle: thread_author,
-                reply_count: thread_reply,
-                vote_count: thread_vote,
-                created_at: thread_created,
-                status: thread_status,
-            },
-        )
-        .await;
+        if let Err(error) =
+            crate::meili::reconcile_thread_in_meili(&pool, &meili_url, &meili_key, thread_id).await
+        {
+            tracing::warn!(%error, thread_id, "failed to reconcile edited thread in search");
+        }
     });
 
-    // Bump cache
-    shared::cache::bump_version_silent(state.redis.as_ref(), "thread", &id.to_string()).await;
+    crate::cache::invalidate_thread_surfaces(state.redis.as_ref(), id, row.board_id).await;
 
     Ok(Json(thread_to_detail_dto(&row)))
 }
@@ -664,30 +649,52 @@ pub async fn delete_thread(
     .map_err(|_r| AppError::Unauthorized)?;
 
     let id: i64 = id_str.parse().map_err(|_| AppError::NotFound)?;
-    let thread = repo::find_thread(&state.db, id).await?.ok_or(AppError::NotFound)?;
-
-    if thread.author_id != auth.id {
+    let mut tx = state.db.begin().await?;
+    let (author_id, board_id): (Option<i64>, i64) = sqlx::query_as(
+        "SELECT author_id, board_id FROM forum.threads \
+         WHERE id = $1 AND deleted_at IS NULL AND hidden_at IS NULL FOR UPDATE",
+    )
+    .bind(id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or(AppError::NotFound)?;
+    if author_id != Some(auth.id) {
         return Err(AppError::Forbidden);
     }
-
+    let affected_board_ids =
+        crate::repo::boards::lock_boards_for_thread_count(&mut tx, &[board_id]).await?;
     sqlx::query(
-        "UPDATE forum.threads SET deleted_at = now(), deleted_by = $1 WHERE id = $2 AND deleted_at IS NULL",
+        "UPDATE forum.threads SET deleted_at = now(), deleted_by = $1 \
+         WHERE id = $2",
     )
     .bind(auth.id)
     .bind(id)
-    .execute(&state.db)
+    .execute(&mut *tx)
     .await?;
+    activity::contributions::deactivate_contribution(
+        &mut tx,
+        &format!("forum_thread:{id}"),
+        chrono::Utc::now(),
+    )
+    .await?;
+    crate::repo::deactivate_target_vote_contributions(&mut tx, "thread", id, chrono::Utc::now())
+        .await?;
+    crate::repo::boards::refresh_board_thread_counts(&mut tx, &affected_board_ids).await?;
+    tx.commit().await?;
 
     // Delete from Meilisearch (fire-and-forget).
     let meili_url = state.meili_url.clone();
     let meili_key = state.meili_master_key.clone();
     let thread_id = id;
     tokio::spawn(async move {
-        crate::meili::delete_thread_from_meili(&meili_url, &meili_key, thread_id).await;
+        if let Err(error) =
+            crate::meili::delete_thread_from_meili(&meili_url, &meili_key, thread_id).await
+        {
+            tracing::warn!(%error, thread_id, "failed to remove deleted thread from search");
+        }
     });
 
-    shared::cache::bump_version_silent(state.redis.as_ref(), "board", &thread.board_id.to_string())
-        .await;
+    crate::cache::invalidate_thread_surfaces(state.redis.as_ref(), id, board_id).await;
 
     Ok(Json(json!({"ok": true})))
 }

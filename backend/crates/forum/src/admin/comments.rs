@@ -5,8 +5,60 @@
 use axum::extract::{Path, State};
 use axum::http::HeaderMap;
 use axum::Json;
+use serde::Deserialize;
 use serde_json::{json, Value};
 use shared::{AppError, AppResult, AppState};
+
+use crate::dto::CommentDto;
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdminCommentActionInput {
+    reason: String,
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct AdminCommentRow {
+    author_id: Option<i64>,
+    thread_id: i64,
+    board_id: i64,
+    thread_status: String,
+    thread_deleted_at: Option<chrono::DateTime<chrono::Utc>>,
+    thread_hidden_at: Option<chrono::DateTime<chrono::Utc>>,
+    thread_archived_at: Option<chrono::DateTime<chrono::Utc>>,
+    created_at: chrono::DateTime<chrono::Utc>,
+    deleted_at: Option<chrono::DateTime<chrono::Utc>>,
+    hidden_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+/// GET /api/v2/admin/forum/comments/{id} — staff recovery detail.
+pub async fn get_comment_for_moderation(
+    State(state): State<AppState>,
+    Path(id_str): Path<String>,
+    headers: HeaderMap,
+) -> AppResult<Json<CommentDto>> {
+    let auth = identity::auth_middleware::authenticate(
+        &headers,
+        &state.db,
+        &state.jwt_secret,
+        state.redis.as_ref(),
+    )
+    .await
+    .map_err(|_| AppError::Unauthorized)?;
+    auth.require_capability(shared::auth::Capability::ModerateContent)
+        .map_err(|_| AppError::Forbidden)?;
+
+    let id: i64 = id_str.parse().map_err(|_| AppError::NotFound)?;
+    let comment =
+        crate::repo::find_comment_for_moderation(&state.db, id).await?.ok_or(AppError::NotFound)?;
+    let solved_comment_id: Option<i64> =
+        sqlx::query_scalar("SELECT solved_answer_id FROM forum.threads WHERE id = $1")
+            .bind(comment.thread_id)
+            .fetch_optional(&state.db)
+            .await?
+            .flatten();
+    Ok(Json(crate::handlers::comment_to_dto(&comment, solved_comment_id)))
+}
 
 /// POST /api/v2/admin/forum/comments/{id}/{action}
 ///
@@ -15,6 +67,7 @@ pub async fn admin_comment_action(
     State(state): State<AppState>,
     Path((id_str, action)): Path<(String, String)>,
     headers: HeaderMap,
+    Json(body): Json<AdminCommentActionInput>,
 ) -> AppResult<Json<Value>> {
     let auth = identity::auth_middleware::authenticate(
         &headers,
@@ -24,9 +77,35 @@ pub async fn admin_comment_action(
     )
     .await
     .map_err(|_| AppError::Unauthorized)?;
-    auth.require_mod().map_err(|_| AppError::Forbidden)?;
+    auth.require_capability(shared::auth::Capability::ModerateContent)
+        .map_err(|_| AppError::Forbidden)?;
 
     let id: i64 = id_str.parse().map_err(|_| AppError::NotFound)?;
+    let reason = body.reason.trim();
+    if !(3..=500).contains(&reason.chars().count()) {
+        return Err(AppError::BadRequest("reason must be 3–500 characters".into()));
+    }
+    let mut tx = state.db.begin().await?;
+    let comment = sqlx::query_as::<_, AdminCommentRow>(
+        "SELECT c.author_id, c.thread_id, t.board_id, t.status AS thread_status, \
+                t.deleted_at AS thread_deleted_at, t.hidden_at AS thread_hidden_at, \
+                t.archived_at AS thread_archived_at, c.created_at, \
+                c.deleted_at, c.hidden_at \
+         FROM forum.comments c \
+         JOIN forum.threads t ON t.id = c.thread_id \
+         WHERE c.id = $1 FOR UPDATE OF c",
+    )
+    .bind(id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or(AppError::NotFound)?;
+    super::require_lower_author_role(&mut tx, &auth, comment.author_id).await?;
+    let parent_is_visible = comment.thread_status == "visible"
+        && comment.thread_deleted_at.is_none()
+        && comment.thread_hidden_at.is_none()
+        && comment.thread_archived_at.is_none();
+    let was_visible =
+        parent_is_visible && comment.deleted_at.is_none() && comment.hidden_at.is_none();
 
     match action.as_str() {
         "delete" => {
@@ -35,44 +114,103 @@ pub async fn admin_comment_action(
             )
             .bind(auth.id)
             .bind(id)
-            .execute(&state.db)
+            .execute(&mut *tx)
             .await?;
-            crate::repo::insert_mod_action(&state.db, auth.id, "delete", "comment", id, None, None)
+            if comment.deleted_at.is_none() {
+                sqlx::query(
+                    "UPDATE forum.threads SET reply_count = GREATEST(reply_count - 1, 0) \
+                     WHERE id = $1",
+                )
+                .bind(comment.thread_id)
+                .execute(&mut *tx)
                 .await?;
+            }
         }
         "restore" => {
             sqlx::query(
                 "UPDATE forum.comments SET deleted_at = NULL, deleted_by = NULL WHERE id = $1",
             )
             .bind(id)
-            .execute(&state.db)
+            .execute(&mut *tx)
             .await?;
-            crate::repo::insert_mod_action(
-                &state.db, auth.id, "restore", "comment", id, None, None,
-            )
-            .await?;
+            if comment.deleted_at.is_some() {
+                sqlx::query("UPDATE forum.threads SET reply_count = reply_count + 1 WHERE id = $1")
+                    .bind(comment.thread_id)
+                    .execute(&mut *tx)
+                    .await?;
+            }
         }
         "hide" => {
             sqlx::query("UPDATE forum.comments SET hidden_at = now() WHERE id = $1")
                 .bind(id)
-                .execute(&state.db)
-                .await?;
-            crate::repo::insert_mod_action(&state.db, auth.id, "hide", "comment", id, None, None)
+                .execute(&mut *tx)
                 .await?;
         }
         "unhide" => {
             sqlx::query("UPDATE forum.comments SET hidden_at = NULL WHERE id = $1")
                 .bind(id)
-                .execute(&state.db)
-                .await?;
-            crate::repo::insert_mod_action(&state.db, auth.id, "unhide", "comment", id, None, None)
+                .execute(&mut *tx)
                 .await?;
         }
         _ => return Err(AppError::BadRequest(format!("unknown action: {action}"))),
     }
 
-    // Bump cache
-    shared::cache::bump_version_silent(state.redis.as_ref(), "comment", &id.to_string()).await;
+    let is_visible = match action.as_str() {
+        "restore" => parent_is_visible && comment.hidden_at.is_none(),
+        "unhide" => parent_is_visible && comment.deleted_at.is_none(),
+        _ => false,
+    };
+    if was_visible && matches!(action.as_str(), "delete" | "hide") {
+        activity::contributions::deactivate_contribution(
+            &mut tx,
+            &format!("forum_comment:{id}"),
+            chrono::Utc::now(),
+        )
+        .await?;
+    } else if is_visible {
+        if let Some(author_id) = comment.author_id {
+            activity::contributions::activate_contribution(
+                &mut tx,
+                author_id,
+                activity::contributions::ActivityKind::Comment,
+                &format!("forum_comment:{id}"),
+                comment.created_at,
+            )
+            .await?;
+        }
+    }
+    if matches!(action.as_str(), "delete" | "hide") {
+        crate::repo::deactivate_target_vote_contributions(
+            &mut tx,
+            "comment",
+            id,
+            chrono::Utc::now(),
+        )
+        .await?;
+    } else if matches!(action.as_str(), "restore" | "unhide") {
+        crate::repo::reactivate_target_vote_contributions(&mut tx, "comment", id).await?;
+    }
+    crate::repo::insert_mod_action(&mut *tx, auth.id, &action, "comment", id, Some(reason), None)
+        .await?;
+    governance::record_account_event_tx(
+        &mut tx,
+        governance::AccountActor { account_id: auth.id, role: &auth.role },
+        &format!("forum.comment.{action}"),
+        "comment",
+        &id.to_string(),
+        reason,
+        None,
+    )
+    .await?;
+    tx.commit().await?;
+
+    crate::cache::invalidate_thread_surfaces(
+        state.redis.as_ref(),
+        comment.thread_id,
+        comment.board_id,
+    )
+    .await;
+    crate::meili::reconcile_thread_in_background(&state, comment.thread_id);
 
     Ok(Json(json!({"ok": true})))
 }

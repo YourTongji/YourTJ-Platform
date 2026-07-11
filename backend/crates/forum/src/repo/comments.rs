@@ -1,9 +1,27 @@
 use shared::AppResult;
-use sqlx::PgPool;
+use sqlx::{FromRow, PgConnection, PgPool};
 
 use crate::models::CommentRowJoined;
 
 use super::{base64_decode_str, base64_encode_str};
+
+#[derive(Debug, FromRow)]
+struct ThreadPostingState {
+    deleted_at: Option<chrono::DateTime<chrono::Utc>>,
+    hidden_at: Option<chrono::DateTime<chrono::Utc>>,
+    closed_at: Option<chrono::DateTime<chrono::Utc>>,
+    archived_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+struct NewComment<'a> {
+    thread_id: i64,
+    parent_id: Option<i64>,
+    path: &'a str,
+    author_id: i64,
+    body: &'a str,
+    quoted_comment_id: Option<i64>,
+    is_hidden: bool,
+}
 
 /// List comments for a thread with cursor pagination.
 /// Ordered by `path` ASC for correct nested (楼中楼) display.
@@ -15,7 +33,22 @@ pub async fn list_comments(
     cursor: Option<&str>,
     limit: i64,
     current_user_id: Option<i64>,
+    can_view_moderated_parent: bool,
 ) -> AppResult<(Vec<CommentRowJoined>, Option<String>)> {
+    let thread_is_readable: bool = sqlx::query_scalar(
+        "SELECT EXISTS( \
+           SELECT 1 FROM forum.threads \
+           WHERE id = $1 AND ($2 OR (deleted_at IS NULL AND hidden_at IS NULL)) \
+         )",
+    )
+    .bind(thread_id)
+    .bind(can_view_moderated_parent)
+    .fetch_one(pool)
+    .await?;
+    if !thread_is_readable {
+        return Err(shared::AppError::NotFound);
+    }
+
     let cursor_path: Option<String> = cursor
         .map(base64_decode_str)
         .transpose()
@@ -88,14 +121,36 @@ pub async fn create_comment(
     body: &str,
     parent_id: Option<i64>,
     quoted_comment_id: Option<i64>,
+    is_hidden: bool,
 ) -> AppResult<CommentRowJoined> {
     let mut tx = pool.begin().await?;
+
+    let thread_state: Option<ThreadPostingState> = sqlx::query_as(
+        "SELECT deleted_at, hidden_at, closed_at, archived_at \
+         FROM forum.threads WHERE id = $1 FOR UPDATE",
+    )
+    .bind(thread_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let thread_state = thread_state.ok_or(shared::AppError::NotFound)?;
+    if thread_state.deleted_at.is_some() || thread_state.hidden_at.is_some() {
+        return Err(shared::AppError::NotFound);
+    }
+    if thread_state.archived_at.is_some() {
+        return Err(shared::AppError::Conflict("thread is archived".into()));
+    }
+    if thread_state.closed_at.is_some() {
+        return Err(shared::AppError::Conflict("thread is closed".into()));
+    }
 
     if let Some(pid) = parent_id {
         // Lock the parent comment row to prevent concurrent sibling inserts.
         // Fetch parent path inside the same transaction with FOR UPDATE.
         let parent_path: Option<String> = sqlx::query_scalar(
-            "SELECT path FROM forum.comments WHERE id = $1 AND thread_id = $2 FOR UPDATE",
+            "SELECT path FROM forum.comments \
+             WHERE id = $1 AND thread_id = $2 \
+               AND deleted_at IS NULL AND hidden_at IS NULL \
+             FOR UPDATE",
         )
         .bind(pid)
         .bind(thread_id)
@@ -120,23 +175,20 @@ pub async fn create_comment(
 
         let row = insert_comment_tx(
             &mut tx,
-            thread_id,
-            parent_id,
-            &path,
-            author_id,
-            body,
-            quoted_comment_id,
+            NewComment {
+                thread_id,
+                parent_id,
+                path: &path,
+                author_id,
+                body,
+                quoted_comment_id,
+                is_hidden,
+            },
         )
         .await?;
         tx.commit().await?;
         Ok(row)
     } else {
-        // Lock the thread row to prevent concurrent top-level comment creation.
-        let _: (i64,) = sqlx::query_as("SELECT id FROM forum.threads WHERE id = $1 FOR UPDATE")
-            .bind(thread_id)
-            .fetch_one(&mut *tx)
-            .await?;
-
         // Top-level comment: find next top-level index.
         let max_path: String = sqlx::query_scalar(
             "SELECT COALESCE(MAX(path), '') FROM forum.comments \
@@ -149,9 +201,19 @@ pub async fn create_comment(
         let top_level = next_sibling_index(&max_path, "");
         let path = format!("{top_level:04x}");
 
-        let row =
-            insert_comment_tx(&mut tx, thread_id, None, &path, author_id, body, quoted_comment_id)
-                .await?;
+        let row = insert_comment_tx(
+            &mut tx,
+            NewComment {
+                thread_id,
+                parent_id: None,
+                path: &path,
+                author_id,
+                body,
+                quoted_comment_id,
+                is_hidden,
+            },
+        )
+        .await?;
         tx.commit().await?;
         Ok(row)
     }
@@ -159,18 +221,13 @@ pub async fn create_comment(
 
 /// Insert the comment row and update thread reply_count in the active transaction.
 async fn insert_comment_tx(
-    tx: &mut sqlx::PgConnection,
-    thread_id: i64,
-    parent_id: Option<i64>,
-    path: &str,
-    author_id: i64,
-    body: &str,
-    quoted_comment_id: Option<i64>,
+    tx: &mut PgConnection,
+    comment: NewComment<'_>,
 ) -> AppResult<CommentRowJoined> {
     let row = sqlx::query_as::<_, CommentRowJoined>(
         "WITH inserted AS ( \
-            INSERT INTO forum.comments (thread_id, parent_id, path, author_id, body, quoted_comment_id) \
-            VALUES ($1, $2, $3, $4, $5, $6) \
+            INSERT INTO forum.comments (thread_id, parent_id, path, author_id, body, quoted_comment_id, hidden_at) \
+            VALUES ($1, $2, $3, $4, $5, $6, CASE WHEN $7 THEN now() ELSE NULL END) \
             RETURNING id, thread_id, parent_id, path, author_id, body, vote_count, deleted_at, hidden_at, edited_at, created_at, quoted_comment_id \
          ) \
          SELECT c.id, c.thread_id, c.parent_id, c.path, c.author_id, \
@@ -180,12 +237,13 @@ async fn insert_comment_tx(
          FROM inserted c \
          JOIN identity.accounts a ON a.id = c.author_id",
     )
-    .bind(thread_id)
-    .bind(parent_id)
-    .bind(path)
-    .bind(author_id)
-    .bind(body)
-    .bind(quoted_comment_id)
+    .bind(comment.thread_id)
+    .bind(comment.parent_id)
+    .bind(comment.path)
+    .bind(comment.author_id)
+    .bind(comment.body)
+    .bind(comment.quoted_comment_id)
+    .bind(comment.is_hidden)
     .fetch_one(&mut *tx)
     .await?;
 
@@ -195,9 +253,20 @@ async fn insert_comment_tx(
          SET reply_count = reply_count + 1, last_activity_at = now() \
          WHERE id = $1",
     )
-    .bind(thread_id)
+    .bind(comment.thread_id)
     .execute(&mut *tx)
     .await?;
+
+    if !comment.is_hidden {
+        activity::contributions::activate_contribution(
+            tx,
+            comment.author_id,
+            activity::contributions::ActivityKind::Comment,
+            &format!("forum_comment:{}", row.id),
+            row.created_at,
+        )
+        .await?;
+    }
 
     Ok(row)
 }
@@ -227,6 +296,25 @@ pub async fn find_comment(pool: &PgPool, id: i64) -> AppResult<Option<CommentRow
          FROM forum.comments c \
          JOIN identity.accounts a ON a.id = c.author_id \
          WHERE c.id = $1 AND c.deleted_at IS NULL AND c.hidden_at IS NULL",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row)
+}
+
+/// Find a comment for staff recovery, including hidden and soft-deleted rows.
+pub async fn find_comment_for_moderation(
+    pool: &PgPool,
+    id: i64,
+) -> AppResult<Option<CommentRowJoined>> {
+    let row = sqlx::query_as::<_, CommentRowJoined>(
+        "SELECT c.id, c.thread_id, c.parent_id, c.path, c.author_id, \
+                c.body, c.vote_count, c.deleted_at, c.hidden_at, c.edited_at, c.created_at, \
+                c.quoted_comment_id, a.handle AS author_handle \
+         FROM forum.comments c \
+         JOIN identity.accounts a ON a.id = c.author_id \
+         WHERE c.id = $1",
     )
     .bind(id)
     .fetch_optional(pool)

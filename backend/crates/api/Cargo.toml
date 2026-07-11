@@ -38,3 +38,5 @@ reviews.workspace = true
 credit.workspace = true
 forum.workspace = true
 media.workspace = true
+activity.workspace = true
+governance.workspace = true

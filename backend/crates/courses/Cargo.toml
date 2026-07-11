@@ -21,7 +21,9 @@ deadpool-redis.workspace = true
 tracing.workspace = true
 identity.workspace = true
 forum.workspace = true
+governance.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt"] }
 axum = { workspace = true, features = ["macros"] }
+uuid.workspace = true

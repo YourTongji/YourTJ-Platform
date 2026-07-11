@@ -1,5 +1,13 @@
 # 架构反思（基于 D1 导入实践）与端到端测试方案
 
+> **Status:** Historical architecture review and proposed E2E plan; not a current implementation inventory
+>
+> **Owner:** Platform maintainers
+>
+> **Last classified:** 2026-07-11; verify every checklist item against current source and CI before use
+>
+> **Authoritative sources:** `AGENTS.md`, `contract/openapi.yaml`, numbered migrations, and current CI
+
 > 触发点：[D1_LOCAL_IMPORT.md](D1_LOCAL_IMPORT.md) 记录了"生产 D1 → 本地 PG"的
 > 完整导入流程。这次实践第一次把**真实生产数据**灌进了 v2 后端，暴露出的问题
 > 比任何代码评审都真实。本文分两部分：

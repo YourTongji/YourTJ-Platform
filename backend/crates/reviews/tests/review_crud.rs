@@ -210,3 +210,72 @@ async fn test_invalid_rating_rejected() {
 
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 }
+
+#[tokio::test]
+async fn create_review_idempotency_replays_before_captcha_and_rejects_key_reuse() {
+    let (pool, app) = create_test_app().await;
+    let suffix = uuid::Uuid::new_v4().simple().to_string();
+    let course_id = seed_course(&pool, &format!("IDEMP-{suffix}"), "Idempotent reviews").await;
+    let account_id = seed_account(
+        &pool,
+        &format!("idempotent-{suffix}@tongji.edu.cn"),
+        &format!("idempotent-{suffix}"),
+    )
+    .await;
+    let token = helpers::create_access_token_for(account_id);
+    let uri = format!("/api/v2/courses/{course_id}/reviews");
+    let idempotency_key = uuid::Uuid::new_v4().to_string();
+    let request_body = json!({
+        "rating": 5,
+        "comment": "stable publication",
+        "captchaToken": format!("idempotency-captcha-{suffix}")
+    });
+    let make_request = |body: Value| {
+        let mut request = auth_req(Method::POST, &uri, body, &token);
+        request
+            .headers_mut()
+            .insert("Idempotency-Key", idempotency_key.parse().expect("idempotency header"));
+        request
+    };
+
+    let first = app
+        .clone()
+        .oneshot(make_request(request_body.clone()))
+        .await
+        .expect("first idempotent review response");
+    assert_eq!(first.status(), StatusCode::CREATED);
+    let first_body: Value = read_json(first).await;
+
+    let replay =
+        app.clone().oneshot(make_request(request_body)).await.expect("idempotent review replay");
+    assert_eq!(replay.status(), StatusCode::CREATED);
+    let replay_body: Value = read_json(replay).await;
+    assert_eq!(replay_body, first_body);
+
+    let conflict = app
+        .oneshot(make_request(json!({
+            "rating": 4,
+            "comment": "different publication",
+            "captchaToken": format!("idempotency-captcha-{suffix}")
+        })))
+        .await
+        .expect("idempotency key conflict");
+    assert_eq!(conflict.status(), StatusCode::CONFLICT);
+
+    let review_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM reviews.reviews WHERE course_id = $1 AND account_id = $2",
+    )
+    .bind(course_id)
+    .bind(account_id)
+    .fetch_one(&pool)
+    .await
+    .expect("idempotent review count");
+    assert_eq!(review_count, 1);
+    let aggregate_count: i32 =
+        sqlx::query_scalar("SELECT review_count FROM courses.courses WHERE id = $1")
+            .bind(course_id)
+            .fetch_one(&pool)
+            .await
+            .expect("idempotent course aggregate");
+    assert_eq!(aggregate_count, 1);
+}

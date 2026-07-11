@@ -5,6 +5,7 @@
 //! fan-out-on-write. Hot ranking is a periodic job writing a Redis ZSET.
 mod admin;
 pub mod badges;
+mod cache;
 pub mod digest;
 mod dto;
 mod error;
@@ -26,6 +27,9 @@ use shared::AppState;
 /// All routes owned by the forum domain.
 pub fn routes(state: AppState) -> Router {
     Router::new()
+        .route("/api/v2/users/{handle}", get(handlers::get_user_profile))
+        .route("/api/v2/users/{handle}/threads", get(handlers::list_user_threads))
+        .route("/api/v2/users/{handle}/comments", get(handlers::list_user_comments))
         .route("/api/v2/forum/tags", get(handlers::list_tags_handler))
         .route("/api/v2/forum/boards", get(handlers::list_boards))
         .route("/api/v2/forum/boards/{board_id}/threads", get(handlers::list_threads))
@@ -105,6 +109,13 @@ pub fn routes(state: AppState) -> Router {
             "/api/v2/forum/dm/conversations/{id}/messages",
             get(handlers::list_messages_handler).post(handlers::send_message_handler),
         )
+        .route(
+            "/api/v2/forum/dm/conversations/{id}/read",
+            post(handlers::read_conversation_handler),
+        )
+        .route("/api/v2/forum/dm/messages/{id}/report", post(handlers::report_message_handler))
+        .route("/api/v2/admin/dm/reports", get(handlers::list_dm_reports_handler))
+        .route("/api/v2/admin/dm/reports/{id}/resolve", post(handlers::resolve_dm_report_handler))
         .merge(admin::routes())
         .with_state(state)
 }

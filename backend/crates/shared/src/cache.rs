@@ -36,6 +36,24 @@ pub async fn bump_version_opt(pool: Option<&Pool>, prefix: &str, id: &str) -> Re
     Ok(())
 }
 
+/// Read the current namespace version, returning zero when Redis is absent or unavailable.
+pub async fn current_version_opt(pool: Option<&Pool>, prefix: &str, id: &str) -> i64 {
+    let Some(pool) = pool else {
+        return 0;
+    };
+    let Ok(mut conn) = pool.get().await else {
+        return 0;
+    };
+    let key = format!("ver:{prefix}:{id}");
+    redis::cmd("GET")
+        .arg(key)
+        .query_async::<Option<i64>>(&mut conn)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or(0)
+}
+
 /// Read a cached value by version. Returns `None` on miss.
 pub async fn get_cached(pool: &Pool, prefix: &str, id: &str) -> Result<Option<String>> {
     let mut conn = pool.get().await?;

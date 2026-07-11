@@ -38,11 +38,22 @@ yourtj-platform/
 │   ├── ops/                  # 运维脚本（选课物化等）
 │   └── Dockerfile
 ├── contract/openapi.yaml     # API 契约 → 生成客户端类型
-├── docs/                     # 设计文档 · API 参考 · 对齐清单
+├── docs/                     # 当前业务规范 · 架构 · 运维手册 · 历史方案
 ├── tools/d1/                 # D1 旧版数据导入工具链
 ├── docker-compose.yml
 └── AGENTS.md                 # 编码规范
 ```
+
+## 文档
+
+从 [`docs/README.md`](docs/README.md) 开始阅读。该索引说明文档权威顺序，并区分
+当前规范、当前 PR 提案、后续工作和历史方案。社区治理相关的当前规范包括：
+
+- [`docs/product/community-governance.md`](docs/product/community-governance.md)
+- [`docs/product/activity-scoring.md`](docs/product/activity-scoring.md)
+- [`docs/product/profile-and-messaging.md`](docs/product/profile-and-messaging.md)
+- [`docs/security/rbac-and-audit.md`](docs/security/rbac-and-audit.md)
+- [`docs/operations/admin-console.md`](docs/operations/admin-console.md)
 
 ## 本地开发
 

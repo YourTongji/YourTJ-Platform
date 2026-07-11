@@ -1,14 +1,67 @@
-//! User-facing flag handler.
+//! User-facing forum report submission and automatic safety thresholds.
 
 use axum::extract::{Path, State};
 use axum::http::HeaderMap;
 use axum::Json;
 use shared::{AppError, AppResult, AppState};
+use sqlx::PgConnection;
 
-/// POST /api/v2/forum/posts/{id}/flag
+const AUTO_SILENCE_REASON: &str = "two content auto-hides within 24 hours";
+
+async fn apply_auto_silence(connection: &mut PgConnection, account_id: i64) -> AppResult<bool> {
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind(format!("forum:auto_silence:{account_id}"))
+        .execute(&mut *connection)
+        .await?;
+
+    let count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM forum.flags flag \
+         WHERE flag.auto_hidden_at > now() - interval '24 hours' \
+           AND ( \
+             (flag.target_type = 'thread' AND EXISTS ( \
+               SELECT 1 FROM forum.threads WHERE id = flag.target_id AND author_id = $1 \
+             )) OR \
+             (flag.target_type = 'comment' AND EXISTS ( \
+               SELECT 1 FROM forum.comments WHERE id = flag.target_id AND author_id = $1 \
+             )) \
+           )",
+    )
+    .bind(account_id)
+    .fetch_one(&mut *connection)
+    .await?;
+    if count < 2 {
+        return Ok(false);
+    }
+
+    let metadata = serde_json::json!({ "durationHours": 24, "autoHideCount": count });
+    identity::sanctions::issue_system_silence_tx(
+        connection,
+        account_id,
+        AUTO_SILENCE_REASON,
+        chrono::Utc::now() + chrono::Duration::hours(24),
+        Some(&metadata),
+    )
+    .await
+}
+
+fn validate_input(body: &crate::dto::FlagInput) -> AppResult<(&str, Option<&str>, &str)> {
+    if !matches!(body.reason.as_str(), "spam" | "abuse" | "off_topic" | "illegal" | "other") {
+        return Err(AppError::BadRequest("invalid flag reason".into()));
+    }
+    let note = body.note.as_deref().map(str::trim).filter(|note| !note.is_empty());
+    if note.is_some_and(|note| note.chars().count() > 1000) {
+        return Err(AppError::BadRequest("flag note must not exceed 1000 characters".into()));
+    }
+    if !matches!(body.post_type.as_str(), "thread" | "comment") {
+        return Err(AppError::BadRequest("postType must be thread/comment".into()));
+    }
+    Ok((&body.reason, note, &body.post_type))
+}
+
+/// POST /api/v2/forum/posts/{id}/flag.
 pub async fn flag_post(
     State(state): State<AppState>,
-    Path(id_str): Path<String>,
+    Path(id): Path<String>,
     headers: HeaderMap,
     Json(body): Json<crate::dto::FlagInput>,
 ) -> AppResult<Json<serde_json::Value>> {
@@ -20,190 +73,87 @@ pub async fn flag_post(
     )
     .await
     .map_err(|_| AppError::Unauthorized)?;
-
-    let tl = crate::trust_levels::get_trust_level(state.redis.as_ref(), &state.db, auth.id).await?;
-    if tl == 0 {
-        shared::ratelimit::check_token_bucket(
-            state.redis.as_ref(),
-            "flag_tl0",
-            &auth.id.to_string(),
-            5,
-            86400,
-        )
-        .await?;
-    } else {
-        shared::ratelimit::check_token_bucket(
-            state.redis.as_ref(),
-            "flag",
-            &auth.id.to_string(),
-            15,
-            86400,
-        )
-        .await?;
+    if matches!(auth.role.as_str(), "mod" | "admin") {
+        return Err(AppError::Forbidden);
     }
-
-    let post_id: i64 = id_str.parse().map_err(|_| AppError::NotFound)?;
-
-    // Derive post_type by checking which table the ID exists in
-    let exists_thread: bool =
-        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM forum.threads WHERE id = $1)")
-            .bind(post_id)
-            .fetch_one(&state.db)
-            .await
-            .unwrap_or(false);
-
-    let target_type = if exists_thread { "thread" } else { "comment" };
-
-    // Get reporter's trust level for weight
-    let weight: f32 = match auth.role.as_str() {
-        "admin" | "mod" => 3.0,
-        _ => {
-            let tl: i16 = sqlx::query_scalar(
-                "SELECT COALESCE(trust_level, 0)::smallint FROM identity.accounts WHERE id = $1",
-            )
-            .bind(auth.id)
-            .fetch_one(&state.db)
-            .await
-            .unwrap_or(0);
-            match tl {
-                0 => 0.5,
-                1 => 1.0,
-                2 => 1.5,
-                3 => 2.0,
-                _ => 1.0,
-            }
-        }
-    };
-
-    let (threshold_reached, author_id) = crate::repo::insert_flag(
-        &state.db,
-        target_type,
-        post_id,
-        auth.id,
-        &body.reason,
-        body.note.as_deref(),
-        weight,
+    let trust_level =
+        crate::trust_levels::get_trust_level(state.redis.as_ref(), &state.db, auth.id).await?;
+    let (bucket, capacity) = if trust_level == 0 { ("flag_tl0", 5) } else { ("flag", 15) };
+    shared::ratelimit::check_token_bucket(
+        state.redis.as_ref(),
+        bucket,
+        &auth.id.to_string(),
+        capacity,
+        86_400,
     )
     .await?;
 
-    if threshold_reached {
-        // Notify target author about auto-hide (fire-and-forget)
-        let pool = state.db.clone();
-        let post_type = target_type.to_string();
-        let flag_post_id = post_id;
-        if let Some(target_author_id) = author_id {
-            tokio::spawn(async move {
+    let post_id: i64 = id.parse().map_err(|_| AppError::NotFound)?;
+    let (reason, note, target_type) = validate_input(&body)?;
+    let weight = match trust_level {
+        0 => 0.5,
+        1 => 1.0,
+        2 => 1.5,
+        3 => 2.0,
+        _ => 1.0,
+    };
+
+    let mut tx = state.db.begin().await?;
+    let outcome =
+        crate::repo::insert_flag(&mut tx, target_type, post_id, auth.id, reason, note, weight)
+            .await?;
+    let auto_silenced = if outcome.auto_hidden {
+        if let Some(author_id) = outcome.author_id {
+            apply_auto_silence(&mut tx, author_id).await?
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+    tx.commit().await?;
+
+    if outcome.auto_hidden {
+        crate::cache::invalidate_thread_surfaces(
+            state.redis.as_ref(),
+            outcome.thread_id,
+            outcome.board_id,
+        )
+        .await;
+        crate::meili::reconcile_thread_in_background(&state, outcome.thread_id);
+        if let Some(author_id) = outcome.author_id {
+            crate::notification_hooks::create_notification(
+                &state.db,
+                author_id,
+                "flag_auto_hide",
+                serde_json::json!({ "postType": target_type, "postId": post_id.to_string() }),
+                None,
+                None,
+            )
+            .await;
+            if auto_silenced {
+                identity::sanctions::invalidate_silence_cache(state.redis.as_ref(), author_id)
+                    .await;
                 crate::notification_hooks::create_notification(
-                    &pool,
-                    target_author_id,
-                    "flag_auto_hide",
+                    &state.db,
+                    author_id,
+                    "mod_action",
                     serde_json::json!({
-                        "postType": post_type,
-                        "postId": flag_post_id.to_string(),
+                        "action": "auto_silence",
+                        "reason": AUTO_SILENCE_REASON,
+                        "duration": "24h",
                     }),
                     None,
                     None,
                 )
                 .await;
-            });
-
-            // Auto-silence check (G3): if author has ≥2 auto-hides in 24h, silence them.
-            let pool = state.db.clone();
-            let redis_pool = state.redis.clone();
-            let silenced_author_id = target_author_id;
-            tokio::spawn(async move {
-                // Skip auto-silence for mods/admins
-                let target_role: Option<String> =
-                    sqlx::query_scalar("SELECT role FROM identity.accounts WHERE id = $1")
-                        .bind(silenced_author_id)
-                        .fetch_optional(&pool)
-                        .await
-                        .unwrap_or(None);
-                if matches!(target_role.as_deref(), Some("mod") | Some("admin")) {
-                    return;
-                }
-
-                // Count recent auto-hides (including this one since the INSERT already ran)
-                let count = match crate::repo::count_recent_auto_hides(&pool, silenced_author_id)
-                    .await
-                {
-                    Ok(c) => c,
-                    Err(e) => {
-                        tracing::warn!(error = %e, author_id = silenced_author_id, "auto-silence count failed");
-                        return;
-                    }
-                };
-
-                if count >= 2 {
-                    // Check if already silenced
-                    let already_silenced: bool = sqlx::query_scalar(
-                        "SELECT EXISTS( \
-                         SELECT 1 FROM identity.sanctions \
-                         WHERE account_id = $1 AND kind = 'silence' \
-                         AND revoked_at IS NULL \
-                         AND (ends_at IS NULL OR ends_at > now()) \
-                        )",
-                    )
-                    .bind(silenced_author_id)
-                    .fetch_one(&pool)
-                    .await
-                    .unwrap_or(false);
-
-                    if already_silenced {
-                        return;
-                    }
-
-                    // Insert silence sanction (24h, issued_by = 0 for system)
-                    let _ = sqlx::query(
-                        "INSERT INTO identity.sanctions \
-                         (account_id, kind, reason, issued_by, ends_at) \
-                         VALUES ($1, 'silence', 'auto-silence: ≥2 auto-hides in 24h', 0, now() + interval '24 hours')",
-                    )
-                    .bind(silenced_author_id)
-                    .execute(&pool)
-                    .await;
-
-                    // Log mod_action (actor = 0 for system)
-                    let _ = crate::repo::insert_mod_action(
-                        &pool,
-                        0,
-                        "auto_silence",
-                        "account",
-                        silenced_author_id,
-                        Some("自动禁言：24小时内被自动隐藏≥2次"),
-                        None,
-                    )
-                    .await;
-
-                    // Invalidate Redis cache (best-effort)
-                    if let Some(ref rp) = redis_pool {
-                        if let Ok(mut conn) = rp.get().await {
-                            let _: () = redis::cmd("DEL")
-                                .arg(format!("identity:sanction:{silenced_author_id}"))
-                                .query_async(&mut *conn)
-                                .await
-                                .unwrap_or(());
-                        }
-                    }
-
-                    // Notify the silenced user
-                    crate::notification_hooks::create_notification(
-                        &pool,
-                        silenced_author_id,
-                        "mod_action",
-                        serde_json::json!({
-                            "action": "auto_silence",
-                            "reason": "24小时内内容被自动隐藏达到2次",
-                            "duration": "24h",
-                        }),
-                        None,
-                        None,
-                    )
-                    .await;
-                }
-            });
+            }
         }
     }
 
-    Ok(Json(serde_json::json!({"ok": true, "autoHidden": threshold_reached})))
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "autoHidden": outcome.auto_hidden,
+        "autoSilenced": auto_silenced,
+    })))
 }

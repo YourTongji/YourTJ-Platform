@@ -172,7 +172,7 @@ pub async fn enforce_captcha(
     token: &str,
 ) -> CaptchaOutcome {
     let trimmed = token.trim();
-    if trimmed.is_empty() {
+    if trimmed.is_empty() || trimmed.len() > 8192 {
         return CaptchaOutcome::Invalid;
     }
     verify_and_consume(verifier, redis, purpose, trimmed, 600).await
@@ -232,6 +232,14 @@ mod tests {
     async fn enforce_captcha_rejects_empty_token() {
         let verifier = FakeCaptcha;
         let out = enforce_captcha(&verifier, None, "purpose", "").await;
+        assert_eq!(out, CaptchaOutcome::Invalid);
+    }
+
+    #[tokio::test]
+    async fn enforce_captcha_rejects_oversized_token_before_provider_use() {
+        let verifier = FakeCaptcha;
+        let token = "x".repeat(8193);
+        let out = enforce_captcha(&verifier, None, "purpose", &token).await;
         assert_eq!(out, CaptchaOutcome::Invalid);
     }
 

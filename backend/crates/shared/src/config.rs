@@ -1,5 +1,7 @@
 //! Runtime configuration, loaded once at startup from the environment.
 
+const DEFAULT_CAPTCHA_SITEVERIFY_URL: &str = "https://captcha.07211024.xyz/api/siteverify";
+
 /// Application configuration. Construct with [`Config::from_env`].
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -71,7 +73,10 @@ impl Config {
             email_encryption_strict: std::env::var("EMAIL_ENCRYPTION_STRICT")
                 .map(|v| v == "1" || v == "true")
                 .unwrap_or(false),
-            captcha_siteverify_url: env_or_default("CAPTCHA_SITEVERIFY_URL", ""),
+            captcha_siteverify_url: env_or_default(
+                "CAPTCHA_SITEVERIFY_URL",
+                DEFAULT_CAPTCHA_SITEVERIFY_URL,
+            ),
         })
     }
 

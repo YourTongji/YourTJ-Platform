@@ -227,6 +227,50 @@ export interface paths {
         };
         trace?: never;
     };
+    "/me/activity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Current user's daily public activity calendar
+         * @description Returns every Asia/Shanghai calendar day in the requested inclusive range, including zero-count days. The maximum range is 371 days.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    from?: string;
+                    to?: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ActivityCalendar"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/me/drafts": {
         parameters: {
             query?: never;
@@ -470,7 +514,7 @@ export interface paths {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": components["schemas"]["UserProfileWithStats"];
+                        "application/json": components["schemas"]["UserProfile"];
                     };
                 };
             };
@@ -512,7 +556,7 @@ export interface paths {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": components["schemas"]["ThreadFeedPage"];
+                        "application/json": components["schemas"]["UserThreadPage"];
                     };
                 };
             };
@@ -554,7 +598,7 @@ export interface paths {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": components["schemas"]["CommentPage"];
+                        "application/json": components["schemas"]["UserCommentPage"];
                     };
                 };
             };
@@ -1932,7 +1976,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/selection/courses/by-major": {
+    "/selection/courses-by-major": {
         parameters: {
             query?: never;
             header?: never;
@@ -1944,7 +1988,7 @@ export interface paths {
             parameters: {
                 query: {
                     majorId: string;
-                    grade?: string;
+                    grade: string;
                 };
                 header?: never;
                 path?: never;
@@ -1971,7 +2015,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/selection/courses/by-nature": {
+    "/selection/courses-by-nature": {
         parameters: {
             query?: never;
             header?: never;
@@ -2009,7 +2053,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/selection/courses/by-code/{code}": {
+    "/selection/courses/{code}": {
         parameters: {
             query?: never;
             header?: never;
@@ -2085,23 +2129,21 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/selection/courses/by-time": {
+    "/selection/courses/{code}/timeslots": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** Courses matching a time window (for scheduling) */
+        /** Timeslots for a selection course code */
         get: {
             parameters: {
-                query?: {
-                    weekday?: number;
-                    startSlot?: number;
-                    endSlot?: number;
-                };
+                query?: never;
                 header?: never;
-                path?: never;
+                path: {
+                    code: string;
+                };
                 cookie?: never;
             };
             requestBody?: never;
@@ -2341,7 +2383,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Report a review */
+        /** Report a visible review authored by another account */
         post: {
             parameters: {
                 query?: never;
@@ -2367,6 +2409,9 @@ export interface paths {
                     };
                     content?: never;
                 };
+                400: components["responses"]["BadRequest"];
+                404: components["responses"]["NotFound"];
+                409: components["responses"]["Conflict"];
             };
         };
         delete?: never;
@@ -2460,7 +2505,7 @@ export interface paths {
                 query?: {
                     board?: string;
                     tag?: string;
-                    feed?: "hot" | "new" | "following" | "unread";
+                    sort?: "hot" | "new" | "following" | "unread";
                     /** @description Opaque pagination cursor */
                     cursor?: components["parameters"]["Cursor"];
                     limit?: components["parameters"]["Limit"];
@@ -2560,11 +2605,15 @@ export interface paths {
             requestBody?: never;
             responses: {
                 /** @description deleted */
-                204: {
+                200: {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": {
+                            ok: boolean;
+                        };
+                    };
                 };
             };
         };
@@ -2768,11 +2817,15 @@ export interface paths {
             requestBody?: never;
             responses: {
                 /** @description deleted */
-                204: {
+                200: {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": {
+                            ok: boolean;
+                        };
+                    };
                 };
             };
         };
@@ -2871,11 +2924,13 @@ export interface paths {
             };
             responses: {
                 /** @description ok */
-                204: {
+                200: {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["VoteResponse"];
+                    };
                 };
             };
         };
@@ -2911,11 +2966,13 @@ export interface paths {
             };
             responses: {
                 /** @description queued */
-                202: {
+                200: {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["FlagResponse"];
+                    };
                 };
             };
         };
@@ -3216,7 +3273,11 @@ export interface paths {
         /** List DM conversations */
         get: {
             parameters: {
-                query?: never;
+                query?: {
+                    /** @description Opaque pagination cursor */
+                    cursor?: components["parameters"]["Cursor"];
+                    limit?: components["parameters"]["Limit"];
+                };
                 header?: never;
                 path?: never;
                 cookie?: never;
@@ -3245,9 +3306,7 @@ export interface paths {
             };
             requestBody: {
                 content: {
-                    "application/json": {
-                        recipientId: string;
-                    };
+                    "application/json": components["schemas"]["DmConversationInput"];
                 };
             };
             responses: {
@@ -3315,9 +3374,7 @@ export interface paths {
             };
             requestBody: {
                 content: {
-                    "application/json": {
-                        body: string;
-                    };
+                    "application/json": components["schemas"]["DmMessageInput"];
                 };
             };
             responses: {
@@ -3330,6 +3387,89 @@ export interface paths {
                         "application/json": components["schemas"]["DmMessage"];
                     };
                 };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/forum/dm/conversations/{id}/read": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Mark a DM conversation read through a message */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": components["schemas"]["DmReadInput"];
+                };
+            };
+            responses: {
+                /** @description read position updated */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                404: components["responses"]["NotFound"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/forum/dm/messages/{id}/report": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Report a private message to moderators */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["DmReportInput"];
+                };
+            };
+            responses: {
+                /** @description queued */
+                202: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                404: components["responses"]["NotFound"];
+                409: components["responses"]["Conflict"];
             };
         };
         delete?: never;
@@ -3366,11 +3506,13 @@ export interface paths {
             };
             responses: {
                 /** @description ok */
-                204: {
+                200: {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["PollVoteResponse"];
+                    };
                 };
             };
         };
@@ -3405,7 +3547,7 @@ export interface paths {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": components["schemas"]["PollResult"];
+                        "application/json": components["schemas"]["Poll"];
                     };
                 };
             };
@@ -3905,6 +4047,348 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/overview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Administration dashboard counters */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AdminOverview"];
+                    };
+                };
+                403: components["responses"]["Forbidden"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/audit-events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Cursor-paginated immutable administration audit events */
+        get: {
+            parameters: {
+                query?: {
+                    actorId?: string;
+                    action?: string;
+                    targetType?: string;
+                    /** @description Opaque pagination cursor */
+                    cursor?: components["parameters"]["Cursor"];
+                    limit?: components["parameters"]["Limit"];
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AdminAuditEventPage"];
+                    };
+                };
+                403: components["responses"]["Forbidden"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/activity-policy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Current activity scoring policy */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ActivityPolicy"];
+                    };
+                };
+                403: components["responses"]["Forbidden"];
+            };
+        };
+        /** Publish a new activity scoring policy revision */
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["ActivityPolicyUpdateInput"];
+                };
+            };
+            responses: {
+                /** @description updated */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ActivityPolicy"];
+                    };
+                };
+                403: components["responses"]["Forbidden"];
+                409: components["responses"]["Conflict"];
+            };
+        };
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/activity-policy/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Activity scoring policy revision history */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description Opaque pagination cursor */
+                    cursor?: components["parameters"]["Cursor"];
+                    limit?: components["parameters"]["Limit"];
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ActivityPolicyPage"];
+                    };
+                };
+                403: components["responses"]["Forbidden"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Search and filter the administration user directory */
+        get: {
+            parameters: {
+                query?: {
+                    q?: string;
+                    role?: "user" | "mod" | "admin";
+                    status?: "active" | "suspended" | "deleted";
+                    /** @description Opaque pagination cursor */
+                    cursor?: components["parameters"]["Cursor"];
+                    limit?: components["parameters"]["Limit"];
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AdminUserPage"];
+                    };
+                };
+                403: components["responses"]["Forbidden"];
+            };
+        };
+        put?: never;
+        /** Invite and provision a campus account */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["AdminUserInviteInput"];
+                };
+            };
+            responses: {
+                /** @description invited */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AdminUser"];
+                    };
+                };
+                403: components["responses"]["Forbidden"];
+                409: components["responses"]["Conflict"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/users/{id}/role": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Change a user's platform role */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["AdminUserRoleInput"];
+                };
+            };
+            responses: {
+                /** @description updated */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AdminUser"];
+                    };
+                };
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+                409: components["responses"]["Conflict"];
+            };
+        };
+        trace?: never;
+    };
+    "/admin/users/{id}/sessions/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Revoke every active session for a user */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["AdminReasonInput"];
+                };
+            };
+            responses: {
+                /** @description revoked */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/reviews": {
         parameters: {
             query?: never;
@@ -3966,7 +4450,11 @@ export interface paths {
                 };
                 cookie?: never;
             };
-            requestBody?: never;
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["AdminReasonInput"];
+                };
+            };
             responses: {
                 /** @description ok */
                 204: {
@@ -3979,33 +4467,7 @@ export interface paths {
         };
         options?: never;
         head?: never;
-        /** Edit a review */
-        patch: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path: {
-                    id: string;
-                };
-                cookie?: never;
-            };
-            requestBody?: {
-                content: {
-                    "application/json": components["schemas"]["ReviewInput"];
-                };
-            };
-            responses: {
-                /** @description ok */
-                200: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": components["schemas"]["Review"];
-                    };
-                };
-            };
-        };
+        patch?: never;
         trace?: never;
     };
     "/admin/reviews/{id}/toggle": {
@@ -4027,7 +4489,11 @@ export interface paths {
                 };
                 cookie?: never;
             };
-            requestBody?: never;
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["AdminReasonInput"];
+                };
+            };
             responses: {
                 /** @description ok */
                 200: {
@@ -4091,7 +4557,7 @@ export interface paths {
             };
             requestBody: {
                 content: {
-                    "application/json": components["schemas"]["Course"];
+                    "application/json": components["schemas"]["AdminCourseCreateInput"];
                 };
             };
             responses: {
@@ -4132,7 +4598,7 @@ export interface paths {
             };
             requestBody: {
                 content: {
-                    "application/json": components["schemas"]["Course"];
+                    "application/json": components["schemas"]["AdminCourseUpdateInput"];
                 };
             };
             responses: {
@@ -4158,7 +4624,11 @@ export interface paths {
                 };
                 cookie?: never;
             };
-            requestBody?: never;
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["AdminReasonInput"];
+                };
+            };
             responses: {
                 /** @description ok */
                 204: {
@@ -4185,7 +4655,7 @@ export interface paths {
         get: {
             parameters: {
                 query?: {
-                    status?: "open" | "resolved" | "all";
+                    status?: "open" | "upheld" | "rejected" | "ignored" | "all";
                     /** @description Opaque pagination cursor */
                     cursor?: components["parameters"]["Cursor"];
                     limit?: components["parameters"]["Limit"];
@@ -4234,22 +4704,107 @@ export interface paths {
                 };
                 cookie?: never;
             };
-            requestBody?: {
+            requestBody: {
                 content: {
-                    "application/json": {
-                        action?: string;
-                        note?: string;
+                    "application/json": components["schemas"]["ReviewReportResolutionInput"];
+                };
+            };
+            responses: {
+                /** @description resolved */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Report"];
                     };
                 };
             };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/dm/reports": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Private-message report queue; unreported conversations are never exposed */
+        get: {
+            parameters: {
+                query?: {
+                    status?: "open" | "upheld" | "rejected";
+                    /** @description Opaque pagination cursor */
+                    cursor?: components["parameters"]["Cursor"];
+                    limit?: components["parameters"]["Limit"];
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
             responses: {
                 /** @description ok */
                 200: {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["DmReportPage"];
+                    };
                 };
+                403: components["responses"]["Forbidden"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/dm/reports/{id}/resolve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Resolve a private-message report */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["DmReportResolutionInput"];
+                };
+            };
+            responses: {
+                /** @description resolved */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["DmReport"];
+                    };
+                };
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
             };
         };
         delete?: never;
@@ -4314,9 +4869,7 @@ export interface paths {
             };
             requestBody: {
                 content: {
-                    "application/json": {
-                        value: string;
-                    };
+                    "application/json": components["schemas"]["SettingUpdateInput"];
                 };
             };
             responses: {
@@ -4325,11 +4878,276 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["Setting"];
+                    };
                 };
             };
         };
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/announcements": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List announcements for administration */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description Opaque pagination cursor */
+                    cursor?: components["parameters"]["Cursor"];
+                    limit?: components["parameters"]["Limit"];
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AnnouncementPage"];
+                    };
+                };
+                403: components["responses"]["Forbidden"];
+            };
+        };
+        put?: never;
+        /** Publish an announcement */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["AnnouncementInput"];
+                };
+            };
+            responses: {
+                /** @description created */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Announcement"];
+                    };
+                };
+                403: components["responses"]["Forbidden"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/announcements/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete an announcement */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["AdminReasonInput"];
+                };
+            };
+            responses: {
+                /** @description deleted */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+            };
+        };
+        options?: never;
+        head?: never;
+        /** Update an announcement */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["AnnouncementInput"];
+                };
+            };
+            responses: {
+                /** @description updated */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Announcement"];
+                    };
+                };
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+            };
+        };
+        trace?: never;
+    };
+    "/admin/media/uploads": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Pending media moderation queue */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description Opaque pagination cursor */
+                    cursor?: components["parameters"]["Cursor"];
+                    limit?: components["parameters"]["Limit"];
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["UploadPage"];
+                    };
+                };
+                403: components["responses"]["Forbidden"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/media/uploads/{id}/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Approve a pending upload */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["AdminReasonInput"];
+                };
+            };
+            responses: {
+                /** @description approved */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+                409: components["responses"]["Conflict"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/media/uploads/{id}/block": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Block a pending upload */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["AdminReasonInput"];
+                };
+            };
+            responses: {
+                /** @description blocked */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+                409: components["responses"]["Conflict"];
+            };
+        };
         delete?: never;
         options?: never;
         head?: never;
@@ -4353,7 +5171,11 @@ export interface paths {
                 path?: never;
                 cookie?: never;
             };
-            requestBody?: never;
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["AdminReasonInput"];
+                };
+            };
             responses: {
                 /** @description queued */
                 202: {
@@ -4387,7 +5209,11 @@ export interface paths {
                 path?: never;
                 cookie?: never;
             };
-            requestBody?: never;
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["AdminReasonInput"];
+                };
+            };
             responses: {
                 /** @description queued */
                 202: {
@@ -4421,7 +5247,11 @@ export interface paths {
                 path?: never;
                 cookie?: never;
             };
-            requestBody?: never;
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["AdminReasonInput"];
+                };
+            };
             responses: {
                 /** @description queued */
                 202: {
@@ -4457,15 +5287,7 @@ export interface paths {
             };
             requestBody: {
                 content: {
-                    "application/json": {
-                        slug: string;
-                        name: string;
-                        description?: string;
-                        parentId?: string;
-                        position?: number;
-                        isLocked?: boolean;
-                        minTrustToPost?: number;
-                    };
+                    "application/json": components["schemas"]["AdminBoardCreateInput"];
                 };
             };
             responses: {
@@ -4474,7 +5296,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["Board"];
+                    };
                 };
             };
         };
@@ -4504,10 +5328,14 @@ export interface paths {
                 };
                 cookie?: never;
             };
-            requestBody?: never;
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["AdminReasonInput"];
+                };
+            };
             responses: {
                 /** @description deleted */
-                204: {
+                200: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -4527,14 +5355,20 @@ export interface paths {
                 };
                 cookie?: never;
             };
-            requestBody?: never;
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["AdminBoardUpdateInput"];
+                };
+            };
             responses: {
                 /** @description ok */
                 200: {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["Board"];
+                    };
                 };
             };
         };
@@ -4562,7 +5396,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["Tag"][];
+                    };
                 };
             };
         };
@@ -4577,11 +5413,7 @@ export interface paths {
             };
             requestBody: {
                 content: {
-                    "application/json": {
-                        slug: string;
-                        name: string;
-                        description?: string;
-                    };
+                    "application/json": components["schemas"]["AdminTagCreateInput"];
                 };
             };
             responses: {
@@ -4590,7 +5422,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["Tag"];
+                    };
                 };
             };
         };
@@ -4620,10 +5454,14 @@ export interface paths {
                 };
                 cookie?: never;
             };
-            requestBody?: never;
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["AdminReasonInput"];
+                };
+            };
             responses: {
                 /** @description deleted */
-                204: {
+                200: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -4643,30 +5481,34 @@ export interface paths {
                 };
                 cookie?: never;
             };
-            requestBody?: never;
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["AdminTagUpdateInput"];
+                };
+            };
             responses: {
                 /** @description ok */
                 200: {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["Tag"];
+                    };
                 };
             };
         };
         trace?: never;
     };
-    "/admin/forum/threads/{id}/pin": {
+    "/admin/forum/threads/{id}": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        get?: never;
-        put?: never;
-        /** Pin/unpin thread */
-        post: {
+        /** Read a thread for moderation */
+        get: {
             parameters: {
                 query?: never;
                 header?: never;
@@ -4682,8 +5524,98 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
+                    content: {
+                        "application/json": components["schemas"]["ThreadDetail"];
+                    };
+                };
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/forum/comments/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read a comment for moderation */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Comment"];
+                    };
+                };
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/forum/threads/{id}/{action}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Apply a reasoned moderation or organization action to a thread */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                    action: "pin" | "unpin" | "close" | "reopen" | "archive" | "unarchive" | "delete" | "restore" | "hide" | "unhide" | "move";
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["AdminThreadActionInput"];
+                };
+            };
+            responses: {
+                /** @description updated */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
                     content?: never;
                 };
+                400: components["responses"]["BadRequest"];
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
             };
         };
         delete?: never;
@@ -4692,7 +5624,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/admin/forum/threads/{id}/close": {
+    "/admin/forum/comments/{id}/{action}": {
         parameters: {
             query?: never;
             header?: never;
@@ -4701,205 +5633,33 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Close/reopen thread */
+        /** Apply a reasoned moderation action to a comment */
         post: {
             parameters: {
                 query?: never;
                 header?: never;
                 path: {
                     id: string;
+                    action: "delete" | "restore" | "hide" | "unhide";
                 };
                 cookie?: never;
             };
-            requestBody?: never;
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["AdminCommentActionInput"];
+                };
+            };
             responses: {
-                /** @description ok */
+                /** @description updated */
                 200: {
                     headers: {
                         [name: string]: unknown;
                     };
                     content?: never;
                 };
-            };
-        };
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/admin/forum/threads/{id}/archive": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Archive thread */
-        post: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path: {
-                    id: string;
-                };
-                cookie?: never;
-            };
-            requestBody?: never;
-            responses: {
-                /** @description ok */
-                200: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content?: never;
-                };
-            };
-        };
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/admin/forum/threads/{id}/restore": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Restore deleted thread */
-        post: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path: {
-                    id: string;
-                };
-                cookie?: never;
-            };
-            requestBody?: never;
-            responses: {
-                /** @description ok */
-                200: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content?: never;
-                };
-            };
-        };
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/admin/forum/threads/{id}/move": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Move thread */
-        post: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path: {
-                    id: string;
-                };
-                cookie?: never;
-            };
-            requestBody?: never;
-            responses: {
-                /** @description ok */
-                200: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content?: never;
-                };
-            };
-        };
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/admin/forum/threads/{id}/hide": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Hide thread */
-        post: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path: {
-                    id: string;
-                };
-                cookie?: never;
-            };
-            requestBody?: never;
-            responses: {
-                /** @description ok */
-                200: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content?: never;
-                };
-            };
-        };
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/admin/forum/threads/{id}/unhide": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Unhide thread */
-        post: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path: {
-                    id: string;
-                };
-                cookie?: never;
-            };
-            requestBody?: never;
-            responses: {
-                /** @description ok */
-                200: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content?: never;
-                };
+                400: components["responses"]["BadRequest"];
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
             };
         };
         delete?: never;
@@ -4917,7 +5677,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Feature a thread */
+        /** Feature or unfeature a thread */
         post: {
             parameters: {
                 query?: never;
@@ -4927,16 +5687,18 @@ export interface paths {
                 };
                 cookie?: never;
             };
-            requestBody?: never;
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["FeatureThreadInput"];
+                };
+            };
             responses: {
                 /** @description ok */
                 200: {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content: {
-                        "application/json": components["schemas"]["FeaturedThreadResponse"];
-                    };
+                    content?: never;
                 };
             };
         };
@@ -4957,7 +5719,7 @@ export interface paths {
         get: {
             parameters: {
                 query?: {
-                    status?: "open" | "all";
+                    status?: "open" | "upheld" | "rejected" | "ignored" | "all";
                     /** @description Opaque pagination cursor */
                     cursor?: components["parameters"]["Cursor"];
                     limit?: components["parameters"]["Limit"];
@@ -4973,7 +5735,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["AdminForumFlagPage"];
+                    };
                 };
             };
         };
@@ -5004,14 +5768,20 @@ export interface paths {
                 };
                 cookie?: never;
             };
-            requestBody?: never;
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["FlagResolveInput"];
+                };
+            };
             responses: {
                 /** @description ok */
                 200: {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["AdminForumFlag"];
+                    };
                 };
             };
         };
@@ -5043,7 +5813,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["WatchedWord"][];
+                    };
                 };
             };
         };
@@ -5067,7 +5839,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["WatchedWord"];
+                    };
                 };
             };
         };
@@ -5097,10 +5871,14 @@ export interface paths {
                 };
                 cookie?: never;
             };
-            requestBody?: never;
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["AdminReasonInput"];
+                };
+            };
             responses: {
                 /** @description deleted */
-                204: {
+                200: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -5170,7 +5948,11 @@ export interface paths {
                 };
                 cookie?: never;
             };
-            requestBody?: never;
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["SanctionInput"];
+                };
+            };
             responses: {
                 /** @description silenced */
                 204: {
@@ -5179,6 +5961,8 @@ export interface paths {
                     };
                     content?: never;
                 };
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
             };
         };
         delete?: never;
@@ -5206,7 +5990,11 @@ export interface paths {
                 };
                 cookie?: never;
             };
-            requestBody?: never;
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["SanctionInput"];
+                };
+            };
             responses: {
                 /** @description suspended */
                 204: {
@@ -5215,6 +6003,8 @@ export interface paths {
                     };
                     content?: never;
                 };
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
             };
         };
         delete?: never;
@@ -5242,7 +6032,11 @@ export interface paths {
                 };
                 cookie?: never;
             };
-            requestBody?: never;
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["UnsanctionInput"];
+                };
+            };
             responses: {
                 /** @description revoked */
                 204: {
@@ -5251,6 +6045,8 @@ export interface paths {
                     };
                     content?: never;
                 };
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
             };
         };
         delete?: never;
@@ -5283,8 +6079,12 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["Sanction"][];
+                    };
                 };
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
             };
         };
         put?: never;
@@ -5318,7 +6118,7 @@ export interface paths {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": components["schemas"]["BadgePage"];
+                        "application/json": components["schemas"]["Badge"][];
                     };
                 };
             };
@@ -5378,6 +6178,7 @@ export interface components {
             avatarUrl?: string | null;
             /** @enum {string} */
             role?: "user" | "mod" | "admin";
+            capabilities?: string[];
             trustLevel?: number;
             createdAt?: number;
         };
@@ -5400,11 +6201,11 @@ export interface components {
             id?: string;
             code?: string;
             name?: string;
-            credit?: number;
+            credit?: number | null;
             department?: string | null;
             teacherName?: string | null;
             reviewCount?: number;
-            reviewAvg?: number;
+            reviewAvg?: number | null;
         };
         CourseDetail: components["schemas"]["Course"] & {
             teachers?: components["schemas"]["Teacher"][];
@@ -5440,12 +6241,23 @@ export interface components {
             updatedAt?: number;
         };
         Report: {
-            id?: string;
-            reviewId?: string;
-            reason?: string;
+            id: string;
+            reviewId: string;
+            reason: string;
             /** @enum {string} */
-            status?: "open" | "resolved";
-            createdAt?: number;
+            status: "open" | "upheld" | "rejected" | "ignored";
+            courseId?: string | null;
+            reviewAuthorHandle?: string | null;
+            reviewRating?: number | null;
+            /** @enum {string|null} */
+            reviewStatus?: "visible" | "hidden" | "pending" | null;
+            reviewExcerpt?: string | null;
+            createdAt: number;
+        };
+        ReviewReportResolutionInput: {
+            /** @enum {string} */
+            action: "uphold" | "reject" | "ignore";
+            note: string;
         };
         Wallet: {
             accountId?: string;
@@ -5627,34 +6439,38 @@ export interface components {
             unreadCount?: number | null;
         };
         ThreadDetail: {
-            id?: string;
-            boardId?: string;
-            authorHandle?: string;
-            authorId?: string;
-            title?: string;
-            body?: string | null;
-            replyCount?: number;
-            voteCount?: number;
-            hotScore?: number | null;
-            tags?: string[];
-            status?: string;
-            pinnedAt?: number | null;
-            pinnedGlobally?: boolean;
-            closedAt?: number | null;
-            archivedAt?: number | null;
-            deletedAt?: number | null;
-            editedAt?: number | null;
-            hiddenAt?: number | null;
-            createdAt?: number;
-            lastActivityAt?: number;
-            myLastReadCommentId?: string | null;
-            mySubscriptionLevel?: string | null;
+            id: string;
+            boardId: string;
+            authorHandle: string;
+            authorId: string;
+            title: string;
+            body: string | null;
+            replyCount: number;
+            voteCount: number;
+            hotScore: number | null;
+            tags: string[];
+            status: string;
+            pinnedAt: number | null;
+            pinnedGlobally: boolean;
+            featuredAt: number | null;
+            closedAt: number | null;
+            archivedAt: number | null;
+            deletedAt: number | null;
+            editedAt: number | null;
+            hiddenAt: number | null;
+            createdAt: number;
+            lastActivityAt: number;
+            solvedAnswerId: string | null;
+            myLastReadCommentId: string | null;
+            mySubscriptionLevel: string | null;
+            poll: components["schemas"]["Poll"] | null;
         };
         ThreadInput: {
             boardId: string;
             title: string;
-            body?: string;
+            body?: string | null;
             tags?: string[];
+            poll?: components["schemas"]["PollInput"];
         };
         ThreadUpdateInput: {
             title?: string;
@@ -5667,6 +6483,14 @@ export interface components {
         ThreadMoveInput: {
             boardId: string;
         };
+        AdminThreadActionInput: {
+            reason: string;
+            globally?: boolean;
+            boardId?: string;
+        };
+        AdminCommentActionInput: {
+            reason: string;
+        };
         PostRevision: {
             id?: string;
             seq?: number;
@@ -5676,22 +6500,25 @@ export interface components {
             createdAt?: number;
         };
         Comment: {
-            id?: string;
-            threadId?: string;
-            parentId?: string | null;
-            path?: string;
-            authorHandle?: string;
-            authorId?: string;
-            body?: string;
-            voteCount?: number;
-            isDeleted?: boolean;
-            isHidden?: boolean;
-            editedAt?: number | null;
-            createdAt?: number;
+            id: string;
+            threadId: string;
+            parentId: string | null;
+            path: string;
+            authorHandle: string;
+            authorId: string;
+            body: string;
+            voteCount: number;
+            isDeleted: boolean;
+            isHidden: boolean;
+            editedAt: number | null;
+            createdAt: number;
+            quotedCommentId: string | null;
+            isSolved: boolean;
         };
         CommentInput: {
             parentId?: string;
             body: string;
+            quotedCommentId?: string;
         };
         CommentUpdateInput: {
             body: string;
@@ -5699,16 +6526,29 @@ export interface components {
         VoteInput: {
             /** @enum {string} */
             value: "up" | "down";
+            /** @enum {string} */
+            postType: "thread" | "comment";
+        };
+        VoteResponse: {
+            ok: boolean;
+            voteCount: number;
         };
         FlagInput: {
             /** @enum {string} */
             reason: "spam" | "abuse" | "off_topic" | "illegal" | "other";
             note?: string;
+            /** @enum {string} */
+            postType: "thread" | "comment";
+        };
+        FlagResponse: {
+            ok: boolean;
+            autoHidden: boolean;
+            autoSilenced: boolean;
         };
         FlagResolveInput: {
             /** @enum {string} */
             action: "uphold" | "reject" | "ignore";
-            note?: string;
+            note: string;
         };
         Subscription: {
             /** @enum {string} */
@@ -5771,7 +6611,7 @@ export interface components {
             /** @enum {string} */
             kind?: "silence" | "suspend";
             reason?: string;
-            issuedBy?: string;
+            issuedBy?: string | null;
             startsAt?: number;
             endsAt?: number | null;
             revokedAt?: number | null;
@@ -5783,6 +6623,7 @@ export interface components {
         };
         UnsanctionInput: {
             sanctionId: string;
+            reason: string;
         };
         WatchedWord: {
             id?: string;
@@ -5791,20 +6632,68 @@ export interface components {
             action?: "block" | "censor" | "queue";
             createdAt?: number;
         };
+        AdminBoardCreateInput: {
+            slug: string;
+            name: string;
+            reason: string;
+        };
+        AdminBoardUpdateInput: {
+            slug?: string;
+            name?: string;
+            reason: string;
+        };
+        AdminTagCreateInput: {
+            slug: string;
+            name: string;
+            description?: string;
+            reason: string;
+        };
+        AdminTagUpdateInput: {
+            slug?: string;
+            name?: string;
+            description?: string;
+            reason: string;
+        };
         WatchedWordInput: {
             word: string;
             /** @enum {string} */
             action: "block" | "censor" | "queue";
+            reason: string;
         };
         Setting: {
             key?: string;
             value?: string;
         };
+        SettingUpdateInput: {
+            value: string;
+            reason: string;
+        };
         Announcement: {
-            id?: string;
-            title?: string;
-            body?: string;
-            createdAt?: number;
+            id: string;
+            title: string;
+            body?: string | null;
+            createdAt: number;
+        };
+        AnnouncementInput: {
+            title: string;
+            body?: string | null;
+            reason: string;
+        };
+        AdminCourseCreateInput: {
+            code: string;
+            name: string;
+            credit?: number;
+            department?: string;
+            teacherName?: string;
+            reason: string;
+        };
+        AdminCourseUpdateInput: {
+            code?: string;
+            name?: string;
+            credit?: number;
+            department?: string;
+            teacherName?: string;
+            reason: string;
         };
         CoursePage: components["schemas"]["Page"] & {
             items?: components["schemas"]["Course"][];
@@ -5839,6 +6728,12 @@ export interface components {
         ThreadFeedPage: components["schemas"]["Page"] & {
             items?: components["schemas"]["ThreadFeed"][];
         };
+        UserThreadPage: components["schemas"]["Page"] & {
+            items?: components["schemas"]["UserThread"][];
+        };
+        UserCommentPage: components["schemas"]["Page"] & {
+            items?: components["schemas"]["UserComment"][];
+        };
         RevisionPage: components["schemas"]["Page"] & {
             items?: components["schemas"]["PostRevision"][];
         };
@@ -5846,32 +6741,83 @@ export interface components {
             items?: components["schemas"]["ModAction"][];
         };
         DmConversation: {
-            id?: string;
-            otherAccountId?: string;
-            otherHandle?: string;
-            otherAvatarUrl?: string | null;
-            lastMessageBody?: string | null;
+            id: string;
+            participantId: string;
+            participantHandle: string;
+            participantAvatarUrl?: string | null;
+            lastMessageExcerpt?: string | null;
             lastMessageAt?: number | null;
-            unreadCount?: number;
-            createdAt?: number;
+            unreadCount: number;
+            createdAt: number;
+        };
+        DmConversationInput: {
+            recipientHandle: string;
         };
         DmMessage: {
-            id?: string;
-            conversationId?: string;
-            senderId?: string;
-            senderHandle?: string;
-            body?: string;
-            createdAt?: number;
+            id: string;
+            conversationId: string;
+            senderId: string;
+            senderHandle: string;
+            body: string;
+            createdAt: number;
         };
-        PollResult: {
-            pollId?: string;
-            options?: {
-                id?: string;
-                body?: string;
-                voteCount?: number;
-            }[];
-            totalVotes?: number;
-            myOptionId?: string | null;
+        DmMessageInput: {
+            body: string;
+        };
+        DmReadInput: {
+            lastReadMessageId?: string | null;
+        };
+        DmReportInput: {
+            /** @enum {string} */
+            reason: "spam" | "abuse" | "harassment" | "fraud" | "illegal" | "other";
+            note?: string;
+        };
+        DmReport: {
+            id: string;
+            messageId: string;
+            conversationId: string;
+            reporterId: string;
+            reporterHandle?: string;
+            senderId: string;
+            senderHandle?: string;
+            messageExcerpt?: string;
+            /** @enum {string} */
+            reason: "spam" | "abuse" | "harassment" | "fraud" | "illegal" | "other";
+            note?: string | null;
+            /** @enum {string} */
+            status: "open" | "upheld" | "rejected";
+            handledBy?: string | null;
+            handledAt?: number | null;
+            createdAt: number;
+        };
+        DmReportResolutionInput: {
+            /** @enum {string} */
+            action: "uphold" | "reject";
+            note?: string;
+        };
+        PollInput: {
+            question: string;
+            /** @default false */
+            multiSelect: boolean;
+            closesAt?: number | null;
+            options: string[];
+        };
+        PollOption: {
+            id: string;
+            label: string;
+            voteCount: number;
+            position: number;
+        };
+        Poll: {
+            id: string;
+            question: string;
+            multiSelect: boolean;
+            closesAt: number | null;
+            options: components["schemas"]["PollOption"][];
+            myVotes: string[];
+        };
+        PollVoteResponse: {
+            ok: boolean;
         };
         DraftOutput: {
             draftKey?: string;
@@ -5888,16 +6834,79 @@ export interface components {
             avatarUrl?: string | null;
             createdAt?: number;
         };
+        UserBadge: {
+            slug: string;
+            name: string;
+        };
         UserProfile: {
-            handle?: string;
+            id: string;
+            handle: string;
             avatarUrl?: string | null;
             /** @enum {string} */
-            role?: "user" | "mod" | "admin";
-            createdAt?: number;
+            role: "user" | "mod" | "admin";
+            trustLevel: number;
+            badges: components["schemas"]["UserBadge"][];
+            threadCount: number;
+            commentCount: number;
+            votesReceived: number;
+            createdAt: number;
         };
-        UserProfileWithStats: components["schemas"]["UserProfile"] & {
-            threadCount?: number;
-            commentCount?: number;
+        UserThread: {
+            id: string;
+            title: string;
+            boardSlug: string;
+            replyCount: number;
+            voteCount: number;
+            createdAt: number;
+        };
+        UserComment: {
+            id: string;
+            threadId: string;
+            threadTitle: string;
+            body: string;
+            createdAt: number;
+        };
+        /** @deprecated */
+        UserProfileWithStats: components["schemas"]["UserProfile"];
+        ActivityWeights: {
+            thread: number;
+            comment: number;
+            like: number;
+        };
+        ActivityDay: {
+            /** Format: date */
+            date: string;
+            threads: number;
+            comments: number;
+            /** @description Positive likes given by the user. */
+            likes: number;
+            score: number;
+        };
+        /** @description A continuous Asia/Shanghai calendar; days without activity are returned with zero counts. */
+        ActivityCalendar: {
+            /** @enum {string} */
+            timezone: "Asia/Shanghai";
+            /** Format: date */
+            from: string;
+            /** Format: date */
+            to: string;
+            policyVersion: number;
+            weights: components["schemas"]["ActivityWeights"];
+            days: components["schemas"]["ActivityDay"][];
+        };
+        ActivityPolicy: {
+            version: number;
+            /** @enum {string} */
+            timezone: "Asia/Shanghai";
+            weights: components["schemas"]["ActivityWeights"];
+            reason: string;
+            changedBy: string;
+            createdAt: number;
+        };
+        ActivityPolicyUpdateInput: {
+            expectedVersion: number;
+            weights: components["schemas"]["ActivityWeights"];
+            reason: string;
         };
         OneboxResult: {
             url?: string;
@@ -5947,17 +6956,104 @@ export interface components {
         UploadPage: components["schemas"]["Page"] & {
             items?: components["schemas"]["Upload"][];
         };
+        AdminForumFlagPage: components["schemas"]["Page"] & {
+            items?: components["schemas"]["AdminForumFlag"][];
+        };
+        AdminUser: {
+            id: string;
+            handle: string;
+            avatarUrl?: string | null;
+            /** @enum {string} */
+            role: "user" | "mod" | "admin";
+            /** @enum {string} */
+            status: "active" | "suspended" | "deleted";
+            trustLevel: number;
+            lastActiveAt?: number | null;
+            createdAt: number;
+        };
+        AdminUserInviteInput: {
+            /** Format: email */
+            email: string;
+            handle: string;
+            reason: string;
+        };
+        AdminReasonInput: {
+            reason: string;
+        };
+        AdminForumFlag: {
+            id: string;
+            /** @enum {string} */
+            targetType: "thread" | "comment";
+            targetId: string;
+            reporterId: string;
+            /** @enum {string} */
+            reason: "spam" | "abuse" | "off_topic" | "illegal" | "other";
+            note?: string | null;
+            weight: number;
+            /** @enum {string} */
+            status: "open" | "upheld" | "rejected" | "ignored";
+            handledBy?: string | null;
+            handledAt?: number | null;
+            resolutionNote?: string | null;
+            authorHandle?: string | null;
+            targetTitle?: string | null;
+            contentExcerpt?: string | null;
+            createdAt: number;
+        };
+        AdminUserRoleInput: {
+            /** @enum {string} */
+            role: "user" | "mod";
+            reason: string;
+        };
+        AdminOverview: {
+            totalUsers: number;
+            activeUsers: number;
+            suspendedUsers: number;
+            moderators?: number;
+            administrators?: number;
+            pendingReviewReports: number;
+            pendingForumFlags: number;
+            pendingDmReports: number;
+            pendingMediaUploads: number;
+            threadsToday: number;
+            commentsToday: number;
+            likesToday: number;
+        };
+        AdminAuditEvent: {
+            id: string;
+            /** @enum {string} */
+            actorKind: "account" | "system" | "service";
+            actorId?: string | null;
+            actorHandle?: string | null;
+            actorRole?: string | null;
+            action: string;
+            targetType: string;
+            targetId: string;
+            reason?: string | null;
+            metadata?: Record<string, never> | null;
+            createdAt: number;
+        };
         Badge: {
             id?: string;
+            slug?: string;
             name?: string;
             description?: string | null;
             iconUrl?: string | null;
+            mintAmount?: number;
             createdAt?: number;
         };
         BadgeInput: {
+            slug: string;
             name: string;
             description?: string;
             iconUrl?: string;
+            /** @default 0 */
+            mintAmount: number;
+            reason: string;
+        };
+        FeatureThreadInput: {
+            featured: boolean;
+            reason: string;
         };
         FeaturedThreadResponse: {
             id?: string;
@@ -5977,6 +7073,21 @@ export interface components {
         };
         BadgePage: components["schemas"]["Page"] & {
             items?: components["schemas"]["Badge"][];
+        };
+        ActivityPolicyPage: components["schemas"]["Page"] & {
+            items?: components["schemas"]["ActivityPolicy"][];
+        };
+        AdminUserPage: components["schemas"]["Page"] & {
+            items?: components["schemas"]["AdminUser"][];
+        };
+        AdminAuditEventPage: components["schemas"]["Page"] & {
+            items?: components["schemas"]["AdminAuditEvent"][];
+        };
+        DmReportPage: components["schemas"]["Page"] & {
+            items?: components["schemas"]["DmReport"][];
+        };
+        AnnouncementPage: components["schemas"]["Page"] & {
+            items?: components["schemas"]["Announcement"][];
         };
     };
     responses: {

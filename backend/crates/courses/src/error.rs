@@ -24,6 +24,9 @@ pub enum CoursesError {
     #[error("invalid major or grade")]
     InvalidMajorOrGrade,
 
+    #[error("course with reviews cannot be deleted")]
+    CourseHasReviews,
+
     #[error("database error")]
     Database(#[from] sqlx::Error),
 }
@@ -37,6 +40,9 @@ impl From<CoursesError> for AppError {
             CoursesError::InvalidDepartment(_)
             | CoursesError::InvalidSort(_)
             | CoursesError::InvalidMajorOrGrade => AppError::BadRequest(err.to_string()),
+            CoursesError::CourseHasReviews => AppError::Conflict(
+                "course with reviews cannot be deleted; preserve its community history".into(),
+            ),
             CoursesError::Database(inner) => AppError::Internal(inner.into()),
         }
     }

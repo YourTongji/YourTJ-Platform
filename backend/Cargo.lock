@@ -3,6 +3,24 @@
 version = 4
 
 [[package]]
+name = "activity"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "chrono",
+ "governance",
+ "identity",
+ "serde",
+ "serde_json",
+ "shared",
+ "sqlx",
+ "tokio",
+ "tower",
+ "uuid",
+]
+
+[[package]]
 name = "aho-corasick"
 version = "1.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -36,6 +54,7 @@ checksum = "2a4385e2e34eb35d6b3efe798b9eb88096925d87726c0798709bf56d9ed84af3"
 name = "api"
 version = "0.1.0"
 dependencies = [
+ "activity",
  "anyhow",
  "axum",
  "base64",
@@ -44,6 +63,7 @@ dependencies = [
  "credit",
  "deadpool-redis",
  "forum",
+ "governance",
  "hex",
  "identity",
  "media",
@@ -355,6 +375,7 @@ dependencies = [
  "chrono",
  "deadpool-redis",
  "forum",
+ "governance",
  "identity",
  "meilisearch-sdk",
  "pinyin",
@@ -366,6 +387,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -738,6 +760,7 @@ dependencies = [
 name = "forum"
 version = "0.1.0"
 dependencies = [
+ "activity",
  "aho-corasick",
  "anyhow",
  "arc-swap",
@@ -746,6 +769,7 @@ dependencies = [
  "chrono",
  "deadpool-redis",
  "futures",
+ "governance",
  "hex",
  "identity",
  "meilisearch-sdk",
@@ -910,6 +934,17 @@ dependencies = [
  "cfg-if",
  "libc",
  "r-efi 6.0.0",
+]
+
+[[package]]
+name = "governance"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "shared",
+ "sqlx",
 ]
 
 [[package]]
@@ -1231,6 +1266,7 @@ dependencies = [
  "chrono",
  "credit",
  "deadpool-redis",
+ "governance",
  "hex",
  "hmac",
  "jsonwebtoken",
@@ -1472,6 +1508,7 @@ dependencies = [
  "axum",
  "base64",
  "chrono",
+ "governance",
  "hex",
  "hmac",
  "identity",
@@ -1485,6 +1522,8 @@ dependencies = [
  "shared",
  "sqlx",
  "thiserror 2.0.18",
+ "tokio",
+ "tower",
  "tracing",
  "uuid",
 ]
@@ -2107,14 +2146,18 @@ dependencies = [
 name = "reviews"
 version = "0.1.0"
 dependencies = [
+ "activity",
  "axum",
  "chrono",
  "courses",
  "deadpool-redis",
+ "governance",
+ "hex",
  "identity",
  "redis",
  "serde",
  "serde_json",
+ "sha2",
  "shared",
  "sqlx",
  "thiserror 2.0.18",

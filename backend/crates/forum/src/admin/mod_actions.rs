@@ -35,7 +35,8 @@ pub async fn list_mod_actions(
     )
     .await
     .map_err(|_| AppError::Unauthorized)?;
-    auth.require_mod().map_err(|_| AppError::Forbidden)?;
+    auth.require_capability(shared::auth::Capability::ReadAudit)
+        .map_err(|_| AppError::Forbidden)?;
 
     let cursor: Option<i64> = q.cursor.and_then(|c| c.parse().ok());
     let (rows, next_cursor) = crate::repo::list_mod_actions(&state.db, cursor, q.limit).await?;

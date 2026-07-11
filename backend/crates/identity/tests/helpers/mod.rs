@@ -43,10 +43,12 @@ pub async fn create_test_app() -> (PgPool, axum::Router) {
     (pool, router)
 }
 
+#[allow(dead_code)]
 pub async fn create_test_app_with_pool(pool: PgPool) -> axum::Router {
     create_test_app_with_pool_and_encryption(pool, None).await
 }
 
+#[allow(dead_code)]
 pub async fn create_test_app_with_pool_and_encryption(
     pool: PgPool,
     email_encryption: Option<EmailEncryption>,
@@ -101,7 +103,87 @@ async fn run_migrations(pool: &PgPool) {
         }
     }
 
+    let has_password_hash: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM information_schema.columns \
+         WHERE table_schema = 'identity' AND table_name = 'accounts' \
+           AND column_name = 'password_hash')",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or(false);
+    if !has_password_hash {
+        sqlx::raw_sql(include_str!("../../../../migrations/0011_password_auth.sql"))
+            .execute(pool)
+            .await
+            .expect("migration 0011 failed");
+    }
+
+    let has_encrypted_email: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM information_schema.columns \
+         WHERE table_schema = 'identity' AND table_name = 'accounts' \
+           AND column_name = 'email_ciphertext')",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or(false);
+    if !has_encrypted_email {
+        sqlx::raw_sql(include_str!("../../../../migrations/0016_email_encryption.sql"))
+            .execute(pool)
+            .await
+            .expect("migration 0016 failed");
+        sqlx::raw_sql(include_str!("../../../../migrations/0018_email_encrypted_storage.sql"))
+            .execute(pool)
+            .await
+            .expect("migration 0018 failed");
+    }
+
+    let has_governance: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM information_schema.schemata WHERE schema_name = 'governance')",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or(false);
+    if !has_governance {
+        sqlx::raw_sql(include_str!("../../../../migrations/0022_governance.sql"))
+            .execute(pool)
+            .await
+            .expect("migration 0022 failed");
+    }
+
+    let has_invitation_expiry: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM information_schema.columns \
+         WHERE table_schema = 'identity' AND table_name = 'accounts' \
+           AND column_name = 'invitation_expires_at')",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or(false);
+    if !has_invitation_expiry {
+        sqlx::raw_sql(include_str!("../../../../migrations/0024_invitation_expiry.sql"))
+            .execute(pool)
+            .await
+            .expect("migration 0024 failed");
+    }
+
+    let has_moderation_state: bool = sqlx::query_scalar(
+        "SELECT COALESCE(( \
+           SELECT is_nullable = 'YES' FROM information_schema.columns \
+           WHERE table_schema = 'identity' AND table_name = 'sanctions' \
+             AND column_name = 'issued_by' \
+         ), false)",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or(false);
+    if !has_moderation_state {
+        sqlx::raw_sql(include_str!("../../../../migrations/0025_moderation_state.sql"))
+            .execute(pool)
+            .await
+            .expect("migration 0025 failed");
+    }
+
     // Clean test data from previous runs (always run, even if migrations were skipped).
+    sqlx::query("DELETE FROM governance.audit_events").execute(pool).await.ok();
     sqlx::query("DELETE FROM identity.sessions").execute(pool).await.ok();
     sqlx::query("DELETE FROM identity.email_codes").execute(pool).await.ok();
     sqlx::query("DELETE FROM identity.account_keys").execute(pool).await.ok();
@@ -114,6 +196,7 @@ async fn run_migrations(pool: &PgPool) {
 }
 
 /// Read the JSON body from a response.
+#[allow(dead_code)] // reason: each integration-test binary compiles this shared helper independently
 pub async fn read_json(resp: Response<Body>) -> Value {
     let bytes =
         to_bytes(resp.into_body(), 10 * 1024 * 1024).await.expect("failed to read response body");

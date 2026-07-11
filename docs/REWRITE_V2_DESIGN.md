@@ -1,5 +1,18 @@
 # YourTJ v2 后端设计草案（A）
 
+> **Status:** Historical architecture baseline; non-authoritative for current API, schema, governance,
+> or implementation status.
+>
+> **Owner:** Platform maintainers
+>
+> **Last verified:** Partially reconciled through 2026-06 remediation notes; not a current inventory
+>
+> **Authoritative sources:** [`docs/README.md`](README.md), `contract/openapi.yaml`, numbered migrations,
+> and current normative product/security documents
+>
+> 本文保留早期架构决策和演进背景。完整 DDL、示例路径、阶段状态可能已经过期；当前社区治理、
+> 活跃度、资料/私信与权限规范请从 [`docs/README.md`](README.md) 进入。
+
 > 目标架构：阿里云华东 · SAE 无状态容器（serverless）· PolarDB（A 单实例 / B 主从读写分离）· Meilisearch 搜索 · Redis 缓存/计数/限流/热榜 · OSS+CDN 媒体。
 > 身份：校园邮箱验证码注册 + JWT/refresh；账号绑 Ed25519，仅资金操作签名。
 > 本文覆盖：①API 约定 ②v2 OpenAPI 草案 ③PolarDB DDL ④搜索索引设计 ⑤缓存与失效策略。
@@ -24,7 +37,7 @@
 
 ## 1. v2 OpenAPI 草案（约定 + 代表性示例）
 
-> **完整契约以 [`contract/openapi.yaml`](../contract/openapi.yaml) 为单一权威源**（65 路径 / 75 操作 / 52 schema，覆盖 auth·identity·wallet·credit(含 escrow 市场)·search·courses·selection(选课)·reviews·forum·notifications·platform·admin，并抽出可复用的 `Cursor/Limit/X-Wallet-Sig/Idempotency-Key` 参数与错误响应）。本节只保留约定与代表性示例，改接口请先改契约。
+> **完整契约以 [`contract/openapi.yaml`](../contract/openapi.yaml) 为单一权威源**。本节只保留历史约定与代表性示例；路径、操作和 schema 数量不在文档中手工维护，改接口请先改契约。
 
 ```yaml
 openapi: 3.1.0
@@ -197,6 +210,20 @@ paths:
 > 选 **PolarDB PostgreSQL**：JSONB、部分索引、CITEXT、枚举更顺手，且搜索外置 Meilisearch 不依赖库内中文分词。
 > MySQL 变体：`CITEXT`→`VARCHAR + 唯一索引(lower())`，`BYTEA`→`VARBINARY`，枚举→`ENUM`/`CHECK`，`JSONB`→`JSON`。
 > 单库多 schema，按域隔离。
+>
+> **Current addendum (2026-07-11):** the historical inline DDL below predates the governance rollout.
+> Current structure is append-only in migrations: `0020_activity.sql` owns activity events/counts/policy,
+> `0021_dm_moderation.sql` owns canonical DM/read/report state, `0022_governance.sql` owns central audit and
+> invitations, `0023_review_moderation_decisions.sql` owns explicit review-report decisions,
+> `0024_invitation_expiry.sql` owns invitation expiry/acceptance, and `0025_moderation_state.sql` owns
+> automated-hide provenance plus system-issued sanctions. `0026_forum_flag_attempts.sql` preserves
+> terminal report attempts, `0027_activity_backfill.sql` projects existing contributions, and
+> `0028_review_course_restrict.sql` protects retained review history from course deletion.
+> `0029_review_report_open_uniqueness.sql` preserves terminal cases while allowing later reports, and
+> `0030_review_create_idempotency.sql` provides durable review-publication replay, and
+> `0031_forum_board_thread_count_reconcile.sql` aligns historical board counters with the current
+> visible-thread invariant. Do not copy
+> this historical DDL to create a database; run the numbered migrations.
 
 ```sql
 CREATE EXTENSION IF NOT EXISTS citext;
@@ -565,7 +592,7 @@ Previously all system-originated ledger entries used literal `"system-signed"` a
 - `CREDIT_SYSTEM_PRIVATE_KEY` (hex-encoded 32-byte seed) loaded from the environment
 - `derive_system_key()` in `api/src/bootstrap.rs` derives the Ed25519 keypair at startup
 - System public key is stored in `AppState.system_public_key_b64`
-- All `mint`, `escrow_hold`, `escrow_release` entries are signed with real Ed25519 
+- All `mint`, `escrow_hold`, `escrow_release` entries are signed with real Ed25519
 - `verify_full_ledger` verifies both user and system signatures against stored public keys
 - Batch preload of `identity.account_keys` reduces N+1 queries during full verification
 
@@ -603,6 +630,8 @@ Previously all system-originated ledger entries used literal `"system-signed"` a
 | `identity` | Auth, accounts, sessions, Ed25519 key management, wallet claim |
 | `credit` | Ledger, wallets, wallets balance, tasks, products, purchases |
 | `forum` | Boards, threads, comments, votes, notifications (moved from identity) |
+| `activity` | Idempotent contribution events, daily counts, versioned display weights |
+| `governance` | Append-only cross-domain staff/system audit events |
 | `courses` | Catalogue, teachers, departments, selection (选课) mirror, admin course CRUD (moved from api) |
 | `shared` | Config, JWT primitives (no DB queries), AppState, error types, pagination, cache, rate limiting |
 | `api` | Router composition, startup wiring, platform routes, admin stubs (selection sync, review reindex) |

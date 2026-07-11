@@ -19,6 +19,10 @@ deadpool-redis.workspace = true
 uuid.workspace = true
 identity.workspace = true
 courses.workspace = true
+activity.workspace = true
+governance.workspace = true
+hex.workspace = true
+sha2.workspace = true
 
 [dev-dependencies]
 tower.workspace = true

@@ -1,174 +1,240 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { MessageSquare, Plus, Send } from "lucide-react";
+import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import * as React from "react";
+import { Link, useSearchParams } from "react-router";
 import { toast } from "sonner";
 
 import { PageHeader } from "@/components/common/page-header";
-import { EmptyState, ErrorState, LoadingState } from "@/components/common/states";
+import { EmptyState, LoadingState } from "@/components/common/states";
+import { ConversationList } from "@/components/messages/conversation-list";
+import { ConversationThread } from "@/components/messages/conversation-thread";
+import { NewConversationDialog } from "@/components/messages/new-conversation-dialog";
+import { ReportMessageDialog } from "@/components/messages/report-message-dialog";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import { useAuth } from "@/context/auth-provider";
 import { api } from "@/lib/api/endpoints";
-import type { DmConversation } from "@/lib/api/types";
-import { formatUnixTime } from "@/lib/format";
+import type { DmConversation, DmMessage, DmReportReason } from "@/lib/api/types";
 import { cn } from "@/lib/utils";
 
-function conversationLabel(item: DmConversation) {
-  return item.participantHandle ?? item.otherHandle ?? item.participantId ?? item.otherAccountId ?? item.id ?? "会话";
-}
-
 export function MessagesPage() {
-  const { isAuthenticated } = useAuth();
+  const { account, isAuthenticated, isLoading: authLoading } = useAuth();
   const queryClient = useQueryClient();
-  const [selectedId, setSelectedId] = React.useState("");
-  const [recipientId, setRecipientId] = React.useState("");
+  const [searchParams, setSearchParams] = useSearchParams();
+  const selectedId = searchParams.get("conversation") ?? "";
   const [body, setBody] = React.useState("");
-  const conversations = useQuery({
+  const [reportingMessage, setReportingMessage] = React.useState<DmMessage | null>(null);
+  const lastMarkedRead = React.useRef("");
+
+  const conversations = useInfiniteQuery({
     queryKey: ["dm", "conversations"],
-    queryFn: api.dmConversations,
+    queryFn: ({ pageParam }) => api.dmConversations(pageParam),
+    initialPageParam: null as string | null,
+    getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
     enabled: isAuthenticated,
   });
-  const messages = useQuery({
-    queryKey: ["dm", "messages", selectedId],
-    queryFn: () => api.dmMessages(selectedId),
-    enabled: isAuthenticated && Boolean(selectedId),
-  });
-  const createConversation = useMutation({
-    mutationFn: () => api.createDmConversation(recipientId),
-    onSuccess: async (data) => {
-      toast.success("会话已创建");
-      setRecipientId("");
-      await queryClient.invalidateQueries({ queryKey: ["dm", "conversations"] });
-      if (data.id) {
-        setSelectedId(data.id);
-      }
-    },
-    onError: (error) => toast.error(error instanceof Error ? error.message : "创建会话失败"),
-  });
-  const sendMessage = useMutation({
-    mutationFn: () => api.sendDmMessage(selectedId, body),
-    onSuccess: async () => {
-      setBody("");
-      await queryClient.invalidateQueries({ queryKey: ["dm", "messages", selectedId] });
-      await queryClient.invalidateQueries({ queryKey: ["dm", "conversations"] });
-    },
-    onError: (error) => toast.error(error instanceof Error ? error.message : "发送失败"),
-  });
+  const conversationItems = conversations.data?.pages.flatMap((page) => page.items ?? []) ?? [];
+  const selectedConversation = conversationItems.find((item) => item.id === selectedId);
+  const fetchNextConversationPage = conversations.fetchNextPage;
+  const hasNextConversationPage = conversations.hasNextPage;
+  const isFetchingNextConversationPage = conversations.isFetchingNextPage;
 
   React.useEffect(() => {
-    if (!selectedId && conversations.data?.[0]?.id) {
-      setSelectedId(conversations.data[0].id);
+    if (selectedId && !selectedConversation && hasNextConversationPage && !isFetchingNextConversationPage) {
+      void fetchNextConversationPage();
     }
-  }, [conversations.data, selectedId]);
+  }, [
+    fetchNextConversationPage,
+    hasNextConversationPage,
+    isFetchingNextConversationPage,
+    selectedConversation,
+    selectedId,
+  ]);
 
+  const messages = useInfiniteQuery({
+    queryKey: ["dm", "messages", selectedId],
+    queryFn: ({ pageParam }) => api.dmMessages(selectedId, pageParam),
+    initialPageParam: null as string | null,
+    getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
+    enabled: isAuthenticated && Boolean(selectedId),
+  });
+  const messageItems = React.useMemo(
+    () => (messages.data?.pages.flatMap((page) => page.items ?? []) ?? []).reverse(),
+    [messages.data?.pages],
+  );
+
+  const ignoredUsers = useInfiniteQuery({
+    queryKey: ["ignores"],
+    queryFn: ({ pageParam }) => api.ignoredUsers(pageParam),
+    initialPageParam: null as string | null,
+    getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
+    enabled: isAuthenticated,
+  });
+  const fetchNextIgnoredPage = ignoredUsers.fetchNextPage;
+  const hasNextIgnoredPage = ignoredUsers.hasNextPage;
+  const isFetchingNextIgnoredPage = ignoredUsers.isFetchingNextPage;
+  React.useEffect(() => {
+    if (hasNextIgnoredPage && !isFetchingNextIgnoredPage) {
+      void fetchNextIgnoredPage();
+    }
+  }, [fetchNextIgnoredPage, hasNextIgnoredPage, isFetchingNextIgnoredPage]);
+  const selectedIsIgnored = Boolean(
+    selectedConversation
+    && ignoredUsers.data?.pages.some((page) =>
+      (page.items ?? []).some((item) => item.accountId === selectedConversation.participantId)),
+  );
+
+  const createConversation = useMutation({
+    mutationFn: (handle: string) => api.createDmConversation(handle),
+    onSuccess: async (conversation) => {
+      toast.success(`已打开与 ${conversation.participantHandle} 的对话`);
+      selectConversation(conversation);
+      await queryClient.invalidateQueries({ queryKey: ["dm", "conversations"] });
+    },
+  });
+  const sendMessage = useMutation({
+    mutationFn: () => api.sendDmMessage(selectedId, body.trim()),
+    onSuccess: async () => {
+      setBody("");
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["dm", "messages", selectedId] }),
+        queryClient.invalidateQueries({ queryKey: ["dm", "conversations"] }),
+      ]);
+    },
+  });
+  const reportMessage = useMutation({
+    mutationFn: ({ message, reason, note }: {
+      message: DmMessage;
+      reason: DmReportReason;
+      note?: string;
+    }) => api.reportDmMessage(message.id, reason, note),
+    onSuccess: () => toast.success("举报已提交，审核人员只会看到这条消息及你的说明"),
+  });
+  const relationship = useMutation({
+    mutationFn: async () => {
+      if (!selectedConversation) return;
+      if (selectedIsIgnored) {
+        await api.unignoreUser(selectedConversation.participantId);
+      } else {
+        await api.ignoreUser(selectedConversation.participantId);
+      }
+    },
+    onSuccess: async () => {
+      toast.success(selectedIsIgnored ? "已解除屏蔽" : "已屏蔽该用户");
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["ignores"] }),
+        queryClient.invalidateQueries({ queryKey: ["dm", "conversations"] }),
+      ]);
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : "关系设置失败"),
+  });
+
+  const newestMessage = messages.data?.pages[0]?.items?.[0];
+  React.useEffect(() => {
+    if (!selectedId || !newestMessage?.id) return;
+    const readKey = `${selectedId}:${newestMessage.id}`;
+    if (lastMarkedRead.current === readKey) return;
+    lastMarkedRead.current = readKey;
+    void api
+      .markDmConversationRead(selectedId, newestMessage.id)
+      .then(() => queryClient.invalidateQueries({ queryKey: ["dm", "conversations"] }))
+      .catch(() => {
+        lastMarkedRead.current = "";
+      });
+  }, [newestMessage?.id, queryClient, selectedId]);
+
+  function selectConversation(conversation: DmConversation) {
+    setBody("");
+    sendMessage.reset();
+    setSearchParams({ conversation: conversation.id }, { replace: true });
+  }
+
+  function clearSelection() {
+    setBody("");
+    sendMessage.reset();
+    setSearchParams({}, { replace: true });
+  }
+
+  if (authLoading) {
+    return <LoadingState label="确认登录状态" />;
+  }
   if (!isAuthenticated) {
-    return <EmptyState title="登录后使用私信" />;
+    return (
+      <EmptyState
+        title="登录后使用私信"
+        description="私信只对会话双方可见；举报时只向审核人员提交被举报的单条消息。"
+        action={<Button asChild><Link to="/login">前往登录</Link></Button>}
+      />
+    );
   }
 
   return (
     <div>
       <PageHeader
-        eyebrow="DM"
+        eyebrow="Private Messages"
         title="私信"
-        description="1:1 站内私信，接入 forum DM conversation/message 接口。"
+        description="一对一站内沟通。收件箱显示未读数和消息摘要，未举报的对话不会向管理员开放。"
       />
-      <div className="grid gap-5 lg:grid-cols-[20rem_minmax(0,1fr)]">
-        <aside className="space-y-4">
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Plus className="h-4 w-4 text-primary" />
-                新建会话
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-2">
-              <Label>对方账号 ID</Label>
-              <div className="flex gap-2">
-                <Input value={recipientId} onChange={(event) => setRecipientId(event.target.value)} />
-                <Button onClick={() => createConversation.mutate()} disabled={!recipientId || createConversation.isPending}>
-                  创建
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader>
-              <CardTitle>会话</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-2">
-              {conversations.isLoading ? (
-                <LoadingState />
-              ) : conversations.isError ? (
-                <ErrorState error={conversations.error} onRetry={() => void conversations.refetch()} />
-              ) : (conversations.data ?? []).length === 0 ? (
-                <p className="text-sm text-muted-foreground">暂无会话</p>
-              ) : (
-                conversations.data?.map((item) => (
-                  <button
-                    key={item.id}
-                    onClick={() => item.id && setSelectedId(item.id)}
-                    className={cn(
-                      "block w-full rounded-md border p-3 text-left text-sm transition-colors hover:bg-accent",
-                      selectedId === item.id && "border-primary bg-secondary",
-                    )}
-                  >
-                    <p className="font-medium">{conversationLabel(item)}</p>
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      {formatUnixTime(item.lastMessageAt ?? item.createdAt)}
-                    </p>
-                  </button>
-                ))
-              )}
-            </CardContent>
-          </Card>
+      <div className="grid gap-5 lg:grid-cols-[22rem_minmax(0,1fr)]">
+        <aside className={cn(selectedConversation && "hidden lg:block")}>
+          <ConversationList
+            conversations={conversationItems}
+            selectedId={selectedId}
+            headerAction={(
+              <NewConversationDialog
+                canCreate={(account?.trustLevel ?? 0) >= 1}
+                isPending={createConversation.isPending}
+                error={createConversation.error}
+                onReset={createConversation.reset}
+                onCreate={(handle) => createConversation.mutateAsync(handle)}
+              />
+            )}
+            isLoading={conversations.isLoading}
+            error={conversations.error}
+            hasMore={Boolean(conversations.hasNextPage)}
+            isLoadingMore={conversations.isFetchingNextPage}
+            onRetry={() => void conversations.refetch()}
+            onLoadMore={() => void conversations.fetchNextPage()}
+            onSelect={selectConversation}
+          />
         </aside>
 
-        <section className="space-y-4">
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <MessageSquare className="h-4 w-4 text-primary" />
-                消息
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              {!selectedId ? (
-                <EmptyState title="选择一个会话" />
-              ) : messages.isLoading ? (
-                <LoadingState />
-              ) : messages.isError ? (
-                <ErrorState error={messages.error} onRetry={() => void messages.refetch()} />
-              ) : (messages.data?.items ?? []).length === 0 ? (
-                <EmptyState title="暂无消息" />
-              ) : (
-                messages.data?.items?.map((message) => (
-                  <div key={message.id} className="rounded-md border p-3">
-                    <div className="flex items-center justify-between gap-3">
-                      <p className="font-medium">{message.senderHandle}</p>
-                      <p className="text-xs text-muted-foreground">{formatUnixTime(message.createdAt)}</p>
-                    </div>
-                    <p className="mt-2 whitespace-pre-wrap text-sm">{message.body}</p>
-                  </div>
-                ))
-              )}
-            </CardContent>
-          </Card>
-          {selectedId ? (
-            <Card>
-              <CardContent className="space-y-3 p-4">
-                <Textarea value={body} onChange={(event) => setBody(event.target.value)} placeholder="输入消息" />
-                <Button onClick={() => sendMessage.mutate()} disabled={!body.trim() || sendMessage.isPending}>
-                  <Send className="h-4 w-4" />
-                  发送
-                </Button>
-              </CardContent>
-            </Card>
-          ) : null}
+        <section className={cn(!selectedConversation && "hidden lg:block")}>
+          <ConversationThread
+            conversation={selectedConversation}
+            messages={messageItems}
+            currentAccountId={account?.id}
+            body={body}
+            isIgnored={selectedIsIgnored}
+            relationshipPending={relationship.isPending || ignoredUsers.isLoading || ignoredUsers.isFetchingNextPage}
+            isLoading={messages.isLoading}
+            error={messages.error}
+            sendError={sendMessage.error}
+            isSending={sendMessage.isPending}
+            hasOlder={Boolean(messages.hasNextPage)}
+            isLoadingOlder={messages.isFetchingNextPage}
+            onBodyChange={setBody}
+            onBack={clearSelection}
+            onRetry={() => void messages.refetch()}
+            onLoadOlder={() => void messages.fetchNextPage()}
+            onSend={() => sendMessage.mutate()}
+            onReport={(message) => {
+              reportMessage.reset();
+              setReportingMessage(message);
+            }}
+            onToggleIgnore={() => relationship.mutate()}
+          />
         </section>
       </div>
+
+      <ReportMessageDialog
+        message={reportingMessage}
+        isPending={reportMessage.isPending}
+        error={reportMessage.error}
+        onClose={() => {
+          setReportingMessage(null);
+          reportMessage.reset();
+        }}
+        onReport={(message, reason, note) => reportMessage.mutateAsync({ message, reason, note })}
+      />
     </div>
   );
 }

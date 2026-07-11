@@ -1,0 +1,13 @@
+[package]
+name = "governance"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+shared.workspace = true
+sqlx.workspace = true

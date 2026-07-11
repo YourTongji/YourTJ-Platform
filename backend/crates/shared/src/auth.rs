@@ -26,7 +26,93 @@ pub struct AuthAccount {
     pub status: String,
 }
 
+/// Named server capabilities derived from the persisted account role.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Capability {
+    ModerateContent,
+    SearchUsers,
+    SilenceUsers,
+    ReadAudit,
+    InviteUsers,
+    ChangeRoles,
+    SuspendUsers,
+    ManageCommunity,
+    ManageCourses,
+    ManagePlatform,
+    ManageActivity,
+    ManageAnnouncements,
+    RunOperations,
+}
+
+impl Capability {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ModerateContent => "moderation.content",
+            Self::SearchUsers => "users.search",
+            Self::SilenceUsers => "users.silence",
+            Self::ReadAudit => "audit.read",
+            Self::InviteUsers => "users.invite",
+            Self::ChangeRoles => "users.roles",
+            Self::SuspendUsers => "users.suspend",
+            Self::ManageCommunity => "community.manage",
+            Self::ManageCourses => "courses.manage",
+            Self::ManagePlatform => "platform.settings",
+            Self::ManageActivity => "activity.policy",
+            Self::ManageAnnouncements => "announcements.manage",
+            Self::RunOperations => "operations.jobs",
+        }
+    }
+}
+
+const MOD_CAPABILITIES: &[Capability] = &[
+    Capability::ModerateContent,
+    Capability::SearchUsers,
+    Capability::SilenceUsers,
+    Capability::ReadAudit,
+];
+
+const ADMIN_CAPABILITIES: &[Capability] = &[
+    Capability::ModerateContent,
+    Capability::SearchUsers,
+    Capability::SilenceUsers,
+    Capability::ReadAudit,
+    Capability::InviteUsers,
+    Capability::ChangeRoles,
+    Capability::SuspendUsers,
+    Capability::ManageCommunity,
+    Capability::ManageCourses,
+    Capability::ManagePlatform,
+    Capability::ManageActivity,
+    Capability::ManageAnnouncements,
+    Capability::RunOperations,
+];
+
+pub fn capabilities_for_role(role: &str) -> &'static [Capability] {
+    match role {
+        "mod" => MOD_CAPABILITIES,
+        "admin" => ADMIN_CAPABILITIES,
+        _ => &[],
+    }
+}
+
+pub fn capability_names_for_role(role: &str) -> Vec<String> {
+    capabilities_for_role(role).iter().map(|capability| capability.as_str().to_string()).collect()
+}
+
 impl AuthAccount {
+    pub fn has_capability(&self, capability: Capability) -> bool {
+        capabilities_for_role(&self.role).contains(&capability)
+    }
+
+    #[allow(clippy::result_large_err)] // reason: authorization guards return tower Response directly for handler composition
+    pub fn require_capability(&self, capability: Capability) -> Result<(), Response> {
+        if self.has_capability(capability) {
+            Ok(())
+        } else {
+            Err(forbidden())
+        }
+    }
+
     #[allow(clippy::result_large_err)] // reason: require_mod returns tower Response directly for middleware-like guards; boxing would add indirection without benefit
     pub fn require_mod(&self) -> Result<(), Response> {
         if self.role == "mod" || self.role == "admin" {
@@ -75,4 +161,23 @@ pub fn internal_error() -> Response {
         Json(json!({"error":{"code":"INTERNAL","message":"internal server error"}})),
     )
         .into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{capabilities_for_role, AuthAccount, Capability};
+
+    #[test]
+    fn moderator_has_moderation_but_not_configuration_capabilities() {
+        let moderator = AuthAccount { id: 1, role: "mod".into(), status: "active".into() };
+        assert!(moderator.has_capability(Capability::ModerateContent));
+        assert!(moderator.has_capability(Capability::SilenceUsers));
+        assert!(!moderator.has_capability(Capability::ManageActivity));
+        assert!(!moderator.has_capability(Capability::ChangeRoles));
+    }
+
+    #[test]
+    fn ordinary_user_has_no_staff_capabilities() {
+        assert!(capabilities_for_role("user").is_empty());
+    }
 }

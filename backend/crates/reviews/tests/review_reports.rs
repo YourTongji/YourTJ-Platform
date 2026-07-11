@@ -151,3 +151,242 @@ async fn test_report_requires_auth() {
 
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
 }
+
+#[tokio::test]
+async fn admin_uphold_hides_review_and_records_audit() {
+    let (pool, app) = create_test_app().await;
+    let course_id = seed_course(&pool, "CS305", "Community Safety").await;
+    let author_id = seed_account(&pool, "author9@tongji.edu.cn", "author9").await;
+    let reporter_id = seed_account(&pool, "reporter4@tongji.edu.cn", "reporter4").await;
+    let admin_id = seed_account(&pool, "admin1@tongji.edu.cn", "admin1").await;
+    sqlx::query("UPDATE identity.accounts SET role = 'admin' WHERE id = $1")
+        .bind(admin_id)
+        .execute(&pool)
+        .await
+        .expect("promote test admin");
+
+    let create = app
+        .clone()
+        .oneshot(auth_req(
+            Method::POST,
+            &format!("/api/v2/courses/{course_id}/reviews"),
+            json!({ "rating": 1, "comment": "reported review" }),
+            &helpers::create_access_token_for(author_id),
+        ))
+        .await
+        .expect("create review request");
+    let review: Value = read_json(create).await;
+    let review_id = review["id"].as_str().expect("review id");
+    let report = app
+        .clone()
+        .oneshot(auth_req(
+            Method::POST,
+            &format!("/api/v2/reviews/{review_id}/report"),
+            json!({ "reason": "policy violation" }),
+            &helpers::create_access_token_for(reporter_id),
+        ))
+        .await
+        .expect("report request");
+    assert_eq!(report.status(), StatusCode::NO_CONTENT);
+    let report_id: i64 =
+        sqlx::query_scalar("SELECT id FROM reviews.review_reports WHERE review_id = $1")
+            .bind(review_id.parse::<i64>().expect("numeric review id"))
+            .fetch_one(&pool)
+            .await
+            .expect("report id");
+
+    let decision = app
+        .clone()
+        .oneshot(auth_req(
+            Method::POST,
+            &format!("/api/v2/admin/reports/{report_id}/resolve"),
+            json!({ "action": "uphold", "note": "confirmed policy violation" }),
+            &helpers::create_access_token_for(admin_id),
+        ))
+        .await
+        .expect("decision request");
+    assert_eq!(decision.status(), StatusCode::OK);
+    let decision_body: Value = read_json(decision).await;
+    assert_eq!(decision_body["status"], "upheld");
+    let status: String =
+        sqlx::query_scalar("SELECT status::text FROM reviews.reviews WHERE id = $1")
+            .bind(review_id.parse::<i64>().expect("numeric review id"))
+            .fetch_one(&pool)
+            .await
+            .expect("review status");
+    assert_eq!(status, "hidden");
+    let audit_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM governance.audit_events \
+         WHERE action = 'reviews.report.decided' AND target_id = $1",
+    )
+    .bind(report_id.to_string())
+    .fetch_one(&pool)
+    .await
+    .expect("audit count");
+    assert_eq!(audit_count, 1);
+
+    let duplicate = app
+        .oneshot(auth_req(
+            Method::POST,
+            &format!("/api/v2/admin/reports/{report_id}/resolve"),
+            json!({ "action": "reject", "note": "attempted second decision" }),
+            &helpers::create_access_token_for(admin_id),
+        ))
+        .await
+        .expect("duplicate decision request");
+    assert_eq!(duplicate.status(), StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn terminal_report_allows_a_new_open_report_from_same_reporter() {
+    let (pool, app) = create_test_app().await;
+    let suffix = uuid::Uuid::new_v4().simple().to_string();
+    let course_id = seed_course(&pool, &format!("REREPORT-{suffix}"), "Re-report policy").await;
+    let author_id = seed_account(
+        &pool,
+        &format!("rereport-author-{suffix}@tongji.edu.cn"),
+        &format!("rereport-author-{suffix}"),
+    )
+    .await;
+    let reporter_id = seed_account(
+        &pool,
+        &format!("rereport-user-{suffix}@tongji.edu.cn"),
+        &format!("rereport-user-{suffix}"),
+    )
+    .await;
+    let admin_id = seed_account(
+        &pool,
+        &format!("rereport-admin-{suffix}@tongji.edu.cn"),
+        &format!("rereport-admin-{suffix}"),
+    )
+    .await;
+    sqlx::query("UPDATE identity.accounts SET role = 'admin' WHERE id = $1")
+        .bind(admin_id)
+        .execute(&pool)
+        .await
+        .expect("promote re-report admin");
+    let created = app
+        .clone()
+        .oneshot(auth_req(
+            Method::POST,
+            &format!("/api/v2/courses/{course_id}/reviews"),
+            json!({ "rating": 2 }),
+            &helpers::create_access_token_for(author_id),
+        ))
+        .await
+        .expect("create re-report review");
+    let review: Value = read_json(created).await;
+    let review_id = review["id"].as_str().expect("review id");
+    let reporter_token = helpers::create_access_token_for(reporter_id);
+    let first = app
+        .clone()
+        .oneshot(auth_req(
+            Method::POST,
+            &format!("/api/v2/reviews/{review_id}/report"),
+            json!({ "reason": "first report" }),
+            &reporter_token,
+        ))
+        .await
+        .expect("first report");
+    assert_eq!(first.status(), StatusCode::NO_CONTENT);
+    let first_report_id: i64 = sqlx::query_scalar(
+        "SELECT id FROM reviews.review_reports \
+         WHERE review_id = $1 AND reporter_account_id = $2 AND status = 'open'",
+    )
+    .bind(review_id.parse::<i64>().expect("numeric review id"))
+    .bind(reporter_id)
+    .fetch_one(&pool)
+    .await
+    .expect("first report id");
+    let rejected = app
+        .clone()
+        .oneshot(auth_req(
+            Method::POST,
+            &format!("/api/v2/admin/reports/{first_report_id}/resolve"),
+            json!({ "action": "reject", "note": "first report not substantiated" }),
+            &helpers::create_access_token_for(admin_id),
+        ))
+        .await
+        .expect("reject first report");
+    assert_eq!(rejected.status(), StatusCode::OK);
+
+    let second = app
+        .oneshot(auth_req(
+            Method::POST,
+            &format!("/api/v2/reviews/{review_id}/report"),
+            json!({ "reason": "new conduct after edit" }),
+            &reporter_token,
+        ))
+        .await
+        .expect("second report");
+    assert_eq!(second.status(), StatusCode::NO_CONTENT);
+    let statuses: Vec<String> = sqlx::query_scalar(
+        "SELECT status FROM reviews.review_reports \
+         WHERE review_id = $1 AND reporter_account_id = $2 ORDER BY id",
+    )
+    .bind(review_id.parse::<i64>().expect("numeric review id"))
+    .bind(reporter_id)
+    .fetch_all(&pool)
+    .await
+    .expect("report history");
+    assert_eq!(statuses, vec!["rejected", "open"]);
+}
+
+#[tokio::test]
+async fn report_requires_visible_review_and_rejects_self_report() {
+    let (pool, app) = create_test_app().await;
+    let suffix = uuid::Uuid::new_v4().simple().to_string();
+    let course_id = seed_course(&pool, &format!("REPORTABLE-{suffix}"), "Report visibility").await;
+    let author_id = seed_account(
+        &pool,
+        &format!("reportable-author-{suffix}@tongji.edu.cn"),
+        &format!("reportable-author-{suffix}"),
+    )
+    .await;
+    let reporter_id = seed_account(
+        &pool,
+        &format!("reportable-user-{suffix}@tongji.edu.cn"),
+        &format!("reportable-user-{suffix}"),
+    )
+    .await;
+    let created = app
+        .clone()
+        .oneshot(auth_req(
+            Method::POST,
+            &format!("/api/v2/courses/{course_id}/reviews"),
+            json!({ "rating": 3 }),
+            &helpers::create_access_token_for(author_id),
+        ))
+        .await
+        .expect("create reportable review");
+    let review: Value = read_json(created).await;
+    let review_id = review["id"].as_str().expect("review id");
+
+    let self_report = app
+        .clone()
+        .oneshot(auth_req(
+            Method::POST,
+            &format!("/api/v2/reviews/{review_id}/report"),
+            json!({ "reason": "self report attempt" }),
+            &helpers::create_access_token_for(author_id),
+        ))
+        .await
+        .expect("self report response");
+    assert_eq!(self_report.status(), StatusCode::BAD_REQUEST);
+
+    sqlx::query("UPDATE reviews.reviews SET status = 'hidden' WHERE id = $1")
+        .bind(review_id.parse::<i64>().expect("numeric review id"))
+        .execute(&pool)
+        .await
+        .expect("hide review fixture");
+    let hidden_report = app
+        .oneshot(auth_req(
+            Method::POST,
+            &format!("/api/v2/reviews/{review_id}/report"),
+            json!({ "reason": "hidden review attempt" }),
+            &helpers::create_access_token_for(reporter_id),
+        ))
+        .await
+        .expect("hidden review response");
+    assert_eq!(hidden_report.status(), StatusCode::NOT_FOUND);
+}
