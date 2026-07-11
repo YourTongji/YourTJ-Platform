@@ -3984,7 +3984,7 @@ export interface paths {
         get: {
             parameters: {
                 query?: {
-                    view?: "inbox" | "archived" | "deleted";
+                    view?: "inbox" | "requests" | "sent" | "archived" | "deleted";
                     q?: string;
                     /** @description Opaque pagination cursor */
                     cursor?: components["parameters"]["Cursor"];
@@ -4008,11 +4008,13 @@ export interface paths {
             };
         };
         put?: never;
-        /** Create or get DM conversation */
+        /** Create or get a direct conversation or bounded message request */
         post: {
             parameters: {
                 query?: never;
-                header?: never;
+                header?: {
+                    "Idempotency-Key"?: string;
+                };
                 path?: never;
                 cookie?: never;
             };
@@ -4022,7 +4024,7 @@ export interface paths {
                 };
             };
             responses: {
-                /** @description ok */
+                /** @description direct conversation or pending request */
                 200: {
                     headers: {
                         [name: string]: unknown;
@@ -4031,6 +4033,10 @@ export interface paths {
                         "application/json": components["schemas"]["DmConversation"];
                     };
                 };
+                400: components["responses"]["BadRequest"];
+                403: components["responses"]["Forbidden"];
+                409: components["responses"]["Conflict"];
+                429: components["responses"]["RateLimited"];
             };
         };
         delete?: never;
@@ -4062,15 +4068,132 @@ export interface paths {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": {
-                            count: number;
-                        };
+                        "application/json": components["schemas"]["DmCounts"];
                     };
                 };
             };
         };
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/forum/dm/requests/{id}/accept": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Accept an incoming message request */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description accepted conversation */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["DmConversation"];
+                    };
+                };
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+                409: components["responses"]["Conflict"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/forum/dm/requests/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Decline an incoming request or withdraw an outgoing request without blocking or notifying */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description removed */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                404: components["responses"]["NotFound"];
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/forum/dm/requests/{id}/report": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Report the one request message and remove the incoming request */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["DmReportInput"];
+                };
+            };
+            responses: {
+                /** @description queued and request removed */
+                202: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                404: components["responses"]["NotFound"];
+            };
+        };
         delete?: never;
         options?: never;
         head?: never;
@@ -9446,10 +9569,24 @@ export interface components {
             isArchived: boolean;
             isMuted: boolean;
             isDeleted: boolean;
+            /** @enum {string} */
+            requestStatus: "accepted" | "pending";
+            /** @enum {string|null} */
+            requestDirection?: "incoming" | "outgoing" | null;
+            /** @description False while a one-message request awaits acceptance. */
+            canSend: boolean;
             createdAt: number;
         };
         DmConversationInput: {
             recipientHandle: string;
+            /** @description Required when the recipient does not already accept direct delivery from the sender; it is the only message allowed before acceptance. */
+            requestMessage?: string;
+        };
+        DmCounts: {
+            /** @description unreadCount plus requestCount for compatibility badges. */
+            count: number;
+            unreadCount: number;
+            requestCount: number;
         };
         DmMessage: {
             id: string;

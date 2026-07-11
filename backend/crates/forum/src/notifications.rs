@@ -66,9 +66,14 @@ fn notification_target_url(notification_type: &str, payload: &Value) -> Option<S
         return Some(target.to_owned());
     }
 
-    if notification_type == "dm" {
-        return numeric_payload_id(payload, "conversationId")
-            .map(|id| format!("/messages?conversation={id}"));
+    if matches!(notification_type, "dm" | "dm_request" | "dm_request_accepted") {
+        return numeric_payload_id(payload, "conversationId").map(|id| {
+            if notification_type == "dm_request" {
+                format!("/messages?view=requests&conversation={id}")
+            } else {
+                format!("/messages?conversation={id}")
+            }
+        });
     }
 
     if let Some(thread_id) = numeric_payload_id(payload, "threadId") {
@@ -212,6 +217,10 @@ mod tests {
         assert_eq!(
             notification_target_url("dm", &json!({ "conversationId": "7" })),
             Some("/messages?conversation=7".into())
+        );
+        assert_eq!(
+            notification_target_url("dm_request", &json!({ "conversationId": "8" })),
+            Some("/messages?view=requests&conversation=8".into())
         );
         assert_eq!(
             notification_target_url("system", &json!({ "targetUrl": "/settings" })),

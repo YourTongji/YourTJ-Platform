@@ -1187,7 +1187,7 @@ components:
     # ---- forum: DM ----
     DmConversation:
       type: object
-      required: [id, participantId, participantHandle, unreadCount, isArchived, isMuted, isDeleted, createdAt]
+      required: [id, participantId, participantHandle, unreadCount, isArchived, isMuted, isDeleted, requestStatus, canSend, createdAt]
       properties:
         id: { type: string }
         participantId: { type: string }
@@ -1199,12 +1199,27 @@ components:
         isArchived: { type: boolean }
         isMuted: { type: boolean }
         isDeleted: { type: boolean }
+        requestStatus: { type: string, enum: [accepted, pending] }
+        requestDirection: { type: string, enum: [incoming, outgoing], nullable: true }
+        canSend: { type: boolean, description: False while a one-message request awaits acceptance. }
         createdAt: { type: integer }
     DmConversationInput:
       type: object
       required: [recipientHandle]
       properties:
         recipientHandle: { type: string, minLength: 3, maxLength: 30 }
+        requestMessage:
+          type: string
+          minLength: 1
+          maxLength: 1000
+          description: Required when the recipient does not already accept direct delivery from the sender; it is the only message allowed before acceptance.
+    DmCounts:
+      type: object
+      required: [count, unreadCount, requestCount]
+      properties:
+        count: { type: integer, minimum: 0, description: unreadCount plus requestCount for compatibility badges. }
+        unreadCount: { type: integer, minimum: 0 }
+        requestCount: { type: integer, minimum: 0 }
     DmMessage:
       type: object
       required: [id, conversationId, senderId, senderHandle, body, createdAt]
@@ -2636,16 +2651,23 @@ paths:
       tags: [forum]
       summary: List DM conversations
       parameters:
-        - { name: view, in: query, schema: { type: string, enum: [inbox, archived, deleted], default: inbox } }
+        - { name: view, in: query, schema: { type: string, enum: [inbox, requests, sent, archived, deleted], default: inbox } }
         - { name: q, in: query, schema: { type: string, minLength: 2, maxLength: 100 } }
         - { $ref: "#/components/parameters/Cursor" }
         - { $ref: "#/components/parameters/Limit" }
       responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/DmConversationPage" } } } } }
     post:
       tags: [forum]
-      summary: Create or get DM conversation
+      summary: Create or get a direct conversation or bounded message request
+      parameters:
+        - { name: Idempotency-Key, in: header, required: false, schema: { type: string, minLength: 1, maxLength: 128 } }
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/DmConversationInput" } } } }
-      responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/DmConversation" } } } } }
+      responses:
+        "200": { description: direct conversation or pending request, content: { application/json: { schema: { $ref: "#/components/schemas/DmConversation" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "429": { $ref: "#/components/responses/RateLimited" }
   /forum/dm/unread-count:
     get:
       tags: [forum]
@@ -2655,10 +2677,30 @@ paths:
           description: ok
           content:
             application/json:
-              schema:
-                type: object
-                required: [count]
-                properties: { count: { type: integer, minimum: 0 } }
+              schema: { $ref: "#/components/schemas/DmCounts" }
+  /forum/dm/requests/{id}/accept:
+    post:
+      tags: [forum]
+      summary: Accept an incoming message request
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "200": { description: accepted conversation, content: { application/json: { schema: { $ref: "#/components/schemas/DmConversation" } } } }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /forum/dm/requests/{id}:
+    delete:
+      tags: [forum]
+      summary: Decline an incoming request or withdraw an outgoing request without blocking or notifying
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses: { "204": { description: removed }, "404": { $ref: "#/components/responses/NotFound" } }
+  /forum/dm/requests/{id}/report:
+    post:
+      tags: [forum]
+      summary: Report the one request message and remove the incoming request
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/DmReportInput" } } } }
+      responses: { "202": { description: queued and request removed }, "404": { $ref: "#/components/responses/NotFound" } }
   /forum/dm/conversations/{id}:
     delete:
       tags: [forum]

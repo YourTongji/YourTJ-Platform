@@ -143,6 +143,14 @@ Fresh database 必须只通过 sqlx migration ledger 建立。普通启动、CI 
 - Evidence read 本身是敏感动作，需要 capability、purpose 和 audit。
 - DM archive、mute 和 delete 是 `dm_participants` 上的 participant-local 状态；不能改写另一参与者的
   副本。新消息可恢复双方 inbox 可见性，但 mute 保持独立，并且只影响通知投影，不影响未读计数。
+- DM request 是 canonical pair conversation 上的显式 `pending -> accepted | declined` 状态，不复用
+  participant archive/delete 或 follow boolean。Pending 只含创建时单条附言；accepted unread 与
+  incoming request count 分开投影，decline/withdraw 不创建通知或 block，block 会原子关闭 pending。
+  `dm_messages` trigger 在数据库边界拒绝 pending 的第二条/接收方消息和 declined delivery，handler
+  检查不是唯一安全边界。
+- Request creation 使用 account-scoped `Idempotency-Key` 和 request hash；同 key 不同 payload 冲突。
+  `request_sender_id/request_recipient_id` 只用于参与者授权、反骚扰冷却与本人导出，不进入日志、公开
+  profile、搜索或 staff 通用浏览面。
 
 ## 积分不变量
 

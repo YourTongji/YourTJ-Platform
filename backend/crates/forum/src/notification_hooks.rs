@@ -171,7 +171,7 @@ fn in_app_category(event_type: &str) -> Option<&'static str> {
         "vote" => Some("votes"),
         "badge" => Some("badges"),
         "watching" => Some("subscriptions"),
-        "dm" => Some("directMessages"),
+        "dm" | "dm_request" | "dm_request_accepted" => Some("directMessages"),
         _ => None,
     }
 }
@@ -184,6 +184,7 @@ mod tests {
     fn maps_only_optional_interaction_events_to_user_preferences() {
         assert_eq!(in_app_category("reply"), Some("replies"));
         assert_eq!(in_app_category("dm"), Some("directMessages"));
+        assert_eq!(in_app_category("dm_request"), Some("directMessages"));
         assert_eq!(in_app_category("content_moderated"), None);
         assert_eq!(in_app_category("security"), None);
     }

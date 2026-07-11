@@ -13,7 +13,7 @@ describe("RealtimeRefresh", () => {
   it("uses an authorization header and treats SSE as a query refresh hint", async () => {
     localStorage.setItem("yourtj.accessToken", "access-token");
     const fetchMock = vi.fn().mockResolvedValue(new Response(
-      "event: dm\ndata: {}\n\n",
+      "event: dm_request\ndata: {}\n\n",
       { status: 200, headers: { "Content-Type": "text/event-stream" } },
     ));
     vi.stubGlobal("fetch", fetchMock);

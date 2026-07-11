@@ -1,4 +1,14 @@
-import { Archive, BellOff, Inbox, Loader2, RotateCcw, Search, Trash2 } from "lucide-react";
+import {
+  Archive,
+  BellOff,
+  Inbox,
+  Loader2,
+  MailQuestion,
+  RotateCcw,
+  Search,
+  SendHorizontal,
+  Trash2,
+} from "lucide-react";
 import type { ReactNode } from "react";
 
 import { EmptyState, ErrorState, LoadingState } from "@/components/common/states";
@@ -11,12 +21,14 @@ import type { DmConversation } from "@/lib/api/types";
 import { formatUnixTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
-export type ConversationView = "inbox" | "archived" | "deleted";
+export type ConversationView = "inbox" | "requests" | "sent" | "archived" | "deleted";
 
 const viewLabels: Record<ConversationView, string> = {
   inbox: "收件箱",
-  archived: "已归档",
-  deleted: "最近删除",
+  requests: "请求",
+  sent: "已发送",
+  archived: "归档",
+  deleted: "删除",
 };
 
 export function ConversationList({
@@ -24,6 +36,7 @@ export function ConversationList({
   selectedId,
   view,
   searchQuery,
+  requestCount,
   headerAction,
   isLoading,
   error,
@@ -41,6 +54,7 @@ export function ConversationList({
   selectedId: string;
   view: ConversationView;
   searchQuery: string;
+  requestCount: number;
   headerAction: ReactNode;
   isLoading: boolean;
   error?: unknown;
@@ -74,21 +88,29 @@ export function ConversationList({
             maxLength={100}
           />
         </div>
-        <div className="grid grid-cols-3 gap-1 rounded-lg bg-muted p-1" aria-label="私信会话分类">
-          {(["inbox", "archived", "deleted"] as const).map((item) => (
+        <div className="grid grid-cols-5 gap-1 rounded-lg bg-muted p-1" aria-label="私信会话分类">
+          {(["inbox", "requests", "sent", "archived", "deleted"] as const).map((item) => (
             <Button
               key={item}
               type="button"
               variant={view === item ? "secondary" : "ghost"}
               size="sm"
               className={cn("h-8", view === item && "bg-background shadow-sm")}
+              aria-label={viewLabels[item]}
               aria-pressed={view === item}
               onClick={() => onViewChange(item)}
             >
               {item === "inbox" ? <Inbox className="size-3.5" /> : null}
+              {item === "requests" ? <MailQuestion className="size-3.5" /> : null}
+              {item === "sent" ? <SendHorizontal className="size-3.5" /> : null}
               {item === "archived" ? <Archive className="size-3.5" /> : null}
               {item === "deleted" ? <Trash2 className="size-3.5" /> : null}
-              <span className="hidden sm:inline">{viewLabels[item]}</span>
+              <span className="hidden min-[360px]:inline">{viewLabels[item]}</span>
+              {item === "requests" && requestCount > 0 ? (
+                <Badge variant="secondary" className="h-4 min-w-4 px-1 text-[10px] tabular-nums">
+                  {requestCount > 99 ? "99+" : requestCount}
+                </Badge>
+              ) : null}
             </Button>
           ))}
         </div>
@@ -101,7 +123,15 @@ export function ConversationList({
         ) : conversations.length === 0 ? (
           <EmptyState
             title={searchQuery.trim() ? "没有匹配的会话" : `${viewLabels[view]}为空`}
-            description={view === "inbox" ? "用公开 handle 发起一段一对一对话。" : "会话状态只影响你的收件箱，不会删除对方副本。"}
+            description={
+              view === "inbox"
+                ? "用公开 handle 发起一段一对一对话。"
+                : view === "requests"
+                  ? "陌生人只能先发送一条附言；接受后才能继续对话。"
+                  : view === "sent"
+                    ? "尚未被对方接受的请求会显示在这里。"
+                    : "会话状态只影响你的收件箱，不会删除对方副本。"
+            }
             className="border-0 shadow-none"
           />
         ) : (
@@ -134,6 +164,11 @@ export function ConversationList({
                       )}>
                         {conversation.lastMessageExcerpt || "还没有消息"}
                       </span>
+                      {conversation.requestStatus === "pending" ? (
+                        <Badge variant="outline" className="shrink-0 px-1.5 text-[10px]">
+                          {conversation.requestDirection === "incoming" ? "待处理" : "待接受"}
+                        </Badge>
+                      ) : null}
                       {conversation.unreadCount > 0 ? (
                         <Badge className="min-w-5 justify-center px-1.5 tabular-nums">
                           {conversation.unreadCount > 99 ? "99+" : conversation.unreadCount}

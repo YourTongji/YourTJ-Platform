@@ -155,6 +155,7 @@ export type Poll = Schema["Poll"];
 export type ThreadDetailWithPoll = ThreadDetail;
 
 export type DmConversation = Schema["DmConversation"];
+export type DmCounts = Schema["DmCounts"];
 export type DmMessage = Schema["DmMessage"];
 export type IgnoreUser = Schema["IgnoreUser"];
 export type DmReportReason = Schema["DmReportInput"]["reason"];

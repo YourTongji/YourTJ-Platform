@@ -5,11 +5,13 @@ import {
   Ban,
   Bell,
   BellOff,
+  Check,
   Flag,
   Loader2,
   MoreHorizontal,
   Send,
   Trash2,
+  Undo2,
   UserRoundCheck,
 } from "lucide-react";
 import * as React from "react";
@@ -47,6 +49,7 @@ export function ConversationThread({
   isIgnored,
   relationshipPending,
   lifecyclePending,
+  requestActionPending,
   isLoading,
   error,
   sendError,
@@ -59,6 +62,8 @@ export function ConversationThread({
   onLoadOlder,
   onSend,
   onReport,
+  onAcceptRequest,
+  onDeclineRequest,
   onToggleIgnore,
   onToggleArchive,
   onToggleMute,
@@ -71,6 +76,7 @@ export function ConversationThread({
   isIgnored: boolean;
   relationshipPending: boolean;
   lifecyclePending: boolean;
+  requestActionPending: boolean;
   isLoading: boolean;
   error?: unknown;
   sendError?: unknown;
@@ -82,7 +88,9 @@ export function ConversationThread({
   onRetry: () => void;
   onLoadOlder: () => void;
   onSend: () => void;
-  onReport: (message: DmMessage) => void;
+  onReport: (message: DmMessage, isRequest: boolean) => void;
+  onAcceptRequest: () => void;
+  onDeclineRequest: () => void;
   onToggleIgnore: () => void;
   onToggleArchive: () => void;
   onToggleMute: () => void;
@@ -92,10 +100,18 @@ export function ConversationThread({
   const [confirmDeleteOpen, setConfirmDeleteOpen] = React.useState(false);
   const viewportRef = React.useRef<HTMLDivElement>(null);
   const newestMessageId = messages.at(-1)?.id;
+  const isIncomingRequest = conversation?.requestStatus === "pending"
+    && conversation.requestDirection === "incoming";
+  const isOutgoingRequest = conversation?.requestStatus === "pending"
+    && conversation.requestDirection === "outgoing";
 
   React.useEffect(() => {
-    if (newestMessageId) {
-      viewportRef.current?.scrollTo({ top: viewportRef.current.scrollHeight });
+    const viewport = viewportRef.current;
+    if (!newestMessageId || !viewport) return;
+    if (typeof viewport.scrollTo === "function") {
+      viewport.scrollTo({ top: viewport.scrollHeight });
+    } else {
+      viewport.scrollTop = viewport.scrollHeight;
     }
   }, [newestMessageId]);
 
@@ -111,7 +127,7 @@ export function ConversationThread({
     );
   }
 
-  const canSend = Boolean(body.trim()) && !isSending && !isIgnored;
+  const canSend = Boolean(body.trim()) && !isSending && !isIgnored && conversation.canSend;
 
   return (
     <>
@@ -132,11 +148,13 @@ export function ConversationThread({
               >
                 {conversation.participantHandle}
               </Link>
-              <p className="text-xs text-muted-foreground">一对一私信</p>
+              <p className="text-xs text-muted-foreground">
+                {isIncomingRequest ? "收到的消息请求" : isOutgoingRequest ? "已发送的消息请求" : "一对一私信"}
+              </p>
             </div>
           </div>
           <div className="flex items-center gap-1">
-            <DropdownMenu>
+            {conversation.requestStatus === "accepted" ? <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button type="button" variant="ghost" size="icon" disabled={lifecyclePending} aria-label="会话设置">
                   <MoreHorizontal className="size-4" />
@@ -156,7 +174,7 @@ export function ConversationThread({
                   <Trash2 className="size-4" />删除会话
                 </DropdownMenuItem>
               </DropdownMenuContent>
-            </DropdownMenu>
+            </DropdownMenu> : null}
             <Button
               type="button"
               size="sm"
@@ -214,7 +232,7 @@ export function ConversationThread({
                             variant="ghost"
                             size="icon"
                             className="size-6 opacity-70 sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100"
-                            onClick={() => onReport(message)}
+                            onClick={() => onReport(message, isIncomingRequest)}
                             aria-label={`举报 ${message.senderHandle} 的这条消息`}
                           >
                             <Flag className="size-3" />
@@ -238,7 +256,61 @@ export function ConversationThread({
         </CardContent>
 
         <CardFooter className="block border-t p-3 sm:p-4">
-          {isIgnored ? (
+          {isIncomingRequest ? (
+            <div className="space-y-3 rounded-xl border bg-card p-3 shadow-sm">
+              <div>
+                <p className="text-sm font-medium">接受后才能继续对话</p>
+                <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                  对方目前只能发送这一条附言。删除不会自动屏蔽或通知对方；举报只提交这条附言作为审核证据。
+                </p>
+              </div>
+              <div className="flex flex-wrap justify-end gap-2">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => messages[0] && onReport(messages[0], true)}
+                  disabled={requestActionPending || messages.length === 0}
+                >
+                  <Flag className="size-4" />举报
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={onDeclineRequest}
+                  disabled={requestActionPending}
+                >
+                  <Trash2 className="size-4" />删除请求
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={onAcceptRequest}
+                  disabled={requestActionPending}
+                >
+                  {requestActionPending ? <Loader2 className="size-4 animate-spin" /> : <Check className="size-4" />}
+                  接受
+                </Button>
+              </div>
+            </div>
+          ) : isOutgoingRequest ? (
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-dashed p-3">
+              <div>
+                <p className="text-sm font-medium">请求已发送，等待对方接受</p>
+                <p className="mt-1 text-xs text-muted-foreground">接受前不能继续发送；撤回不会通知或屏蔽对方。</p>
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={onDeclineRequest}
+                disabled={requestActionPending}
+              >
+                <Undo2 className="size-4" />撤回请求
+              </Button>
+            </div>
+          ) : isIgnored ? (
             <div className="flex items-center justify-between gap-3 rounded-lg border border-dashed p-3 text-sm text-muted-foreground">
               <span>你已屏蔽该用户，解除屏蔽后才能继续对话。</span>
               <Button type="button" variant="outline" size="sm" onClick={onToggleIgnore} disabled={relationshipPending}>

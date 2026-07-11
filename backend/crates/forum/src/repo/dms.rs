@@ -2,7 +2,7 @@
 
 use chrono::{DateTime, Utc};
 use shared::{AppError, AppResult};
-use sqlx::{FromRow, PgPool, Postgres, QueryBuilder};
+use sqlx::{FromRow, PgPool, Postgres, QueryBuilder, Transaction};
 
 use crate::models::{DmConversationListRow, DmMessageReportRow, DmMessageRow};
 
@@ -11,6 +11,355 @@ use crate::models::{DmConversationListRow, DmMessageReportRow, DmMessageRow};
 pub struct InsertedMessage {
     pub id: i64,
     pub created_at: DateTime<Utc>,
+}
+
+/// How a newly initiated conversation is authorized by the recipient's policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DmStartMode {
+    Direct,
+    Request,
+}
+
+/// Durable result of starting or replaying a conversation.
+#[derive(Debug, Clone)]
+pub struct DmStartResult {
+    pub conversation_id: i64,
+    pub request_status: String,
+    pub request_created: bool,
+    pub message_created: bool,
+}
+
+/// Counts used by the global private-message badge.
+#[derive(Debug, Clone, Copy, FromRow)]
+pub struct DmCounts {
+    pub unread_count: i64,
+    pub request_count: i64,
+}
+
+#[derive(Debug, Clone, FromRow)]
+struct ExistingConversation {
+    id: i64,
+    request_status: String,
+    request_sender_id: Option<i64>,
+    is_in_cooldown: bool,
+}
+
+async fn enforce_request_daily_limit(
+    transaction: &mut Transaction<'_, Postgres>,
+    sender_id: i64,
+) -> AppResult<()> {
+    let lock_key = format!("dm-request-budget:{sender_id}");
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind(lock_key)
+        .execute(&mut **transaction)
+        .await?;
+    let recent_requests: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM forum.dm_request_attempts \
+         WHERE sender_id = $1 AND created_at > now() - interval '24 hours'",
+    )
+    .bind(sender_id)
+    .fetch_one(&mut **transaction)
+    .await?;
+    if recent_requests >= 10 {
+        return Err(AppError::RateLimited);
+    }
+    Ok(())
+}
+
+async fn insert_message_tx(
+    transaction: &mut Transaction<'_, Postgres>,
+    conversation_id: i64,
+    sender_id: i64,
+    body: &str,
+) -> AppResult<()> {
+    sqlx::query(
+        "INSERT INTO forum.dm_messages (conversation_id, sender_id, body) VALUES ($1, $2, $3)",
+    )
+    .bind(conversation_id)
+    .bind(sender_id)
+    .bind(body)
+    .execute(&mut **transaction)
+    .await?;
+    Ok(())
+}
+
+/// Return a completed matching start request before consuming abuse-control budget.
+pub async fn find_start_replay(
+    pool: &PgPool,
+    sender_id: i64,
+    idempotency_key: &str,
+    request_hash: &str,
+) -> AppResult<Option<i64>> {
+    let replay: Option<(String, i64)> = sqlx::query_as(
+        "SELECT request_hash, conversation_id FROM forum.dm_request_idempotency \
+         WHERE sender_id = $1 AND idempotency_key = $2",
+    )
+    .bind(sender_id)
+    .bind(idempotency_key)
+    .fetch_optional(pool)
+    .await?;
+    let Some((stored_hash, conversation_id)) = replay else {
+        return Ok(None);
+    };
+    if stored_hash != request_hash {
+        return Err(AppError::Conflict(
+            "idempotency key was already used for another message request".into(),
+        ));
+    }
+    Ok(Some(conversation_id))
+}
+
+/// Start a direct conversation or one-message request, with durable replay protection.
+pub async fn start_conversation(
+    pool: &PgPool,
+    sender_id: i64,
+    recipient_id: i64,
+    initial_message: Option<&str>,
+    idempotency: Option<(&str, &str)>,
+) -> AppResult<DmStartResult> {
+    if sender_id == recipient_id {
+        return Err(AppError::BadRequest("cannot start a conversation with yourself".into()));
+    }
+    let account_low_id = sender_id.min(recipient_id);
+    let account_high_id = sender_id.max(recipient_id);
+    let mut transaction = pool.begin().await?;
+
+    if !identity::public_accounts::lock_active_interaction_accounts(
+        &mut transaction,
+        &[account_low_id, account_high_id],
+    )
+    .await?
+    {
+        return Err(AppError::Forbidden);
+    }
+    super::relationships::lock_pair_unblocked(&mut transaction, sender_id, recipient_id).await?;
+
+    if let Some((idempotency_key, request_hash)) = idempotency {
+        let lock_key = format!("dm_request:{sender_id}:{idempotency_key}");
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+            .bind(lock_key)
+            .execute(&mut *transaction)
+            .await?;
+        let replay: Option<(String, i64, String)> = sqlx::query_as(
+            "SELECT idempotency.request_hash, idempotency.conversation_id, \
+                    conversation.request_status \
+             FROM forum.dm_request_idempotency AS idempotency \
+             JOIN forum.dm_conversations AS conversation \
+               ON conversation.id = idempotency.conversation_id \
+             WHERE idempotency.sender_id = $1 AND idempotency.idempotency_key = $2",
+        )
+        .bind(sender_id)
+        .bind(idempotency_key)
+        .fetch_optional(&mut *transaction)
+        .await?;
+        if let Some((stored_hash, conversation_id, request_status)) = replay {
+            if stored_hash != request_hash {
+                return Err(AppError::Conflict(
+                    "idempotency key was already used for another message request".into(),
+                ));
+            }
+            transaction.commit().await?;
+            return Ok(DmStartResult {
+                conversation_id,
+                request_status,
+                request_created: false,
+                message_created: false,
+            });
+        }
+    }
+
+    let existing = sqlx::query_as::<_, ExistingConversation>(
+        "SELECT id, request_status, request_sender_id, \
+                COALESCE(request_cooldown_until > now(), FALSE) AS is_in_cooldown \
+         FROM forum.dm_conversations \
+         WHERE account_low_id = $1 AND account_high_id = $2 FOR UPDATE",
+    )
+    .bind(account_low_id)
+    .bind(account_high_id)
+    .fetch_optional(&mut *transaction)
+    .await?;
+
+    let effective_mode = if existing
+        .as_ref()
+        .is_some_and(|conversation| conversation.request_status == "accepted")
+    {
+        DmStartMode::Direct
+    } else {
+        let recipient_policy =
+            identity::public_accounts::lock_dm_policy(&mut transaction, recipient_id).await?;
+        if recipient_policy == "nobody" {
+            return Err(AppError::Forbidden);
+        }
+        let recipient_follows_sender: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM forum.user_follows \
+             WHERE follower_id = $1 AND followed_id = $2)",
+        )
+        .bind(recipient_id)
+        .bind(sender_id)
+        .fetch_one(&mut *transaction)
+        .await?;
+        if recipient_follows_sender {
+            DmStartMode::Direct
+        } else if recipient_policy == "everyone" {
+            DmStartMode::Request
+        } else {
+            return Err(AppError::Forbidden);
+        }
+    };
+    if effective_mode == DmStartMode::Request && initial_message.is_none() {
+        return Err(AppError::BadRequest(
+            "requestMessage is required when the recipient has not accepted messages from you"
+                .into(),
+        ));
+    }
+
+    let mut request_created = false;
+    let mut conversation_changed = false;
+    let mut message_created = false;
+    let (conversation_id, request_status) = match existing {
+        None => match effective_mode {
+            DmStartMode::Direct => {
+                let conversation_id = sqlx::query_scalar(
+                    "INSERT INTO forum.dm_conversations \
+                       (account_low_id, account_high_id, request_status) \
+                     VALUES ($1, $2, 'accepted') RETURNING id",
+                )
+                .bind(account_low_id)
+                .bind(account_high_id)
+                .fetch_one(&mut *transaction)
+                .await?;
+                conversation_changed = true;
+                (conversation_id, "accepted".to_owned())
+            }
+            DmStartMode::Request => {
+                enforce_request_daily_limit(&mut transaction, sender_id).await?;
+                let conversation_id = sqlx::query_scalar(
+                    "INSERT INTO forum.dm_conversations \
+                       (account_low_id, account_high_id, request_status, request_sender_id, \
+                        request_recipient_id, requested_at) \
+                     VALUES ($1, $2, 'pending', $3, $4, now()) RETURNING id",
+                )
+                .bind(account_low_id)
+                .bind(account_high_id)
+                .bind(sender_id)
+                .bind(recipient_id)
+                .fetch_one(&mut *transaction)
+                .await?;
+                request_created = true;
+                conversation_changed = true;
+                (conversation_id, "pending".to_owned())
+            }
+        },
+        Some(existing) if existing.request_status == "accepted" => {
+            (existing.id, "accepted".to_owned())
+        }
+        Some(existing)
+            if existing.request_status == "pending"
+                && effective_mode == DmStartMode::Request
+                && existing.request_sender_id == Some(sender_id) =>
+        {
+            (existing.id, "pending".to_owned())
+        }
+        Some(existing) if existing.request_status == "pending" => {
+            sqlx::query(
+                "UPDATE forum.dm_conversations \
+                 SET request_status = 'accepted', responded_at = now(), \
+                     request_cooldown_until = NULL \
+                 WHERE id = $1",
+            )
+            .bind(existing.id)
+            .execute(&mut *transaction)
+            .await?;
+            conversation_changed = true;
+            (existing.id, "accepted".to_owned())
+        }
+        Some(existing) if effective_mode == DmStartMode::Direct => {
+            sqlx::query(
+                "UPDATE forum.dm_conversations \
+                 SET request_status = 'accepted', responded_at = now(), \
+                     request_cooldown_until = NULL \
+                 WHERE id = $1",
+            )
+            .bind(existing.id)
+            .execute(&mut *transaction)
+            .await?;
+            conversation_changed = true;
+            (existing.id, "accepted".to_owned())
+        }
+        Some(existing) => {
+            if existing.is_in_cooldown {
+                return Err(AppError::Conflict(
+                    "a declined message request cannot be retried yet".into(),
+                ));
+            }
+            enforce_request_daily_limit(&mut transaction, sender_id).await?;
+            sqlx::query(
+                "UPDATE forum.dm_conversations \
+                 SET request_status = 'pending', request_sender_id = $2, \
+                     request_recipient_id = $3, requested_at = now(), responded_at = NULL, \
+                     request_cooldown_until = NULL \
+                 WHERE id = $1",
+            )
+            .bind(existing.id)
+            .bind(sender_id)
+            .bind(recipient_id)
+            .execute(&mut *transaction)
+            .await?;
+            request_created = true;
+            conversation_changed = true;
+            (existing.id, "pending".to_owned())
+        }
+    };
+
+    sqlx::query(
+        "INSERT INTO forum.dm_participants (conversation_id, account_id) \
+         VALUES ($1, $2), ($1, $3) \
+         ON CONFLICT (conversation_id, account_id) DO UPDATE \
+         SET deleted_at = NULL, archived_at = NULL",
+    )
+    .bind(conversation_id)
+    .bind(account_low_id)
+    .bind(account_high_id)
+    .execute(&mut *transaction)
+    .await?;
+
+    if request_created {
+        sqlx::query(
+            "INSERT INTO forum.dm_request_attempts \
+               (sender_id, recipient_id, conversation_id) VALUES ($1, $2, $3)",
+        )
+        .bind(sender_id)
+        .bind(recipient_id)
+        .bind(conversation_id)
+        .execute(&mut *transaction)
+        .await?;
+    }
+
+    let should_insert_message =
+        initial_message.is_some() && (request_status != "pending" || request_created);
+    if let Some(message) = initial_message.filter(|_| should_insert_message) {
+        insert_message_tx(&mut transaction, conversation_id, sender_id, message).await?;
+        message_created = true;
+    }
+
+    if let Some((idempotency_key, request_hash)) =
+        idempotency.filter(|_| conversation_changed || message_created)
+    {
+        sqlx::query(
+            "INSERT INTO forum.dm_request_idempotency \
+               (sender_id, idempotency_key, request_hash, conversation_id) \
+             VALUES ($1, $2, $3, $4)",
+        )
+        .bind(sender_id)
+        .bind(idempotency_key)
+        .bind(request_hash)
+        .bind(conversation_id)
+        .execute(&mut *transaction)
+        .await?;
+    }
+
+    transaction.commit().await?;
+    Ok(DmStartResult { conversation_id, request_status, request_created, message_created })
 }
 
 /// Find or atomically create the canonical conversation for an unordered pair.
@@ -63,6 +412,24 @@ pub async fn find_or_create_conversation(
     Ok(conversation_id)
 }
 
+/// Return whether a pair already has an accepted conversation.
+pub async fn pair_has_accepted_conversation(
+    pool: &PgPool,
+    account_id_a: i64,
+    account_id_b: i64,
+) -> AppResult<bool> {
+    let accepted = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM forum.dm_conversations \
+         WHERE account_low_id = LEAST($1, $2) AND account_high_id = GREATEST($1, $2) \
+           AND request_status = 'accepted')",
+    )
+    .bind(account_id_a)
+    .bind(account_id_b)
+    .fetch_one(pool)
+    .await?;
+    Ok(accepted)
+}
+
 /// Return one conversation as visible to one participant.
 pub async fn get_conversation(
     pool: &PgPool,
@@ -76,14 +443,21 @@ pub async fn get_conversation(
                 other_account.avatar_url AS other_avatar_url, \
                 LEFT(last_message.body, 160) AS last_message_excerpt, \
                 COALESCE(last_message.created_at, conversation.created_at) AS last_message_at, \
-                (SELECT COUNT(*) FROM forum.dm_messages AS unread \
-                 WHERE unread.conversation_id = conversation.id \
-                   AND unread.sender_id <> $2 \
-                   AND (participant.last_read_message_id IS NULL \
-                        OR unread.id > participant.last_read_message_id)) AS unread_count, \
+                CASE WHEN conversation.request_status = 'accepted' THEN \
+                  (SELECT COUNT(*) FROM forum.dm_messages AS unread \
+                   WHERE unread.conversation_id = conversation.id \
+                     AND unread.sender_id <> $2 \
+                     AND (participant.last_read_message_id IS NULL \
+                          OR unread.id > participant.last_read_message_id)) \
+                ELSE 0::bigint END AS unread_count, \
                 participant.archived_at IS NOT NULL AS is_archived, \
                 participant.muted_at IS NOT NULL AS is_muted, \
                 participant.deleted_at IS NOT NULL AS is_deleted, \
+                conversation.request_status, \
+                CASE WHEN conversation.request_status = 'pending' THEN \
+                  CASE WHEN conversation.request_recipient_id = $2 THEN 'incoming' ELSE 'outgoing' END \
+                ELSE NULL END AS request_direction, \
+                conversation.request_status = 'accepted' AS can_send, \
                 conversation.created_at \
          FROM forum.dm_conversations AS conversation \
          JOIN forum.dm_participants AS participant \
@@ -101,7 +475,7 @@ pub async fn get_conversation(
            ORDER BY message.id DESC \
            LIMIT 1 \
          ) AS last_message ON true \
-         WHERE conversation.id = $1",
+         WHERE conversation.id = $1 AND conversation.request_status <> 'declined'",
     )
     .bind(conversation_id)
     .bind(account_id)
@@ -149,16 +523,26 @@ pub async fn list_conversations(
                 other_account.avatar_url AS other_avatar_url, \
                 LEFT(last_message.body, 160) AS last_message_excerpt, \
                 COALESCE(last_message.created_at, conversation.created_at) AS last_message_at, \
-                (SELECT COUNT(*) FROM forum.dm_messages AS unread \
-                 WHERE unread.conversation_id = conversation.id \
-                   AND unread.sender_id <> ",
+                CASE WHEN conversation.request_status = 'accepted' THEN \
+                  (SELECT COUNT(*) FROM forum.dm_messages AS unread \
+                   WHERE unread.conversation_id = conversation.id \
+                     AND unread.sender_id <> ",
     );
     builder.push_bind(account_id).push(
         " AND (participant.last_read_message_id IS NULL \
-                OR unread.id > participant.last_read_message_id)) AS unread_count, \
+                OR unread.id > participant.last_read_message_id)) \
+         ELSE 0::bigint END AS unread_count, \
          participant.archived_at IS NOT NULL AS is_archived, \
          participant.muted_at IS NOT NULL AS is_muted, \
          participant.deleted_at IS NOT NULL AS is_deleted, \
+         conversation.request_status, \
+         CASE WHEN conversation.request_status = 'pending' THEN \
+           CASE WHEN conversation.request_recipient_id = ",
+    );
+    builder.push_bind(account_id).push(
+        " THEN 'incoming' ELSE 'outgoing' END \
+         ELSE NULL END AS request_direction, \
+         conversation.request_status = 'accepted' AS can_send, \
          conversation.created_at \
          FROM forum.dm_conversations AS conversation \
          JOIN forum.dm_participants AS participant \
@@ -183,11 +567,27 @@ pub async fn list_conversations(
          WHERE ",
     );
     match view {
-        "archived" => {
-            builder.push("participant.deleted_at IS NULL AND participant.archived_at IS NOT NULL")
-        }
-        "deleted" => builder.push("participant.deleted_at IS NOT NULL"),
-        _ => builder.push("participant.deleted_at IS NULL AND participant.archived_at IS NULL"),
+        "archived" => builder.push(
+            "conversation.request_status = 'accepted' AND participant.deleted_at IS NULL \
+             AND participant.archived_at IS NOT NULL",
+        ),
+        "deleted" => builder.push(
+            "conversation.request_status = 'accepted' AND participant.deleted_at IS NOT NULL",
+        ),
+        "requests" => builder.push(
+            "conversation.request_status = 'pending' \
+             AND conversation.request_recipient_id = participant.account_id \
+             AND participant.deleted_at IS NULL",
+        ),
+        "sent" => builder.push(
+            "conversation.request_status = 'pending' \
+             AND conversation.request_sender_id = participant.account_id \
+             AND participant.deleted_at IS NULL",
+        ),
+        _ => builder.push(
+            "conversation.request_status = 'accepted' AND participant.deleted_at IS NULL \
+             AND participant.archived_at IS NULL",
+        ),
     };
     if let Some(query) = search_query {
         let pattern = format!("%{query}%");
@@ -228,6 +628,9 @@ pub async fn unread_count(pool: &PgPool, account_id: i64) -> AppResult<i64> {
     let count = sqlx::query_scalar(
         "SELECT COUNT(*) \
          FROM forum.dm_messages AS message \
+         JOIN forum.dm_conversations AS conversation \
+           ON conversation.id = message.conversation_id \
+          AND conversation.request_status = 'accepted' \
          JOIN forum.dm_participants AS participant \
            ON participant.conversation_id = message.conversation_id \
           AND participant.account_id = $1 \
@@ -240,6 +643,36 @@ pub async fn unread_count(pool: &PgPool, account_id: i64) -> AppResult<i64> {
     .fetch_one(pool)
     .await?;
     Ok(count)
+}
+
+/// Return accepted-message unread count and pending incoming request count separately.
+pub async fn counts(pool: &PgPool, account_id: i64) -> AppResult<DmCounts> {
+    let counts = sqlx::query_as::<_, DmCounts>(
+        "SELECT \
+           (SELECT COUNT(*) \
+            FROM forum.dm_messages AS message \
+            JOIN forum.dm_conversations AS conversation \
+              ON conversation.id = message.conversation_id \
+             AND conversation.request_status = 'accepted' \
+            JOIN forum.dm_participants AS participant \
+              ON participant.conversation_id = conversation.id \
+             AND participant.account_id = $1 \
+             AND participant.deleted_at IS NULL \
+            WHERE message.sender_id <> $1 \
+              AND (participant.last_read_message_id IS NULL \
+                   OR message.id > participant.last_read_message_id)) AS unread_count, \
+           (SELECT COUNT(*) FROM forum.dm_conversations AS request \
+            JOIN forum.dm_participants AS participant \
+              ON participant.conversation_id = request.id \
+             AND participant.account_id = $1 \
+             AND participant.deleted_at IS NULL \
+            WHERE request.request_status = 'pending' \
+              AND request.request_recipient_id = $1) AS request_count",
+    )
+    .bind(account_id)
+    .fetch_one(pool)
+    .await?;
+    Ok(counts)
 }
 
 /// Return whether the participant muted notifications for one conversation.
@@ -271,7 +704,9 @@ pub async fn set_archived(
     let result = sqlx::query(
         "UPDATE forum.dm_participants \
          SET archived_at = CASE WHEN $3 THEN COALESCE(archived_at, now()) ELSE NULL END \
-         WHERE conversation_id = $1 AND account_id = $2 AND deleted_at IS NULL",
+         WHERE conversation_id = $1 AND account_id = $2 AND deleted_at IS NULL \
+           AND EXISTS (SELECT 1 FROM forum.dm_conversations \
+                       WHERE id = $1 AND request_status = 'accepted')",
     )
     .bind(conversation_id)
     .bind(account_id)
@@ -291,7 +726,9 @@ pub async fn set_muted(
     let result = sqlx::query(
         "UPDATE forum.dm_participants \
          SET muted_at = CASE WHEN $3 THEN COALESCE(muted_at, now()) ELSE NULL END \
-         WHERE conversation_id = $1 AND account_id = $2 AND deleted_at IS NULL",
+         WHERE conversation_id = $1 AND account_id = $2 AND deleted_at IS NULL \
+           AND EXISTS (SELECT 1 FROM forum.dm_conversations \
+                       WHERE id = $1 AND request_status = 'accepted')",
     )
     .bind(conversation_id)
     .bind(account_id)
@@ -310,7 +747,9 @@ pub async fn delete_for_participant(
     let result = sqlx::query(
         "UPDATE forum.dm_participants \
          SET deleted_at = now(), archived_at = NULL \
-         WHERE conversation_id = $1 AND account_id = $2 AND deleted_at IS NULL",
+         WHERE conversation_id = $1 AND account_id = $2 AND deleted_at IS NULL \
+           AND EXISTS (SELECT 1 FROM forum.dm_conversations \
+                       WHERE id = $1 AND request_status = 'accepted')",
     )
     .bind(conversation_id)
     .bind(account_id)
@@ -328,7 +767,9 @@ pub async fn recover_for_participant(
     let result = sqlx::query(
         "UPDATE forum.dm_participants \
          SET deleted_at = NULL, archived_at = NULL \
-         WHERE conversation_id = $1 AND account_id = $2 AND deleted_at IS NOT NULL",
+         WHERE conversation_id = $1 AND account_id = $2 AND deleted_at IS NOT NULL \
+           AND EXISTS (SELECT 1 FROM forum.dm_conversations \
+                       WHERE id = $1 AND request_status = 'accepted')",
     )
     .bind(conversation_id)
     .bind(account_id)
@@ -346,6 +787,9 @@ pub async fn find_available_other_participant(
     let other_account_id = sqlx::query_scalar(
         "SELECT account.id \
          FROM forum.dm_participants AS mine \
+         JOIN forum.dm_conversations AS conversation \
+           ON conversation.id = mine.conversation_id \
+          AND conversation.request_status = 'accepted' \
          JOIN forum.dm_participants AS other \
            ON other.conversation_id = mine.conversation_id \
           AND other.account_id <> mine.account_id \
@@ -383,8 +827,12 @@ pub async fn send_message(
         "INSERT INTO forum.dm_messages (conversation_id, sender_id, body) \
          SELECT $1, $2, $3 \
          WHERE EXISTS ( \
-           SELECT 1 FROM forum.dm_participants \
-           WHERE conversation_id = $1 AND account_id = $2 AND deleted_at IS NULL \
+           SELECT 1 FROM forum.dm_participants AS participant \
+           JOIN forum.dm_conversations AS conversation \
+             ON conversation.id = participant.conversation_id \
+            AND conversation.request_status = 'accepted' \
+           WHERE participant.conversation_id = $1 AND participant.account_id = $2 \
+             AND participant.deleted_at IS NULL \
          ) \
          RETURNING id, created_at",
     )
@@ -523,8 +971,12 @@ pub async fn is_participant(
 ) -> AppResult<bool> {
     let exists = sqlx::query_scalar(
         "SELECT EXISTS ( \
-           SELECT 1 FROM forum.dm_participants \
-           WHERE conversation_id = $1 AND account_id = $2 AND deleted_at IS NULL \
+           SELECT 1 FROM forum.dm_participants AS participant \
+           JOIN forum.dm_conversations AS conversation \
+             ON conversation.id = participant.conversation_id \
+            AND conversation.request_status IN ('accepted', 'pending') \
+           WHERE participant.conversation_id = $1 AND participant.account_id = $2 \
+             AND participant.deleted_at IS NULL \
          )",
     )
     .bind(conversation_id)
@@ -532,6 +984,217 @@ pub async fn is_participant(
     .fetch_one(pool)
     .await?;
     Ok(exists)
+}
+
+/// Directional accounts for one pending request.
+#[derive(Debug, Clone, Copy, FromRow)]
+pub struct DmRequestParties {
+    pub sender_id: i64,
+    pub recipient_id: i64,
+}
+
+/// Current request state retained after acceptance for idempotent response replay.
+#[derive(Debug, Clone, FromRow)]
+pub struct DmRequestState {
+    pub sender_id: i64,
+    pub recipient_id: i64,
+    pub request_status: String,
+}
+
+/// Result of accepting a request, including whether this call performed the transition.
+#[derive(Debug, Clone, Copy)]
+pub struct DmAcceptResult {
+    pub sender_id: i64,
+    pub changed: bool,
+}
+
+/// Return a request-originated conversation state when the viewer is one of its parties.
+pub async fn get_request_state(
+    pool: &PgPool,
+    conversation_id: i64,
+    account_id: i64,
+) -> AppResult<Option<DmRequestState>> {
+    let state = sqlx::query_as::<_, DmRequestState>(
+        "SELECT request_sender_id AS sender_id, request_recipient_id AS recipient_id, \
+                request_status \
+         FROM forum.dm_conversations \
+         WHERE id = $1 AND request_sender_id IS NOT NULL AND request_recipient_id IS NOT NULL \
+           AND $2 IN (request_sender_id, request_recipient_id)",
+    )
+    .bind(conversation_id)
+    .bind(account_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(state)
+}
+
+/// Accept a pending request as its recipient and unlock normal bidirectional delivery.
+pub async fn accept_request(
+    pool: &PgPool,
+    conversation_id: i64,
+    recipient_id: i64,
+) -> AppResult<DmAcceptResult> {
+    let state =
+        get_request_state(pool, conversation_id, recipient_id).await?.ok_or(AppError::NotFound)?;
+    if state.recipient_id != recipient_id {
+        return Err(AppError::Forbidden);
+    }
+    if state.request_status == "accepted" {
+        return Ok(DmAcceptResult { sender_id: state.sender_id, changed: false });
+    }
+    if state.request_status != "pending" {
+        return Err(AppError::Conflict("message request is no longer pending".into()));
+    }
+
+    let account_low_id = state.sender_id.min(state.recipient_id);
+    let account_high_id = state.sender_id.max(state.recipient_id);
+    let mut transaction = pool.begin().await?;
+    if !identity::public_accounts::lock_active_interaction_accounts(
+        &mut transaction,
+        &[account_low_id, account_high_id],
+    )
+    .await?
+    {
+        return Err(AppError::Forbidden);
+    }
+    super::relationships::lock_pair_unblocked(
+        &mut transaction,
+        state.sender_id,
+        state.recipient_id,
+    )
+    .await?;
+    if identity::public_accounts::lock_dm_policy(&mut transaction, recipient_id).await? == "nobody"
+    {
+        return Err(AppError::Forbidden);
+    }
+    let result = sqlx::query(
+        "UPDATE forum.dm_conversations \
+         SET request_status = 'accepted', responded_at = now(), request_cooldown_until = NULL \
+         WHERE id = $1 AND request_status = 'pending' AND request_recipient_id = $2 \
+           AND request_sender_id = $3",
+    )
+    .bind(conversation_id)
+    .bind(recipient_id)
+    .bind(state.sender_id)
+    .execute(&mut *transaction)
+    .await?;
+    if result.rows_affected() == 0 {
+        return Err(AppError::Conflict("message request is no longer pending".into()));
+    }
+    sqlx::query(
+        "UPDATE forum.dm_participants \
+         SET deleted_at = NULL, archived_at = NULL, \
+             last_read_message_id = CASE WHEN account_id = $2 THEN \
+               (SELECT MAX(id) FROM forum.dm_messages WHERE conversation_id = $1) \
+               ELSE last_read_message_id END \
+         WHERE conversation_id = $1",
+    )
+    .bind(conversation_id)
+    .bind(recipient_id)
+    .execute(&mut *transaction)
+    .await?;
+    transaction.commit().await?;
+    Ok(DmAcceptResult { sender_id: state.sender_id, changed: true })
+}
+
+/// Decline an incoming request or withdraw an outgoing request without creating a block.
+pub async fn decline_request(
+    pool: &PgPool,
+    conversation_id: i64,
+    account_id: i64,
+) -> AppResult<()> {
+    let mut transaction = pool.begin().await?;
+    let _parties = sqlx::query_as::<_, DmRequestParties>(
+        "SELECT request_sender_id AS sender_id, request_recipient_id AS recipient_id \
+         FROM forum.dm_conversations \
+         WHERE id = $1 AND request_status = 'pending' \
+           AND $2 IN (request_sender_id, request_recipient_id) \
+         FOR UPDATE",
+    )
+    .bind(conversation_id)
+    .bind(account_id)
+    .fetch_optional(&mut *transaction)
+    .await?
+    .ok_or(AppError::NotFound)?;
+    sqlx::query(
+        "UPDATE forum.dm_conversations \
+         SET request_status = 'declined', responded_at = now(), \
+             request_cooldown_until = now() + CASE \
+               WHEN request_recipient_id = $2 THEN interval '30 days' \
+               ELSE interval '5 minutes' END \
+         WHERE id = $1",
+    )
+    .bind(conversation_id)
+    .bind(account_id)
+    .execute(&mut *transaction)
+    .await?;
+    sqlx::query(
+        "DELETE FROM forum.dm_messages AS message \
+         WHERE message.conversation_id = $1 \
+           AND NOT EXISTS (SELECT 1 FROM forum.dm_message_reports AS report \
+                           WHERE report.message_id = message.id)",
+    )
+    .bind(conversation_id)
+    .execute(&mut *transaction)
+    .await?;
+    transaction.commit().await?;
+    Ok(())
+}
+
+/// Report the single request message and atomically remove the request from the inbox.
+pub async fn report_request(
+    pool: &PgPool,
+    conversation_id: i64,
+    recipient_id: i64,
+    reason: &str,
+    note: Option<&str>,
+) -> AppResult<i64> {
+    let mut transaction = pool.begin().await?;
+    let parties = sqlx::query_as::<_, DmRequestParties>(
+        "SELECT request_sender_id AS sender_id, request_recipient_id AS recipient_id \
+         FROM forum.dm_conversations \
+         WHERE id = $1 AND request_status = 'pending' AND request_recipient_id = $2 \
+         FOR UPDATE",
+    )
+    .bind(conversation_id)
+    .bind(recipient_id)
+    .fetch_optional(&mut *transaction)
+    .await?
+    .ok_or(AppError::NotFound)?;
+    let message_id: i64 = sqlx::query_scalar(
+        "SELECT id FROM forum.dm_messages \
+         WHERE conversation_id = $1 AND sender_id = $2 ORDER BY id ASC LIMIT 1",
+    )
+    .bind(conversation_id)
+    .bind(parties.sender_id)
+    .fetch_optional(&mut *transaction)
+    .await?
+    .ok_or(AppError::NotFound)?;
+    let report_id: i64 = sqlx::query_scalar(
+        "INSERT INTO forum.dm_message_reports \
+           (message_id, conversation_id, reported_by, reason, note) \
+         VALUES ($1, $2, $3, $4, $5) \
+         ON CONFLICT (message_id, reported_by) DO UPDATE SET message_id = EXCLUDED.message_id \
+         RETURNING id",
+    )
+    .bind(message_id)
+    .bind(conversation_id)
+    .bind(recipient_id)
+    .bind(reason)
+    .bind(note)
+    .fetch_one(&mut *transaction)
+    .await?;
+    sqlx::query(
+        "UPDATE forum.dm_conversations \
+         SET request_status = 'declined', responded_at = now(), \
+             request_cooldown_until = now() + interval '30 days' \
+         WHERE id = $1",
+    )
+    .bind(conversation_id)
+    .execute(&mut *transaction)
+    .await?;
+    transaction.commit().await?;
+    Ok(report_id)
 }
 
 /// Check whether an account participates in the reported message's conversation.
@@ -546,6 +1209,9 @@ pub async fn can_access_message(
            FROM forum.dm_messages AS message \
            JOIN forum.dm_participants AS participant \
              ON participant.conversation_id = message.conversation_id \
+           JOIN forum.dm_conversations AS conversation \
+             ON conversation.id = message.conversation_id \
+            AND conversation.request_status IN ('accepted', 'pending') \
            WHERE message.id = $1 \
              AND participant.account_id = $2 \
              AND participant.deleted_at IS NULL \

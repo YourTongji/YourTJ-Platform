@@ -22,7 +22,7 @@ export function RealtimeRefresh({ isAuthenticated }: { isAuthenticated: boolean 
         queryClient.invalidateQueries({ queryKey: ["notification-count"] }),
         queryClient.invalidateQueries({ queryKey: ["notifications"] }),
       ];
-      if (eventType === "dm") {
+      if (["dm", "dm_request", "dm_request_accepted"].includes(eventType)) {
         tasks.push(
           queryClient.invalidateQueries({ queryKey: ["dm-unread-count"] }),
           queryClient.invalidateQueries({ queryKey: ["dm", "conversations"] }),

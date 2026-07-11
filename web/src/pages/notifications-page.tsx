@@ -16,6 +16,8 @@ import { formatUnixTime } from "@/lib/format";
 const NOTIFICATION_LABELS: Record<string, string> = {
   badge: "徽章",
   dm: "私信",
+  dm_request: "消息请求",
+  dm_request_accepted: "请求已接受",
   flag_auto_hide: "内容治理",
   mention: "提及",
   mod_action: "治理通知",

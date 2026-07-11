@@ -44,6 +44,7 @@ import type {
   Department,
   DeviceSessionPage,
   DmConversation,
+  DmCounts,
   DmMessage,
   DmReportReason,
   DmReport,
@@ -696,7 +697,7 @@ export const api = {
 
   dmConversations(query: {
     cursor?: string | null;
-    view?: "inbox" | "archived" | "deleted";
+    view?: "inbox" | "requests" | "sent" | "archived" | "deleted";
     q?: string;
   } = {}) {
     return apiRequest<Page<DmConversation>>("/forum/dm/conversations", {
@@ -705,13 +706,33 @@ export const api = {
   },
 
   dmUnreadCount() {
-    return apiRequest<{ count: number }>("/forum/dm/unread-count");
+    return apiRequest<DmCounts>("/forum/dm/unread-count");
   },
 
-  createDmConversation(recipientHandle: string) {
+  createDmConversation(recipientHandle: string, requestMessage: string, idempotencyKey: string) {
     return apiRequest<DmConversation>("/forum/dm/conversations", {
       method: "POST",
-      body: { recipientHandle },
+      headers: { "Idempotency-Key": idempotencyKey },
+      body: { recipientHandle, requestMessage },
+    });
+  },
+
+  acceptDmRequest(id: string) {
+    return apiRequest<DmConversation>(`/forum/dm/requests/${encodeURIComponent(id)}/accept`, {
+      method: "POST",
+    });
+  },
+
+  declineDmRequest(id: string) {
+    return apiRequest<void>(`/forum/dm/requests/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    });
+  },
+
+  reportDmRequest(id: string, reason: DmReportReason, note?: string) {
+    return apiRequest<void>(`/forum/dm/requests/${encodeURIComponent(id)}/report`, {
+      method: "POST",
+      body: { reason, note },
     });
   },
 

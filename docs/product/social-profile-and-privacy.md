@@ -6,7 +6,7 @@
 >
 > 负责人：Forum/Identity/Web maintainers、Privacy owner、Product owner
 >
-> 最近核验：2026-07-12，migrations `0034_social_identity_privacy.sql`、`0045_achievement_operations.sql`
+> 最近核验：2026-07-12，migrations `0034_social_identity_privacy.sql`、`0044_dm_message_requests.sql`、`0045_achievement_operations.sql`
 
 本规范定义公开资料、用户关注、板块/主题订阅、block、mute、资料隐私和徽章语义。目标是
 建立可解释的社交关系，而不是把所有关系都命名为 “following” 或 “屏蔽”。
@@ -34,6 +34,8 @@
   解除 block 不恢复关系。
 - Profile、资料内容列表、feed、通知、新 DM、评论/引用回复和投票使用统一 block/mute 规则；mute
   不改变资料访问、follow 或直接互动权限。
+- DM `everyone` 只允许未被接收方关注的新联系人进入单消息请求箱，不等于陌生消息直接送达；
+  `following` 只允许接收方已关注用户直接送达，`nobody` 阻止新会话和 pending request 接受。
 - board/thread 支持 watching、tracking、muted subscription；thread direct subscription 覆盖 board
   fallback，删除 direct override 后恢复 board 语义，列表和 feed 使用稳定 cursor。
 - 用户搜索以 `discoverable` 和已验证校园身份作为候选门槛，响应时重新应用 active/suspension、
@@ -44,7 +46,7 @@
 
 - 暂无 handle history/cooldown/redirect、公开 activity/media/likes tabs。
 - activity/mention 隐私仍未实现；public profile 是否允许外部搜索引擎索引仍需独立政策。
-- 第一阶段不做私密账号与 pending request；若未来引入，必须增加显式状态机和通知/反滥用策略。
+- 第一阶段不做私密账号与 follow pending request；DM message request 使用独立状态机，二者不得混用。
 - Avatar/banner 已有 owner+clean binding 和上传状态 UI，但图片 scanner、变体、EXIF 清理和 orphan GC
   仍是媒体链路缺口；当前依赖独立 staff 人工审核，Web 不再提供任意 URL 输入。
 - 旧 `/me/ignores` 作为 block-by-id 兼容 alias 保留，新客户端只使用 handle-based block API。
@@ -76,7 +78,7 @@ Forum 订阅在用户界面统一显示为“订阅”；内部保留的 `follow
 
 relationship 一次返回 `following`、`followedBy`、`blockedByMe`、`blockedMe`、`muted`、
 `canFollow`、`canStartConversation`，Web 不再下载整张 block 列表推断单个用户状态。第一阶段没有
-`requestState`；`canMention` 随 mention policy 一起后续增加。
+follow `requestState`；DM request 只存在于私信 API。`canMention` 随 mention policy 一起后续增加。
 
 ## Block 与 mute
 
@@ -84,8 +86,8 @@ relationship 一次返回 `following`、`followedBy`、`blockedByMe`、`blockedM
 
 - mute 是当前用户私有过滤，不阻止对方继续访问公共板块内容或互动。
 - block 在任意方向存在时阻止 follow、DM、回复到对方内容、直接 mention 和对对方内容的反应。
-- 创建 block 在同一 transaction 删除双方 accepted follow 和 pending request，并校正关系计数；解除
-  block 不恢复这些关系。
+- 创建 block 在同一 transaction 删除双方 accepted follow、关闭 pending DM request 并校正关系计数；
+  解除 block 不恢复这些关系或请求。
 - 公共板块原讨论仍由板块可见性决定；block 会从双方个性化 feed 隐藏内容、阻止 profile 内容聚合
   与直接互动，但不删除或改写历史公共讨论，不破坏其他参与者的回复上下文。
 - profile、搜索、通知、feed、DM 和互动端点共享同一 relationship policy，不各自解释。

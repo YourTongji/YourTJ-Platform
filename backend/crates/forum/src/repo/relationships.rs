@@ -219,6 +219,29 @@ pub async fn block(pool: &PgPool, account_id: i64, blocked_account_id: i64) -> A
     .bind(blocked_account_id)
     .execute(&mut *tx)
     .await?;
+    let declined_requests: Vec<i64> = sqlx::query_scalar(
+        "UPDATE forum.dm_conversations \
+         SET request_status = 'declined', responded_at = now(), \
+             request_cooldown_until = now() + interval '30 days' \
+         WHERE account_low_id = LEAST($1, $2) AND account_high_id = GREATEST($1, $2) \
+           AND request_status = 'pending' \
+         RETURNING id",
+    )
+    .bind(account_id)
+    .bind(blocked_account_id)
+    .fetch_all(&mut *tx)
+    .await?;
+    if !declined_requests.is_empty() {
+        sqlx::query(
+            "DELETE FROM forum.dm_messages AS message \
+             WHERE message.conversation_id = ANY($1) \
+               AND NOT EXISTS (SELECT 1 FROM forum.dm_message_reports AS report \
+                               WHERE report.message_id = message.id)",
+        )
+        .bind(&declined_requests)
+        .execute(&mut *tx)
+        .await?;
+    }
     tx.commit().await?;
     Ok(())
 }

@@ -71,7 +71,9 @@ export function AppLayout() {
     staleTime: 30_000,
     refetchInterval: 60_000,
   });
-  const unreadDmCount = dmCount.data?.count ?? 0;
+  const unreadDmCount = dmCount.data?.unreadCount ?? dmCount.data?.count ?? 0;
+  const dmRequestCount = dmCount.data?.requestCount ?? 0;
+  const dmBadgeCount = unreadDmCount + dmRequestCount;
 
   return (
     <TooltipProvider>
@@ -147,12 +149,14 @@ export function AppLayout() {
                   <Link
                     to="/messages"
                     className="relative"
-                    aria-label={unreadDmCount > 0 ? `私信，${unreadDmCount} 条未读` : "私信"}
+                    aria-label={dmBadgeCount > 0
+                      ? `私信，${unreadDmCount} 条未读，${dmRequestCount} 条待处理请求`
+                      : "私信"}
                   >
                     <MessageCircle className="size-[18px]" />
-                    {unreadDmCount > 0 ? (
+                    {dmBadgeCount > 0 ? (
                       <span className="absolute -right-1 -top-1 min-w-4 rounded-full bg-primary px-1 text-center text-[10px] font-semibold leading-4 text-primary-foreground">
-                        {unreadDmCount > 99 ? "99+" : unreadDmCount}
+                        {dmBadgeCount > 99 ? "99+" : dmBadgeCount}
                       </span>
                     ) : null}
                   </Link>

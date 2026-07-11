@@ -274,6 +274,9 @@ pub struct DmConversationListRow {
     pub is_archived: bool,
     pub is_muted: bool,
     pub is_deleted: bool,
+    pub request_status: String,
+    pub request_direction: Option<String>,
+    pub can_send: bool,
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 

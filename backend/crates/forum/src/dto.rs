@@ -473,6 +473,7 @@ pub struct PollInput {
 #[serde(rename_all = "camelCase")]
 pub struct DmConversationInput {
     pub recipient_handle: String,
+    pub request_message: Option<String>,
 }
 
 /// A DM conversation in the list response.
@@ -489,7 +490,19 @@ pub struct DmConversationDto {
     pub is_archived: bool,
     pub is_muted: bool,
     pub is_deleted: bool,
+    pub request_status: String,
+    pub request_direction: Option<String>,
+    pub can_send: bool,
     pub created_at: i64,
+}
+
+/// Accepted-message unread and incoming-request counts for global navigation.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DmCountsDto {
+    pub count: i64,
+    pub unread_count: i64,
+    pub request_count: i64,
 }
 
 /// POST /api/v2/forum/dm/conversations/{id}/messages

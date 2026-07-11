@@ -194,6 +194,50 @@ pub async fn find_account_authorization_state_by_id(
     Ok(account)
 }
 
+/// Lock active, non-suspended accounts before a cross-domain direct interaction.
+///
+/// The account locks serialize the eligibility check with staff suspension, while
+/// returning only an authorization fact and never selecting profile or contact data.
+pub async fn lock_active_interaction_accounts(
+    connection: &mut PgConnection,
+    account_ids: &[i64],
+) -> AppResult<bool> {
+    if account_ids.is_empty() {
+        return Ok(false);
+    }
+    let mut expected_ids = account_ids.to_vec();
+    expected_ids.sort_unstable();
+    expected_ids.dedup();
+    let eligible_ids: Vec<i64> = sqlx::query_scalar(
+        "SELECT account.id FROM identity.accounts AS account \
+         WHERE account.id = ANY($1) \
+           AND account.status = 'active'::identity.account_status \
+           AND NOT EXISTS ( \
+             SELECT 1 FROM identity.sanctions AS sanction \
+             WHERE sanction.account_id = account.id AND sanction.kind = 'suspend' \
+               AND sanction.revoked_at IS NULL AND sanction.starts_at <= now() \
+               AND (sanction.ends_at IS NULL OR sanction.ends_at > now()) \
+           ) \
+         ORDER BY account.id FOR SHARE OF account",
+    )
+    .bind(&expected_ids)
+    .fetch_all(connection)
+    .await?;
+    Ok(eligible_ids == expected_ids)
+}
+
+/// Lock and return the recipient's new-conversation policy for an interaction transaction.
+pub async fn lock_dm_policy(connection: &mut PgConnection, account_id: i64) -> AppResult<String> {
+    let policy = sqlx::query_scalar(
+        "SELECT dm_policy FROM identity.profile_privacy WHERE account_id = $1 FOR SHARE",
+    )
+    .bind(account_id)
+    .fetch_optional(connection)
+    .await?
+    .unwrap_or_else(|| "following".to_owned());
+    Ok(policy)
+}
+
 /// Return whether an account may receive a controlled credit reward.
 ///
 /// Eligibility requires an active account and no unrevoked, unexpired suspend

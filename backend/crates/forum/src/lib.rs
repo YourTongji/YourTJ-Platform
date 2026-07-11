@@ -133,6 +133,15 @@ pub fn routes(state: AppState) -> Router {
                 .post(handlers::create_or_get_conversation_handler),
         )
         .route("/api/v2/forum/dm/unread-count", get(handlers::unread_dm_count_handler))
+        .route(
+            "/api/v2/forum/dm/requests/{id}/accept",
+            post(handlers::accept_message_request_handler),
+        )
+        .route("/api/v2/forum/dm/requests/{id}", delete(handlers::decline_message_request_handler))
+        .route(
+            "/api/v2/forum/dm/requests/{id}/report",
+            post(handlers::report_message_request_handler),
+        )
         .route("/api/v2/forum/dm/conversations/{id}", delete(handlers::delete_conversation_handler))
         .route(
             "/api/v2/forum/dm/conversations/{id}/recover",

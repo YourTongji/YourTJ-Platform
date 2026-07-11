@@ -106,14 +106,6 @@ export function ProfilePage() {
     },
     onError: (error) => toast.error(error instanceof Error ? error.message : "屏蔽设置失败"),
   });
-  const startConversation = useMutation({
-    mutationFn: () => api.createDmConversation(profile.data?.handle ?? name),
-    onSuccess: (conversation) => {
-      navigate(`/messages?conversation=${encodeURIComponent(conversation.id)}`);
-    },
-    onError: (error) => toast.error(error instanceof Error ? error.message : "无法发起私信"),
-  });
-
   if (profile.isLoading) {
     return <LoadingState label="加载用户主页" />;
   }
@@ -153,13 +145,15 @@ export function ProfilePage() {
         isSelf={isSelf}
         relationshipLoading={socialRelationship.isLoading}
         relationshipPending={relationshipPending}
-        messagePending={startConversation.isPending}
+        messagePending={false}
         canStartConversation={(account?.trustLevel ?? 0) >= 1 && Boolean(socialRelationship.data?.canStartConversation)}
         canManageUser={canManageUser}
         canManageVerifications={canManageVerifications}
         confirmBlockOpen={confirmBlockOpen}
         onConfirmBlockOpenChange={setConfirmBlockOpen}
-        onStartConversation={() => startConversation.mutate()}
+        onStartConversation={() => {
+          navigate(`/messages?recipient=${encodeURIComponent(profile.data.handle)}`);
+        }}
         onToggleFollow={() => followRelationship.mutate()}
         onToggleMute={() => muteRelationship.mutate()}
         onToggleBlock={() => blockRelationship.mutate()}

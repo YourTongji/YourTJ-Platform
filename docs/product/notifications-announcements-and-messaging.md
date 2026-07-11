@@ -6,7 +6,7 @@
 >
 > 负责人：Forum/Web/Platform maintainers、Community operations、Privacy owner
 >
-> 最近核验：2026-07-11，`origin/main@ed8a06c`
+> 最近核验：2026-07-12，migration `0044_dm_message_requests.sql`
 
 通知告诉用户“发生了什么”，公告传达平台级信息，私信承载参与者之间的非公开交流。三者都
 涉及未读、实时、偏好和保留，但必须保持各自的权限和证据边界。
@@ -35,7 +35,13 @@
 - 私信有 canonical 1:1 conversation、分页 inbox/messages、单调 read pointer、准确未读、
   block/sanction/trust 检查、单条举报和受限 staff evidence。
 - 私信支持 participant-local archive/unarchive、可恢复删除、会话搜索和 mute；新消息会让双方的归档/
-  隐藏会话重新进入收件箱，mute 只抑制通知而不篡改未读事实。Web 已接通三类收件箱和全局私信角标。
+  隐藏会话重新进入收件箱，mute 只抑制通知而不篡改未读事实。
+- 陌生联系使用显式 `pending -> accepted | declined` 消息请求：接收方有独立请求箱，发送方有已发送
+  请求箱；pending 只允许创建时的一条、最多 1000 字附言，接受前双方都不能追加消息。
+- 请求接受会创建普通 conversation 并通知发送方；删除/拒绝或发送方撤回不会通知、不会隐式 block，
+  未举报附言随终态立即删除。举报会在同一事务创建最小 evidence 并移出请求箱。
+- 全局私信角标分别投影 accepted conversation 未读数与 incoming request 数；Web 的 SSE 只把
+  `dm/dm_request/dm_request_accepted` 当回源刷新信号，不把瞬时事件当消息事实。
 
 ### Partial
 
@@ -47,7 +53,7 @@
   当前实现提供机制，不替代政策决定。
 - `presentation` 已进入 contract、数据库和后台，但 Web 目前在公告页统一以 card 展示；全站 persistent
   banner 及其占位、关闭和无障碍行为仍需单独完成。
-- 私信仍缺 DM policy、消息请求、附件、实时、retention/legal-hold worker 和多实例广播。
+- 私信仍缺附件、typing/presence、消息撤回、request expiry、retention/legal-hold worker 和多实例广播。
 
 ## 通知模型
 
@@ -118,19 +124,28 @@ draft -> scheduled -> published -> archived
 
 ## 私信权限与请求
 
-目标 `dmPolicy`：`everyone | following | nobody`。不满足直接送达条件的新联系人进入 message
-requests；接受后进入 canonical conversation，拒绝/举报不会暴露额外资料。
+`dmPolicy` 为 `everyone | following | nobody`：接收方已关注的发送者可以直接送达；`everyone`
+允许其他 active、未 block 用户先发一条请求；`following` 拒绝陌生请求；`nobody` 拒绝所有新会话和
+pending request 的接受。已接受会话不因 policy 后续收紧而静默关闭，block 和 suspension 仍立即阻断。
 
 - 不能给自己、无效/暂停账号或任意方向 block 的账号发消息。
 - 当前 TL0 不能发起新会话；active silence 阻止创建和发送，发送时重新检查账号、参与者与 block。
-- 消息当前为不可编辑纯文本，长度边界以 OpenAPI 为准；编辑/撤回若增加必须显式建模。
-- 已存在会话在 policy 改变后能否继续属于 `Decision needed`；安全 block 总是立即生效。
-- 发送、read pointer 和 request accept 幂等；并发创建仍只有一个 unordered account pair。
+- 创建请求支持 account-scoped `Idempotency-Key`，相同 key/内容返回同一 conversation，不同内容冲突；
+  Redis 每账号每天 10 次请求限制之外，数据库还以最小 attempt 元数据对最近 24 小时请求做相同上界，
+  并发 attempt 按 sender 串行，缓存缺失时不失守。
+- 接受动作可安全重放；并发 pair mutation 使用同一 advisory lock，并与账号 suspension 的 account lock
+  串行，canonical unordered account pair 始终只有一个 conversation。
+- 接收方拒绝进入 30 天 sender/recipient pair 冷却，发送方撤回进入 5 分钟防抖；二者不等价于 block，
+  也不创建拒绝通知。Block 会原子关闭 pending request 并进入 30 天冷却。冷却结束后的新请求仍重新
+  检查当时 policy、账号状态和 block。
+- 消息当前为不可编辑纯文本，普通消息上限 16000 字，请求附言上限 1000 字；编辑/撤回若增加必须显式建模。
 
 ## 私信生命周期与隐私
 
 - archive/unarchive 只改变参与者自己的 inbox 组织。
 - delete/recover 是参与者自己的可恢复隐藏，不立即删除对方副本。
+- pending request 不复用 archive/delete：incoming 只有 accept、delete/decline、report，outgoing 只有等待
+  或 withdraw。declined conversation 的 pair/status/cooldown 作为最小反滥用元数据保留，未举报正文立即删除。
 - 双方删除且无举报/legal hold 后，retention worker 在恢复窗结束后清除正文和未绑定 asset。
 - 消息默认不可编辑；如支持撤回，保留“消息已撤回”事件和治理证据，而不是静默消失。
 - 附件使用 private clean asset 和短期授权 URL，不能进入公共 CDN。
@@ -143,7 +158,7 @@ requests；接受后进入 canonical conversation，拒绝/举报不会暴露额
 - 哪些公告必须 ack、哪些正文修订要求重新确认、哪些 audience 可定向；未读 current revision 的
   首次全局弹窗是既定基线，不属于可关闭的 presentation preference。
 - 不可关闭的通知类别以及 email/push 的第一阶段范围。
-- DM policy 变化对既有会话的影响、消息撤回语义和 request 过期时间。
+- 消息撤回语义和 pending request 自动过期时间；既有 accepted conversation 持续有效已确定。
 - 未举报消息、举报证据、附件和备份的保留期；group DM 建议 P2。
 
 ## 验收基线

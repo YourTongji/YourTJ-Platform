@@ -44,13 +44,14 @@ async fn run_migrations(pool: &PgPool) {
     .await
     .unwrap_or(false);
     if is_fresh {
-        let migrations: [&str; 11] = [
+        let migrations: [&str; 12] = [
             include_str!("../../../../migrations/0001_init.sql"),
             include_str!("../../../../migrations/0002_escrow_selection.sql"),
             include_str!("../../../../migrations/0003_platform.sql"),
             include_str!("../../../../migrations/0004_review_remediation.sql"),
             include_str!("../../../../migrations/0005_forum_parity.sql"),
             include_str!("../../../../migrations/0006_forum_f2_f3.sql"),
+            include_str!("../../../../migrations/0015_media_upload_intents.sql"),
             include_str!("../../../../migrations/0020_activity.sql"),
             include_str!("../../../../migrations/0021_dm_moderation.sql"),
             include_str!("../../../../migrations/0022_governance.sql"),
@@ -237,6 +238,23 @@ async fn run_migrations(pool: &PgPool) {
             .execute(pool)
             .await
             .expect("migration 0043 failed");
+    }
+
+    let has_dm_message_requests: bool = sqlx::query_scalar(
+        "SELECT EXISTS( \
+           SELECT 1 FROM information_schema.columns \
+           WHERE table_schema = 'forum' AND table_name = 'dm_conversations' \
+             AND column_name = 'request_status' \
+         )",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or(false);
+    if !has_dm_message_requests {
+        sqlx::raw_sql(include_str!("../../../../migrations/0044_dm_message_requests.sql"))
+            .execute(pool)
+            .await
+            .expect("migration 0044 failed");
     }
 
     let has_governance_schema: bool = sqlx::query_scalar(
