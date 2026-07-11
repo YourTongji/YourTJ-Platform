@@ -26,6 +26,8 @@
   `pending/clean/blocked` 审核状态。
 - Web 已使用 Alibaba 官方 Browser SDK 实现 direct-to-OSS 基础链路：先取 exact-key STS intent，
   本地计算 SHA-256，再由 OSS signed callback 取得 canonical upload id；SDK 动态加载，不进入首屏包。
+- Web 已建立 `plain_v1`/`markdown_v1` 展示边界和共享编辑/预览组件；第一阶段选择 CodeMirror 6
+  作为源码编辑器、react-markdown/unified + GFM + strict sanitizer 作为 renderer，独立路由按需加载。
 - 课程/课评与论坛各有 Meilisearch 候选能力；独立 `search` domain 返回 typed
   courses/reviews/threads，每类都由 owner domain 回 PostgreSQL 重建，Web 可到达对应 canonical route。
 - 课程管理 mutation 会在事务提交后 reconcile 单个 course document；后台提供 course/review/forum
@@ -33,7 +35,8 @@
 
 ### Partial
 
-- Web 输入和展示仍为纯文本；没有 Markdown renderer/editor、预览、autosave 或图片插入。
+- 现有业务 DTO 尚未持久化 `contentFormat`，页面也未挂载 Markdown 组件；仍缺 autosave、asset 图片
+  插入与服务端 AST/conformance 验证，因此不能把组件基础误记为 Markdown 已上线。
 - queued 内容目前复用 hidden 状态，没有独立 pending 状态/审核任务；编辑没有
   `contentVersion/expectedVersion` 乐观冲突检测，搜索/通知等事务外副作用也没有 durable outbox。
 - tags、tag filter、subscription、poll/vote viewer state、read tracking 和 drafts 契约未接齐。
@@ -73,8 +76,10 @@
 - CSP、禁止第三方远程图片和最小化第三方脚本作为 defense-in-depth；sanitizer 仍是主边界。
 
 编辑器选型以成熟维护、可访问性、移动端输入、paste/drop upload、插件隔离和可控输出为标准。
-Markdown-first 可评估 Milkdown；源码编辑可评估 CodeMirror 6；渲染可使用 unified/remark/GFM 与
-严格 sanitizer。框架不能替代服务端 policy，最终选型需形成架构决策并补 bundle/安全验证。
+第一阶段已选择 CodeMirror 6 源码编辑、react-markdown/unified + remark-gfm 渲染和
+rehype-sanitize 二次约束；不启用 raw HTML，远程图片降级为不可加载提示。相关依赖进入独立
+`markdown-vendor` chunk，只在创作/展示路由需要时加载。框架不能替代服务端 policy，业务挂载前仍要
+补服务端 AST/profile 与跨客户端 conformance corpus。
 
 Web、iOS 和 Flutter 可以使用不同 renderer，但 `markdown_v1` 的 allowed syntax、URL/image policy、
 plain-text projection 与恶意样例必须由共享 protocol profile 和 conformance corpus 约束。任何客户端

@@ -30,6 +30,20 @@ export default defineConfig({
           if (moduleId.includes("/@noble/")) {
             return "crypto-vendor";
           }
+          if (moduleId.includes("/ali-oss/")) {
+            return "oss-vendor";
+          }
+          if (
+            moduleId.includes("/@codemirror/")
+            || moduleId.includes("/@lezer/")
+            || moduleId.includes("/@uiw/react-codemirror/")
+            || moduleId.includes("/react-markdown/")
+            || moduleId.includes("/remark-")
+            || moduleId.includes("/rehype-")
+            || moduleId.includes("/unified/")
+          ) {
+            return "markdown-vendor";
+          }
           return undefined;
         },
       },

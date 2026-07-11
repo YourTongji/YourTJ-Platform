@@ -1,0 +1,168 @@
+import { markdown } from "@codemirror/lang-markdown";
+import { EditorState } from "@codemirror/state";
+import { EditorView } from "@codemirror/view";
+import CodeMirror, { type ReactCodeMirrorRef } from "@uiw/react-codemirror";
+import { Bold, Code2, Italic, Link, List, ListOrdered, Quote } from "lucide-react";
+import * as React from "react";
+
+import { Button } from "@/components/ui/button";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { MarkdownContent } from "@/components/content/markdown-content";
+
+interface MarkdownAction {
+  label: string;
+  icon: React.ComponentType<{ className?: string }>;
+  apply: (selected: string) => { value: string; selectionOffset: number };
+}
+
+const inlineActions: MarkdownAction[] = [
+  {
+    label: "加粗",
+    icon: Bold,
+    apply: (selected) => ({ value: `**${selected || "加粗文字"}**`, selectionOffset: 2 }),
+  },
+  {
+    label: "斜体",
+    icon: Italic,
+    apply: (selected) => ({ value: `*${selected || "斜体文字"}*`, selectionOffset: 1 }),
+  },
+  {
+    label: "行内代码",
+    icon: Code2,
+    apply: (selected) => ({ value: `\`${selected || "code"}\``, selectionOffset: 1 }),
+  },
+  {
+    label: "链接",
+    icon: Link,
+    apply: (selected) => ({ value: `[${selected || "链接文字"}](https://)`, selectionOffset: 1 }),
+  },
+];
+
+export function MarkdownEditor({
+  value,
+  onChange,
+  label,
+  maxLength,
+  minHeight = 220,
+  placeholder = "使用 Markdown 编写内容",
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  label: string;
+  maxLength: number;
+  minHeight?: number;
+  placeholder?: string;
+}) {
+  const editorRef = React.useRef<ReactCodeMirrorRef>(null);
+  const [mode, setMode] = React.useState<"edit" | "preview">("edit");
+  const extensions = React.useMemo(() => [
+    markdown(),
+    EditorView.lineWrapping,
+    EditorState.changeFilter.of((transaction) => transaction.newDoc.length <= maxLength),
+    EditorView.theme({
+      "&": { backgroundColor: "transparent", color: "inherit", fontSize: "0.875rem" },
+      ".cm-content": { minHeight: `${minHeight}px`, padding: "0.75rem", fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" },
+      ".cm-scroller": { overflow: "auto" },
+      ".cm-gutters": { display: "none" },
+      "&.cm-focused": { outline: "none" },
+      ".cm-placeholder": { color: "hsl(var(--muted-foreground))" },
+      ".cm-selectionBackground, &.cm-focused .cm-selectionBackground": { backgroundColor: "hsl(var(--primary) / 0.18)" },
+    }),
+  ], [maxLength, minHeight]);
+
+  function replaceSelection(action: MarkdownAction) {
+    const view = editorRef.current?.view;
+    if (!view) return;
+    const { from, to } = view.state.selection.main;
+    const selected = view.state.sliceDoc(from, to);
+    const replacement = action.apply(selected);
+    const selectedLength = selected ? selected.length : replacement.value.length - replacement.selectionOffset * 2;
+    view.dispatch({
+      changes: { from, to, insert: replacement.value },
+      selection: {
+        anchor: from + replacement.selectionOffset,
+        head: from + replacement.selectionOffset + selectedLength,
+      },
+      scrollIntoView: true,
+    });
+    view.focus();
+  }
+
+  function prefixLines(prefix: string, fallback: string) {
+    const view = editorRef.current?.view;
+    if (!view) return;
+    const { from, to } = view.state.selection.main;
+    const selected = view.state.sliceDoc(from, to) || fallback;
+    const replacement = selected.split("\n").map((line) => `${prefix}${line}`).join("\n");
+    view.dispatch({ changes: { from, to, insert: replacement }, scrollIntoView: true });
+    view.focus();
+  }
+
+  return (
+    <div className="overflow-hidden rounded-lg border bg-background focus-within:ring-[3px] focus-within:ring-ring/35">
+      <Tabs value={mode} onValueChange={(next) => setMode(next as "edit" | "preview")} className="gap-0">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b bg-muted/30 px-2 py-1.5">
+          <div className="flex items-center gap-0.5" role="toolbar" aria-label="Markdown 格式工具">
+            {inlineActions.map((action) => (
+              <Button
+                key={action.label}
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="size-8"
+                onClick={() => replaceSelection(action)}
+                disabled={mode !== "edit"}
+                aria-label={action.label}
+              >
+                <action.icon className="size-4" />
+              </Button>
+            ))}
+            <Button type="button" variant="ghost" size="icon" className="size-8" onClick={() => prefixLines("> ", "引用内容")} disabled={mode !== "edit"} aria-label="引用">
+              <Quote className="size-4" />
+            </Button>
+            <Button type="button" variant="ghost" size="icon" className="size-8" onClick={() => prefixLines("- ", "列表项")} disabled={mode !== "edit"} aria-label="无序列表">
+              <List className="size-4" />
+            </Button>
+            <Button type="button" variant="ghost" size="icon" className="size-8" onClick={() => prefixLines("1. ", "列表项")} disabled={mode !== "edit"} aria-label="有序列表">
+              <ListOrdered className="size-4" />
+            </Button>
+          </div>
+          <TabsList className="h-8">
+            <TabsTrigger value="edit" className="h-6 text-xs">编辑</TabsTrigger>
+            <TabsTrigger value="preview" className="h-6 text-xs">预览</TabsTrigger>
+          </TabsList>
+        </div>
+        <TabsContent value="edit">
+          <CodeMirror
+            ref={editorRef}
+            value={value}
+            onChange={onChange}
+            extensions={extensions}
+            placeholder={placeholder}
+            aria-label={label}
+            basicSetup={{
+              lineNumbers: false,
+              foldGutter: false,
+              highlightActiveLine: false,
+              highlightActiveLineGutter: false,
+              autocompletion: false,
+            }}
+          />
+        </TabsContent>
+        <TabsContent value="preview">
+          <div className="p-4" style={{ minHeight }}>
+            {value.trim() ? (
+              <MarkdownContent content={value} format="markdown_v1" />
+            ) : (
+              <p className="text-sm text-muted-foreground">没有可预览的内容</p>
+            )}
+          </div>
+        </TabsContent>
+      </Tabs>
+      <div className="flex items-center justify-between gap-3 border-t bg-muted/20 px-3 py-1.5 text-xs text-muted-foreground">
+        <span>支持 CommonMark 与 GFM；不解析 HTML 或远程图片</span>
+        <span className="shrink-0 tabular-nums">{value.length}/{maxLength}</span>
+      </div>
+    </div>
+  );
+}
