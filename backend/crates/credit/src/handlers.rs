@@ -34,6 +34,36 @@ fn map_auth_err(response: axum::response::Response) -> shared::AppError {
     }
 }
 
+async fn append_consumed_user_ledger(
+    conn: &mut sqlx::PgConnection,
+    account_id: i64,
+    expected_type: &str,
+    consumed: crate::signing::ConsumedIntent,
+) -> AppResult<()> {
+    let prepared = consumed.ledger_entry.ok_or(CreditError::InvalidSignature)?;
+    if prepared.type_ != expected_type
+        || prepared.from_account != Some(account_id)
+        || prepared.signer != account_id.to_string()
+    {
+        return Err(CreditError::InvalidSignature.into());
+    }
+    repo::append_ledger_entry_tx(
+        conn,
+        &prepared.tx_id,
+        &prepared.type_,
+        prepared.from_account,
+        prepared.to_account,
+        prepared.amount,
+        &prepared.nonce,
+        prepared.metadata.as_ref(),
+        &prepared.signer,
+        &consumed.signature,
+        prepared.created_at,
+    )
+    .await?;
+    Ok(())
+}
+
 /// POST /api/v2/credit/signing-intents — return exact bytes for wallet signing.
 pub async fn create_signing_intent(
     State(state): State<AppState>,
@@ -141,7 +171,7 @@ pub async fn tip(
     let request = serde_json::to_value(&body)
         .map_err(|error| shared::AppError::Internal(anyhow::Error::new(error)))?;
     let mut tx = state.db.begin().await?;
-    let signature =
+    let consumed =
         crate::signing::consume_intent(&mut tx, &headers, auth.id, "credit.tip", &request).await?;
     let wallet_balance: i64 = sqlx::query_scalar(
         "SELECT COALESCE((SELECT balance FROM credit.wallets WHERE account_id = $1 FOR UPDATE), 0)",
@@ -152,32 +182,7 @@ pub async fn tip(
     if wallet_balance < body.amount {
         return Err(CreditError::InsufficientBalance.into());
     }
-    let tx_id = uuid::Uuid::new_v4().to_string();
-    let nonce = uuid::Uuid::new_v4().to_string();
-    let timestamp = Utc::now().timestamp();
-    let intent_id = headers
-        .get("x-wallet-intent")
-        .and_then(|header| header.to_str().ok())
-        .ok_or(CreditError::IntentUnavailable)?;
-    let metadata = serde_json::json!({
-        "target_type": body.target_type,
-        "target_id": body.target_id,
-        "signing_intent_id": intent_id,
-    });
-    repo::append_ledger_entry_tx(
-        &mut tx,
-        &tx_id,
-        "tip",
-        Some(auth.id),
-        Some(to_account_id),
-        body.amount,
-        &nonce,
-        Some(&metadata),
-        &auth.id.to_string(),
-        &signature,
-        timestamp,
-    )
-    .await?;
+    append_consumed_user_ledger(&mut tx, auth.id, "tip", consumed).await?;
     tx.commit().await?;
 
     tracing::info!(from = auth.id, to = to_account_id, amount = body.amount, "tip processed");
@@ -265,11 +270,8 @@ pub async fn create_task(
 
     let request = serde_json::to_value(&body)
         .map_err(|error| shared::AppError::Internal(anyhow::Error::new(error)))?;
-    let tx_id = uuid::Uuid::new_v4().to_string();
-    let nonce = uuid::Uuid::new_v4().to_string();
-    let created_at = Utc::now().timestamp();
     let mut tx = state.db.begin().await?;
-    let signature =
+    let consumed =
         crate::signing::consume_intent(&mut tx, &headers, auth.id, "credit.task.create", &request)
             .await?;
     let wallet_balance: i64 = sqlx::query_scalar(
@@ -281,28 +283,9 @@ pub async fn create_task(
     if wallet_balance < body.reward_amount {
         return Err(CreditError::InsufficientBalance.into());
     }
-    let intent_id = headers
-        .get("x-wallet-intent")
-        .and_then(|header| header.to_str().ok())
-        .ok_or(CreditError::IntentUnavailable)?;
-    let metadata = serde_json::json!({
-        "title": body.title,
-        "signing_intent_id": intent_id,
-    });
-    repo::append_ledger_entry_tx(
-        &mut tx,
-        &tx_id,
-        "escrow_hold",
-        Some(auth.id),
-        None,
-        body.reward_amount,
-        &nonce,
-        Some(&metadata),
-        &auth.id.to_string(),
-        &signature,
-        created_at,
-    )
-    .await?;
+    let hold_tx_id =
+        consumed.ledger_entry.as_ref().ok_or(CreditError::InvalidSignature)?.tx_id.clone();
+    append_consumed_user_ledger(&mut tx, auth.id, "escrow_hold", consumed).await?;
 
     let task = repo::insert_task_tx(
         &mut tx,
@@ -311,7 +294,7 @@ pub async fn create_task(
         body.description.as_deref(),
         body.reward_amount,
         body.contact_info.as_deref(),
-        &tx_id,
+        &hold_tx_id,
     )
     .await?;
 
@@ -696,16 +679,9 @@ pub async fn purchase_product(
     )
     .await?;
 
-    let product = repo::find_product(&state.db, id).await?.ok_or(CreditError::ProductNotFound)?;
-    if product.seller_id == auth.id {
-        return Err(CreditError::InvalidAction("cannot purchase your own product".into()).into());
-    }
     let request = serde_json::json!({ "productId": id.to_string() });
-    let tx_id = uuid::Uuid::new_v4().to_string();
-    let nonce = uuid::Uuid::new_v4().to_string();
-    let created_at = Utc::now().timestamp();
     let mut tx = state.db.begin().await?;
-    let signature = crate::signing::consume_intent(
+    let consumed = crate::signing::consume_intent(
         &mut tx,
         &headers,
         auth.id,
@@ -713,6 +689,17 @@ pub async fn purchase_product(
         &request,
     )
     .await?;
+    let product =
+        repo::find_product_for_update_tx(&mut tx, id).await?.ok_or(CreditError::ProductNotFound)?;
+    if product.status != "on_sale" {
+        return Err(CreditError::InvalidAction("product is not on_sale".into()).into());
+    }
+    if product.stock <= 0 {
+        return Err(CreditError::InvalidAction("product is sold out".into()).into());
+    }
+    if product.seller_id == auth.id {
+        return Err(CreditError::InvalidAction("cannot purchase your own product".into()).into());
+    }
     let wallet_balance: i64 = sqlx::query_scalar(
         "SELECT COALESCE((SELECT balance FROM credit.wallets WHERE account_id = $1 FOR UPDATE), 0)",
     )
@@ -722,37 +709,23 @@ pub async fn purchase_product(
     if wallet_balance < product.price {
         return Err(CreditError::InsufficientBalance.into());
     }
-    let intent_id = headers
-        .get("x-wallet-intent")
-        .and_then(|header| header.to_str().ok())
-        .ok_or(CreditError::IntentUnavailable)?;
-    let metadata = serde_json::json!({
-        "product_id": id.to_string(),
-        "title": product.title,
-        "signing_intent_id": intent_id,
-    });
-    repo::append_ledger_entry_tx(
-        &mut tx,
-        &tx_id,
-        "escrow_hold",
-        Some(auth.id),
-        None,
-        product.price,
-        &nonce,
-        Some(&metadata),
-        &auth.id.to_string(),
-        &signature,
-        created_at,
-    )
-    .await?;
+    let hold_tx_id =
+        consumed.ledger_entry.as_ref().ok_or(CreditError::InvalidSignature)?.tx_id.clone();
+    append_consumed_user_ledger(&mut tx, auth.id, "escrow_hold", consumed).await?;
 
     repo::decrement_stock_tx(&mut tx, id).await?;
     if product.stock <= 1 {
         repo::update_product_status_tx(&mut tx, id, "sold_out").await?;
     }
-    let purchase =
-        repo::insert_purchase_tx(&mut tx, id, auth.id, product.seller_id, product.price, &tx_id)
-            .await?;
+    let purchase = repo::insert_purchase_tx(
+        &mut tx,
+        id,
+        auth.id,
+        product.seller_id,
+        product.price,
+        &hold_tx_id,
+    )
+    .await?;
     tx.commit().await?;
 
     Ok(Json(PurchaseDto {

@@ -4,7 +4,10 @@ mod helpers;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use helpers::{create_test_account, create_test_app, create_token, mint_to_account, read_json};
+use helpers::{
+    create_test_account, create_test_app, create_token, mint_to_account, read_json,
+    signed_post_request,
+};
 use serde_json::json;
 use tower::ServiceExt;
 
@@ -15,7 +18,7 @@ use tower::ServiceExt;
 #[tokio::test]
 async fn task_create_requires_balance() {
     let (pool, app) = create_test_app().await;
-    create_test_account(&pool, "taskcreator@tongji.edu.cn", "taskcreator").await;
+    let account_id = create_test_account(&pool, "taskcreator@tongji.edu.cn", "taskcreator").await;
     // No points minted.
 
     let token = create_token(&pool, "taskcreator@tongji.edu.cn").await;
@@ -24,18 +27,18 @@ async fn task_create_requires_balance() {
         "rewardAmount": 100
     });
 
-    let resp = app
-        .oneshot(
-            Request::builder()
-                .uri("/api/v2/credit/tasks")
-                .method("POST")
-                .header("Authorization", format!("Bearer {token}"))
-                .header("Content-Type", "application/json")
-                .body(Body::from(body.to_string()))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let request = signed_post_request(
+        &app,
+        &pool,
+        &token,
+        account_id,
+        "/api/v2/credit/tasks",
+        "credit.task.create",
+        body.clone(),
+        Some(body),
+    )
+    .await;
+    let resp = app.oneshot(request).await.unwrap();
 
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 }
@@ -52,19 +55,18 @@ async fn task_create_and_list() {
         "rewardAmount": 100
     });
 
-    let resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri("/api/v2/credit/tasks")
-                .method("POST")
-                .header("Authorization", format!("Bearer {token}"))
-                .header("Content-Type", "application/json")
-                .body(Body::from(body.to_string()))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let request = signed_post_request(
+        &app,
+        &pool,
+        &token,
+        a,
+        "/api/v2/credit/tasks",
+        "credit.task.create",
+        body.clone(),
+        Some(body),
+    )
+    .await;
+    let resp = app.clone().oneshot(request).await.unwrap();
 
     assert_eq!(resp.status(), StatusCode::OK);
     let json = read_json(resp).await;
@@ -116,19 +118,18 @@ async fn task_accept_and_submit_flow() {
         "rewardAmount": 200
     });
 
-    let resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri("/api/v2/credit/tasks")
-                .method("POST")
-                .header("Authorization", format!("Bearer {token}"))
-                .header("Content-Type", "application/json")
-                .body(Body::from(body.to_string()))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let request = signed_post_request(
+        &app,
+        &pool,
+        &token,
+        creator,
+        "/api/v2/credit/tasks",
+        "credit.task.create",
+        body.clone(),
+        Some(body),
+    )
+    .await;
+    let resp = app.clone().oneshot(request).await.unwrap();
 
     assert_eq!(resp.status(), StatusCode::OK);
     let task = read_json(resp).await;
@@ -178,18 +179,19 @@ async fn task_accept_and_submit_flow() {
     assert_eq!(resp.status(), StatusCode::NO_CONTENT);
 
     // Confirm as creator (releases escrow to acceptor).
-    let resp = app
-        .oneshot(
-            Request::builder()
-                .uri(format!("/api/v2/credit/tasks/{task_id}/action"))
-                .method("POST")
-                .header("Authorization", format!("Bearer {token}"))
-                .header("Content-Type", "application/json")
-                .body(Body::from(r#"{"action":"confirm"}"#))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let action = json!({ "action": "confirm" });
+    let request = signed_post_request(
+        &app,
+        &pool,
+        &token,
+        creator,
+        &format!("/api/v2/credit/tasks/{task_id}/action"),
+        "credit.task.action",
+        json!({ "id": task_id, "action": "confirm" }),
+        Some(action),
+    )
+    .await;
+    let resp = app.oneshot(request).await.unwrap();
 
     assert_eq!(resp.status(), StatusCode::NO_CONTENT);
 
@@ -291,18 +293,18 @@ async fn purchase_flow_releases_escrow() {
 
     // Purchase as buyer.
     let buyer_token = create_token(&pool, "pbuyer@tongji.edu.cn").await;
-    let resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri(format!("/api/v2/credit/products/{product_id}/purchase"))
-                .method("POST")
-                .header("Authorization", format!("Bearer {buyer_token}"))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let request = signed_post_request(
+        &app,
+        &pool,
+        &buyer_token,
+        buyer,
+        &format!("/api/v2/credit/products/{product_id}/purchase"),
+        "credit.product.purchase",
+        json!({ "productId": product_id }),
+        None,
+    )
+    .await;
+    let resp = app.clone().oneshot(request).await.unwrap();
 
     assert_eq!(resp.status(), StatusCode::OK);
     let purchase = read_json(resp).await;
@@ -349,18 +351,19 @@ async fn purchase_flow_releases_escrow() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::NO_CONTENT);
 
-    let resp = app
-        .oneshot(
-            Request::builder()
-                .uri(format!("/api/v2/credit/purchases/{purchase_id}/action"))
-                .method("POST")
-                .header("Authorization", format!("Bearer {buyer_token}"))
-                .header("Content-Type", "application/json")
-                .body(Body::from(r#"{"action":"confirm"}"#))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let action = json!({ "action": "confirm" });
+    let request = signed_post_request(
+        &app,
+        &pool,
+        &buyer_token,
+        buyer,
+        &format!("/api/v2/credit/purchases/{purchase_id}/action"),
+        "credit.purchase.action",
+        json!({ "id": purchase_id, "action": "confirm" }),
+        Some(action),
+    )
+    .await;
+    let resp = app.oneshot(request).await.unwrap();
     assert_eq!(resp.status(), StatusCode::NO_CONTENT);
 
     // Seller should have received 100 points.
@@ -382,19 +385,18 @@ async fn task_delete_open_refunds_escrow_and_removes_row() {
     // Create a task — escrow_hold deducts 150.
     let token = create_token(&pool, "delcreator@tongji.edu.cn").await;
     let body = json!({ "title": "Deletable Bounty", "rewardAmount": 150 });
-    let resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri("/api/v2/credit/tasks")
-                .method("POST")
-                .header("Authorization", format!("Bearer {token}"))
-                .header("Content-Type", "application/json")
-                .body(Body::from(body.to_string()))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let request = signed_post_request(
+        &app,
+        &pool,
+        &token,
+        creator,
+        "/api/v2/credit/tasks",
+        "credit.task.create",
+        body.clone(),
+        Some(body),
+    )
+    .await;
+    let resp = app.clone().oneshot(request).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     let task = read_json(resp).await;
     let task_id = task["id"].as_str().unwrap().to_string();
@@ -407,19 +409,18 @@ async fn task_delete_open_refunds_escrow_and_removes_row() {
     assert_eq!(held.0, 350);
 
     // Delete the open task — must refund the escrow and remove the row.
-    let resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri(format!("/api/v2/credit/tasks/{task_id}/action"))
-                .method("POST")
-                .header("Authorization", format!("Bearer {token}"))
-                .header("Content-Type", "application/json")
-                .body(Body::from(r#"{"action":"delete"}"#))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let request = signed_post_request(
+        &app,
+        &pool,
+        &token,
+        creator,
+        &format!("/api/v2/credit/tasks/{task_id}/action"),
+        "credit.task.action",
+        json!({ "id": task_id, "action": "delete" }),
+        Some(json!({ "action": "delete" })),
+    )
+    .await;
+    let resp = app.clone().oneshot(request).await.unwrap();
     assert_eq!(resp.status(), StatusCode::NO_CONTENT);
 
     // Creator is made whole again.
@@ -450,4 +451,112 @@ async fn task_delete_open_refunds_escrow_and_removes_row() {
     assert_eq!(resp.status(), StatusCode::OK);
     let verify = read_json(resp).await;
     assert!(verify["ok"].as_bool().unwrap(), "ledger verify failed: {verify}");
+}
+
+#[tokio::test]
+async fn purchase_rejects_sold_out_product_without_charging() {
+    let (pool, app) = create_test_app().await;
+    let seller = create_test_account(&pool, "soldoutseller@tongji.edu.cn", "soldoutseller").await;
+    let buyer = create_test_account(&pool, "soldoutbuyer@tongji.edu.cn", "soldoutbuyer").await;
+    mint_to_account(&pool, buyer, 100).await;
+    let product_id: i64 = sqlx::query_scalar(
+        "INSERT INTO credit.products (seller_id, title, price, stock, status) \
+         VALUES ($1, 'Sold out', 40, 0, 'sold_out') RETURNING id",
+    )
+    .bind(seller)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let token = create_token(&pool, "soldoutbuyer@tongji.edu.cn").await;
+    let request = signed_post_request(
+        &app,
+        &pool,
+        &token,
+        buyer,
+        &format!("/api/v2/credit/products/{product_id}/purchase"),
+        "credit.product.purchase",
+        json!({ "productId": product_id.to_string() }),
+        None,
+    )
+    .await;
+
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let balance: i64 =
+        sqlx::query_scalar("SELECT balance FROM credit.wallets WHERE account_id = $1")
+            .bind(buyer)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let purchases: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM credit.purchases WHERE buyer_id = $1")
+            .bind(buyer)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(balance, 100);
+    assert_eq!(purchases, 0);
+}
+
+#[tokio::test]
+async fn concurrent_purchase_confirm_releases_escrow_once() {
+    let (pool, app) = create_test_app().await;
+    let seller = create_test_account(&pool, "raceseller@tongji.edu.cn", "raceseller").await;
+    let buyer = create_test_account(&pool, "racebuyer@tongji.edu.cn", "racebuyer").await;
+    let product_id: i64 = sqlx::query_scalar(
+        "INSERT INTO credit.products (seller_id, title, price, stock) \
+         VALUES ($1, 'Race product', 25, 1) RETURNING id",
+    )
+    .bind(seller)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let purchase_id: i64 = sqlx::query_scalar(
+        "INSERT INTO credit.purchases \
+         (product_id, buyer_id, seller_id, amount, status, hold_tx_id) \
+         VALUES ($1, $2, $3, 25, 'delivered', 'test-hold') RETURNING id",
+    )
+    .bind(product_id)
+    .bind(buyer)
+    .bind(seller)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let token = create_token(&pool, "racebuyer@tongji.edu.cn").await;
+    let uri = format!("/api/v2/credit/purchases/{purchase_id}/action");
+    let signing_body = json!({ "id": purchase_id.to_string(), "action": "confirm" });
+    let first = signed_post_request(
+        &app,
+        &pool,
+        &token,
+        buyer,
+        &uri,
+        "credit.purchase.action",
+        signing_body.clone(),
+        Some(json!({ "action": "confirm" })),
+    )
+    .await;
+    let second = signed_post_request(
+        &app,
+        &pool,
+        &token,
+        buyer,
+        &uri,
+        "credit.purchase.action",
+        signing_body,
+        Some(json!({ "action": "confirm" })),
+    )
+    .await;
+
+    let (first_response, second_response) =
+        tokio::join!(app.clone().oneshot(first), app.clone().oneshot(second));
+    let statuses = [first_response.unwrap().status(), second_response.unwrap().status()];
+    assert_eq!(statuses.iter().filter(|status| **status == StatusCode::NO_CONTENT).count(), 1);
+    let seller_balance: i64 =
+        sqlx::query_scalar("SELECT balance FROM credit.wallets WHERE account_id = $1")
+            .bind(seller)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(seller_balance, 25);
 }
