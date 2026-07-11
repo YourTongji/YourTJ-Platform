@@ -75,12 +75,12 @@ pub async fn get_unread_thread_ids(
     let rows: Vec<(i64, i32)> = sqlx::query_as(
         "SELECT t.id, \
                 t.reply_count - COALESCE(\
-                    (SELECT COUNT(*) FROM forum.comments c WHERE c.thread_id = t.id \
+                    (SELECT COUNT(*)::int FROM forum.comments c WHERE c.thread_id = t.id \
                      AND c.id <= COALESCE(tr.last_read_comment_id, 0)), 0\
                 ) AS unread_count \
          FROM forum.threads t \
          JOIN forum.thread_reads tr ON tr.thread_id = t.id AND tr.account_id = $1 \
-         WHERE t.deleted_at IS NULL \
+         WHERE t.deleted_at IS NULL AND t.hidden_at IS NULL AND t.archived_at IS NULL \
            AND t.id > $2 \
            AND (t.reply_count > 0) \
            AND (tr.last_read_comment_id IS NULL \

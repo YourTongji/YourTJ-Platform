@@ -3,21 +3,21 @@
 //! Every handler returns `AppResult<impl IntoResponse>` so `?` on a DB or
 //! domain error automatically renders the correct error envelope.
 
+pub(crate) mod admin;
+
 use sha2::Digest as _;
 
-use axum::extract::Path;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
 use chrono::Utc;
-use serde::Deserialize;
 use shared::{AppResult, AppState};
 
 use crate::auth::{create_access_token, generate_refresh_token};
 use crate::dto::{
     AccountDto, AuthTokensOutput, BindKeyInput, ClaimChallengeOutput, ClaimInput,
     PasswordChangeInput, PasswordForgotInput, PasswordLoginInput, PasswordResetInput, RefreshInput,
-    RequestCodeInput, UpdateMeInput, UserBadgeDto, UserProfileDto, VerifyEmailInput, WalletDto,
+    RequestCodeInput, UpdateMeInput, VerifyEmailInput, WalletDto,
 };
 use crate::email_code::{generate_code, hash_code, verify_code};
 use crate::error::IdentityError;
@@ -37,6 +37,7 @@ fn row_to_dto(row: &crate::models::AccountRow) -> AccountDto {
         handle: row.handle.clone(),
         avatar_url: row.avatar_url.clone(),
         role: row.role.clone(),
+        capabilities: shared::auth::capability_names_for_role(&row.role),
         trust_level: row.trust_level,
         created_at: row.created_at.timestamp(),
     }
@@ -51,6 +52,18 @@ fn validate_handle(handle: &str) -> Result<(), IdentityError> {
         .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '.' || c == '_' || c == '-')
     {
         return Err(IdentityError::InvalidHandle);
+    }
+    Ok(())
+}
+
+async fn ensure_login_allowed(
+    state: &AppState,
+    account: &crate::models::AccountRow,
+) -> AppResult<()> {
+    if account.status != "active"
+        || crate::sanctions::is_suspended(state.redis.as_ref(), &state.db, account.id).await?
+    {
+        return Err(shared::AppError::Forbidden);
     }
     Ok(())
 }
@@ -150,6 +163,8 @@ pub async fn verify_email(
             .await?
         {
             Some(acct) => {
+                repo::ensure_invitation_valid(&state.db, acct.id).await?;
+                repo::mark_email_verified(&state.db, acct.id).await?;
                 // Existing account: set password if provided and no password is set.
                 if let Some(pw) = body.password.as_deref() {
                     let current_hash = repo::find_password_hash(
@@ -189,6 +204,8 @@ pub async fn verify_email(
                 account
             }
         };
+
+    ensure_login_allowed(&state, &account).await?;
 
     // Create access + refresh tokens.
     let access_token = create_access_token(account.id, &state.jwt_secret, state.jwt_ttl)
@@ -239,6 +256,7 @@ pub async fn refresh(
         repo::find_account_by_id(&state.db, state.email_encryption.as_ref(), session.account_id)
             .await?
             .ok_or(shared::AppError::Unauthorized)?;
+    ensure_login_allowed(&state, &account).await?;
 
     // Create new token pair.
     let access_token = create_access_token(account.id, &state.jwt_secret, state.jwt_ttl)
@@ -291,54 +309,6 @@ pub async fn get_me(
         .await?
         .ok_or(shared::AppError::NotFound)?;
     Ok(Json(row_to_dto(&account)))
-}
-
-/// GET /api/v2/users/{handle} — public user profile (no auth required).
-#[tracing::instrument(skip(state))]
-pub async fn get_user_profile(
-    State(state): State<AppState>,
-    Path(handle): Path<String>,
-) -> AppResult<Json<UserProfileDto>> {
-    // Look up account by handle (CITEXT, case-insensitive).
-    let account = repo::find_account_by_handle(&state.db, state.email_encryption.as_ref(), &handle)
-        .await?
-        .ok_or(shared::AppError::NotFound)?;
-
-    // Aggregate stats from forum.user_stats (LEFT JOIN behaviour via COALESCE).
-    let (thread_count, comment_count, votes_received) = sqlx::query_as::<_, (i32, i32, i32)>(
-        "SELECT COALESCE(threads_created, 0), COALESCE(comments_created, 0), \
-                    COALESCE(votes_received, 0) \
-             FROM forum.user_stats WHERE account_id = $1",
-    )
-    .bind(account.id)
-    .fetch_optional(&state.db)
-    .await?
-    .unwrap_or((0, 0, 0));
-
-    // Badges from platform.account_badges → platform.badges.
-    let badges: Vec<UserBadgeDto> = sqlx::query_as::<_, (String, String)>(
-        "SELECT b.slug, b.name \
-         FROM platform.account_badges ab \
-         JOIN platform.badges b ON b.id = ab.badge_id \
-         WHERE ab.account_id = $1",
-    )
-    .bind(account.id)
-    .fetch_all(&state.db)
-    .await?
-    .into_iter()
-    .map(|(slug, name)| UserBadgeDto { slug, name })
-    .collect();
-
-    Ok(Json(UserProfileDto {
-        handle: account.handle,
-        avatar_url: account.avatar_url,
-        trust_level: account.trust_level,
-        badges,
-        thread_count,
-        comment_count,
-        votes_received,
-        created_at: account.created_at.timestamp(),
-    }))
 }
 
 /// PATCH /me
@@ -644,300 +614,6 @@ pub async fn bind_key(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// POST /api/v2/admin/users/{id}/silence — silence a user (cannot write)
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SanctionInput {
-    pub reason: String,
-    pub ends_at: Option<i64>, // unix seconds, None = indefinite
-}
-
-/// POST /api/v2/admin/users/{id}/unsanction
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct UnsanctionInput {
-    pub sanction_id: String,
-}
-
-/// POST /api/v2/admin/users/{id}/silence — silence a user (cannot write)
-#[tracing::instrument(skip(state, headers))]
-pub async fn silence_user(
-    State(state): State<AppState>,
-    Path(account_id_str): Path<String>,
-    headers: HeaderMap,
-    Json(body): Json<SanctionInput>,
-) -> AppResult<StatusCode> {
-    let auth = crate::auth_middleware::authenticate(
-        &headers,
-        &state.db,
-        &state.jwt_secret,
-        state.redis.as_ref(),
-    )
-    .await
-    .map_err(|_| shared::AppError::Unauthorized)?;
-    auth.require_mod().map_err(|_| shared::AppError::Forbidden)?;
-
-    let account_id: i64 = account_id_str.parse().map_err(|_| shared::AppError::NotFound)?;
-    let ends_at = body
-        .ends_at
-        .map(|ts| chrono::DateTime::from_timestamp(ts, 0).unwrap_or(chrono::Utc::now()));
-
-    sqlx::query(
-        "INSERT INTO identity.sanctions (account_id, kind, reason, issued_by, ends_at) \
-         VALUES ($1, 'silence', $2, $3, $4)",
-    )
-    .bind(account_id)
-    .bind(&body.reason)
-    .bind(auth.id)
-    .bind(ends_at)
-    .execute(&state.db)
-    .await?;
-
-    // Invalidate Redis sanction cache
-    if let Some(ref r) = state.redis {
-        if let Ok(mut conn) = r.get().await {
-            let key = format!("identity:sanction:{account_id}");
-            let _: () = redis::cmd("DEL").arg(&key).query_async(&mut conn).await.unwrap_or(());
-        }
-    }
-
-    Ok(StatusCode::NO_CONTENT)
-}
-
-/// POST /api/v2/admin/users/{id}/suspend — suspend a user (cannot login)
-#[tracing::instrument(skip(state, headers))]
-pub async fn suspend_user(
-    State(state): State<AppState>,
-    Path(account_id_str): Path<String>,
-    headers: HeaderMap,
-    Json(body): Json<SanctionInput>,
-) -> AppResult<StatusCode> {
-    let auth = crate::auth_middleware::authenticate(
-        &headers,
-        &state.db,
-        &state.jwt_secret,
-        state.redis.as_ref(),
-    )
-    .await
-    .map_err(|_| shared::AppError::Unauthorized)?;
-    auth.require_mod().map_err(|_| shared::AppError::Forbidden)?;
-
-    let account_id: i64 = account_id_str.parse().map_err(|_| shared::AppError::NotFound)?;
-    let ends_at = body
-        .ends_at
-        .map(|ts| chrono::DateTime::from_timestamp(ts, 0).unwrap_or(chrono::Utc::now()));
-
-    sqlx::query(
-        "INSERT INTO identity.sanctions (account_id, kind, reason, issued_by, ends_at) \
-         VALUES ($1, 'suspend', $2, $3, $4)",
-    )
-    .bind(account_id)
-    .bind(&body.reason)
-    .bind(auth.id)
-    .bind(ends_at)
-    .execute(&state.db)
-    .await?;
-
-    if let Some(ref r) = state.redis {
-        if let Ok(mut conn) = r.get().await {
-            let key = format!("identity:sanction:{account_id}");
-            let _: () = redis::cmd("DEL").arg(&key).query_async(&mut conn).await.unwrap_or(());
-        }
-    }
-
-    Ok(StatusCode::NO_CONTENT)
-}
-
-/// POST /api/v2/admin/users/{id}/unsanction — revoke a sanction
-#[tracing::instrument(skip(state, headers))]
-pub async fn unsanction_user(
-    State(state): State<AppState>,
-    Path(account_id_str): Path<String>,
-    headers: HeaderMap,
-    Json(body): Json<UnsanctionInput>,
-) -> AppResult<StatusCode> {
-    let auth = crate::auth_middleware::authenticate(
-        &headers,
-        &state.db,
-        &state.jwt_secret,
-        state.redis.as_ref(),
-    )
-    .await
-    .map_err(|_| shared::AppError::Unauthorized)?;
-    auth.require_mod().map_err(|_| shared::AppError::Forbidden)?;
-
-    let account_id: i64 = account_id_str.parse().map_err(|_| shared::AppError::NotFound)?;
-    let sanction_id: i64 = body
-        .sanction_id
-        .parse()
-        .map_err(|_| shared::AppError::BadRequest("invalid sanctionId".into()))?;
-
-    sqlx::query(
-        "UPDATE identity.sanctions SET revoked_at = now(), revoked_by = $1 \
-         WHERE id = $2 AND account_id = $3 AND revoked_at IS NULL",
-    )
-    .bind(auth.id)
-    .bind(sanction_id)
-    .bind(account_id)
-    .execute(&state.db)
-    .await?;
-
-    if let Some(ref r) = state.redis {
-        if let Ok(mut conn) = r.get().await {
-            let key = format!("identity:sanction:{account_id}");
-            let _: () = redis::cmd("DEL").arg(&key).query_async(&mut conn).await.unwrap_or(());
-        }
-    }
-
-    Ok(StatusCode::NO_CONTENT)
-}
-
-/// GET /api/v2/admin/users/{id}/sanctions — list sanctions for a user
-#[tracing::instrument(skip(state, headers))]
-pub async fn list_user_sanctions(
-    State(state): State<AppState>,
-    Path(account_id_str): Path<String>,
-    headers: HeaderMap,
-) -> AppResult<Json<serde_json::Value>> {
-    let auth = crate::auth_middleware::authenticate(
-        &headers,
-        &state.db,
-        &state.jwt_secret,
-        state.redis.as_ref(),
-    )
-    .await
-    .map_err(|_| shared::AppError::Unauthorized)?;
-    auth.require_mod().map_err(|_| shared::AppError::Forbidden)?;
-
-    let account_id: i64 = account_id_str.parse().map_err(|_| shared::AppError::NotFound)?;
-
-    #[derive(Debug, sqlx::FromRow)]
-    struct SanctionRow {
-        id: i64,
-        account_id: i64,
-        kind: String,
-        reason: String,
-        issued_by: i64,
-        starts_at: chrono::DateTime<chrono::Utc>,
-        ends_at: Option<chrono::DateTime<chrono::Utc>>,
-        revoked_at: Option<chrono::DateTime<chrono::Utc>>,
-        created_at: chrono::DateTime<chrono::Utc>,
-    }
-
-    let rows: Vec<SanctionRow> = sqlx::query_as(
-        "SELECT id, account_id, kind, reason, issued_by, starts_at, ends_at, revoked_at, created_at \
-         FROM identity.sanctions WHERE account_id = $1 ORDER BY created_at DESC",
-    )
-    .bind(account_id)
-    .fetch_all(&state.db)
-    .await?;
-
-    let items: Vec<serde_json::Value> = rows
-        .into_iter()
-        .map(|r| {
-            serde_json::json!({
-                "id": r.id.to_string(),
-                "accountId": r.account_id.to_string(),
-                "kind": r.kind,
-                "reason": r.reason,
-                "issuedBy": r.issued_by.to_string(),
-                "startsAt": r.starts_at.timestamp(),
-                "endsAt": r.ends_at.map(|t| t.timestamp()),
-                "revokedAt": r.revoked_at.map(|t| t.timestamp()),
-                "createdAt": r.created_at.timestamp(),
-            })
-        })
-        .collect();
-
-    Ok(Json(serde_json::json!(items)))
-}
-
-/// GET /api/v2/users/{handle}/threads — public user thread list.
-pub async fn list_user_threads(
-    State(state): State<AppState>,
-    Path(handle): Path<String>,
-) -> AppResult<Json<Vec<crate::dto::UserThreadDto>>> {
-    use crate::dto::UserThreadDto;
-
-    // Find account by handle
-    let account_id: Option<i64> =
-        sqlx::query_scalar("SELECT id FROM identity.accounts WHERE handle = $1")
-            .bind(&handle)
-            .fetch_optional(&state.db)
-            .await?
-            .map(|id: i64| id);
-
-    let account_id = account_id.ok_or(shared::AppError::NotFound)?;
-
-    let rows: Vec<(i64, String, String, i32, i32, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
-        "SELECT t.id, t.title, COALESCE(b.slug, ''), \
-                t.reply_count, t.vote_count, t.created_at \
-         FROM forum.threads t \
-         JOIN forum.boards b ON b.id = t.board_id \
-         WHERE t.author_id = $1 AND t.deleted_at IS NULL AND t.hidden_at IS NULL \
-         ORDER BY t.created_at DESC LIMIT 50",
-    )
-    .bind(account_id)
-    .fetch_all(&state.db)
-    .await?;
-
-    let items: Vec<UserThreadDto> = rows
-        .into_iter()
-        .map(|(id, title, board_slug, reply_count, vote_count, created_at)| UserThreadDto {
-            id: id.to_string(),
-            title,
-            board_slug,
-            reply_count,
-            vote_count,
-            created_at: created_at.timestamp(),
-        })
-        .collect();
-
-    Ok(Json(items))
-}
-
-/// GET /api/v2/users/{handle}/comments — public user comment list.
-pub async fn list_user_comments(
-    State(state): State<AppState>,
-    Path(handle): Path<String>,
-) -> AppResult<Json<Vec<crate::dto::UserCommentDto>>> {
-    use crate::dto::UserCommentDto;
-
-    let account_id: Option<i64> =
-        sqlx::query_scalar("SELECT id FROM identity.accounts WHERE handle = $1")
-            .bind(&handle)
-            .fetch_optional(&state.db)
-            .await?
-            .map(|id: i64| id);
-
-    let account_id = account_id.ok_or(shared::AppError::NotFound)?;
-
-    let rows: Vec<(i64, i64, String, String, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
-        "SELECT c.id, c.thread_id, COALESCE(t.title, ''), \
-                LEFT(c.body, 200), c.created_at \
-         FROM forum.comments c \
-         JOIN forum.threads t ON t.id = c.thread_id \
-         WHERE c.author_id = $1 AND c.deleted_at IS NULL AND c.hidden_at IS NULL \
-         ORDER BY c.created_at DESC LIMIT 50",
-    )
-    .bind(account_id)
-    .fetch_all(&state.db)
-    .await?;
-
-    let items: Vec<UserCommentDto> = rows
-        .into_iter()
-        .map(|(id, thread_id, thread_title, body_excerpt, created_at)| UserCommentDto {
-            id: id.to_string(),
-            thread_id: thread_id.to_string(),
-            thread_title,
-            body_excerpt,
-            created_at: created_at.timestamp(),
-        })
-        .collect();
-
-    Ok(Json(items))
-}
-
 // ---------------------------------------------------------------------------
 // Password auth handlers
 // ---------------------------------------------------------------------------
@@ -973,6 +649,7 @@ pub async fn password_login(
     if !password::verify(&body.password, &phc) {
         return Err(IdentityError::WrongPassword.into());
     }
+    ensure_login_allowed(&state, &account).await?;
 
     // Issue tokens.
     let access_token = create_access_token(account.id, &state.jwt_secret, state.jwt_ttl)

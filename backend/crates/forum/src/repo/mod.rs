@@ -59,26 +59,31 @@ pub mod mod_actions;
 pub mod notification_prefs;
 pub mod notifications;
 pub mod polls;
+pub mod profiles;
 pub mod reads;
 pub mod revisions;
 pub mod subscriptions;
 pub mod tags;
 pub mod thread_state;
 
-pub use flags::{count_recent_auto_hides, insert_flag, list_flag_queue, resolve_flag};
+pub use flags::{insert_flag, list_flag_queue, resolve_flag};
 pub use mod_actions::{insert_mod_action, list_mod_actions};
 
 pub use boards::{find_board, list_boards};
 pub use bookmarks::{delete_bookmark, list_bookmarks, upsert_bookmark};
 pub use comments::{
-    create_comment, find_comment, list_comments, next_sibling_index, update_comment,
+    create_comment, find_comment, find_comment_for_moderation, list_comments, next_sibling_index,
+    update_comment,
 };
 pub use drafts::{
     count_drafts, delete_draft, delete_drafts_for_account, draft_exists, get_draft, list_drafts,
     upsert_draft,
 };
 pub use hot_rank::refresh_hot_rank;
-pub use ignores::{batch_ignored_ids, delete_ignore, insert_ignore, is_ignored, list_ignored_ids};
+pub use ignores::{
+    batch_ignored_ids, delete_ignore, insert_ignore, is_ignored, list_ignored_ids,
+    list_ignored_users,
+};
 pub use notification_prefs::{get_notification_prefs, set_notification_prefs};
 pub use notifications::{list_notifications, mark_read, NotificationRow};
 pub use polls::{
@@ -97,11 +102,13 @@ pub use tags::{
 };
 pub use thread_state::{
     archive_thread, auto_archive_stale, clear_solved_answer, close_thread, hide_thread,
-    move_thread, pin_thread, reopen_thread, restore_thread, set_solved_answer, unhide_thread,
-    unpin_thread,
+    move_thread, pin_thread, reopen_thread, restore_thread, set_solved_answer, unarchive_thread,
+    unhide_thread, unpin_thread,
 };
 pub use threads::{
-    create_thread, fetch_threads_by_ids, find_thread, list_threads, list_threads_feed,
-    list_threads_feed_following, update_thread,
+    create_thread, fetch_threads_by_ids, find_thread, find_thread_for_moderation, list_threads,
+    list_threads_feed, list_threads_feed_following, update_thread,
 };
-pub use votes::vote_post;
+pub use votes::{
+    deactivate_target_vote_contributions, reactivate_target_vote_contributions, vote_post,
+};

@@ -1,5 +1,5 @@
 use axum::extract::{Path, Query, State};
-use axum::http::HeaderMap;
+use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
 use serde::Deserialize;
 use serde_json::json;
@@ -37,17 +37,29 @@ pub async fn list_comments(
     let thread_id: i64 = thread_id_str.parse().map_err(|_| AppError::NotFound)?;
 
     // Try auth — if the user is logged in, filter out ignored authors.
-    let current_user_id: Option<i64> = identity::auth_middleware::authenticate(
+    let current_account = identity::auth_middleware::authenticate(
         &headers,
         &state.db,
         &state.jwt_secret,
         state.redis.as_ref(),
     )
     .await
-    .ok()
-    .map(|a| a.id);
+    .ok();
+    let current_user_id = current_account.as_ref().map(|account| account.id);
+    let can_view_moderated_parent = current_account
+        .as_ref()
+        .is_some_and(|account| account.has_capability(shared::auth::Capability::ModerateContent));
 
-    // Fetch solved_answer_id for Q&A solved-answer marking
+    let (rows, next_cursor) = repo::list_comments(
+        &state.db,
+        thread_id,
+        q.cursor.as_deref(),
+        q.limit,
+        current_user_id,
+        can_view_moderated_parent,
+    )
+    .await?;
+
     let solved_comment_id: Option<i64> =
         sqlx::query_scalar("SELECT solved_answer_id FROM forum.threads WHERE id = $1")
             .bind(thread_id)
@@ -55,9 +67,6 @@ pub async fn list_comments(
             .await?
             .flatten();
 
-    let (rows, next_cursor) =
-        repo::list_comments(&state.db, thread_id, q.cursor.as_deref(), q.limit, current_user_id)
-            .await?;
     let items: Vec<CommentDto> =
         rows.iter().map(|r| comment_to_dto(r, solved_comment_id)).collect();
     Ok(Json(Page::new(items, next_cursor)))
@@ -69,7 +78,7 @@ pub async fn create_comment(
     Path(thread_id_str): Path<String>,
     headers: HeaderMap,
     Json(body): Json<CommentInput>,
-) -> AppResult<Json<CommentDto>> {
+) -> AppResult<(StatusCode, Json<CommentDto>)> {
     let auth = identity::auth_middleware::authenticate(
         &headers,
         &state.db,
@@ -78,7 +87,10 @@ pub async fn create_comment(
     )
     .await
     .map_err(|_r| AppError::Unauthorized)?;
-
+    let body_length = body.body.chars().count();
+    if body.body.trim().is_empty() || body_length > 16_000 {
+        return Err(AppError::BadRequest("body must be 1–16000 characters".into()));
+    }
     // Check that the account is not silenced
     crate::sanctions::require_can_post(state.redis.as_ref(), &state.db, auth.id).await?;
 
@@ -106,6 +118,7 @@ pub async fn create_comment(
     // Check watched words on the body text.
     let watched_word_action: Option<String> =
         crate::watched_words::check_watched_words(&body.body).map(|(_matched, action)| action);
+    let is_queued = watched_word_action.as_deref() == Some("queue");
 
     // Block action: reject before insert.
     if watched_word_action.as_deref() == Some("block") {
@@ -135,6 +148,7 @@ pub async fn create_comment(
         &body.body,
         parent_id,
         quoted_comment_id,
+        is_queued,
     )
     .await?;
 
@@ -336,29 +350,18 @@ pub async fn create_comment(
         });
     }
 
-    // Handle queue action: auto-hide the comment.
-    if watched_word_action.as_deref() == Some("queue") {
-        let _ = sqlx::query("UPDATE forum.comments SET hidden_at = now() WHERE id = $1")
-            .bind(row.id)
-            .execute(&state.db)
-            .await;
-    }
-
     // Build response DTO, applying censorship for censor action.
     let mut dto = comment_to_dto(&row, None);
     if watched_word_action.as_deref() == Some("censor") {
         dto.body = crate::watched_words::censor_text(&dto.body);
     }
 
-    // Bump thread cache version.
-    shared::cache::bump_version_opt(state.redis.as_ref(), "thread", &thread_id.to_string())
-        .await
-        .ok();
+    crate::cache::invalidate_thread_by_id(state.redis.as_ref(), &state.db, thread_id).await;
 
-    Ok(Json(dto))
+    Ok((StatusCode::CREATED, Json(dto)))
 }
 
-/// PATCH /api/v2/forum/comments/{id} — auth required (author or mod)
+/// PATCH /api/v2/forum/comments/{id} — auth required (author only)
 pub async fn update_comment(
     State(state): State<AppState>,
     Path(id_str): Path<String>,
@@ -373,12 +376,13 @@ pub async fn update_comment(
     )
     .await
     .map_err(|_r| AppError::Unauthorized)?;
+    crate::sanctions::require_can_post(state.redis.as_ref(), &state.db, auth.id).await?;
 
     let id: i64 = id_str.parse().map_err(|_| AppError::NotFound)?;
 
-    // Check ownership or mod
+    // Staff moderate through reasoned admin actions; they never overwrite user speech.
     let comment = repo::find_comment(&state.db, id).await?.ok_or(AppError::NotFound)?;
-    if comment.author_id != auth.id && auth.role != "mod" && auth.role != "admin" {
+    if comment.author_id != auth.id {
         return Err(AppError::Forbidden);
     }
 
@@ -403,9 +407,7 @@ pub async fn update_comment(
             .await?
             .flatten();
 
-    // Bump thread cache
-    shared::cache::bump_version_silent(state.redis.as_ref(), "thread", &row.thread_id.to_string())
-        .await;
+    crate::cache::invalidate_thread_by_id(state.redis.as_ref(), &state.db, row.thread_id).await;
 
     Ok(Json(comment_to_dto(&row, solved_comment_id)))
 }
@@ -432,20 +434,34 @@ pub async fn delete_comment(
         return Err(AppError::Forbidden);
     }
 
-    sqlx::query(
-        "UPDATE forum.comments SET deleted_at = now(), deleted_by = $1 WHERE id = $2 AND deleted_at IS NULL",
+    let mut tx = state.db.begin().await?;
+    let deleted_thread_id: Option<i64> = sqlx::query_scalar(
+        "UPDATE forum.comments SET deleted_at = now(), deleted_by = $1 \
+         WHERE id = $2 AND author_id = $1 AND deleted_at IS NULL RETURNING thread_id",
     )
     .bind(auth.id)
     .bind(id)
-    .execute(&state.db)
+    .fetch_optional(&mut *tx)
     .await?;
-
-    shared::cache::bump_version_silent(
-        state.redis.as_ref(),
-        "thread",
-        &comment.thread_id.to_string(),
+    let deleted_thread_id =
+        deleted_thread_id.ok_or_else(|| AppError::Conflict("comment is already deleted".into()))?;
+    sqlx::query(
+        "UPDATE forum.threads SET reply_count = GREATEST(reply_count - 1, 0) WHERE id = $1",
     )
-    .await;
+    .bind(deleted_thread_id)
+    .execute(&mut *tx)
+    .await?;
+    activity::contributions::deactivate_contribution(
+        &mut tx,
+        &format!("forum_comment:{id}"),
+        chrono::Utc::now(),
+    )
+    .await?;
+    crate::repo::deactivate_target_vote_contributions(&mut tx, "comment", id, chrono::Utc::now())
+        .await?;
+    tx.commit().await?;
+
+    crate::cache::invalidate_thread_by_id(state.redis.as_ref(), &state.db, comment.thread_id).await;
 
     Ok(Json(json!({"ok": true})))
 }

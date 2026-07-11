@@ -37,6 +37,9 @@ pub enum IdentityError {
     #[error("only @tongji.edu.cn email addresses are accepted")]
     InvalidEmailDomain,
 
+    #[error("account invitation has expired; ask an administrator to invite you again")]
+    InvitationExpired,
+
     // Wallet claim errors
     #[error("challenge not found")]
     ChallengeNotFound,
@@ -82,7 +85,8 @@ impl From<IdentityError> for AppError {
             IdentityError::InvalidCode
             | IdentityError::CodeExpired
             | IdentityError::CodeExhausted
-            | IdentityError::InvalidEmailDomain => AppError::BadRequest(err.to_string()),
+            | IdentityError::InvalidEmailDomain
+            | IdentityError::InvitationExpired => AppError::BadRequest(err.to_string()),
             IdentityError::EmailAlreadyUsed
             | IdentityError::HandleTaken
             | IdentityError::KeyAlreadyBound => AppError::Conflict(err.to_string()),

@@ -268,12 +268,13 @@ pub async fn global_search(
     // Search forum threads when type includes "thread" or is "all" (default).
     let threads = if params.query_type == "thread" || params.query_type == "all" {
         forum::meili::search_threads(
+            &state.db,
             &state.meili_url,
             &state.meili_master_key,
             &params.q,
             params.limit,
         )
-        .await
+        .await?
     } else {
         Vec::new()
     };

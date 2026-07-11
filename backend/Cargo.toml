@@ -62,6 +62,8 @@ reviews = { version = "0.1.0", path = "crates/reviews" }
 credit = { version = "0.1.0", path = "crates/credit" }
 forum = { version = "0.1.0", path = "crates/forum" }
 media = { version = "0.1.0", path = "crates/media" }
+activity = { version = "0.1.0", path = "crates/activity" }
+governance = { version = "0.1.0", path = "crates/governance" }
 
 [profile.release]
 opt-level = 3

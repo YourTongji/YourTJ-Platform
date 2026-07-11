@@ -25,6 +25,18 @@ struct StoredAccountRow {
     created_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub(crate) struct AdminUserRow {
+    pub id: i64,
+    pub handle: String,
+    pub avatar_url: Option<String>,
+    pub role: String,
+    pub status: String,
+    pub trust_level: i16,
+    pub last_active_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+}
+
 impl StoredAccountRow {
     fn decrypt(self, encryption: Option<&EmailEncryption>) -> AppResult<AccountRow> {
         let email = match (self.email, self.email_ciphertext) {
@@ -177,8 +189,8 @@ pub async fn insert_account(
         let result = sqlx::query_as::<_, StoredAccountRow>(
             "INSERT INTO identity.accounts \
              (email, email_ciphertext, email_key_version, email_blind_index, \
-              password_email_blind, handle) \
-             VALUES ($1, $2, $3, $4, $4, $5) \
+              password_email_blind, handle, email_verified_at) \
+             VALUES ($1, $2, $3, $4, $4, $5, now()) \
              ON CONFLICT (handle) DO NOTHING \
              RETURNING id, email::text AS email, email_ciphertext, \
                        handle, avatar_url, role::text, status::text, trust_level, created_at",
@@ -200,6 +212,138 @@ pub async fn insert_account(
             return Err(crate::error::IdentityError::HandleTaken.into());
         }
     }
+}
+
+/// Provision an unverified account that must still prove campus mailbox ownership.
+#[allow(clippy::too_many_arguments)] // reason: encrypted identity storage fields are explicit to avoid accidental plaintext fallbacks
+pub async fn insert_invited_account(
+    tx: &mut sqlx::PgConnection,
+    encryption: Option<&EmailEncryption>,
+    email: &str,
+    handle: &str,
+    role: &str,
+    invited_by: i64,
+) -> AppResult<AccountRow> {
+    let ciphertext = encryption
+        .map(|encryption| encryption.encrypt(email))
+        .transpose()
+        .map_err(AppError::Internal)?;
+    let blind_index = encryption.map(|encryption| encryption.blind_index(email));
+    let row = sqlx::query_as::<_, StoredAccountRow>(
+        "INSERT INTO identity.accounts \
+         (email, email_ciphertext, email_key_version, email_blind_index, password_email_blind, \
+          handle, role, invited_by, invited_at, invitation_expires_at) \
+         VALUES ($1, $2, $3, $4, $4, $5, $6::identity.account_role, $7, now(), \
+                 now() + interval '7 days') ON CONFLICT DO NOTHING \
+         RETURNING id, email::text AS email, email_ciphertext, handle, avatar_url, \
+                   role::text, status::text, trust_level, created_at",
+    )
+    .bind(encryption.is_none().then_some(email))
+    .bind(ciphertext)
+    .bind(encryption.map(|encryption| i16::from(encryption.active_version())))
+    .bind(blind_index)
+    .bind(handle)
+    .bind(role)
+    .bind(invited_by)
+    .fetch_optional(tx)
+    .await?
+    .ok_or_else(|| AppError::Conflict("email or handle is already registered".into()))?;
+    row.decrypt(encryption)
+}
+
+/// Mark mailbox ownership proven after successful email-code verification.
+pub async fn mark_email_verified(pool: &PgPool, account_id: i64) -> AppResult<()> {
+    sqlx::query(
+        "UPDATE identity.accounts \
+         SET email_verified_at = COALESCE(email_verified_at, now()), \
+             invitation_accepted_at = CASE WHEN invited_at IS NOT NULL \
+                                          THEN COALESCE(invitation_accepted_at, now()) \
+                                          ELSE invitation_accepted_at END \
+         WHERE id = $1",
+    )
+    .bind(account_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Reject an unverified staff invitation after its bounded acceptance window.
+pub async fn ensure_invitation_valid(pool: &PgPool, account_id: i64) -> AppResult<()> {
+    let is_valid: bool = sqlx::query_scalar(
+        "SELECT invited_at IS NULL OR email_verified_at IS NOT NULL \
+                OR invitation_expires_at > now() \
+         FROM identity.accounts WHERE id = $1",
+    )
+    .bind(account_id)
+    .fetch_optional(pool)
+    .await?
+    .ok_or(AppError::NotFound)?;
+    if !is_valid {
+        return Err(crate::error::IdentityError::InvitationExpired.into());
+    }
+    Ok(())
+}
+
+/// Return a bounded page from the privacy-safe staff user directory.
+#[allow(clippy::too_many_arguments)] // reason: each optional directory filter is independently bound and intentionally explicit
+pub async fn list_admin_users(
+    pool: &PgPool,
+    cursor: Option<i64>,
+    limit: i64,
+    query: Option<&str>,
+    role: Option<&str>,
+    status: Option<&str>,
+) -> AppResult<Vec<AdminUserRow>> {
+    let rows = sqlx::query_as::<_, AdminUserRow>(
+        "SELECT accounts.id, accounts.handle::text, accounts.avatar_url, accounts.role::text, \
+                CASE WHEN accounts.status = 'active' AND EXISTS ( \
+                    SELECT 1 FROM identity.sanctions sanctions \
+                    WHERE sanctions.account_id = accounts.id AND sanctions.kind = 'suspend' \
+                      AND sanctions.revoked_at IS NULL \
+                      AND (sanctions.ends_at IS NULL OR sanctions.ends_at > now()) \
+                ) THEN 'suspended' ELSE accounts.status::text END AS status, \
+                accounts.trust_level, accounts.last_active_at, accounts.created_at \
+         FROM identity.accounts accounts \
+         WHERE ($1::bigint IS NULL OR accounts.id < $1) \
+           AND ($2::text IS NULL OR accounts.handle ILIKE '%' || $2 || '%' \
+                OR accounts.id::text = $2) \
+           AND ($3::text IS NULL OR accounts.role::text = $3) \
+           AND ($4::text IS NULL OR \
+                CASE WHEN accounts.status = 'active' AND EXISTS ( \
+                    SELECT 1 FROM identity.sanctions sanctions \
+                    WHERE sanctions.account_id = accounts.id AND sanctions.kind = 'suspend' \
+                      AND sanctions.revoked_at IS NULL \
+                      AND (sanctions.ends_at IS NULL OR sanctions.ends_at > now()) \
+                ) THEN 'suspended' ELSE accounts.status::text END = $4) \
+         ORDER BY accounts.id DESC LIMIT $5",
+    )
+    .bind(cursor)
+    .bind(query)
+    .bind(role)
+    .bind(status)
+    .bind(limit.clamp(1, 100) + 1)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+/// Return one privacy-safe account record for staff actions.
+pub async fn find_admin_user(pool: &PgPool, account_id: i64) -> AppResult<Option<AdminUserRow>> {
+    let row = sqlx::query_as::<_, AdminUserRow>(
+        "SELECT accounts.id, accounts.handle::text, accounts.avatar_url, accounts.role::text, \
+                CASE WHEN accounts.status = 'active' AND EXISTS ( \
+                    SELECT 1 FROM identity.sanctions sanctions \
+                    WHERE sanctions.account_id = accounts.id AND sanctions.kind = 'suspend' \
+                      AND sanctions.revoked_at IS NULL \
+                      AND (sanctions.ends_at IS NULL OR sanctions.ends_at > now()) \
+                ) THEN 'suspended' ELSE accounts.status::text END AS status, \
+                accounts.trust_level, accounts.last_active_at, accounts.created_at \
+         FROM identity.accounts accounts WHERE accounts.id = $1",
+    )
+    .bind(account_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row)
 }
 
 /// Look up an account by its email (case-insensitive via CITEXT).
@@ -233,23 +377,6 @@ pub async fn find_account_by_id(
          FROM identity.accounts WHERE id = $1",
     )
     .bind(id)
-    .fetch_optional(pool)
-    .await?;
-    row.map(|row| row.decrypt(encryption)).transpose()
-}
-
-/// Look up an account by public handle without exposing its stored email.
-pub async fn find_account_by_handle(
-    pool: &PgPool,
-    encryption: Option<&EmailEncryption>,
-    handle: &str,
-) -> AppResult<Option<AccountRow>> {
-    let row = sqlx::query_as::<_, StoredAccountRow>(
-        "SELECT id, email::text AS email, email_ciphertext, handle, \
-                avatar_url, role::text, status::text, trust_level, created_at \
-         FROM identity.accounts WHERE handle = $1",
-    )
-    .bind(handle)
     .fetch_optional(pool)
     .await?;
     row.map(|row| row.decrypt(encryption)).transpose()

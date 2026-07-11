@@ -5,10 +5,27 @@
 //! - `DELETE /api/v2/me/ignores/{account_id}` — unignore a user
 //! - `GET /api/v2/me/ignores`                 — list ignored account ids
 
-use axum::extract::{Path, State};
-use axum::http::HeaderMap;
+use axum::extract::{Path, Query, State};
+use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
+use serde::{Deserialize, Serialize};
 use shared::{AppError, AppResult, AppState};
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IgnoreListQuery {
+    cursor: Option<String>,
+    limit: Option<i64>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IgnoreUserDto {
+    account_id: String,
+    handle: String,
+    avatar_url: Option<String>,
+    created_at: i64,
+}
 
 /// PUT /api/v2/me/ignores/{account_id}
 ///
@@ -17,7 +34,7 @@ pub async fn ignore_user_handler(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(ignored_account_id_str): Path<String>,
-) -> AppResult<Json<serde_json::Value>> {
+) -> AppResult<StatusCode> {
     let auth = identity::auth_middleware::authenticate(
         &headers,
         &state.db,
@@ -49,7 +66,7 @@ pub async fn ignore_user_handler(
 
     crate::repo::insert_ignore(&state.db, auth.id, ignored_account_id).await?;
 
-    Ok(Json(serde_json::json!({"ok": true})))
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// DELETE /api/v2/me/ignores/{account_id}
@@ -59,7 +76,7 @@ pub async fn unignore_user_handler(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(ignored_account_id_str): Path<String>,
-) -> AppResult<Json<serde_json::Value>> {
+) -> AppResult<StatusCode> {
     let auth = identity::auth_middleware::authenticate(
         &headers,
         &state.db,
@@ -75,7 +92,7 @@ pub async fn unignore_user_handler(
 
     crate::repo::delete_ignore(&state.db, auth.id, ignored_account_id).await?;
 
-    Ok(Json(serde_json::json!({"ok": true})))
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// GET /api/v2/me/ignores
@@ -84,7 +101,8 @@ pub async fn unignore_user_handler(
 pub async fn list_ignores_handler(
     State(state): State<AppState>,
     headers: HeaderMap,
-) -> AppResult<Json<Vec<serde_json::Value>>> {
+    Query(query): Query<IgnoreListQuery>,
+) -> AppResult<Json<shared::Page<IgnoreUserDto>>> {
     let auth = identity::auth_middleware::authenticate(
         &headers,
         &state.db,
@@ -94,9 +112,27 @@ pub async fn list_ignores_handler(
     .await
     .map_err(|_r| AppError::Unauthorized)?;
 
-    let ids = crate::repo::list_ignored_ids(&state.db, auth.id).await?;
-    let items: Vec<serde_json::Value> =
-        ids.into_iter().map(|id| serde_json::json!({"ignoredAccountId": id.to_string()})).collect();
-
-    Ok(Json(items))
+    let cursor = query
+        .cursor
+        .as_deref()
+        .map(str::parse::<i64>)
+        .transpose()
+        .map_err(|_| AppError::BadRequest("invalid cursor".into()))?;
+    let limit = query.limit.unwrap_or(30).clamp(1, 100);
+    let mut rows = crate::repo::list_ignored_users(&state.db, auth.id, cursor, limit).await?;
+    let has_more = rows.len() > limit as usize;
+    if has_more {
+        rows.truncate(limit as usize);
+    }
+    let next_cursor = has_more.then(|| rows.last().map(|row| row.account_id.to_string())).flatten();
+    let items = rows
+        .into_iter()
+        .map(|row| IgnoreUserDto {
+            account_id: row.account_id.to_string(),
+            handle: row.handle,
+            avatar_url: row.avatar_url,
+            created_at: row.created_at.timestamp(),
+        })
+        .collect();
+    Ok(Json(shared::Page::new(items, next_cursor)))
 }

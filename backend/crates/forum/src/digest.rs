@@ -138,6 +138,7 @@ async fn get_top_threads(pool: &PgPool) -> Result<Vec<TopThread>, sqlx::Error> {
         JOIN identity.accounts a ON a.id = t.author_id
         WHERE t.deleted_at IS NULL
           AND t.hidden_at IS NULL
+          AND t.archived_at IS NULL
           AND t.last_activity_at > now() - interval '7 days'
         ORDER BY t.hot_score DESC NULLS LAST
         LIMIT 5

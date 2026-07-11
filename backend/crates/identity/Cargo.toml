@@ -28,6 +28,7 @@ zxcvbn.workspace = true
 hmac.workspace = true
 
 credit.workspace = true
+governance.workspace = true
 
 [dev-dependencies]
 tower.workspace = true

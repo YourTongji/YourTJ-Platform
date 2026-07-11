@@ -125,7 +125,30 @@ pub struct FlagRow {
     pub status: String,
     pub handled_by: Option<i64>,
     pub handled_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub auto_hidden_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub resolution_note: Option<String>,
     pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// A moderation-queue report joined with bounded target evidence.
+#[derive(Debug, Clone, FromRow)]
+pub struct FlagQueueRow {
+    pub id: i64,
+    pub target_type: String,
+    pub target_id: i64,
+    pub reporter_id: i64,
+    pub reason: String,
+    pub note: Option<String>,
+    pub weight: f32,
+    pub status: String,
+    pub handled_by: Option<i64>,
+    pub handled_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub auto_hidden_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub resolution_note: Option<String>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub author_handle: Option<String>,
+    pub target_title: Option<String>,
+    pub content_excerpt: Option<String>,
 }
 
 /// A row from `forum.tags`.
@@ -204,6 +227,8 @@ pub struct PostRevisionRow {
 #[derive(Debug, Clone, FromRow)]
 pub struct DmConversationRow {
     pub id: i64,
+    pub account_low_id: i64,
+    pub account_high_id: i64,
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
@@ -214,6 +239,9 @@ pub struct DmParticipantRow {
     pub conversation_id: i64,
     pub account_id: i64,
     pub joined_at: chrono::DateTime<chrono::Utc>,
+    pub last_read_message_id: Option<i64>,
+    pub archived_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub deleted_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 /// A row from `forum.dm_messages`, joined with sender handle.
@@ -233,7 +261,30 @@ pub struct DmConversationListRow {
     pub id: i64,
     pub other_account_id: i64,
     pub other_handle: String,
+    pub other_avatar_url: Option<String>,
+    pub last_message_excerpt: Option<String>,
     pub last_message_at: chrono::DateTime<chrono::Utc>,
+    pub unread_count: i64,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// A DM report joined with the reported message and sender identity.
+#[derive(Debug, Clone, FromRow)]
+pub struct DmMessageReportRow {
+    pub id: i64,
+    pub message_id: i64,
+    pub conversation_id: i64,
+    pub reported_by: i64,
+    pub reporter_handle: String,
+    pub sender_id: i64,
+    pub sender_handle: String,
+    pub message_excerpt: String,
+    pub reason: String,
+    pub note: Option<String>,
+    pub status: String,
+    pub handled_by: Option<i64>,
+    pub handled_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
 /// A row from `forum.notification_prefs`.

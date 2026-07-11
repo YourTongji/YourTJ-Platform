@@ -65,6 +65,58 @@ pub struct AliyunStsProvider {
     client: reqwest::Client,
 }
 
+/// Object deletion boundary used by moderation to quarantine rejected uploads.
+#[async_trait::async_trait]
+pub trait ObjectStore: Send + Sync {
+    async fn delete_object(&self, config: &OssConfig, oss_key: &str) -> Result<(), MediaError>;
+}
+
+/// Authenticated Alibaba Cloud OSS client for moderation operations.
+pub struct AliyunOssClient {
+    client: reqwest::Client,
+}
+
+impl Default for AliyunOssClient {
+    fn default() -> Self {
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(OSS_HTTP_TIMEOUT_SECONDS))
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new());
+        Self { client }
+    }
+}
+
+#[async_trait::async_trait]
+impl ObjectStore for AliyunOssClient {
+    async fn delete_object(&self, config: &OssConfig, oss_key: &str) -> Result<(), MediaError> {
+        let signed = build_delete_object_request(config, oss_key, Utc::now())?;
+        let response = self
+            .client
+            .delete(signed.url)
+            .header("Date", signed.date)
+            .header("Authorization", signed.authorization)
+            .send()
+            .await
+            .map_err(|error| {
+                MediaError::Unavailable(format!("oss delete request failed: {error}"))
+            })?;
+        if response.status().is_success() || response.status() == reqwest::StatusCode::NOT_FOUND {
+            Ok(())
+        } else {
+            tracing::warn!(status = %response.status(), "oss delete object failed");
+            Err(MediaError::Unavailable("oss object quarantine failed".into()))
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct DeleteObjectRequest {
+    url: String,
+    date: String,
+    authorization: String,
+}
+
 impl Default for AliyunStsProvider {
     fn default() -> Self {
         let client = reqwest::Client::builder()
@@ -289,6 +341,28 @@ pub fn generate_url(config: &OssConfig, oss_key: &str) -> String {
     format!("https://{}.oss-{}.aliyuncs.com/{}", config.bucket, config.region, oss_key)
 }
 
+fn build_delete_object_request(
+    config: &OssConfig,
+    oss_key: &str,
+    request_time: DateTime<Utc>,
+) -> Result<DeleteObjectRequest, MediaError> {
+    if oss_key.is_empty() || oss_key.starts_with('/') || oss_key.contains("..") {
+        return Err(MediaError::BadRequest("invalid oss object key".into()));
+    }
+    let date = request_time.format("%a, %d %b %Y %H:%M:%S GMT").to_string();
+    let canonical_resource = format!("/{}/{}", config.bucket, oss_key);
+    let string_to_sign = format!("DELETE\n\n\n{date}\n{canonical_resource}");
+    let mut mac = HmacSha1::new_from_slice(config.access_key_secret.as_bytes())
+        .map_err(|error| MediaError::Internal(anyhow::Error::new(error)))?;
+    mac.update(string_to_sign.as_bytes());
+    let signature = base64::engine::general_purpose::STANDARD.encode(mac.finalize().into_bytes());
+    Ok(DeleteObjectRequest {
+        url: generate_url(config, oss_key),
+        date,
+        authorization: format!("OSS {}:{signature}", config.access_key_id),
+    })
+}
+
 /// Build the least-privilege STS policy for one object.
 pub fn build_upload_policy(config: &OssConfig, oss_key: &str) -> String {
     serde_json::json!({
@@ -456,6 +530,46 @@ mod tests {
     fn sts_percent_encoding_uses_rfc3986_unreserved_set() {
         assert_eq!(percent_encode("AZaz09-_.~"), "AZaz09-_.~");
         assert_eq!(percent_encode(" +/=:{}\""), "%20%2B%2F%3D%3A%7B%7D%22");
+    }
+
+    #[test]
+    fn delete_object_request_uses_oss_v1_authorization() {
+        let config = OssConfig {
+            region: "cn-shanghai".into(),
+            bucket: "yourtj".into(),
+            access_key_id: "test-ak".into(),
+            access_key_secret: "test-secret".into(),
+            role_arn: "acs:ram::1:role/upload".into(),
+            callback_base_url: "https://api.example.test".into(),
+        };
+        let request_time = DateTime::parse_from_rfc3339("2026-07-11T08:09:10Z")
+            .expect("request timestamp")
+            .with_timezone(&Utc);
+        let request = build_delete_object_request(
+            &config,
+            "uploads/42/image/00000000-0000-0000-0000-000000000000.png",
+            request_time,
+        )
+        .expect("signed delete request");
+        assert_eq!(
+            request.url,
+            "https://yourtj.oss-cn-shanghai.aliyuncs.com/uploads/42/image/00000000-0000-0000-0000-000000000000.png"
+        );
+        assert_eq!(request.date, "Sat, 11 Jul 2026 08:09:10 GMT");
+        assert_eq!(request.authorization, "OSS test-ak:9fVdWj+aDQKmkJOAI5uUIrVEPwY=");
+    }
+
+    #[test]
+    fn delete_object_rejects_non_account_scoped_path_traversal() {
+        let config = OssConfig {
+            region: "cn-shanghai".into(),
+            bucket: "yourtj".into(),
+            access_key_id: "test-ak".into(),
+            access_key_secret: "test-secret".into(),
+            role_arn: "acs:ram::1:role/upload".into(),
+            callback_base_url: "https://api.example.test".into(),
+        };
+        assert!(build_delete_object_request(&config, "../other-object", Utc::now()).is_err());
     }
 
     #[test]

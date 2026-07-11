@@ -25,3 +25,7 @@ openssl.workspace = true
 percent-encoding.workspace = true
 async-trait.workspace = true
 identity.workspace = true
+governance.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }

@@ -37,7 +37,7 @@ pub fn routes(state: AppState) -> Router {
         .route("/api/v2/admin/reviews", get(admin_handlers::admin_list_reviews))
         .route(
             "/api/v2/admin/reviews/{id}",
-            patch(admin_handlers::admin_edit_review).delete(admin_handlers::admin_delete_review),
+            axum::routing::delete(admin_handlers::admin_delete_review),
         )
         .route("/api/v2/admin/reviews/{id}/toggle", post(admin_handlers::admin_toggle_review))
         .route("/api/v2/admin/reports", get(admin_handlers::admin_list_reports))

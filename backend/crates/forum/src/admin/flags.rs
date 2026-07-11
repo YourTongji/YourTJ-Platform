@@ -1,18 +1,13 @@
-//! Admin forum flag queue endpoints: list flags and resolve individual flags.
-//!
-//! These handlers require mod/admin auth.
+//! Reasoned forum report review with atomic target and audit transitions.
 
 use axum::extract::{Path, Query, State};
 use axum::http::HeaderMap;
 use axum::Json;
-use serde::Deserialize;
-use serde_json::{json, Value};
+use serde::{Deserialize, Serialize};
 use shared::pagination::Page;
 use shared::{AppError, AppResult, AppState};
 
-// ---------------------------------------------------------------------------
-// Input DTOs
-// ---------------------------------------------------------------------------
+use crate::models::{FlagQueueRow, FlagRow};
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -31,19 +26,75 @@ fn default_limit() -> i64 {
 #[serde(rename_all = "camelCase")]
 pub struct ResolveFlagInput {
     pub action: String,
-    pub note: Option<String>,
+    pub note: String,
 }
 
-// ---------------------------------------------------------------------------
-// Handlers
-// ---------------------------------------------------------------------------
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdminFlagDto {
+    id: String,
+    target_type: String,
+    target_id: String,
+    reporter_id: String,
+    reason: String,
+    note: Option<String>,
+    weight: f32,
+    status: String,
+    handled_by: Option<String>,
+    handled_at: Option<i64>,
+    resolution_note: Option<String>,
+    created_at: i64,
+    author_handle: Option<String>,
+    target_title: Option<String>,
+    content_excerpt: Option<String>,
+}
 
-/// GET /api/v2/admin/forum/flags — list the flag queue
+fn flag_dto(row: FlagRow) -> AdminFlagDto {
+    AdminFlagDto {
+        id: row.id.to_string(),
+        target_type: row.target_type,
+        target_id: row.target_id.to_string(),
+        reporter_id: row.reporter_id.to_string(),
+        reason: row.reason,
+        note: row.note,
+        weight: row.weight,
+        status: row.status,
+        handled_by: row.handled_by.map(|id| id.to_string()),
+        handled_at: row.handled_at.map(|timestamp| timestamp.timestamp()),
+        resolution_note: row.resolution_note,
+        created_at: row.created_at.timestamp(),
+        author_handle: None,
+        target_title: None,
+        content_excerpt: None,
+    }
+}
+
+fn queue_flag_dto(row: FlagQueueRow) -> AdminFlagDto {
+    AdminFlagDto {
+        id: row.id.to_string(),
+        target_type: row.target_type,
+        target_id: row.target_id.to_string(),
+        reporter_id: row.reporter_id.to_string(),
+        reason: row.reason,
+        note: row.note,
+        weight: row.weight,
+        status: row.status,
+        handled_by: row.handled_by.map(|id| id.to_string()),
+        handled_at: row.handled_at.map(|timestamp| timestamp.timestamp()),
+        resolution_note: row.resolution_note,
+        created_at: row.created_at.timestamp(),
+        author_handle: row.author_handle,
+        target_title: row.target_title,
+        content_excerpt: row.content_excerpt,
+    }
+}
+
+/// GET /api/v2/admin/forum/flags — list the report queue.
 pub async fn list_flags_queue(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Query(q): Query<FlagsQueueQuery>,
-) -> AppResult<Json<Page<Value>>> {
+    Query(query): Query<FlagsQueueQuery>,
+) -> AppResult<Json<Page<AdminFlagDto>>> {
     let auth = identity::auth_middleware::authenticate(
         &headers,
         &state.db,
@@ -52,40 +103,34 @@ pub async fn list_flags_queue(
     )
     .await
     .map_err(|_| AppError::Unauthorized)?;
-    auth.require_mod().map_err(|_| AppError::Forbidden)?;
+    auth.require_capability(shared::auth::Capability::ModerateContent)
+        .map_err(|_| AppError::Forbidden)?;
 
-    let cursor: Option<i64> = q.cursor.and_then(|c| c.parse().ok());
+    let status = query.status.as_deref().unwrap_or("open");
+    if !matches!(status, "open" | "upheld" | "rejected" | "ignored" | "all") {
+        return Err(AppError::BadRequest("invalid flag status".into()));
+    }
+    let cursor = query
+        .cursor
+        .as_deref()
+        .map(str::parse)
+        .transpose()
+        .map_err(|_| AppError::BadRequest("invalid cursor".into()))?;
     let (rows, next_cursor) =
-        crate::repo::list_flag_queue(&state.db, q.status.as_deref(), cursor, q.limit).await?;
-
-    let items: Vec<Value> = rows
-        .into_iter()
-        .map(|r| {
-            json!({
-                "id": r.id.to_string(),
-                "targetType": r.target_type,
-                "targetId": r.target_id.to_string(),
-                "reporterId": r.reporter_id.to_string(),
-                "reason": r.reason,
-                "note": r.note,
-                "weight": r.weight,
-                "status": r.status,
-                "createdAt": r.created_at.timestamp(),
-            })
-        })
-        .collect();
-
-    let next_str = next_cursor.map(|c| c.to_string());
-    Ok(Json(Page::new(items, next_str)))
+        crate::repo::list_flag_queue(&state.db, Some(status), cursor, query.limit).await?;
+    Ok(Json(Page::new(
+        rows.into_iter().map(queue_flag_dto).collect(),
+        next_cursor.map(|cursor| cursor.to_string()),
+    )))
 }
 
-/// POST /api/v2/admin/forum/flags/{id}/resolve — resolve a single flag
+/// POST /api/v2/admin/forum/flags/{id}/resolve — resolve all open reports for the target.
 pub async fn resolve_flag(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Path(flag_id_str): Path<String>,
+    Path(flag_id): Path<String>,
     Json(body): Json<ResolveFlagInput>,
-) -> AppResult<Json<Value>> {
+) -> AppResult<Json<AdminFlagDto>> {
     let auth = identity::auth_middleware::authenticate(
         &headers,
         &state.db,
@@ -94,27 +139,50 @@ pub async fn resolve_flag(
     )
     .await
     .map_err(|_| AppError::Unauthorized)?;
-    auth.require_mod().map_err(|_| AppError::Forbidden)?;
+    auth.require_capability(shared::auth::Capability::ModerateContent)
+        .map_err(|_| AppError::Forbidden)?;
 
-    let flag_id: i64 = flag_id_str.parse().map_err(|_| AppError::NotFound)?;
+    let flag_id: i64 = flag_id.parse().map_err(|_| AppError::NotFound)?;
+    let note = body.note.trim();
+    if !(3..=500).contains(&note.chars().count()) {
+        return Err(AppError::BadRequest("note must be 3–500 characters".into()));
+    }
+    if !matches!(body.action.as_str(), "uphold" | "reject" | "ignore") {
+        return Err(AppError::BadRequest("action must be uphold/reject/ignore".into()));
+    }
 
-    crate::repo::resolve_flag(&state.db, flag_id, &body.action, auth.id, body.note.as_deref())
-        .await?;
-
-    // Write mod action
-    if let Err(e) = crate::repo::insert_mod_action(
-        &state.db,
+    let mut tx = state.db.begin().await?;
+    let author_id = crate::repo::flags::lock_flag_target_author(&mut tx, flag_id).await?;
+    super::require_lower_author_role(&mut tx, &auth, author_id).await?;
+    let outcome = crate::repo::resolve_flag(&mut tx, flag_id, &body.action, auth.id, note).await?;
+    crate::repo::insert_mod_action(
+        &mut *tx,
         auth.id,
         &format!("resolve_flag_{}", body.action),
         "flag",
         flag_id,
-        body.note.as_deref(),
+        Some(note),
         None,
     )
-    .await
-    {
-        tracing::warn!(error = %e, "failed to record mod action");
-    }
+    .await?;
+    governance::record_account_event_tx(
+        &mut tx,
+        governance::AccountActor { account_id: auth.id, role: &auth.role },
+        &format!("forum.flag.{}", body.action),
+        "forum_content",
+        &format!("{}:{}", outcome.flag.target_type, outcome.flag.target_id),
+        note,
+        None,
+    )
+    .await?;
+    tx.commit().await?;
+    crate::cache::invalidate_thread_surfaces(
+        state.redis.as_ref(),
+        outcome.thread_id,
+        outcome.board_id,
+    )
+    .await;
+    crate::meili::reconcile_thread_in_background(&state, outcome.thread_id);
 
-    Ok(Json(json!({"ok": true})))
+    Ok(Json(flag_dto(outcome.flag)))
 }

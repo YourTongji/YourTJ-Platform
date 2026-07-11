@@ -42,6 +42,11 @@ pub struct ReportDto {
     pub review_id: String,
     pub reason: String,
     pub status: String,
+    pub course_id: Option<String>,
+    pub review_author_handle: Option<String>,
+    pub review_rating: Option<i32>,
+    pub review_status: Option<String>,
+    pub review_excerpt: Option<String>,
     pub created_at: i64,
 }
 

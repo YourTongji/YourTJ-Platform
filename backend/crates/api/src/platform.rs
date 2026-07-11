@@ -1,12 +1,14 @@
 //! Platform module: announcements and settings exposed as public/admin
 //! endpoints. Lives in the api crate because it has no domain dependency.
 
-use axum::extract::{Path, State};
-use axum::http::HeaderMap;
-use axum::routing::{get, post};
+use axum::extract::{Path, Query, State};
+use axum::http::{HeaderMap, StatusCode};
+use axum::routing::{get, patch, post};
 use axum::{Json, Router};
 use chrono::{DateTime, Utc};
+use governance::AccountActor;
 use serde::{Deserialize, Serialize};
+use shared::auth::Capability;
 use shared::{AppError, AppResult, AppState};
 use sqlx::FromRow;
 use sqlx::PgPool;
@@ -56,6 +58,28 @@ pub struct SettingDto {
 #[serde(rename_all = "camelCase")]
 pub struct UpdateSettingInput {
     pub value: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AnnouncementInput {
+    pub title: String,
+    pub body: Option<String>,
+    pub reason: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdminReasonInput {
+    pub reason: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdminAnnouncementsQuery {
+    pub cursor: Option<String>,
+    pub limit: Option<i64>,
 }
 
 // ---------------------------------------------------------------------------
@@ -92,19 +116,50 @@ pub async fn get_setting(pool: &PgPool, key: &str) -> AppResult<Option<SettingRo
     Ok(row)
 }
 
-pub async fn update_setting(pool: &PgPool, key: &str, value: &str) -> AppResult<()> {
-    let rows =
-        sqlx::query("UPDATE platform.settings SET value = $1, updated_at = now() WHERE key = $2")
-            .bind(value)
-            .bind(key)
-            .execute(pool)
-            .await?
-            .rows_affected();
-
-    if rows == 0 {
-        return Err(AppError::NotFound);
+fn announcement_dto(row: AnnouncementRow) -> AnnouncementDto {
+    AnnouncementDto {
+        id: row.id.to_string(),
+        title: row.title,
+        body: row.body,
+        created_at: row.created_at.timestamp(),
     }
-    Ok(())
+}
+
+fn validate_reason(reason: &str) -> AppResult<&str> {
+    let reason = reason.trim();
+    if !(3..=500).contains(&reason.chars().count()) {
+        return Err(AppError::BadRequest("reason must be 3–500 characters".into()));
+    }
+    Ok(reason)
+}
+
+fn validate_announcement(body: &AnnouncementInput) -> AppResult<(&str, Option<&str>, &str)> {
+    let title = body.title.trim();
+    if title.is_empty() || title.chars().count() > 200 {
+        return Err(AppError::BadRequest("title must be 1–200 characters".into()));
+    }
+    let content = body.body.as_deref().map(str::trim).filter(|content| !content.is_empty());
+    if content.is_some_and(|content| content.chars().count() > 20_000) {
+        return Err(AppError::BadRequest("body must be at most 20000 characters".into()));
+    }
+    Ok((title, content, validate_reason(&body.reason)?))
+}
+
+async fn authenticate_staff(
+    headers: &HeaderMap,
+    state: &AppState,
+    capability: Capability,
+) -> AppResult<shared::AuthAccount> {
+    let auth = identity::auth_middleware::authenticate(
+        headers,
+        &state.db,
+        &state.jwt_secret,
+        state.redis.as_ref(),
+    )
+    .await
+    .map_err(|_| AppError::Unauthorized)?;
+    auth.require_capability(capability).map_err(|_| AppError::Forbidden)?;
+    Ok(auth)
 }
 
 // ---------------------------------------------------------------------------
@@ -116,15 +171,7 @@ pub async fn list_announcements_handler(
     State(state): State<AppState>,
 ) -> AppResult<Json<Vec<AnnouncementDto>>> {
     let rows = list_announcements(&state.db).await?;
-    let items: Vec<AnnouncementDto> = rows
-        .into_iter()
-        .map(|r| AnnouncementDto {
-            id: r.id.to_string(),
-            title: r.title,
-            body: r.body,
-            created_at: r.created_at.timestamp(),
-        })
-        .collect();
+    let items = rows.into_iter().map(announcement_dto).collect();
     Ok(Json(items))
 }
 
@@ -163,15 +210,7 @@ pub async fn admin_list_settings_handler(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> AppResult<Json<Vec<SettingDto>>> {
-    let auth = identity::auth_middleware::authenticate(
-        &headers,
-        &state.db,
-        &state.jwt_secret,
-        state.redis.as_ref(),
-    )
-    .await
-    .map_err(|_r| AppError::Unauthorized)?;
-    auth.require_mod().map_err(|_| AppError::Forbidden)?;
+    authenticate_staff(&headers, &state, Capability::ManagePlatform).await?;
     let rows = list_settings(&state.db).await?;
     let items: Vec<SettingDto> =
         rows.into_iter().map(|r| SettingDto { key: r.key, value: r.value }).collect();
@@ -184,15 +223,7 @@ pub async fn admin_get_setting_handler(
     headers: HeaderMap,
     Path(key): Path<String>,
 ) -> AppResult<Json<SettingDto>> {
-    let auth = identity::auth_middleware::authenticate(
-        &headers,
-        &state.db,
-        &state.jwt_secret,
-        state.redis.as_ref(),
-    )
-    .await
-    .map_err(|_r| AppError::Unauthorized)?;
-    auth.require_mod().map_err(|_| AppError::Forbidden)?;
+    authenticate_staff(&headers, &state, Capability::ManagePlatform).await?;
 
     let row = get_setting(&state.db, &key).await?.ok_or(AppError::NotFound)?;
     Ok(Json(SettingDto { key: row.key, value: row.value }))
@@ -205,18 +236,168 @@ pub async fn admin_update_setting_handler(
     Path(key): Path<String>,
     Json(body): Json<UpdateSettingInput>,
 ) -> AppResult<Json<SettingDto>> {
-    let auth = identity::auth_middleware::authenticate(
-        &headers,
-        &state.db,
-        &state.jwt_secret,
-        state.redis.as_ref(),
+    let auth = authenticate_staff(&headers, &state, Capability::ManagePlatform).await?;
+    let reason = validate_reason(&body.reason)?;
+    if body.value.chars().count() > 20_000 {
+        return Err(AppError::BadRequest("setting value is too long".into()));
+    }
+    let mut tx = state.db.begin().await?;
+    let rows =
+        sqlx::query("UPDATE platform.settings SET value = $1, updated_at = now() WHERE key = $2")
+            .bind(&body.value)
+            .bind(&key)
+            .execute(&mut *tx)
+            .await?
+            .rows_affected();
+    if rows == 0 {
+        return Err(AppError::NotFound);
+    }
+    governance::record_account_event_tx(
+        &mut tx,
+        AccountActor { account_id: auth.id, role: &auth.role },
+        "platform.setting.updated",
+        "setting",
+        &key,
+        reason,
+        None,
     )
-    .await
-    .map_err(|_r| AppError::Unauthorized)?;
-    auth.require_mod().map_err(|_| AppError::Forbidden)?;
-
-    update_setting(&state.db, &key, &body.value).await?;
+    .await?;
+    tx.commit().await?;
     Ok(Json(SettingDto { key, value: body.value }))
+}
+
+/// GET /api/v2/admin/announcements — paginated announcement management list.
+pub async fn admin_list_announcements_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<AdminAnnouncementsQuery>,
+) -> AppResult<Json<shared::Page<AnnouncementDto>>> {
+    authenticate_staff(&headers, &state, Capability::ManageAnnouncements).await?;
+    let cursor = query
+        .cursor
+        .as_deref()
+        .map(str::parse::<i64>)
+        .transpose()
+        .map_err(|_| AppError::BadRequest("invalid cursor".into()))?;
+    let limit = query.limit.unwrap_or(30).clamp(1, 100);
+    let mut rows = sqlx::query_as::<_, AnnouncementRow>(
+        "SELECT id, title, body, created_at FROM platform.announcements \
+         WHERE ($1::bigint IS NULL OR id < $1) ORDER BY id DESC LIMIT $2",
+    )
+    .bind(cursor)
+    .bind(limit + 1)
+    .fetch_all(&state.db)
+    .await?;
+    let has_more = rows.len() > limit as usize;
+    if has_more {
+        rows.truncate(limit as usize);
+    }
+    let next_cursor = has_more.then(|| rows.last().map(|row| row.id.to_string())).flatten();
+    let items = rows.into_iter().map(announcement_dto).collect();
+    Ok(Json(shared::Page::new(items, next_cursor)))
+}
+
+/// POST /api/v2/admin/announcements — publish a public announcement.
+pub async fn admin_create_announcement_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<AnnouncementInput>,
+) -> AppResult<(StatusCode, Json<AnnouncementDto>)> {
+    let auth = authenticate_staff(&headers, &state, Capability::ManageAnnouncements).await?;
+    let (title, content, reason) = validate_announcement(&body)?;
+    let mut tx = state.db.begin().await?;
+    let row = sqlx::query_as::<_, AnnouncementRow>(
+        "INSERT INTO platform.announcements (title, body) VALUES ($1, $2) \
+         RETURNING id, title, body, created_at",
+    )
+    .bind(title)
+    .bind(content)
+    .fetch_one(&mut *tx)
+    .await?;
+    governance::record_account_event_tx(
+        &mut tx,
+        AccountActor { account_id: auth.id, role: &auth.role },
+        "platform.announcement.published",
+        "announcement",
+        &row.id.to_string(),
+        reason,
+        None,
+    )
+    .await?;
+    tx.commit().await?;
+    Ok((StatusCode::CREATED, Json(announcement_dto(row))))
+}
+
+/// PATCH /api/v2/admin/announcements/{id} — update announcement copy.
+pub async fn admin_update_announcement_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(announcement_id): Path<String>,
+    Json(body): Json<AnnouncementInput>,
+) -> AppResult<Json<AnnouncementDto>> {
+    let auth = authenticate_staff(&headers, &state, Capability::ManageAnnouncements).await?;
+    let announcement_id = announcement_id
+        .parse::<i64>()
+        .map_err(|_| AppError::BadRequest("invalid announcement id".into()))?;
+    let (title, content, reason) = validate_announcement(&body)?;
+    let mut tx = state.db.begin().await?;
+    let row = sqlx::query_as::<_, AnnouncementRow>(
+        "UPDATE platform.announcements SET title = $1, body = $2 WHERE id = $3 \
+         RETURNING id, title, body, created_at",
+    )
+    .bind(title)
+    .bind(content)
+    .bind(announcement_id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or(AppError::NotFound)?;
+    governance::record_account_event_tx(
+        &mut tx,
+        AccountActor { account_id: auth.id, role: &auth.role },
+        "platform.announcement.updated",
+        "announcement",
+        &announcement_id.to_string(),
+        reason,
+        None,
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(Json(announcement_dto(row)))
+}
+
+/// DELETE /api/v2/admin/announcements/{id} — remove an announcement.
+pub async fn admin_delete_announcement_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(announcement_id): Path<String>,
+    Json(body): Json<AdminReasonInput>,
+) -> AppResult<StatusCode> {
+    let auth = authenticate_staff(&headers, &state, Capability::ManageAnnouncements).await?;
+    let reason = validate_reason(&body.reason)?;
+    let announcement_id = announcement_id
+        .parse::<i64>()
+        .map_err(|_| AppError::BadRequest("invalid announcement id".into()))?;
+    let mut tx = state.db.begin().await?;
+    let rows = sqlx::query("DELETE FROM platform.announcements WHERE id = $1")
+        .bind(announcement_id)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+    if rows == 0 {
+        return Err(AppError::NotFound);
+    }
+    governance::record_account_event_tx(
+        &mut tx,
+        AccountActor { account_id: auth.id, role: &auth.role },
+        "platform.announcement.deleted",
+        "announcement",
+        &announcement_id.to_string(),
+        reason,
+        None,
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 // ---------------------------------------------------------------------------
@@ -233,6 +414,14 @@ pub fn routes(state: AppState) -> Router {
         .route(
             "/api/v2/admin/settings/{key}",
             get(admin_get_setting_handler).put(admin_update_setting_handler),
+        )
+        .route(
+            "/api/v2/admin/announcements",
+            get(admin_list_announcements_handler).post(admin_create_announcement_handler),
+        )
+        .route(
+            "/api/v2/admin/announcements/{id}",
+            patch(admin_update_announcement_handler).delete(admin_delete_announcement_handler),
         )
         .with_state(state)
 }

@@ -7,6 +7,8 @@ use serde_json::Value;
 use shared::AppState;
 use sqlx::PgPool;
 
+static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("../../migrations");
+
 /// Create a complete test application for the reviews domain.
 ///
 /// Reads `DATABASE_URL` from the environment; falls back to a local
@@ -54,16 +56,155 @@ async fn run_migrations(pool: &PgPool) {
     .ok()
     .flatten();
     if exists != Some(true) {
-        // Apply migrations if not already done by docker-compose initdb.
-        let sql = include_str!("../../../../migrations/0001_init.sql");
-        sqlx::raw_sql(sql).execute(pool).await.expect("migration 0001 failed");
+        MIGRATOR.run(pool).await.expect("review test migrations failed");
+    }
 
-        let sql2 = include_str!("../../../../migrations/0002_escrow_selection.sql");
-        sqlx::raw_sql(sql2).execute(pool).await.expect("migration 0002 failed");
+    let has_forum_parity: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM information_schema.columns \
+         WHERE table_schema = 'identity' AND table_name = 'accounts' \
+           AND column_name = 'trust_level')",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or(false);
+    if !has_forum_parity {
+        sqlx::raw_sql(include_str!("../../../../migrations/0005_forum_parity.sql"))
+            .execute(pool)
+            .await
+            .expect("migration 0005 failed");
+    }
+
+    let has_selection_raw: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM information_schema.tables \
+         WHERE table_schema = 'selection' AND table_name = 'pk_course_details')",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or(false);
+    if !has_selection_raw {
+        sqlx::raw_sql(include_str!("../../../../migrations/0009_selection_raw_pk.sql"))
+            .execute(pool)
+            .await
+            .expect("migration 0009 failed");
+    }
+
+    let has_review_attribution: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM information_schema.columns \
+         WHERE table_schema = 'reviews' AND table_name = 'reviews' \
+           AND column_name = 'reviewer_name')",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or(false);
+    if !has_review_attribution {
+        sqlx::raw_sql(include_str!("../../../../migrations/0010_selection_raw_normalized.sql"))
+            .execute(pool)
+            .await
+            .expect("migration 0010 failed");
+    }
+
+    let has_legacy_interactions: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM information_schema.tables \
+         WHERE table_schema = 'reviews' AND table_name = 'legacy_review_likes')",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or(false);
+    if !has_legacy_interactions {
+        sqlx::raw_sql(include_str!("../../../../migrations/0019_legacy_review_interactions.sql"))
+            .execute(pool)
+            .await
+            .expect("migration 0019 failed");
+    }
+
+    let has_activity_schema: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM information_schema.schemata WHERE schema_name = 'activity')",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or(false);
+    if !has_activity_schema {
+        sqlx::raw_sql(include_str!("../../../../migrations/0020_activity.sql"))
+            .execute(pool)
+            .await
+            .expect("migration 0020 failed");
+    }
+
+    let has_governance_schema: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM information_schema.schemata WHERE schema_name = 'governance')",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or(false);
+    if !has_governance_schema {
+        sqlx::raw_sql(include_str!("../../../../migrations/0022_governance.sql"))
+            .execute(pool)
+            .await
+            .expect("migration 0022 failed");
+    }
+
+    let has_report_status_constraint: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM pg_constraint WHERE conname = 'review_reports_status_check')",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or(false);
+    if !has_report_status_constraint {
+        sqlx::raw_sql(include_str!("../../../../migrations/0023_review_moderation_decisions.sql"))
+            .execute(pool)
+            .await
+            .expect("migration 0023 failed");
+    }
+
+    let review_course_delete_rule: Option<String> = sqlx::query_scalar(
+        "SELECT delete_rule FROM information_schema.referential_constraints \
+         WHERE constraint_schema = 'reviews' AND constraint_name = 'reviews_course_id_fkey'",
+    )
+    .fetch_optional(pool)
+    .await
+    .unwrap_or(None);
+    if review_course_delete_rule.as_deref() == Some("CASCADE") {
+        sqlx::raw_sql(include_str!("../../../../migrations/0028_review_course_restrict.sql"))
+            .execute(pool)
+            .await
+            .expect("migration 0028 failed");
+    }
+
+    let has_open_report_index: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM pg_indexes \
+         WHERE schemaname = 'reviews' \
+           AND indexname = 'review_reports_one_open_per_reporter_idx')",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or(false);
+    if !has_open_report_index {
+        sqlx::raw_sql(include_str!(
+            "../../../../migrations/0029_review_report_open_uniqueness.sql"
+        ))
+        .execute(pool)
+        .await
+        .expect("migration 0029 failed");
+    }
+
+    let has_review_idempotency: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM information_schema.tables \
+         WHERE table_schema = 'reviews' AND table_name = 'review_create_idempotency')",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or(false);
+    if !has_review_idempotency {
+        sqlx::raw_sql(include_str!("../../../../migrations/0030_review_create_idempotency.sql"))
+            .execute(pool)
+            .await
+            .expect("migration 0030 failed");
     }
 
     // Clean test data from previous runs (always run, even if migrations were skipped).
+    sqlx::query("DELETE FROM governance.audit_events").execute(pool).await.ok();
     sqlx::query("DELETE FROM reviews.review_reports").execute(pool).await.ok();
+    sqlx::query("DELETE FROM reviews.review_create_idempotency").execute(pool).await.ok();
     sqlx::query("DELETE FROM reviews.review_likes").execute(pool).await.ok();
     sqlx::query("DELETE FROM reviews.reviews").execute(pool).await.ok();
     sqlx::query("DELETE FROM identity.sessions").execute(pool).await.ok();

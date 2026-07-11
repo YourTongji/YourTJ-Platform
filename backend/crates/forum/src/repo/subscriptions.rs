@@ -158,7 +158,7 @@ pub async fn get_following_thread_ids(
          FROM forum.threads t \
          JOIN forum.subscriptions s ON s.target_type = 'thread' AND s.target_id = t.id \
          WHERE s.account_id = $1 AND s.level IN ('watching', 'tracking') \
-           AND t.deleted_at IS NULL \
+           AND t.deleted_at IS NULL AND t.hidden_at IS NULL AND t.archived_at IS NULL \
            AND t.id > $2 \
          ORDER BY t.last_activity_at DESC \
          LIMIT $3",

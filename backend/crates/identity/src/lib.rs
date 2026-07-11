@@ -13,6 +13,7 @@ mod email_code;
 mod handlers;
 mod ledger;
 mod password;
+pub mod public_accounts;
 mod repo;
 pub mod sanctions;
 
@@ -20,7 +21,7 @@ mod dto;
 mod error;
 mod models;
 
-use axum::routing::{get, post};
+use axum::routing::{get, patch, post};
 use axum::Router;
 
 /// All routes owned by the identity domain.
@@ -37,18 +38,21 @@ pub fn routes(state: AppState) -> Router {
         .route("/api/v2/auth/password/change", post(handlers::password_change))
         // Profile
         .route("/api/v2/me", get(handlers::get_me).patch(handlers::update_me))
-        .route("/api/v2/users/{handle}", get(handlers::get_user_profile))
-        .route("/api/v2/users/{handle}/threads", get(handlers::list_user_threads))
-        .route("/api/v2/users/{handle}/comments", get(handlers::list_user_comments))
         // Wallet
         .route("/api/v2/wallet/bind", post(handlers::bind_key))
         .route("/api/v2/wallet/claim-challenge", get(handlers::claim_challenge))
         .route("/api/v2/wallet/claim", post(handlers::claim_wallet))
         // Admin
-        .route("/api/v2/admin/users/{id}/silence", post(handlers::silence_user))
-        .route("/api/v2/admin/users/{id}/suspend", post(handlers::suspend_user))
-        .route("/api/v2/admin/users/{id}/unsanction", post(handlers::unsanction_user))
-        .route("/api/v2/admin/users/{id}/sanctions", get(handlers::list_user_sanctions))
+        .route(
+            "/api/v2/admin/users",
+            get(handlers::admin::list_users).post(handlers::admin::invite_user),
+        )
+        .route("/api/v2/admin/users/{id}/role", patch(handlers::admin::change_role))
+        .route("/api/v2/admin/users/{id}/sessions/revoke", post(handlers::admin::revoke_sessions))
+        .route("/api/v2/admin/users/{id}/silence", post(handlers::admin::silence_user))
+        .route("/api/v2/admin/users/{id}/suspend", post(handlers::admin::suspend_user))
+        .route("/api/v2/admin/users/{id}/unsanction", post(handlers::admin::unsanction_user))
+        .route("/api/v2/admin/users/{id}/sanctions", get(handlers::admin::list_user_sanctions))
         .with_state(state)
 }
 

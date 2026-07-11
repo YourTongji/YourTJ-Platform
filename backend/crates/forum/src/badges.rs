@@ -6,7 +6,8 @@
 //! crate does not depend on credit) — the `api` crate or a future refactor can
 //! bridge that gap.
 
-use sqlx::PgPool;
+use shared::AppResult;
+use sqlx::{FromRow, PgPool};
 
 /// Standard badges seeded at startup.
 pub const BADGES: &[(&str, &str, &str, &str, i64)] = &[
@@ -14,6 +15,30 @@ pub const BADGES: &[(&str, &str, &str, &str, i64)] = &[
     ("quality-author", "优质作者", "你的主题被标记为精选", "", 10),
     ("first-comment", "首次评论", "发表你的第一条评论", "", 2),
 ];
+
+#[derive(Debug, Clone, FromRow)]
+pub(crate) struct AccountBadgeSummary {
+    pub slug: String,
+    pub name: String,
+}
+
+/// List public badge labels for an account.
+pub(crate) async fn list_account_badges(
+    pool: &PgPool,
+    account_id: i64,
+) -> AppResult<Vec<AccountBadgeSummary>> {
+    let badges = sqlx::query_as::<_, AccountBadgeSummary>(
+        "SELECT badge.slug, badge.name \
+         FROM platform.account_badges account_badge \
+         JOIN platform.badges badge ON badge.id = account_badge.badge_id \
+         WHERE account_badge.account_id = $1 \
+         ORDER BY account_badge.awarded_at DESC, badge.id",
+    )
+    .bind(account_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(badges)
+}
 
 /// Seed the standard badges on startup if they don't already exist.
 ///

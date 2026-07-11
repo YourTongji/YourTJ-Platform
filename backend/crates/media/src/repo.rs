@@ -134,20 +134,6 @@ pub async fn find_upload(pool: &PgPool, id: i64) -> AppResult<Option<UploadRow>>
     Ok(row)
 }
 
-/// Update the status of an upload.
-pub async fn update_status(pool: &PgPool, id: i64, status: &str) -> AppResult<()> {
-    let affected = sqlx::query("UPDATE media.uploads SET status = $1 WHERE id = $2")
-        .bind(status)
-        .bind(id)
-        .execute(pool)
-        .await?
-        .rows_affected();
-    if affected == 0 {
-        return Err(MediaError::NotFound.into());
-    }
-    Ok(())
-}
-
 /// List pending uploads with cursor-based pagination.
 ///
 /// The cursor is the opaque base64-encoded `(created_at_timestamp, id)` pair.

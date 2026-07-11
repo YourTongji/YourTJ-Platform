@@ -42,6 +42,11 @@ pub struct ReviewReportRow {
     pub status: String,
     pub admin_note: Option<String>,
     pub created_at: DateTime<Utc>,
+    pub course_id: Option<i64>,
+    pub review_author_handle: Option<String>,
+    pub review_rating: Option<i32>,
+    pub review_status: Option<String>,
+    pub review_excerpt: Option<String>,
 }
 
 /// Joined row: review + author handle + avatar for list queries.
