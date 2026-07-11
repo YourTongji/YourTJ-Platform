@@ -55,6 +55,17 @@ def gen_review_likes(cur):
     rows = cur.fetchall()
     print(f"\n-- reviews.review_likes: {len(rows)} rows", file=sys.stderr)
 
+    if not rows:
+        return
+
+    col_list = ", ".join(cols)
+    print(f"INSERT INTO reviews.review_likes ({col_list}) VALUES")
+
+    for i, row in enumerate(rows):
+        vals = ", ".join(sql_literal(v) for v in row)
+        sep = "," if i < len(rows) - 1 else ";"
+        print(f"  ({vals}){sep}")
+
 
 def gen_review_reports(cur):
     """Generate INSERTs for reviews.review_reports."""
@@ -62,6 +73,17 @@ def gen_review_reports(cur):
     cols = [d[0] for d in cur.description]
     rows = cur.fetchall()
     print(f"\n-- reviews.review_reports: {len(rows)} rows", file=sys.stderr)
+
+    if not rows:
+        return
+
+    col_list = ", ".join(cols)
+    print(f"INSERT INTO reviews.review_reports ({col_list}) VALUES")
+
+    for i, row in enumerate(rows):
+        vals = ", ".join(sql_literal(v) for v in row)
+        sep = "," if i < len(rows) - 1 else ";"
+        print(f"  ({vals}){sep}")
 
 
 def main():
