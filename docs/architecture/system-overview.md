@@ -26,7 +26,7 @@ flowchart LR
     A --> P["Credit"]
     A --> M["Media"]
     A --> V["Activity / Governance"]
-    A --> PFM["Platform announcements / promotions"]
+    A --> PFM["Platform announcements / promotions / verifications"]
     A --> S["Federated Search"]
     I --> DB[("PostgreSQL")]
     F --> DB
@@ -36,6 +36,7 @@ flowchart LR
     M --> DB
     V --> DB
     PFM --> DB
+    F -->|"public verification projection"| PFM
     S --> K
     S --> R
     S --> F
@@ -61,15 +62,16 @@ PostgreSQL 是业务事实源。Redis 用于限流、缓存和热计数；Meilis
 | `media` | upload intent、OSS callback、asset quarantine/status | 任意业务内容本身 |
 | `activity` | contribution events、daily projection、score policy | 从源表在读路径临时聚合 |
 | `governance` | 跨域 append-only staff/system audit | 代替各域业务状态 |
-| `platform` | 公告、用户 receipt、首页推广与 runtime settings | 业务域外的任意 gateway SQL |
+| `platform` | 公告、用户 receipt、首页推广、人工认证 definition/grant 与 runtime settings | 业务域外的任意 gateway SQL |
 | `search` | 聚合 course/review/thread typed results、查询边界与限流 | 自有业务表、原始索引文档或跨 schema SQL |
 | `shared` | config、errors、auth primitives、pagination、cache/rate-limit helpers | domain SQL 或反向依赖 |
 | `e2e` | 可执行旅程测试 harness | 生产路由或测试替身进入业务 crate |
 
 跨域读取/写入通过 owner crate 的 public API 或明确的 read model。`shared` 不依赖任何 domain；
 `api` 只负责组合。公告、推广和 runtime settings 已迁入独立 `platform` crate；当前
-`api/src/onebox.rs` 和部分 admin handler 仍包含业务 SQL/外部内容处理，是已知架构债务。新增徽章、
-typed settings 或 durable jobs 时继续建立明确 owner domain，而不是扩大 gateway 例外。
+`api/src/onebox.rs` 和部分 admin handler 仍包含业务 SQL/外部内容处理，是已知架构债务。人工认证已经
+由 `platform` owner 提供 public projection；新增成就后台、typed settings 或 durable jobs 时继续建立
+明确 owner domain，而不是扩大 gateway 例外。
 
 ## 仓库边界
 

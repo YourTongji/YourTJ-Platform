@@ -26,6 +26,8 @@
   suspended/deleted 账号不进入公开资料与关系列表。
 - Display name、bio、HTTPS website 与 privacy setting 可由 owner 替换；avatar/banner 只保存本人
   clean OSS asset id，公开 URL 是状态校验后的派生值。
+- 人工认证默认私密；公开 profile 只返回 definition 允许且 grant 明确公开的有效 label/说明/有效期，
+  不返回 issuer、reason、evidence reference 或内部 grant id。
 
 ### Partial
 
@@ -48,6 +50,7 @@
 | 社交关系 | follow、block、mute、subscription | 本人及 policy 允许对象 | block/mute 默认私密、最小暴露 |
 | 私密通信 | DM body、private attachment | participants | staff 仅举报证据、独立 retention |
 | 治理证据 | reports、sanctions、appeals、audit | capability + purpose | 防篡改、访问审计、期限/hold |
+| 认证凭证 | type/grant、签发/撤销原因、opaque evidence reference | `verifications.manage`；允许时为最小公开投影 | 默认私密、可到期/撤销、公开不含证据/操作者 |
 | 运营数据 | job log、metrics、aggregated promo events | operators | 聚合、去标识、有限保留 |
 | 公告 receipt | announcement/revision、seen/dismiss/ack time | 本人、汇总后的公告管理员 | 账号删除级联清除，不记录设备/IP；后台只返回聚合计数 |
 | 积分记录 | ledger、wallet projection | owner/verification policy | ledger 不改写，删除后 tombstone |
@@ -61,6 +64,8 @@
 - Board 声明 `public/campus/staff` 等访问级别；公共讨论不由作者 follow 关系临时改变。
 - Profile、follower/following、new-DM 和 discoverability 已使用独立设置；activity/mention 仍待实现。
 - Block/mute 是关系 policy，不通过前端隐藏代替服务端授权。
+- 人工认证只有在 definition 允许公开、grant 明确 `displayOnProfile`、未撤销且未到期时可见；过期和
+  撤销实时从公开投影消失，不依赖前端缓存隐藏。
 - 搜索、feed、cache、CDN 与 notification 在输出时应用同一可见性规则。
 - 第一阶段默认：profile=`campus`、followers/following=`followers`、DM=`following`、discoverable=on；
   owner 可将 profile/list 改为 public/campus/only_me 等 OpenAPI 声明的值。
@@ -96,12 +101,14 @@ Profile 字段与社交关系不进入普通请求日志、metrics label 或 gov
 4. **Purged**：恢复窗结束后删除可变 PII、未保留私密数据和无引用 media。
 5. **Tombstoned**：保留无法合法改写的最小 ledger/audit/foreign-key identity，不可反查原邮箱。
 
-编排覆盖 identity、forum、reviews、DM、media、activity、search、cache、notifications、audit、credit
+编排覆盖 identity、forum、reviews、DM、media、activity、platform verification、search、cache、notifications、audit、credit
 和 backups。每个 step 幂等、有状态、有重试和人工恢复；删除 API 返回 job/status 而非假装立即完成。
 
 ## 数据导出
 
 - 用户可导出自己的 profile、内容、关系、偏好、通知、允许的 DM 和积分记录。
+- 账号导出应包含本人认证的类型、当前状态、签发/到期/撤销时间；staff reason、issuer 与 evidence
+  reference 属于治理记录，不默认进入用户导出，具体申诉披露按政策处理。
 - 导出生成需要 recent-auth、短期下载 URL、过期和下载审计。
 - 不包含他人私密资料、内部风险分、举报人身份或治理证据；共享对话要最小化第三方信息。
 - 导出格式 machine-readable 并带生成时间、范围和字段说明。
@@ -115,6 +122,7 @@ Profile 字段与社交关系不进入普通请求日志、metrics label 或 gov
 - unreported DM、reported evidence、private attachments；
 - idempotency/outbox/job records；
 - sanctions、appeals、audit 与 access logs；
+- verification grant history、签发/撤销 reason 与证据对象/reference；
 - search query logs、promotion aggregates、activity fine-grained events；
 - backups、OSS versions 和 CDN cache。
 

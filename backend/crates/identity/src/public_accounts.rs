@@ -24,6 +24,13 @@ pub struct PublicAccount {
     pub created_at: DateTime<Utc>,
 }
 
+/// Minimal account state used by other domains for privileged target checks.
+#[derive(Debug, Clone, FromRow)]
+pub struct AccountAuthorizationState {
+    pub role: String,
+    pub status: String,
+}
+
 /// Find an active, non-suspended account by public handle without selecting PII.
 pub async fn find_public_account_by_handle(
     pool: &PgPool,
@@ -147,6 +154,20 @@ pub async fn find_account_role_by_id(
             .fetch_optional(connection)
             .await?;
     Ok(role)
+}
+
+/// Lock and return the role/status needed for a cross-domain privileged mutation.
+pub async fn find_account_authorization_state_by_id(
+    connection: &mut PgConnection,
+    account_id: i64,
+) -> AppResult<Option<AccountAuthorizationState>> {
+    let account = sqlx::query_as::<_, AccountAuthorizationState>(
+        "SELECT role::text, status::text FROM identity.accounts WHERE id = $1 FOR SHARE",
+    )
+    .bind(account_id)
+    .fetch_optional(connection)
+    .await?;
+    Ok(account)
 }
 
 /// Return whether an account may receive a controlled credit reward.

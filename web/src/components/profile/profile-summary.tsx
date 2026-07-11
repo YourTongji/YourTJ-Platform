@@ -16,6 +16,7 @@ import {
 import { Link } from "react-router";
 
 import { TeaBadge } from "@/components/common/tea-badge";
+import { VerificationBadge } from "@/components/common/verification-badge";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -49,6 +50,7 @@ interface ProfileSummaryProps {
   messagePending: boolean;
   canStartConversation: boolean;
   canManageUser: boolean;
+  canManageVerifications: boolean;
   confirmBlockOpen: boolean;
   onConfirmBlockOpenChange: (open: boolean) => void;
   onStartConversation: () => void;
@@ -101,6 +103,7 @@ export function ProfileSummary({
   messagePending,
   canStartConversation,
   canManageUser,
+  canManageVerifications,
   confirmBlockOpen,
   onConfirmBlockOpenChange,
   onStartConversation,
@@ -144,6 +147,13 @@ export function ProfileSummary({
                 <p className="mt-1 text-sm text-muted-foreground">
                   @{profile.handle} · {formatDate(profile.createdAt)} 加入 YourTJ
                 </p>
+                {(profile.verifications ?? []).length > 0 ? (
+                  <div className="mt-2 flex flex-wrap gap-2" aria-label="公开身份与特殊认证">
+                    {(profile.verifications ?? []).map((verification) => (
+                      <VerificationBadge key={verification.slug} verification={verification} />
+                    ))}
+                  </div>
+                ) : null}
               </div>
             </div>
 
@@ -226,6 +236,13 @@ export function ProfileSummary({
                 <Button asChild variant="secondary">
                   <Link to={`/admin?section=users&q=${encodeURIComponent(profile.handle)}`}>
                     <ShieldCheck className="size-4" />用户治理
+                  </Link>
+                </Button>
+              ) : null}
+              {canManageVerifications && !isSelf ? (
+                <Button asChild variant="outline">
+                  <Link to={`/admin?section=verifications&account=${encodeURIComponent(profile.id)}`}>
+                    <ShieldCheck className="size-4" />管理认证
                   </Link>
                 </Button>
               ) : null}

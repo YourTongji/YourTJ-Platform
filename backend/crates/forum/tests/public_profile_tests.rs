@@ -128,6 +128,62 @@ async fn profile_routes_preserve_contract_and_exclude_unavailable_content() {
     .await
     .expect("award profile badge");
 
+    let public_verification_type_id: i64 = sqlx::query_scalar(
+        "INSERT INTO platform.verification_types \
+         (slug, category, label, description, icon, badge_variant, allows_public_display, created_by) \
+         VALUES ('campus-organization', 'identity', '校级组织', '已核实的校级组织账号', \
+                 'building-2', 'default', true, $1) \
+         ON CONFLICT (slug) DO UPDATE SET created_by = EXCLUDED.created_by RETURNING id",
+    )
+    .bind(account_id)
+    .fetch_one(&pool)
+    .await
+    .expect("insert public verification type");
+    sqlx::query(
+        "INSERT INTO platform.verification_grants \
+         (account_id, verification_type_id, display_on_profile, evidence_reference, issue_reason, issued_by) \
+         VALUES ($1, $2, true, 'case:profile-boundary', 'verified organization ownership', $1)",
+    )
+    .bind(account_id)
+    .bind(public_verification_type_id)
+    .execute(&pool)
+    .await
+    .expect("grant public verification");
+
+    let private_verification_type_id: i64 = sqlx::query_scalar(
+        "INSERT INTO platform.verification_types \
+         (slug, category, label, icon, badge_variant, allows_public_display, created_by) \
+         VALUES ('private-check', 'special', '内部核验', 'shield-check', 'outline', false, $1) \
+         ON CONFLICT (slug) DO UPDATE SET created_by = EXCLUDED.created_by RETURNING id",
+    )
+    .bind(account_id)
+    .fetch_one(&pool)
+    .await
+    .expect("insert private verification type");
+    sqlx::query(
+        "INSERT INTO platform.verification_grants \
+         (account_id, verification_type_id, display_on_profile, evidence_reference, issue_reason, issued_by) \
+         VALUES ($1, $2, false, 'case:private-check', 'private verification test', $1)",
+    )
+    .bind(account_id)
+    .bind(private_verification_type_id)
+    .execute(&pool)
+    .await
+    .expect("grant private verification");
+
+    sqlx::query(
+        "INSERT INTO platform.verification_grants \
+         (account_id, verification_type_id, display_on_profile, issue_reason, issued_by, \
+          issued_at, expires_at) \
+         VALUES ($1, $2, true, 'expired verification test', $1, now() - interval '2 hours', \
+                 now() - interval '1 hour')",
+    )
+    .bind(account_id)
+    .bind(public_verification_type_id)
+    .execute(&pool)
+    .await
+    .expect("grant expired verification");
+
     let visible_one =
         insert_thread(&pool, account_id, "Visible one", ThreadVisibility::Visible).await;
     let visible_two =
@@ -157,6 +213,11 @@ async fn profile_routes_preserve_contract_and_exclude_unavailable_content() {
     assert_eq!(profile["commentCount"], 13);
     assert_eq!(profile["votesReceived"], 21);
     assert_eq!(profile["badges"][0]["slug"], "boundary-reader");
+    assert_eq!(profile["verifications"].as_array().expect("public verifications").len(), 1);
+    assert_eq!(profile["verifications"][0]["slug"], "campus-organization");
+    assert!(profile["verifications"][0].get("issuedBy").is_none());
+    assert!(profile["verifications"][0].get("issueReason").is_none());
+    assert!(profile["verifications"][0].get("evidenceReference").is_none());
     assert!(profile.get("email").is_none());
     assert!(profile.get("status").is_none());
 

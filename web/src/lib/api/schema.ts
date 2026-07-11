@@ -7630,6 +7630,194 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/verifications/types": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List staff-managed identity and special verification definitions */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description Opaque pagination cursor */
+                    cursor?: components["parameters"]["Cursor"];
+                    limit?: components["parameters"]["Limit"];
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["VerificationTypePage"];
+                    };
+                };
+                403: components["responses"]["Forbidden"];
+            };
+        };
+        put?: never;
+        /** Create a typed verification definition */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["VerificationTypeInput"];
+                };
+            };
+            responses: {
+                /** @description created */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["VerificationType"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                403: components["responses"]["Forbidden"];
+                409: components["responses"]["Conflict"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/users/{id}/verifications": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List an account's verification grant history */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description Opaque pagination cursor */
+                    cursor?: components["parameters"]["Cursor"];
+                    limit?: components["parameters"]["Limit"];
+                };
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["VerificationGrantPage"];
+                    };
+                };
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+            };
+        };
+        put?: never;
+        /** Grant an identity or special verification to a lower-role account */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["VerificationGrantInput"];
+                };
+            };
+            responses: {
+                /** @description granted */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["VerificationGrant"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+                409: components["responses"]["Conflict"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/verifications/grants/{id}/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Revoke an active verification grant without erasing its history */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["VerificationRevokeInput"];
+                };
+            };
+            responses: {
+                /** @description revoked */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["VerificationGrant"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+                409: components["responses"]["Conflict"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -8686,6 +8874,28 @@ export interface components {
             slug: string;
             name: string;
         };
+        /** @enum {string} */
+        VerificationCategory: "identity" | "special";
+        /**
+         * @description Controlled icon token rendered with the first-party icon library.
+         * @enum {string}
+         */
+        VerificationIcon: "badge-check" | "building-2" | "shield-check" | "sparkles";
+        /**
+         * @description Controlled semantic badge variant; arbitrary CSS and colors are not accepted.
+         * @enum {string}
+         */
+        VerificationBadgeVariant: "default" | "secondary" | "outline";
+        PublicVerification: {
+            slug: string;
+            category: components["schemas"]["VerificationCategory"];
+            label: string;
+            description?: string | null;
+            icon: components["schemas"]["VerificationIcon"];
+            badgeVariant: components["schemas"]["VerificationBadgeVariant"];
+            issuedAt: number;
+            expiresAt?: number | null;
+        };
         UserProfile: {
             id: string;
             handle: string;
@@ -8699,6 +8909,8 @@ export interface components {
             role: "user" | "mod" | "admin";
             trustLevel: number;
             badges: components["schemas"]["UserBadge"][];
+            /** @description Active grants explicitly allowed for public profile display; never contains evidence, issuer, or staff reason. */
+            verifications: components["schemas"]["PublicVerification"][];
             threadCount: number;
             commentCount: number;
             votesReceived: number;
@@ -8930,6 +9142,61 @@ export interface components {
             mintAmount: number;
             reason: string;
         };
+        VerificationType: {
+            id: string;
+            slug: string;
+            category: components["schemas"]["VerificationCategory"];
+            label: string;
+            description?: string | null;
+            icon: components["schemas"]["VerificationIcon"];
+            badgeVariant: components["schemas"]["VerificationBadgeVariant"];
+            allowsPublicDisplay: boolean;
+            createdAt: number;
+        };
+        VerificationTypeInput: {
+            slug: string;
+            category: components["schemas"]["VerificationCategory"];
+            label: string;
+            description?: string | null;
+            icon: components["schemas"]["VerificationIcon"];
+            badgeVariant: components["schemas"]["VerificationBadgeVariant"];
+            /** @default false */
+            allowsPublicDisplay: boolean;
+            reason: string;
+        };
+        VerificationGrant: {
+            id: string;
+            accountId: string;
+            verificationTypeId: string;
+            slug: string;
+            category: components["schemas"]["VerificationCategory"];
+            label: string;
+            icon: components["schemas"]["VerificationIcon"];
+            badgeVariant: components["schemas"]["VerificationBadgeVariant"];
+            displayOnProfile: boolean;
+            /** @enum {string} */
+            status: "active" | "expired" | "revoked";
+            issuedBy: string | null;
+            issuedAt: number;
+            expiresAt?: number | null;
+            issueReason: string;
+            hasEvidence: boolean;
+            revokedBy?: string | null;
+            revokedAt?: number | null;
+            revokeReason?: string | null;
+        };
+        VerificationGrantInput: {
+            verificationTypeId: string;
+            /** @default false */
+            displayOnProfile: boolean;
+            expiresAt?: number | null;
+            /** @description Private opaque pointer to separately governed evidence; never returned by public or staff list responses. */
+            evidenceReference?: string | null;
+            reason: string;
+        };
+        VerificationRevokeInput: {
+            reason: string;
+        };
         FeatureThreadInput: {
             featured: boolean;
             reason: string;
@@ -8952,6 +9219,12 @@ export interface components {
         };
         BadgePage: components["schemas"]["Page"] & {
             items?: components["schemas"]["Badge"][];
+        };
+        VerificationTypePage: components["schemas"]["Page"] & {
+            items?: components["schemas"]["VerificationType"][];
+        };
+        VerificationGrantPage: components["schemas"]["Page"] & {
+            items?: components["schemas"]["VerificationGrant"][];
         };
         ActivityPolicyPage: components["schemas"]["Page"] & {
             items?: components["schemas"]["ActivityPolicy"][];

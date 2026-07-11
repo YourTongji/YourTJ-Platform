@@ -188,6 +188,23 @@ async fn run_migrations(pool: &PgPool) {
             .expect("migration 0039 failed");
     }
 
+    let has_profile_media_usage: bool = sqlx::query_scalar(
+        "SELECT EXISTS( \
+           SELECT 1 FROM information_schema.columns \
+           WHERE table_schema = 'media' AND table_name = 'uploads' \
+             AND column_name = 'usage' \
+         )",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or(false);
+    if !has_profile_media_usage {
+        sqlx::raw_sql(include_str!("../../../../migrations/0040_profile_media_usage.sql"))
+            .execute(pool)
+            .await
+            .expect("migration 0040 failed");
+    }
+
     let has_draft_versions: bool = sqlx::query_scalar(
         "SELECT EXISTS( \
            SELECT 1 FROM information_schema.columns \
@@ -216,6 +233,18 @@ async fn run_migrations(pool: &PgPool) {
             .execute(pool)
             .await
             .expect("migration 0022 failed");
+    }
+
+    let has_verification_credentials: bool =
+        sqlx::query_scalar("SELECT to_regclass('platform.verification_grants') IS NOT NULL")
+            .fetch_one(pool)
+            .await
+            .unwrap_or(false);
+    if !has_verification_credentials {
+        sqlx::raw_sql(include_str!("../../../../migrations/0037_verification_credentials.sql"))
+            .execute(pool)
+            .await
+            .expect("migration 0037 failed");
     }
 
     let has_moderation_state: bool = sqlx::query_scalar(

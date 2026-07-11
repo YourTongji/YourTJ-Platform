@@ -1266,9 +1266,32 @@ components:
       properties:
         slug: { type: string }
         name: { type: string }
+    VerificationCategory:
+      type: string
+      enum: [identity, special]
+    VerificationIcon:
+      type: string
+      description: Controlled icon token rendered with the first-party icon library.
+      enum: [badge-check, building-2, shield-check, sparkles]
+    VerificationBadgeVariant:
+      type: string
+      description: Controlled semantic badge variant; arbitrary CSS and colors are not accepted.
+      enum: [default, secondary, outline]
+    PublicVerification:
+      type: object
+      required: [slug, category, label, icon, badgeVariant, issuedAt]
+      properties:
+        slug: { type: string }
+        category: { $ref: "#/components/schemas/VerificationCategory" }
+        label: { type: string }
+        description: { type: string, nullable: true }
+        icon: { $ref: "#/components/schemas/VerificationIcon" }
+        badgeVariant: { $ref: "#/components/schemas/VerificationBadgeVariant" }
+        issuedAt: { type: integer }
+        expiresAt: { type: integer, nullable: true }
     UserProfile:
       type: object
-      required: [id, handle, displayName, bio, website, avatarUrl, bannerUrl, role, trustLevel, badges, threadCount, commentCount, votesReceived, followerCount, followingCount, createdAt]
+      required: [id, handle, displayName, bio, website, avatarUrl, bannerUrl, role, trustLevel, badges, verifications, threadCount, commentCount, votesReceived, followerCount, followingCount, createdAt]
       properties:
         id: { type: string }
         handle: { type: string }
@@ -1280,6 +1303,10 @@ components:
         role: { type: string, enum: [user, mod, admin] }
         trustLevel: { type: integer, minimum: 0 }
         badges: { type: array, items: { $ref: "#/components/schemas/UserBadge" } }
+        verifications:
+          type: array
+          description: Active grants explicitly allowed for public profile display; never contains evidence, issuer, or staff reason.
+          items: { $ref: "#/components/schemas/PublicVerification" }
         threadCount: { type: integer, minimum: 0 }
         commentCount: { type: integer, minimum: 0 }
         votesReceived: { type: integer, minimum: 0 }
@@ -1541,6 +1568,74 @@ components:
         iconUrl: { type: string, maxLength: 2000 }
         mintAmount: { type: integer, minimum: 0, maximum: 100000, default: 0 }
         reason: { type: string, minLength: 3, maxLength: 500 }
+    VerificationType:
+      type: object
+      required: [id, slug, category, label, icon, badgeVariant, allowsPublicDisplay, createdAt]
+      properties:
+        id: { type: string }
+        slug: { type: string }
+        category: { $ref: "#/components/schemas/VerificationCategory" }
+        label: { type: string }
+        description: { type: string, nullable: true }
+        icon: { $ref: "#/components/schemas/VerificationIcon" }
+        badgeVariant: { $ref: "#/components/schemas/VerificationBadgeVariant" }
+        allowsPublicDisplay: { type: boolean }
+        createdAt: { type: integer }
+    VerificationTypeInput:
+      type: object
+      required: [slug, category, label, icon, badgeVariant, allowsPublicDisplay, reason]
+      additionalProperties: false
+      properties:
+        slug: { type: string, pattern: '^[a-z0-9]+(?:-[a-z0-9]+)*$', minLength: 1, maxLength: 64 }
+        category: { $ref: "#/components/schemas/VerificationCategory" }
+        label: { type: string, minLength: 1, maxLength: 80 }
+        description: { type: string, nullable: true, maxLength: 240 }
+        icon: { $ref: "#/components/schemas/VerificationIcon" }
+        badgeVariant: { $ref: "#/components/schemas/VerificationBadgeVariant" }
+        allowsPublicDisplay: { type: boolean, default: false }
+        reason: { type: string, minLength: 3, maxLength: 500 }
+    VerificationGrant:
+      type: object
+      required: [id, accountId, verificationTypeId, slug, category, label, icon, badgeVariant, displayOnProfile, status, issuedBy, issuedAt, issueReason, hasEvidence]
+      properties:
+        id: { type: string }
+        accountId: { type: string }
+        verificationTypeId: { type: string }
+        slug: { type: string }
+        category: { $ref: "#/components/schemas/VerificationCategory" }
+        label: { type: string }
+        icon: { $ref: "#/components/schemas/VerificationIcon" }
+        badgeVariant: { $ref: "#/components/schemas/VerificationBadgeVariant" }
+        displayOnProfile: { type: boolean }
+        status: { type: string, enum: [active, expired, revoked] }
+        issuedBy: { type: string, nullable: true }
+        issuedAt: { type: integer }
+        expiresAt: { type: integer, nullable: true }
+        issueReason: { type: string }
+        hasEvidence: { type: boolean }
+        revokedBy: { type: string, nullable: true }
+        revokedAt: { type: integer, nullable: true }
+        revokeReason: { type: string, nullable: true }
+    VerificationGrantInput:
+      type: object
+      required: [verificationTypeId, displayOnProfile, reason]
+      additionalProperties: false
+      properties:
+        verificationTypeId: { type: string }
+        displayOnProfile: { type: boolean, default: false }
+        expiresAt: { type: integer, nullable: true }
+        evidenceReference:
+          type: string
+          nullable: true
+          maxLength: 128
+          description: Private opaque pointer to separately governed evidence; never returned by public or staff list responses.
+        reason: { type: string, minLength: 3, maxLength: 500 }
+    VerificationRevokeInput:
+      type: object
+      required: [reason]
+      additionalProperties: false
+      properties:
+        reason: { type: string, minLength: 3, maxLength: 500 }
     FeatureThreadInput:
       type: object
       required: [featured, reason]
@@ -1573,6 +1668,14 @@ components:
       allOf:
         - $ref: "#/components/schemas/Page"
         - { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/Badge" } } } }
+    VerificationTypePage:
+      allOf:
+        - $ref: "#/components/schemas/Page"
+        - { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/VerificationType" } } } }
+    VerificationGrantPage:
+      allOf:
+        - $ref: "#/components/schemas/Page"
+        - { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/VerificationGrant" } } } }
     ActivityPolicyPage:
       allOf:
         - $ref: "#/components/schemas/Page"
@@ -2905,3 +3008,55 @@ paths:
   /admin/platform/badges:
     get: { tags: [admin], summary: List all badges, responses: { "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Badge" } } } } } } }
     post: { tags: [admin], summary: Create a badge, requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/BadgeInput" } } } }, responses: { "201": { description: created, content: { application/json: { schema: { $ref: "#/components/schemas/Badge" } } } } } }
+  /admin/verifications/types:
+    get:
+      tags: [admin, platform]
+      summary: List staff-managed identity and special verification definitions
+      parameters: [{ $ref: "#/components/parameters/Cursor" }, { $ref: "#/components/parameters/Limit" }]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/VerificationTypePage" } } } }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      tags: [admin, platform]
+      summary: Create a typed verification definition
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/VerificationTypeInput" } } } }
+      responses:
+        "201": { description: created, content: { application/json: { schema: { $ref: "#/components/schemas/VerificationType" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /admin/users/{id}/verifications:
+    get:
+      tags: [admin, platform]
+      summary: List an account's verification grant history
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { $ref: "#/components/parameters/Cursor" }
+        - { $ref: "#/components/parameters/Limit" }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/VerificationGrantPage" } } } }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      tags: [admin, platform]
+      summary: Grant an identity or special verification to a lower-role account
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/VerificationGrantInput" } } } }
+      responses:
+        "201": { description: granted, content: { application/json: { schema: { $ref: "#/components/schemas/VerificationGrant" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /admin/verifications/grants/{id}/revoke:
+    post:
+      tags: [admin, platform]
+      summary: Revoke an active verification grant without erasing its history
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/VerificationRevokeInput" } } } }
+      responses:
+        "200": { description: revoked, content: { application/json: { schema: { $ref: "#/components/schemas/VerificationGrant" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }

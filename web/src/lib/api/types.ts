@@ -102,6 +102,14 @@ export type ProfilePrivacy = Schema["ProfilePrivacy"];
 export type Upload = Schema["Upload"];
 export type UploadCredentials = Schema["UploadCredentials"];
 export type UploadUrl = Schema["UploadUrl"];
+export type PublicVerification = Schema["PublicVerification"];
+export type VerificationCategory = Schema["VerificationCategory"];
+export type VerificationIcon = Schema["VerificationIcon"];
+export type VerificationBadgeVariant = Schema["VerificationBadgeVariant"];
+export type VerificationType = Schema["VerificationType"];
+export type VerificationTypeInput = Schema["VerificationTypeInput"];
+export type VerificationGrant = Schema["VerificationGrant"];
+export type VerificationGrantInput = Schema["VerificationGrantInput"];
 export type WatchedWord = Schema["WatchedWord"];
 export interface WatchedWordInput {
   word: string;

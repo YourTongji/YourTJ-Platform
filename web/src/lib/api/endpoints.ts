@@ -72,6 +72,10 @@ import type {
   Upload,
   UploadCredentials,
   UploadUrl,
+  VerificationGrant,
+  VerificationGrantInput,
+  VerificationType,
+  VerificationTypeInput,
   IgnoreUser,
   MyProfile,
   MyUpload,
@@ -1033,6 +1037,37 @@ export const api = {
       method: "PUT",
       body,
     });
+  },
+
+  adminVerificationTypes(cursor?: string | null) {
+    return apiRequest<Page<VerificationType>>("/admin/verifications/types", {
+      query: { cursor, limit: 50 },
+    });
+  },
+
+  createAdminVerificationType(body: VerificationTypeInput) {
+    return apiRequest<VerificationType>("/admin/verifications/types", { method: "POST", body });
+  },
+
+  adminUserVerifications(accountId: string, cursor?: string | null) {
+    return apiRequest<Page<VerificationGrant>>(
+      `/admin/users/${encodeURIComponent(accountId)}/verifications`,
+      { query: { cursor, limit: 50 } },
+    );
+  },
+
+  grantAdminUserVerification(accountId: string, body: VerificationGrantInput) {
+    return apiRequest<VerificationGrant>(
+      `/admin/users/${encodeURIComponent(accountId)}/verifications`,
+      { method: "POST", body },
+    );
+  },
+
+  revokeAdminUserVerification(grantId: string, reason: string) {
+    return apiRequest<VerificationGrant>(
+      `/admin/verifications/grants/${encodeURIComponent(grantId)}/revoke`,
+      { method: "POST", body: { reason } },
+    );
   },
 
   adminAnnouncements(cursor?: string | null) {

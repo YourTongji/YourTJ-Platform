@@ -56,6 +56,8 @@ export function AdminStatusBadge({ value }: { value?: string | null }) {
     user: "用户",
     mod: "版主",
     admin: "管理员",
+    expired: "已到期",
+    revoked: "已撤销",
   };
   const normalized = value ?? "unknown";
   const isRisk = ["suspended", "deleted", "hidden", "upheld", "suspend", "blocked", "block"].includes(normalized);

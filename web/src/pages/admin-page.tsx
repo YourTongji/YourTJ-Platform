@@ -1,5 +1,6 @@
 import {
   Activity,
+  BadgeCheck,
   FileClock,
   LayoutDashboard,
   Megaphone,
@@ -27,15 +28,16 @@ import { PromotionsPanel } from "@/components/admin/promotions-panel";
 import { ResourcesPanel } from "@/components/admin/resources-panel";
 import { SystemPanel } from "@/components/admin/system-panel";
 import { UsersPanel } from "@/components/admin/users-panel";
+import { VerificationsPanel } from "@/components/admin/verifications-panel";
 import { PageHeader } from "@/components/common/page-header";
 import { EmptyState, LoadingState } from "@/components/common/states";
 import { Badge } from "@/components/ui/badge";
 import { useAuth } from "@/context/auth-provider";
 
-type AdminSection = "overview" | "users" | "moderation" | "resources" | "activity" | "announcements" | "promotions" | "audit" | "system";
+type AdminSection = "overview" | "users" | "moderation" | "resources" | "activity" | "announcements" | "promotions" | "verifications" | "audit" | "system";
 
 function isAdminSection(value: string | null): value is AdminSection {
-  return ["overview", "users", "moderation", "resources", "activity", "announcements", "promotions", "audit", "system"].includes(value ?? "");
+  return ["overview", "users", "moderation", "resources", "activity", "announcements", "promotions", "verifications", "audit", "system"].includes(value ?? "");
 }
 
 export function AdminPage() {
@@ -56,6 +58,7 @@ export function AdminPage() {
   const canManageActivity = hasCapability(capabilities, ADMIN_CAPABILITIES.manageActivity);
   const canManageAnnouncements = hasCapability(capabilities, ADMIN_CAPABILITIES.manageAnnouncements);
   const canManagePromotions = hasCapability(capabilities, ADMIN_CAPABILITIES.managePromotions);
+  const canManageVerifications = hasCapability(capabilities, ADMIN_CAPABILITIES.manageVerifications);
   const canReadAudit = hasCapability(capabilities, ADMIN_CAPABILITIES.readAudit);
   const canManageSettings = hasCapability(capabilities, ADMIN_CAPABILITIES.managePlatform);
   const canRunJobs = hasCapability(capabilities, ADMIN_CAPABILITIES.runOperations);
@@ -72,10 +75,11 @@ export function AdminPage() {
     if (canManageActivity) next.push({ id: "activity", label: "活跃度", description: "权重策略与版本", icon: Activity });
     if (canManageAnnouncements) next.push({ id: "announcements", label: "公告", description: "发布与修订", icon: Megaphone });
     if (canManagePromotions) next.push({ id: "promotions", label: "推广", description: "素材、排期与排序", icon: RectangleHorizontal });
+    if (canManageVerifications) next.push({ id: "verifications", label: "认证", description: "身份与特殊标识", icon: BadgeCheck });
     if (canReadAudit) next.push({ id: "audit", label: "审计", description: "不可变治理事件", icon: FileClock });
     if (canManageSettings || canRunJobs) next.push({ id: "system", label: "平台", description: "设置与运维任务", icon: Settings2 });
     return next;
-  }, [canManageActivity, canManageAnnouncements, canManagePromotions, canManageResources, canManageSettings, canManageUsers, canModerate, canReadAudit, canRunJobs, canSearchUsers]);
+  }, [canManageActivity, canManageAnnouncements, canManagePromotions, canManageResources, canManageSettings, canManageUsers, canManageVerifications, canModerate, canReadAudit, canRunJobs, canSearchUsers]);
 
   React.useEffect(() => {
     const requested = searchParams.get("section");
@@ -124,6 +128,9 @@ export function AdminPage() {
       break;
     case "promotions":
       panel = <PromotionsPanel />;
+      break;
+    case "verifications":
+      panel = <VerificationsPanel initialAccountId={searchParams.get("account") ?? ""} />;
       break;
     case "audit":
       panel = <AuditPanel />;

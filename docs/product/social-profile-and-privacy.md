@@ -20,6 +20,8 @@
 - Web 资料设置已接 profile-specific OSS 上传、owner-only 状态恢复与轮询；待审和未通过资产只向 owner
   展示状态，通过审核后才出现绑定操作，当前头像/封面可解除绑定。
 - 资料响应包含受控媒体派生 URL、角色、信任等级、徽章、主题/回复/获赞与准确 followers/following 计数。
+- 公开资料把成就徽章、实时角色标识与人工身份/特殊认证分开；人工认证只返回仍有效、类型允许公开且
+  grant 明确 `displayOnProfile` 的 label/说明/受控图标/有效期，不返回签发人、原因或证据引用。
 - Forum 持有公开单向 follow、私密单向 mute 和双向安全边界 block；follow/unfollow/mute/block 都幂等，
   relationship API 一次返回页面操作所需状态。
 - followers/following 使用稳定游标，读取时过滤 suspended/deleted、viewer block 和第三方
@@ -122,13 +124,22 @@ followers-only 内容，应建立独立内容类型和授权模型。
 - **身份认证**：证明组织、官方账号或经核实身份，有签发、到期、撤销、证据和审计。
 - **角色标识**：说明 moderator/admin 的当前平台职责，不作为成就或身份认证。
 
-特殊认证应记录 type、issuer、issued/expiry/revoked time、reason、display priority 和私有证据引用。
-前台只展示允许公开的 label；后台提供创建、授予、撤销和历史，不允许通过通用 string setting 伪造。
+人工认证由 `platform` owner 管理 typed definition 和 grant history。Definition 区分 `identity` 与
+`special`，图标和 Badge variant 只能使用受控枚举；不接受 SVG、HTML、CSS 或外链素材。Grant 默认
+私密，记录 issuer、issued/expiry/revoked time、签发/撤销 reason 与可选 opaque evidence reference。
+同一账号同一类型同时最多一个有效 grant；到期或撤销后可以重新签发，历史不覆盖。
+
+公开投影同时要求 definition 允许公开、grant 明确 `displayOnProfile`、未撤销且未到期。公开 DTO 只含
+类型、label、普通文本说明、受控图标/样式和 issued/expiry time；issuer、reason、evidence 与内部 grant id
+不进入公开 profile 或公共列表。后台按独立 `verifications.manage` capability 创建类型、授予、查看历史和
+撤销，所有 mutation 要求 reason 并与 governance audit 同事务提交。Self、同级和更高角色目标被拒绝。
 
 ## API 与数据所有权
 
 Forum 拥有 follow/block/mute 与计数投影；Identity 拥有账号、owner-editable profile 和 privacy policy；
-Media 验证 owner+clean image 后调用 Identity 的受限 asset binding API。HTTP shape 以 OpenAPI 为准。
+Media 验证 owner+clean image 后调用 Identity 的受限 asset binding API；Platform 拥有人工认证定义与
+授予历史。Forum 公开资料通过 Platform public API 获取最小公开认证投影，不跨 schema SQL。HTTP shape
+以 OpenAPI 为准。
 
 头像和 banner 只保存 clean media asset reference。服务端生成可用 URL，客户端不得提交任意
 第三方 URL 作为权威字段。上传 intent 会持久化可选的 `profile_avatar/profile_banner` usage，使待审
@@ -151,4 +162,5 @@ Media 验证 owner+clean image 后调用 Identity 的受限 asset binding API。
 - 隐私设置对匿名、校园成员、关系用户、本人和 staff 有矩阵化授权测试。
 - 所有公开 profile 响应不含邮箱或内部治理字段，媒体来自平台 asset。
 - profile 上传刷新后仍能恢复待审/通过/未通过状态；待审或未通过资产没有可用绑定按钮，服务端也拒绝绑定。
-- 成就、认证和角色标识可以独立授予/撤销并留下审计。
+- 成就、认证和角色标识有独立 DTO、视觉语义和权限来源；认证授予/撤销留下同事务审计。
+- 私密、已撤销、已到期或 definition 禁止公开的认证不会出现在任何公开资料响应。

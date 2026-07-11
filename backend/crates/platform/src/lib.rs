@@ -1,4 +1,4 @@
-//! Platform-owned announcements, promotions, and runtime settings.
+//! Platform-owned announcements, promotions, staff-issued verifications, and runtime settings.
 //!
 //! Announcements and promotions remain first-party platform content. Privileged writes require a
 //! named capability, an audit reason, optimistic concurrency, and an audit event in the same
@@ -9,6 +9,7 @@ mod auth;
 mod promotions;
 mod settings;
 mod validation;
+pub mod verifications;
 
 use axum::Router;
 use shared::AppState;
@@ -19,5 +20,6 @@ pub fn routes(state: AppState) -> Router {
         .merge(announcements::routes())
         .merge(promotions::routes())
         .merge(settings::routes())
+        .merge(verifications::routes())
         .with_state(state)
 }

@@ -24,13 +24,15 @@
 - board 后台可配置说明、排序、锁定、最低发帖信任等级和问答属性；公开 board DTO 返回当前用户
   是否可发帖及稳定 restriction code。
 - governance audit 记录多域 staff/system 事件；论坛自动隐藏与 staff 隐藏有不同 provenance。
+- 人工身份/特殊认证由 platform typed definition 与可过期/可撤销 grant 独立建模；后台使用专属
+  `verifications.manage` 创建、授予、查看历史和撤销，reason/audit 与 mutation 同事务。
 
 ### Partial
 
 - “手动注册”只有安全的邀请流程，没有管理员设置明文密码或跳过邮箱验证；这是有意边界。
 - 缺账号停用/删除/恢复/purge、当事人通知、申诉和独立复核。
 - generic settings 只有 string key/value；job trigger 无 durable 状态、进度、失败日志或重试。
-- 成就徽章后端存在但管理 UI 不完整；认证/特殊徽章尚未建模。
+- 成就徽章后端存在但定义、人工授予与撤销 UI 仍不完整；它不复用已经闭环的身份/特殊认证后台。
 - 推广的曝光/点击聚合、公告 receipt 保留策略、批量审核、只读积分完整性与服务健康视图缺失。
 - 高风险角色/永久封禁/PII 操作没有 recent-auth 或双人确认。
 
@@ -165,7 +167,8 @@ sanction、trust-level rate limit 和 watched words，尚未接入同一 captcha
 | Media | scan/flag queue、approve/block、asset lookup | `moderation.content` |
 | Community | boards、tags、watched words | `community.manage` |
 | Promotions | placement、clean asset、站内目标、排期、受众、状态 | `promotions.manage` |
-| Badges | 成就定义、授予/撤销；认证签发/撤销 | 独立 badge/verification capabilities |
+| Badges | 成就定义、规则与人工例外 | 后续独立 achievement capability；不可复用认证权限 |
+| Verifications | typed 身份/特殊认证定义、授予历史、到期与撤销 | `verifications.manage` |
 | Announcements | draft、排期、发布、revision、receipt summary | `announcements.manage` |
 | Policies | 社区规则、隐私政策、条款的 draft/review/publish/version/acceptance | 独立 `policies.manage` |
 | Activity | 当前权重、预览、版本历史、发布 | `activity.policy` |
@@ -197,7 +200,10 @@ draft/review/published/retired、effective time、owner/approver、diff、适用
 - 推广只使用 clean asset、受控 URL、排期和 audience；第一阶段限定自营信息。
 - 公告修改保留 revision；删除改为 archive，强制确认由 requires-ack policy 控制。
 - 成就徽章的自动规则、人工授予和撤销都审计。
-- 身份认证证据为私有治理数据；公开只展示 type/label/有效期允许部分。
+- 身份/特殊认证默认私密；只有 definition 允许且 grant 明确公开的有效认证进入 profile。公开不含
+  issuer、reason、evidence；图标/样式来自受控 enum，不接受任意素材或 CSS。
+- 认证 evidence 字段只保存 opaque internal reference，后台列表只显示是否存在引用，不回显原始引用；
+  实际证据仍需独立 purpose-limited store、访问审计和 retention policy。
 - 角色标识来自实时权限，不通过徽章永久复制。
 
 ## Decision needed
@@ -206,7 +212,8 @@ draft/review/published/retired、effective time、owner/approver、diff、适用
 - 高风险操作使用密码重验、recent-auth challenge 还是双重审批。
 - Staff MFA/WebAuthn、recovery code、break-glass 与最终管理员恢复流程。
 - 推广位是否允许商业内容，以及后续广告合规/计费边界。
-- 认证类型、证据要求、到期与公开展示政策。
+- 各具体认证类型的证据标准、默认有效期、复核周期和证据存储/保留政策；通用 typed grant 与默认私密
+  展示边界已经确定，不再通过 string setting 临时配置。
 - appeal reviewer 分配、SLA、举报证据和治理审计保留期。
 
 ## 验收基线
@@ -217,3 +224,5 @@ draft/review/published/retired、effective time、owner/approver、diff、适用
 - Staff 无任意 DM/PII 浏览能力，敏感 evidence read 本身被审计。
 - 管理 UI 不伪造任务完成、媒体状态、公告确认或 credit 完整性。
 - 用户、内容、媒体、推广、公告、徽章和任务的核心状态机都有可恢复路径和验收旅程。
+- 认证后台缺 capability、self/equal/higher target、非法展示、重复有效 grant、过期/重复撤销与非法
+  evidence reference 均有 handler→PostgreSQL 负向测试。

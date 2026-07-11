@@ -117,6 +117,9 @@ Fresh database 必须只通过 sqlx migration ledger 建立。普通启动、CI 
   block 在任意方向阻止 follow/DM/回复/投票并删除双方 follow，解除时不恢复。
 - 新 PII migration 同时更新[隐私与数据生命周期](../security/privacy-and-data-lifecycle.md)。
 - Staff write 记录 actor kind/id/role、action、target、reason、result 和 correlation；metadata 最小化。
+- 人工认证由 platform 持有 typed definition 与可到期/撤销 grant；forum 公开 profile 只调用其 public
+  projection API。公开条件在 PostgreSQL 查询边界同时检查 type policy、grant opt-in、expiry 与 revoke，
+  不把 issuer、reason、evidence reference 或 internal grant id 复制到 profile DTO。
 - Secrets、code、token、signature-as-credential、raw email、完整请求 body 和任意 DM 不进入日志/审计。
 - Evidence read 本身是敏感动作，需要 capability、purpose 和 audit。
 - DM archive、mute 和 delete 是 `dm_participants` 上的 participant-local 状态；不能改写另一参与者的

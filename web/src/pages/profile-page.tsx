@@ -133,6 +133,10 @@ export function ProfilePage() {
   const contentHidden = Boolean(
     socialRelationship.data?.blockedByMe || socialRelationship.data?.blockedMe,
   );
+  const canManageVerifications = hasCapability(
+    capabilities,
+    ADMIN_CAPABILITIES.manageVerifications,
+  ) && account?.role === "admin" && profile.data.role !== "admin";
 
   return (
     <div className="space-y-5">
@@ -152,6 +156,7 @@ export function ProfilePage() {
         messagePending={startConversation.isPending}
         canStartConversation={(account?.trustLevel ?? 0) >= 1 && Boolean(socialRelationship.data?.canStartConversation)}
         canManageUser={canManageUser}
+        canManageVerifications={canManageVerifications}
         confirmBlockOpen={confirmBlockOpen}
         onConfirmBlockOpenChange={setConfirmBlockOpen}
         onStartConversation={() => startConversation.mutate()}

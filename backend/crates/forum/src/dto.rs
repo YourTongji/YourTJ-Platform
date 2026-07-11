@@ -536,6 +536,7 @@ pub struct UserProfileDto {
     pub role: String,
     pub trust_level: i16,
     pub badges: Vec<UserBadgeDto>,
+    pub verifications: Vec<platform::verifications::PublicVerificationDto>,
     pub thread_count: i32,
     pub comment_count: i32,
     pub votes_received: i32,
