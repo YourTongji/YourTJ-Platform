@@ -454,6 +454,14 @@ async fn test_get_thread_not_found() {
 async fn test_get_thread_returns_detail() {
     let (pool, app) = create_test_app().await;
     let (author_id, _token) = create_test_account(&pool, "bob@tongji.edu.cn", "bob").await;
+    sqlx::query(
+        "INSERT INTO identity.profiles (account_id, display_name) VALUES ($1, 'Bob Chen') \
+         ON CONFLICT (account_id) DO UPDATE SET display_name = EXCLUDED.display_name",
+    )
+    .bind(author_id)
+    .execute(&pool)
+    .await
+    .expect("set author display name");
     let thread_id = seed_thread(&pool, author_id, "Bob's Thread", Some("Hello world")).await;
 
     let resp = app
@@ -472,6 +480,7 @@ async fn test_get_thread_returns_detail() {
     assert_eq!(body["title"], "Bob's Thread");
     assert_eq!(body["body"], "Hello world");
     assert_eq!(body["authorHandle"], "bob");
+    assert_eq!(body["authorDisplayName"], "Bob Chen");
     assert_eq!(body["id"], thread_id.to_string());
 }
 

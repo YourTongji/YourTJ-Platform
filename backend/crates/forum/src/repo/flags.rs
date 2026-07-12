@@ -248,6 +248,7 @@ pub async fn list_flag_queue(
                 flag.reason, flag.note, flag.weight, flag.status, flag.handled_by, \
                 flag.handled_at, flag.auto_hidden_at, flag.resolution_note, flag.created_at, \
                 target_author.handle AS author_handle, \
+                p.display_name AS author_display_name, \
                 CASE WHEN flag.target_type = 'thread' \
                      THEN target_thread.title ELSE comment_thread.title END AS target_title, \
                 LEFT(CASE WHEN flag.target_type = 'thread' \
@@ -261,6 +262,7 @@ pub async fn list_flag_queue(
          LEFT JOIN forum.threads comment_thread ON comment_thread.id = target_comment.thread_id \
          LEFT JOIN identity.accounts target_author \
            ON target_author.id = COALESCE(target_thread.author_id, target_comment.author_id) \
+         LEFT JOIN identity.profiles p ON p.account_id = target_author.id \
          WHERE ($1 = 'all' OR flag.status = $1) AND flag.id < $2 \
          ORDER BY flag.id DESC LIMIT $3",
     )

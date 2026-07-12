@@ -65,6 +65,7 @@ pub struct ThreadRowJoined {
     pub created_at: DateTime<Utc>,
     pub last_activity_at: DateTime<Utc>,
     pub author_handle: String,
+    pub author_display_name: Option<String>,
 }
 
 /// A thread row joined with author handle, including all F1 state-machine columns.
@@ -94,6 +95,7 @@ pub struct ThreadRowJoinedFull {
     pub last_activity_at: DateTime<Utc>,
     pub solved_answer_id: Option<i64>,
     pub author_handle: String,
+    pub author_display_name: Option<String>,
 }
 
 /// A joined row from `forum.comments` + `identity.accounts` (via author_id).
@@ -113,6 +115,7 @@ pub struct CommentRowJoined {
     pub edited_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub author_handle: String,
+    pub author_display_name: Option<String>,
     pub quoted_comment_id: Option<i64>,
 }
 
@@ -152,6 +155,7 @@ pub struct FlagQueueRow {
     pub resolution_note: Option<String>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub author_handle: Option<String>,
+    pub author_display_name: Option<String>,
     pub target_title: Option<String>,
     pub content_excerpt: Option<String>,
 }
@@ -258,6 +262,7 @@ pub struct DmMessageRow {
     pub conversation_id: i64,
     pub sender_id: i64,
     pub sender_handle: String,
+    pub sender_display_name: Option<String>,
     pub body: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
@@ -268,6 +273,7 @@ pub struct DmConversationListRow {
     pub id: i64,
     pub other_account_id: i64,
     pub other_handle: String,
+    pub other_display_name: Option<String>,
     pub other_avatar_url: Option<String>,
     pub last_message_excerpt: Option<String>,
     pub last_message_at: chrono::DateTime<chrono::Utc>,
@@ -289,8 +295,10 @@ pub struct DmMessageReportRow {
     pub conversation_id: i64,
     pub reported_by: i64,
     pub reporter_handle: String,
+    pub reporter_display_name: Option<String>,
     pub sender_id: i64,
     pub sender_handle: String,
+    pub sender_display_name: Option<String>,
     pub message_excerpt: String,
     pub reason: String,
     pub note: Option<String>,

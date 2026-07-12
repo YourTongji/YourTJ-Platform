@@ -54,6 +54,15 @@ async fn following_feed_enforces_relationship_visibility_and_stable_viewer_aware
         create_test_account(&pool, "suspended-author@tongji.edu.cn", "suspended-author").await;
 
     sqlx::query(
+        "INSERT INTO identity.profiles (account_id, display_name) VALUES ($1, 'Following Author') \
+         ON CONFLICT (account_id) DO UPDATE SET display_name = EXCLUDED.display_name",
+    )
+    .bind(followed_id)
+    .execute(&pool)
+    .await
+    .expect("set followed author display name");
+
+    sqlx::query(
         "INSERT INTO forum.user_follows (follower_id, followed_id) \
          VALUES ($1, $2), ($1, $3), ($1, $4), ($1, $5)",
     )
@@ -157,6 +166,8 @@ async fn following_feed_enforces_relationship_visibility_and_stable_viewer_aware
     let first_page = read_json(first_page).await;
     assert_eq!(first_page["items"].as_array().expect("items").len(), 1);
     assert_eq!(first_page["items"][0]["id"], newest_id.to_string());
+    assert_eq!(first_page["items"][0]["authorHandle"], "following-author");
+    assert_eq!(first_page["items"][0]["authorDisplayName"], "Following Author");
     assert_eq!(first_page["items"][0]["bodyExcerpt"], "Canonical following excerpt");
     assert_eq!(first_page["items"][0]["viewerVote"], "up");
     assert_eq!(first_page["items"][0]["isBookmarked"], true);

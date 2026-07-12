@@ -146,9 +146,10 @@ export function ConversationThread({
                 to={`/profile/${encodeURIComponent(conversation.participantHandle)}`}
                 className="block truncate text-sm font-semibold outline-none hover:underline focus-visible:ring-[3px] focus-visible:ring-ring/50"
               >
-                {conversation.participantHandle}
+                {conversation.participantDisplayName ?? `@${conversation.participantHandle}`}
               </Link>
               <p className="text-xs text-muted-foreground">
+                {conversation.participantDisplayName ? `@${conversation.participantHandle} · ` : null}
                 {isIncomingRequest ? "收到的消息请求" : isOutgoingRequest ? "已发送的消息请求" : "一对一私信"}
               </p>
             </div>
@@ -222,7 +223,12 @@ export function ConversationThread({
                   <li key={message.id} className={cn("group flex", isMine ? "justify-end" : "justify-start")}>
                     <div className={cn("max-w-[85%] sm:max-w-[72%]", isMine && "text-right")}>
                       <div className="mb-1 flex items-center gap-2 text-[11px] text-muted-foreground">
-                        {!isMine ? <span className="font-medium">{message.senderHandle}</span> : null}
+                        {!isMine ? (
+                          <span className="font-medium">
+                            {message.senderDisplayName ?? `@${message.senderHandle}`}
+                            {message.senderDisplayName ? ` · @${message.senderHandle}` : null}
+                          </span>
+                        ) : null}
                         <time dateTime={new Date(message.createdAt * 1000).toISOString()}>
                           {formatUnixTime(message.createdAt)}
                         </time>

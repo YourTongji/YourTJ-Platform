@@ -60,7 +60,12 @@ function CommentCard({ comment, threadId }: { comment: Comment; threadId: string
       <CardContent className="p-4">
         <div className="flex items-start justify-between gap-3">
           <div className="flex flex-wrap items-center gap-2 text-sm">
-            <span className="font-medium">{comment.authorHandle}</span>
+            <span className="font-medium">
+              {comment.authorDisplayName ?? `@${comment.authorHandle}`}
+            </span>
+            {comment.authorDisplayName ? (
+              <span className="text-muted-foreground">@{comment.authorHandle}</span>
+            ) : null}
             <span className="text-muted-foreground">{formatUnixTime(comment.createdAt)}</span>
             {comment.isHidden ? <Badge variant="outline">已隐藏</Badge> : null}
             {comment.isDeleted ? <Badge variant="outline">已删除</Badge> : null}
@@ -340,7 +345,7 @@ export function ThreadDetailPage() {
       <PageHeader
         eyebrow={board?.name ?? "Forum"}
         title={item.title ?? "帖子详情"}
-        description={`${item.authorHandle} · ${formatUnixTime(item.createdAt)}`}
+        description={`${item.authorDisplayName ? `${item.authorDisplayName} · @${item.authorHandle}` : `@${item.authorHandle}`} · ${formatUnixTime(item.createdAt)}`}
         actions={
           <>
             <Select value={item.mySubscriptionLevel ?? "none"} onValueChange={(value) => subscribe.mutate(value)}>

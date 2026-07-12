@@ -17,6 +17,9 @@
 
 - Identity 持有 display name、bio、HTTPS website、clean OSS avatar/banner asset reference 和独立
   profile/list/discoverability/DM policy；任意头像 URL 已停止写入并在 migration 中清除。
+- Forum 的主题、评论、私信会话/消息及治理举报投影同时返回可选 display name 与不可变 canonical
+  handle；Web 在存在 display name 时仍展示 `@handle` 以消歧，缺失时直接展示 `@handle`。关注流的
+  候选过滤继续复用 Identity public account projection，并完整传递其 display name。
 - Web 资料设置已接 profile-specific OSS 上传、owner-only 状态恢复与轮询；待审和未通过资产只向 owner
   展示状态，通过审核后才出现绑定操作，当前头像/封面可解除绑定。
 - 资料响应包含受控媒体派生 URL、角色、信任等级、徽章、主题/回复/获赞与准确 followers/following 计数。

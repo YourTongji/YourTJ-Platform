@@ -490,6 +490,7 @@ pub async fn get_conversation(
         "SELECT conversation.id, \
                 other_account.id AS other_account_id, \
                 other_account.handle::text AS other_handle, \
+                other_profile.display_name AS other_display_name, \
                 other_account.avatar_url AS other_avatar_url, \
                 LEFT(last_message.body, 160) AS last_message_excerpt, \
                 COALESCE(last_message.created_at, conversation.created_at) AS last_message_at, \
@@ -518,6 +519,7 @@ pub async fn get_conversation(
            ON other_participant.conversation_id = conversation.id \
           AND other_participant.account_id <> $2 \
          JOIN identity.accounts AS other_account ON other_account.id = other_participant.account_id \
+         LEFT JOIN identity.profiles AS other_profile ON other_profile.account_id = other_account.id \
          LEFT JOIN LATERAL ( \
            SELECT message.body, message.created_at \
            FROM forum.dm_messages AS message \
@@ -570,6 +572,7 @@ pub async fn list_conversations(
         "SELECT conversation.id, \
                 other_account.id AS other_account_id, \
                 other_account.handle::text AS other_handle, \
+                other_profile.display_name AS other_display_name, \
                 other_account.avatar_url AS other_avatar_url, \
                 LEFT(last_message.body, 160) AS last_message_excerpt, \
                 COALESCE(last_message.created_at, conversation.created_at) AS last_message_at, \
@@ -607,6 +610,8 @@ pub async fn list_conversations(
     builder.push_bind(account_id).push(
         " JOIN identity.accounts AS other_account \
            ON other_account.id = other_participant.account_id \
+         LEFT JOIN identity.profiles AS other_profile \
+           ON other_profile.account_id = other_account.id \
          LEFT JOIN LATERAL ( \
            SELECT message.body, message.created_at \
            FROM forum.dm_messages AS message \
@@ -955,9 +960,12 @@ pub async fn list_messages(
     let rows = if let Some(cursor_id) = cursor {
         sqlx::query_as::<_, DmMessageRow>(
             "SELECT message.id, message.conversation_id, message.sender_id, \
-                    account.handle::text AS sender_handle, message.body, message.created_at \
+                    account.handle::text AS sender_handle, \
+                    sp.display_name AS sender_display_name, \
+                    message.body, message.created_at \
              FROM forum.dm_messages AS message \
              JOIN identity.accounts AS account ON account.id = message.sender_id \
+             LEFT JOIN identity.profiles AS sp ON sp.account_id = account.id \
              WHERE message.conversation_id = $1 AND message.id < $2 \
              ORDER BY message.id DESC \
              LIMIT $3",
@@ -970,9 +978,12 @@ pub async fn list_messages(
     } else {
         sqlx::query_as::<_, DmMessageRow>(
             "SELECT message.id, message.conversation_id, message.sender_id, \
-                    account.handle::text AS sender_handle, message.body, message.created_at \
+                    account.handle::text AS sender_handle, \
+                    sp.display_name AS sender_display_name, \
+                    message.body, message.created_at \
              FROM forum.dm_messages AS message \
              JOIN identity.accounts AS account ON account.id = message.sender_id \
+             LEFT JOIN identity.profiles AS sp ON sp.account_id = account.id \
              WHERE message.conversation_id = $1 \
              ORDER BY message.id DESC \
              LIMIT $2",
@@ -1364,14 +1375,18 @@ pub async fn list_message_reports(
     let rows = sqlx::query_as::<_, DmMessageReportRow>(
         "SELECT report.id, report.message_id, report.conversation_id, report.reported_by, \
                 reporter.handle::text AS reporter_handle, \
+                rp.display_name AS reporter_display_name, \
                 message.sender_id, sender.handle::text AS sender_handle, \
+                sp.display_name AS sender_display_name, \
                 LEFT(message.body, 1000) AS message_excerpt, \
                 report.reason, report.note, report.status, \
                 report.handled_by, report.handled_at, report.created_at \
          FROM forum.dm_message_reports AS report \
          JOIN forum.dm_messages AS message ON message.id = report.message_id \
          JOIN identity.accounts AS reporter ON reporter.id = report.reported_by \
+         LEFT JOIN identity.profiles AS rp ON rp.account_id = reporter.id \
          JOIN identity.accounts AS sender ON sender.id = message.sender_id \
+         LEFT JOIN identity.profiles AS sp ON sp.account_id = sender.id \
          WHERE report.status = $1 AND report.id < $2 \
          ORDER BY report.id DESC \
          LIMIT $3",
@@ -1462,14 +1477,18 @@ pub async fn resolve_message_report(
     let row = sqlx::query_as::<_, DmMessageReportRow>(
         "SELECT report.id, report.message_id, report.conversation_id, report.reported_by, \
                 reporter.handle::text AS reporter_handle, \
+                rp.display_name AS reporter_display_name, \
                 message.sender_id, sender.handle::text AS sender_handle, \
+                sp.display_name AS sender_display_name, \
                 LEFT(message.body, 1000) AS message_excerpt, \
                 report.reason, report.note, report.status, \
                 report.handled_by, report.handled_at, report.created_at \
          FROM forum.dm_message_reports AS report \
          JOIN forum.dm_messages AS message ON message.id = report.message_id \
          JOIN identity.accounts AS reporter ON reporter.id = report.reported_by \
+         LEFT JOIN identity.profiles AS rp ON rp.account_id = reporter.id \
          JOIN identity.accounts AS sender ON sender.id = message.sender_id \
+         LEFT JOIN identity.profiles AS sp ON sp.account_id = sender.id \
          WHERE report.id = $1",
     )
     .bind(report_id)

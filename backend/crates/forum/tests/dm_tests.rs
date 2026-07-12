@@ -62,6 +62,17 @@ async fn dm_lifecycle_is_canonical_private_readable_and_moderated() {
         create_test_account(&pool, "dm-mod@tongji.edu.cn", "dm-mod").await;
 
     sqlx::query(
+        "INSERT INTO identity.profiles (account_id, display_name) \
+         VALUES ($1, 'Alice Chen'), ($2, 'Bob Li') \
+         ON CONFLICT (account_id) DO UPDATE SET display_name = EXCLUDED.display_name",
+    )
+    .bind(alice_id)
+    .bind(bob_id)
+    .execute(&pool)
+    .await
+    .expect("set DM participant display names");
+
+    sqlx::query(
         "UPDATE identity.accounts \
          SET trust_level = 1, \
              role = CASE WHEN id = $2 THEN 'mod'::identity.account_role ELSE role END \
@@ -105,6 +116,7 @@ async fn dm_lifecycle_is_canonical_private_readable_and_moderated() {
     let conversation_id = conversation["id"].as_str().unwrap();
     assert_eq!(conversation["participantId"], bob_id.to_string());
     assert_eq!(conversation["participantHandle"], "dm-bob");
+    assert_eq!(conversation["participantDisplayName"], "Bob Li");
     assert!(conversation["participantAvatarUrl"].is_null());
     assert_eq!(conversation["unreadCount"], 0);
     assert_eq!(conversation["isArchived"], false);
@@ -122,6 +134,8 @@ async fn dm_lifecycle_is_canonical_private_readable_and_moderated() {
     assert_eq!(send_response.status(), StatusCode::CREATED);
     let sent_message = read_json(send_response).await;
     let message_id = sent_message["id"].as_str().unwrap();
+    assert_eq!(sent_message["senderHandle"], "dm-alice");
+    assert_eq!(sent_message["senderDisplayName"], "Alice Chen");
 
     let inbox_response =
         request(&app, Method::GET, "/api/v2/forum/dm/conversations?limit=20", &bob_token, None)
@@ -130,6 +144,8 @@ async fn dm_lifecycle_is_canonical_private_readable_and_moderated() {
     let inbox = read_json(inbox_response).await;
     assert_eq!(inbox["items"].as_array().unwrap().len(), 1);
     assert_eq!(inbox["items"][0]["participantId"], alice_id.to_string());
+    assert_eq!(inbox["items"][0]["participantHandle"], "dm-alice");
+    assert_eq!(inbox["items"][0]["participantDisplayName"], "Alice Chen");
     assert_eq!(inbox["items"][0]["lastMessageExcerpt"], "hello bob");
     assert_eq!(inbox["items"][0]["unreadCount"], 1);
 
@@ -183,6 +199,8 @@ async fn dm_lifecycle_is_canonical_private_readable_and_moderated() {
     let report_queue = read_json(report_queue).await;
     assert_eq!(report_queue["items"].as_array().unwrap().len(), 1);
     assert_eq!(report_queue["items"][0]["messageExcerpt"], "hello bob");
+    assert_eq!(report_queue["items"][0]["reporterDisplayName"], "Bob Li");
+    assert_eq!(report_queue["items"][0]["senderDisplayName"], "Alice Chen");
     let evidence_audit: (String, String, serde_json::Value) = sqlx::query_as(
         "SELECT target_id, reason, metadata \
          FROM governance.audit_events \

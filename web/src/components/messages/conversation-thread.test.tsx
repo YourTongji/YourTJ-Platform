@@ -12,6 +12,7 @@ const requestConversation: DmConversation = {
   id: "42",
   participantId: "2",
   participantHandle: "requester",
+  participantDisplayName: "Request User",
   participantAvatarUrl: null,
   lastMessageExcerpt: "想请教课程资料",
   lastMessageAt: 1_700_000_000,
@@ -30,6 +31,7 @@ const requestMessage: DmMessage = {
   conversationId: "42",
   senderId: "2",
   senderHandle: "requester",
+  senderDisplayName: "Request User",
   body: "想请教课程资料",
   createdAt: 1_700_000_000,
 };
@@ -72,6 +74,9 @@ describe("ConversationThread message requests", () => {
     );
 
     expect(screen.queryByRole("textbox", { name: "消息内容" })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Request User" })).toBeVisible();
+    expect(screen.getByText(/@requester · 收到的消息请求/)).toBeVisible();
+    expect(screen.getByText("Request User · @requester")).toBeVisible();
     await user.click(screen.getByRole("button", { name: "接受" }));
     expect(onAcceptRequest).toHaveBeenCalledOnce();
     await user.click(screen.getByRole("button", { name: "删除请求" }));
