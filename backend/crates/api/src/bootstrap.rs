@@ -283,7 +283,6 @@ fn build_router(state: AppState) -> Router {
             .allow_origin(AllowOrigin::list(origins))
             .allow_methods(Any)
             .allow_headers(Any)
-            .allow_credentials(true)
     };
 
     let request_id_layer = SetRequestIdLayer::x_request_id(MakeRequestUuid);
