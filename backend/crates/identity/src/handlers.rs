@@ -19,12 +19,12 @@ use crate::auth::{
 use crate::dto::{
     AccountDto, AccountLifecycleDto, AccountLifecycleMutationDto, AccountLifecycleMutationInput,
     AppealAccessTokenOutput, AppealEmailVerificationInput, AuthTokensOutput, BindKeyInput,
-    ClaimChallengeOutput, ClaimInput, MyProfileDto, OnboardingCompleteInput, OnboardingStateDto,
-    PasswordChangeInput, PasswordForgotInput, PasswordLoginInput, PasswordResetInput,
-    ProfilePrivacyDto, ProfilePrivacyUpdateInput, ProfileUpdateInput, RecentAuthMethod,
-    RecentAuthStatusDto, RecentAuthVerifyInput, RecoveryCredentialDto,
-    RecoveryEmailVerificationInput, RefreshInput, RequestCodeInput, SessionDto, UpdateMeInput,
-    VerifyEmailInput, WalletDto,
+    ClaimChallengeOutput, ClaimInput, EmailCodePurpose, MyProfileDto, OnboardingCompleteInput,
+    OnboardingStateDto, PasswordChangeInput, PasswordForgotInput, PasswordLoginInput,
+    PasswordResetInput, PasswordSetInput, ProfilePrivacyDto, ProfilePrivacyUpdateInput,
+    ProfileUpdateInput, RecentAuthMethod, RecentAuthStatusDto, RecentAuthVerifyInput,
+    RecoveryCredentialDto, RecoveryEmailVerificationInput, RefreshInput, RequestCodeInput,
+    SessionDto, UpdateMeInput, VerifyEmailInput, WalletDto,
 };
 use crate::email_code::{generate_code, hash_code, CodePurpose};
 use crate::error::IdentityError;
@@ -38,8 +38,8 @@ pub struct SessionQuery {
     limit: Option<i64>,
 }
 
-// Rate limiting is now handled by shared::ratelimit::check_token_bucket (Redis-backed).
-// When Redis is unavailable the check passes through so we never block legitimate traffic.
+// Rate limiting is handled by shared::ratelimit::check_token_bucket (Redis-backed).
+// A configured Redis outage returns a stable 503 so abuse controls cannot be bypassed.
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -53,6 +53,7 @@ async fn row_to_dto(state: &AppState, row: &crate::models::AccountRow) -> AppRes
         role: row.role.clone(),
         capabilities: shared::auth::capability_names_for_role(&row.role),
         trust_level: row.trust_level,
+        has_password: row.password_hash.is_some(),
         onboarding_required: crate::onboarding::is_required(&state.db, row.id).await?,
         created_at: row.created_at.timestamp(),
     })
@@ -268,6 +269,49 @@ fn device_label(headers: &HeaderMap) -> Option<String> {
         .map(|value| value.chars().take(200).collect())
 }
 
+fn forwarded_client_address(headers: &HeaderMap) -> &str {
+    headers
+        .get("x-forwarded-for")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(',').next())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("unknown")
+}
+
+async fn check_unauthenticated_credential_limits(
+    state: &AppState,
+    headers: &HeaderMap,
+    route: &str,
+    per_network_limit: u64,
+    global_limit: u64,
+) -> AppResult<()> {
+    let client_address = forwarded_client_address(headers);
+    let network_subject = crate::rate_limit_subject::network_rate_limit_subject(
+        &state.jwt_secret,
+        route,
+        client_address,
+    )?;
+    let global_subject =
+        crate::rate_limit_subject::network_rate_limit_subject(&state.jwt_secret, route, "global")?;
+    shared::ratelimit::check_token_bucket(
+        state.redis.as_ref(),
+        &format!("{route}_network"),
+        &network_subject,
+        if client_address == "unknown" { global_limit } else { per_network_limit },
+        300,
+    )
+    .await?;
+    shared::ratelimit::check_token_bucket(
+        state.redis.as_ref(),
+        &format!("{route}_global"),
+        &global_subject,
+        global_limit,
+        60,
+    )
+    .await
+}
+
 async fn issue_tokens(
     state: &AppState,
     account: &crate::models::AccountRow,
@@ -290,6 +334,26 @@ async fn issue_tokens(
         access_token,
         refresh_token: format!("{session_id:x}:{refresh_plain}"),
         account: row_to_dto(state, account).await?,
+    })
+}
+
+async fn credential_mutation_tokens(
+    state: &AppState,
+    mutation: repo::CredentialMutation,
+    refresh_plain: &str,
+) -> AppResult<AuthTokensOutput> {
+    let access_token = create_session_access_token(
+        mutation.account.id,
+        mutation.session_id,
+        mutation.auth_version,
+        &state.jwt_secret,
+        state.jwt_ttl,
+    )
+    .map_err(|error| shared::AppError::Internal(anyhow::anyhow!(error)))?;
+    Ok(AuthTokensOutput {
+        access_token,
+        refresh_token: format!("{:x}:{refresh_plain}", mutation.session_id),
+        account: row_to_dto(state, &mutation.account).await?,
     })
 }
 
@@ -329,8 +393,19 @@ pub async fn request_code(
     .await?;
 
     // Rate-limit code requests: 1 per 60 seconds per email (Redis-backed).
-    shared::ratelimit::check_token_bucket(state.redis.as_ref(), "email_code", &email, 1, 60)
-        .await?;
+    let email_subject = crate::rate_limit_subject::email_rate_limit_subject(
+        state.email_encryption.as_ref(),
+        &state.jwt_secret,
+        &email,
+    )?;
+    shared::ratelimit::check_token_bucket(
+        state.redis.as_ref(),
+        "email_code",
+        &email_subject,
+        1,
+        60,
+    )
+    .await?;
     // Rate-limit by IP as well: 5 requests per 10 minutes.
     let ip = headers
         .get("x-forwarded-for")
@@ -367,6 +442,7 @@ pub async fn request_code(
         purpose,
         &code_hash,
         expires_at,
+        None,
     )
     .await?;
 
@@ -395,6 +471,7 @@ pub async fn verify_email(
 ) -> AppResult<Json<AuthTokensOutput>> {
     let email = normalize_campus_email(&body.email)?;
     validate_email_code(&body.code)?;
+    check_unauthenticated_credential_limits(&state, &headers, "email_verify", 30, 1_000).await?;
 
     let existing =
         repo::find_account_by_email(&state.db, state.email_encryption.as_ref(), &email).await?;
@@ -415,6 +492,41 @@ pub async fn verify_email(
     }
 
     let account = if let Some(acct) = existing {
+        if let Some(candidate_password) = body.password.as_deref() {
+            let is_login_proof = matches!(body.purpose, None | Some(EmailCodePurpose::Login));
+            if acct.password_hash.is_none() && is_login_proof {
+                repo::preflight_email_code(
+                    &state.db,
+                    state.email_encryption.as_ref(),
+                    &email,
+                    Some(CodePurpose::Login),
+                    &body.code,
+                )
+                .await?;
+                password::validate(candidate_password, &email)?;
+                let password_hash = password::hash(candidate_password).await?;
+                let (refresh_plain, refresh_hash) = generate_refresh_token();
+                let refresh_expires =
+                    Utc::now() + chrono::Duration::seconds(state.refresh_ttl as i64);
+                let mutation = repo::set_password_with_login_code(
+                    &state.db,
+                    state.email_encryption.as_ref(),
+                    acct.id,
+                    &email,
+                    &body.code,
+                    &password_hash,
+                    &refresh_hash,
+                    refresh_expires,
+                    device_label(&headers).as_deref(),
+                )
+                .await?;
+                ensure_login_allowed(&state, &mutation.account).await?;
+                crate::public_search::reconcile_user_in_background(&state, mutation.account.id);
+                return Ok(Json(
+                    credential_mutation_tokens(&state, mutation, &refresh_plain).await?,
+                ));
+            }
+        }
         let code_purpose = repo::consume_email_code(
             &state.db,
             state.email_encryption.as_ref(),
@@ -427,13 +539,6 @@ pub async fn verify_email(
             CodePurpose::Login => {
                 repo::ensure_invitation_valid(&state.db, acct.id).await?;
                 repo::mark_email_verified(&state.db, acct.id).await?;
-                if let Some(pw) = body.password.as_deref() {
-                    if acct.password_hash.is_none() {
-                        password::validate(pw, &email)?;
-                        let hash = password::hash(pw).await?;
-                        repo::update_password_hash(&state.db, acct.id, &hash).await?;
-                    }
-                }
                 acct
             }
             CodePurpose::PasswordReset | CodePurpose::Appeal | CodePurpose::Recovery => {
@@ -450,6 +555,19 @@ pub async fn verify_email(
             shared::AppError::Internal(anyhow::anyhow!("validated registration lost handle"))
         })?;
         let password_hash = if let Some(password) = body.password.as_deref() {
+            let proof = repo::preflight_email_code(
+                &state.db,
+                state.email_encryption.as_ref(),
+                &email,
+                body.purpose.map(Into::into),
+                &body.code,
+            )
+            .await?;
+            if proof != CodePurpose::Registration {
+                return Err(shared::AppError::Conflict(
+                    "account state changed; request a new code".into(),
+                ));
+            }
             password::validate(password, &email)?;
             Some(password::hash(password).await?)
         } else {
@@ -627,6 +745,7 @@ pub async fn request_recent_auth_code(
         CodePurpose::RecentAuth,
         &hash_code(&code),
         Utc::now() + chrono::Duration::minutes(10),
+        None,
     )
     .await?;
     let content = crate::email_templates::recent_auth_code(&code);
@@ -1312,10 +1431,22 @@ pub async fn password_login(
     Json(body): Json<PasswordLoginInput>,
 ) -> AppResult<Json<AuthTokensOutput>> {
     let email = normalize_campus_email(&body.email)?;
+    check_unauthenticated_credential_limits(&state, &headers, "password_login", 30, 1_000).await?;
 
     // Rate-limit: 5 login attempts per email per 5 minutes.
-    shared::ratelimit::check_token_bucket(state.redis.as_ref(), "password_login", &email, 5, 300)
-        .await?;
+    let email_subject = crate::rate_limit_subject::email_rate_limit_subject(
+        state.email_encryption.as_ref(),
+        &state.jwt_secret,
+        &email,
+    )?;
+    shared::ratelimit::check_token_bucket(
+        state.redis.as_ref(),
+        "password_login",
+        &email_subject,
+        5,
+        300,
+    )
+    .await?;
 
     let account =
         repo::find_account_by_email(&state.db, state.email_encryption.as_ref(), &email).await?;
@@ -1342,13 +1473,21 @@ pub async fn password_login(
 #[tracing::instrument(skip_all)]
 pub async fn appeal_password_login(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(body): Json<PasswordLoginInput>,
 ) -> AppResult<Json<AppealAccessTokenOutput>> {
     let email = normalize_campus_email(&body.email)?;
+    check_unauthenticated_credential_limits(&state, &headers, "appeal_password_login", 20, 500)
+        .await?;
+    let email_subject = crate::rate_limit_subject::email_rate_limit_subject(
+        state.email_encryption.as_ref(),
+        &state.jwt_secret,
+        &email,
+    )?;
     shared::ratelimit::check_token_bucket(
         state.redis.as_ref(),
         "appeal_password_login",
-        &email,
+        &email_subject,
         5,
         300,
     )
@@ -1392,13 +1531,21 @@ pub async fn appeal_email_verify(
 #[tracing::instrument(skip_all)]
 pub async fn recovery_password(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(body): Json<PasswordLoginInput>,
 ) -> AppResult<Json<RecoveryCredentialDto>> {
     let email = normalize_campus_email(&body.email)?;
+    check_unauthenticated_credential_limits(&state, &headers, "account_recovery_password", 20, 500)
+        .await?;
+    let email_subject = crate::rate_limit_subject::email_rate_limit_subject(
+        state.email_encryption.as_ref(),
+        &state.jwt_secret,
+        &email,
+    )?;
     shared::ratelimit::check_token_bucket(
         state.redis.as_ref(),
         "account_recovery_password",
-        &email,
+        &email_subject,
         5,
         300,
     )
@@ -1499,14 +1646,26 @@ pub async fn password_forgot(
     .await?;
 
     // Rate-limit: 1 per 60 seconds per email (same bucket as request_code).
-    shared::ratelimit::check_token_bucket(state.redis.as_ref(), "email_code", &email, 1, 60)
-        .await?;
+    let email_subject = crate::rate_limit_subject::email_rate_limit_subject(
+        state.email_encryption.as_ref(),
+        &state.jwt_secret,
+        &email,
+    )?;
+    shared::ratelimit::check_token_bucket(
+        state.redis.as_ref(),
+        "email_code",
+        &email_subject,
+        1,
+        60,
+    )
+    .await?;
 
-    let password_hash =
-        repo::find_password_hash(&state.db, state.email_encryption.as_ref(), &email).await?;
-    if password_hash.is_none() {
+    let credential_version =
+        repo::find_password_reset_version(&state.db, state.email_encryption.as_ref(), &email)
+            .await?;
+    let Some(credential_version) = credential_version else {
         return Ok(StatusCode::NO_CONTENT);
-    }
+    };
 
     let code = generate_code();
     let code_hash = hash_code(&code);
@@ -1519,6 +1678,7 @@ pub async fn password_forgot(
         CodePurpose::PasswordReset,
         &code_hash,
         expires_at,
+        Some(credential_version),
     )
     .await?;
 
@@ -1532,48 +1692,85 @@ pub async fn password_forgot(
 
 /// POST /auth/password/reset
 ///
-/// Verifies the code and updates the password hash. Does NOT automatically
-/// log the user in — they must use /auth/password/login afterwards.
+/// Verifies the code, replaces every prior session, and returns one new token pair.
 #[tracing::instrument(skip_all)]
 pub async fn password_reset(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(body): Json<PasswordResetInput>,
-) -> AppResult<StatusCode> {
+) -> AppResult<Json<AuthTokensOutput>> {
     let email = normalize_campus_email(&body.email)?;
     validate_email_code(&body.code)?;
+    check_unauthenticated_credential_limits(&state, &headers, "password_reset", 10, 300).await?;
 
-    password::validate(&body.new_password, &email)?;
-    repo::consume_email_code(
+    repo::preflight_password_reset_code(
         &state.db,
         state.email_encryption.as_ref(),
         &email,
-        Some(CodePurpose::PasswordReset),
         &body.code,
     )
     .await?;
+    password::validate(&body.new_password, &email)?;
     let new_hash = password::hash(&body.new_password).await?;
+    let (refresh_plain, refresh_hash) = generate_refresh_token();
+    let refresh_expires = Utc::now() + chrono::Duration::seconds(state.refresh_ttl as i64);
+    let mutation = repo::reset_password_with_code(
+        &state.db,
+        state.email_encryption.as_ref(),
+        &email,
+        &body.code,
+        &new_hash,
+        &refresh_hash,
+        refresh_expires,
+        device_label(&headers).as_deref(),
+    )
+    .await?;
+    if let Err(error) = ensure_login_allowed(&state, &mutation.account).await {
+        repo::revoke_all_sessions(&state.db, mutation.account.id).await?;
+        return Err(error);
+    }
+    Ok(Json(credential_mutation_tokens(&state, mutation, &refresh_plain).await?))
+}
 
-    // Find account to get its id.
-    let account = repo::find_account_by_email(&state.db, state.email_encryption.as_ref(), &email)
-        .await?
-        .ok_or(shared::AppError::Unauthorized)?;
-
-    repo::reset_password_and_revoke_all(&state.db, account.id, &new_hash).await?;
-
-    Ok(StatusCode::NO_CONTENT)
+/// POST /auth/password/set — establish the first password after fresh mailbox proof.
+#[tracing::instrument(skip_all)]
+pub async fn password_set(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<PasswordSetInput>,
+) -> AppResult<Json<AuthTokensOutput>> {
+    let auth = authenticated_context(&state, &headers).await?;
+    let account =
+        repo::find_account_by_id(&state.db, state.email_encryption.as_ref(), auth.account.id)
+            .await?
+            .ok_or(shared::AppError::NotFound)?;
+    password::validate(&body.new_password, &account.email)?;
+    let new_hash = password::hash(&body.new_password).await?;
+    let (refresh_plain, refresh_hash) = generate_refresh_token();
+    let refresh_expires = Utc::now() + chrono::Duration::seconds(state.refresh_ttl as i64);
+    let mutation = repo::set_password_and_replace_sessions(
+        &state.db,
+        &auth,
+        &new_hash,
+        &refresh_hash,
+        refresh_expires,
+        device_label(&headers).as_deref(),
+        state.email_encryption.as_ref(),
+    )
+    .await?;
+    Ok(Json(credential_mutation_tokens(&state, mutation, &refresh_plain).await?))
 }
 
 /// POST /auth/password/change
 ///
-/// Changes the password for the authenticated account. Requires the current
-/// password and a valid Bearer token.
+/// Changes the password and replaces every prior refresh family with one new session.
 /// Rate-limited: 3 attempts per account per minute.
 #[tracing::instrument(skip_all)]
 pub async fn password_change(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(body): Json<PasswordChangeInput>,
-) -> AppResult<StatusCode> {
+) -> AppResult<Json<AuthTokensOutput>> {
     let auth = authenticated_context(&state, &headers).await?;
 
     // Rate-limit: 3 changes per account per minute.
@@ -1586,7 +1783,6 @@ pub async fn password_change(
     )
     .await?;
 
-    // Look up account to get the email for password validation.
     let account_row =
         repo::find_account_by_id(&state.db, state.email_encryption.as_ref(), auth.account.id)
             .await?
@@ -1597,23 +1793,26 @@ pub async fn password_change(
             .await?
             .ok_or(IdentityError::NoPasswordSet)?;
 
-    // Verify current password.
     if !password::verify(&body.current_password, &phc).await? {
         return Err(IdentityError::WrongPassword.into());
     }
 
-    // Validate and set new password.
     password::validate(&body.new_password, &account_row.email)?;
     let new_hash = password::hash(&body.new_password).await?;
-
-    repo::change_password_preserving_session(
+    let current_session_id = auth.session_id.ok_or(shared::AppError::Unauthorized)?;
+    let (refresh_plain, refresh_hash) = generate_refresh_token();
+    let refresh_expires = Utc::now() + chrono::Duration::seconds(state.refresh_ttl as i64);
+    let mutation = repo::change_password_and_replace_sessions(
         &state.db,
         auth.account.id,
-        auth.session_id,
+        current_session_id,
         expected_credential_version,
         &new_hash,
+        &refresh_hash,
+        refresh_expires,
+        device_label(&headers).as_deref(),
+        state.email_encryption.as_ref(),
     )
     .await?;
-
-    Ok(StatusCode::NO_CONTENT)
+    Ok(Json(credential_mutation_tokens(&state, mutation, &refresh_plain).await?))
 }

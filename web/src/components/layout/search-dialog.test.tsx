@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
+import type { PropsWithChildren } from "react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -9,13 +10,29 @@ import { expectNoAccessibilityViolations } from "@/test/accessibility";
 import { SearchDialog } from "./search-dialog";
 
 const searchMock = vi.hoisted(() => vi.fn());
+const avatarMock = vi.hoisted(() => ({
+  onLoadingStatusChange: undefined as undefined | ((status: "error") => void),
+}));
 
 vi.mock("@/lib/api/endpoints", () => ({
   api: { search: searchMock },
 }));
 
+vi.mock("@/components/ui/avatar", () => ({
+  Avatar: ({ children }: PropsWithChildren) => <div>{children}</div>,
+  AvatarFallback: ({ children }: PropsWithChildren) => <span>{children}</span>,
+  AvatarImage: ({
+    onLoadingStatusChange,
+    src,
+  }: { onLoadingStatusChange?: (status: "error") => void; src?: string }) => {
+    avatarMock.onLoadingStatusChange = onLoadingStatusChange;
+    return <span data-testid="signed-avatar" data-src={src} />;
+  },
+}));
+
 describe("SearchDialog", () => {
   beforeEach(() => {
+    avatarMock.onLoadingStatusChange = undefined;
     searchMock.mockReset().mockResolvedValue({
       courses: [
         {
@@ -112,5 +129,32 @@ describe("SearchDialog", () => {
     expect(screen.getByRole("link", { name: "学习交流" })).toHaveAttribute("href", "/forum?board=51");
     expect(screen.getByRole("link", { name: "#算法" })).toHaveAttribute("href", "/forum?tag=algorithm");
     await expectNoAccessibilityViolations(document.body);
+  });
+
+  it("refetches the owning search result when a signed avatar expires", async () => {
+    const response = await searchMock();
+    response.users[0].avatarUrl = "https://cdn.example/avatar.webp?auth_key=old";
+    searchMock.mockClear();
+    searchMock.mockResolvedValue(response);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const user = userEvent.setup();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter>
+          <SearchDialog open onOpenChange={vi.fn()} />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    await user.type(screen.getByRole("textbox", { name: "搜索关键词" }), "数据");
+    expect(await screen.findByTestId("signed-avatar")).toHaveAttribute(
+      "data-src",
+      "https://cdn.example/avatar.webp?auth_key=old",
+    );
+    act(() => {
+      avatarMock.onLoadingStatusChange?.("error");
+    });
+
+    await waitFor(() => expect(searchMock).toHaveBeenCalledTimes(2));
   });
 });

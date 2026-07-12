@@ -27,11 +27,15 @@ pub struct CreateBoardInput {
     pub position: i32,
     #[serde(default)]
     pub is_locked: bool,
-    #[serde(default)]
+    #[serde(default = "default_min_trust_to_post")]
     pub min_trust_to_post: i16,
     #[serde(default)]
     pub is_qa: bool,
     pub reason: String,
+}
+
+fn default_min_trust_to_post() -> i16 {
+    1
 }
 
 #[derive(Debug, Deserialize)]

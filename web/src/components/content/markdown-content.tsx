@@ -1,10 +1,15 @@
+import { useQuery } from "@tanstack/react-query";
 import type { Components } from "react-markdown";
+import * as React from "react";
 import ReactMarkdown from "react-markdown";
 import rehypeSanitize from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
 
+import { ForumDeliveryImage } from "@/components/content/forum-delivery-image";
+import { api } from "@/lib/api/endpoints";
 import { cn } from "@/lib/utils";
 import type { ForumAttachment } from "@/lib/api/types";
+import { mediaDeliveryRefetchInterval } from "@/lib/media-delivery";
 
 export type ContentFormat = "plain_v1" | "markdown_v1";
 
@@ -82,14 +87,101 @@ const baseComponents: Components = {
   td: ({ children }) => <td className="border px-3 py-2 align-top">{children}</td>,
 };
 
-function markdownComponents(attachments: ForumAttachment[]): Components {
+function OwnerMediaPreview({ assetId, alt }: { assetId: string; alt?: string }) {
+  const upload = useQuery({
+    queryKey: ["markdown-owner-media", "status", assetId],
+    queryFn: () => api.myMediaUpload(assetId),
+    refetchInterval: (query) => {
+      const state = query.state.data;
+      return state?.status === "pending" || state?.deliveryState === "processing" ? 3_000 : false;
+    },
+  });
+  const pending = useQuery({
+    queryKey: ["markdown-owner-media", "pending-preview", assetId],
+    queryFn: () => api.myMediaPreview(assetId),
+    enabled: upload.data?.status === "pending",
+    staleTime: 60_000,
+  });
+  const delivery = useQuery({
+    queryKey: ["markdown-owner-media", "delivery", assetId],
+    queryFn: () => api.mediaUrl(assetId),
+    enabled: upload.data?.status === "clean" && upload.data.deliveryState === "published",
+    refetchInterval: (query) => mediaDeliveryRefetchInterval(query.state.data),
+  });
+  const [pendingUrl, setPendingUrl] = React.useState<string | null>(null);
+  const retriedDeliveryUrl = React.useRef<string | null>(null);
+
+  React.useEffect(() => {
+    if (!pending.data) {
+      setPendingUrl(null);
+      return;
+    }
+    const nextUrl = URL.createObjectURL(pending.data);
+    setPendingUrl(nextUrl);
+    return () => URL.revokeObjectURL(nextUrl);
+  }, [pending.data]);
+
+  const label = alt?.trim() || "平台图片";
+  if (upload.isLoading || pending.isLoading || delivery.isLoading) {
+    return <span role="status" className="text-sm text-muted-foreground">正在加载图片预览</span>;
+  }
+  if (upload.data?.status === "pending") {
+    return pendingUrl ? (
+      <img
+        src={pendingUrl}
+        alt={`${label}（待审核预览）`}
+        referrerPolicy="no-referrer"
+        className="my-4 max-h-[36rem] max-w-full rounded-xl border object-contain opacity-80"
+      />
+    ) : (
+      <span role="img" aria-label={`${label}待审核`} className="text-sm text-muted-foreground">
+        待审核图片预览暂不可用
+      </span>
+    );
+  }
+  if (upload.data?.status === "clean" && upload.data.deliveryState === "processing") {
+    return <span role="status" className="text-sm text-muted-foreground">图片已通过审核，正在生成安全版本</span>;
+  }
+  if (delivery.data?.url) {
+    return (
+      <img
+        src={delivery.data.url}
+        alt={label}
+        width={delivery.data.width}
+        height={delivery.data.height}
+        referrerPolicy="no-referrer"
+        className="my-4 max-h-[36rem] max-w-full rounded-xl border object-contain"
+        onError={() => {
+          if (retriedDeliveryUrl.current === delivery.data?.url) return;
+          retriedDeliveryUrl.current = delivery.data?.url ?? null;
+          void delivery.refetch();
+        }}
+      />
+    );
+  }
+  return (
+    <span role="img" aria-label={`图片不可用：${label}`} className="text-sm text-muted-foreground">
+      图片当前不可用：{label}
+    </span>
+  );
+}
+
+function markdownComponents(
+  attachments: ForumAttachment[],
+  ownerPreviewAssetIds: readonly string[],
+  onAttachmentDeliveryRefresh?: () => void,
+): Components {
   const byReference = new Map(attachments.map((attachment) => [attachment.reference, attachment]));
+  const ownerPreviewIds = new Set(ownerPreviewAssetIds);
   return {
     ...baseComponents,
     img({ alt, src }) {
       const match = /^\/__yourtj_asset__\/([1-9][0-9]*)$/.exec(src ?? "");
       const attachment = match ? byReference.get(`yourtj-asset:${match[1]}`) : undefined;
       if (!attachment) {
+        if (match && ownerPreviewIds.has(match[1])) {
+          return <OwnerMediaPreview assetId={match[1]} alt={alt ?? undefined} />;
+        }
         return (
           <span
             role="img"
@@ -101,14 +193,11 @@ function markdownComponents(attachments: ForumAttachment[]): Components {
         );
       }
       return (
-        <img
-          src={attachment.url}
-          alt={attachment.alt}
-          width={attachment.width ?? undefined}
-          height={attachment.height ?? undefined}
+        <ForumDeliveryImage
+          attachment={attachment}
+          onDeliveryRefresh={onAttachmentDeliveryRefresh}
           loading="lazy"
           decoding="async"
-          referrerPolicy="no-referrer"
           className="my-4 max-h-[36rem] max-w-full rounded-xl border object-contain"
         />
       );
@@ -121,11 +210,15 @@ export function MarkdownContent({
   format,
   className,
   attachments = [],
+  ownerPreviewAssetIds = [],
+  onAttachmentDeliveryRefresh,
 }: {
   content?: string | null;
   format: ContentFormat;
   className?: string;
   attachments?: ForumAttachment[];
+  ownerPreviewAssetIds?: readonly string[];
+  onAttachmentDeliveryRefresh?: () => void;
 }) {
   if (!content) return null;
   if (format === "plain_v1") {
@@ -138,7 +231,11 @@ export function MarkdownContent({
         rehypePlugins={[rehypeSanitize]}
         skipHtml
         urlTransform={safeMarkdownUrl}
-        components={markdownComponents(attachments)}
+        components={markdownComponents(
+          attachments,
+          ownerPreviewAssetIds,
+          onAttachmentDeliveryRefresh,
+        )}
       >
         {content}
       </ReactMarkdown>

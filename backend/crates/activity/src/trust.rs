@@ -5,6 +5,7 @@
 //! override a staff pin. Automatic demotions consume one unique governance
 //! event id and lower the level by at most one.
 
+use chrono::NaiveDate;
 use shared::{AppError, AppResult, Page};
 use sqlx::{PgConnection, PgPool};
 
@@ -15,6 +16,8 @@ use crate::dto::{
 use crate::models::{TrustLevelEventRow, TrustLevelPolicyRow, TrustProgressRow};
 
 const TEA_NAMES: [&str; 7] = ["茶苗", "绿茶", "白茶", "黄茶", "青茶", "红茶", "黑茶"];
+const TRUST_EVALUATION_BATCH_SIZE: i64 = 50;
+const TRUST_EVALUATION_MAX_ATTEMPTS: i32 = 8;
 
 /// Public tea display name for a trust level in the 0–6 range.
 pub fn tea_name(level: i16) -> &'static str {
@@ -70,28 +73,47 @@ pub async fn ensure_registered_progress(
 
 /// Read the effective trust level used by permission checks.
 pub async fn get_trust_level(pool: &PgPool, account_id: i64) -> AppResult<i16> {
-    let mut connection = pool.acquire().await?;
-    if let Some(progress) = load_progress(&mut connection, account_id).await? {
-        return Ok(effective_level(&progress));
-    }
+    let mut tx = pool.begin().await?;
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind(format!("activity.trust:{account_id}"))
+        .execute(&mut *tx)
+        .await?;
     let status: Option<String> =
         sqlx::query_scalar("SELECT status::text FROM identity.accounts WHERE id = $1")
             .bind(account_id)
-            .fetch_optional(&mut *connection)
+            .fetch_optional(&mut *tx)
             .await?;
-    match status.as_deref() {
-        Some("active") => ensure_registered_progress(&mut connection, account_id).await,
-        _ => Ok(0),
+    if status.as_deref() != Some("active") {
+        return Ok(0);
     }
+    let level = if let Some(progress) = load_progress(&mut tx, account_id).await? {
+        effective_level(&progress)
+    } else {
+        ensure_registered_progress(&mut tx, account_id).await?
+    };
+    tx.commit().await?;
+    Ok(level)
 }
 
 /// Current authenticated trust progress for the home growth card.
 pub async fn trust_progress(pool: &PgPool, account_id: i64) -> AppResult<TrustProgressDto> {
-    let mut connection = pool.acquire().await?;
-    let _ = ensure_registered_progress(&mut connection, account_id).await?;
-    let policy = current_policy_row_tx(&mut connection).await?;
-    let score = compute_qualifying_score_tx(&mut connection, account_id, &policy).await?;
-    let progress = load_progress(&mut connection, account_id).await?.ok_or_else(|| {
+    let mut tx = pool.begin().await?;
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind(format!("activity.trust:{account_id}"))
+        .execute(&mut *tx)
+        .await?;
+    let status: Option<String> =
+        sqlx::query_scalar("SELECT status::text FROM identity.accounts WHERE id = $1")
+            .bind(account_id)
+            .fetch_optional(&mut *tx)
+            .await?;
+    if status.as_deref() != Some("active") {
+        return Err(AppError::NotFound);
+    }
+    let _ = ensure_registered_progress(&mut tx, account_id).await?;
+    let policy = current_policy_row_tx(&mut tx).await?;
+    let score = compute_qualifying_score_tx(&mut tx, account_id, &policy).await?;
+    let progress = load_progress(&mut tx, account_id).await?.ok_or_else(|| {
         AppError::Internal(anyhow::anyhow!("trust progress missing after ensure"))
     })?;
     let effective = if progress.override_level.is_some() {
@@ -101,12 +123,14 @@ pub async fn trust_progress(pool: &PgPool, account_id: i64) -> AppResult<TrustPr
         // still shows the live qualifying score under the current policy.
         progress.trust_level
     };
-    Ok(progress_dto(effective, score, &policy, &progress))
+    let result = progress_dto(effective, score, &policy, &progress);
+    tx.commit().await?;
+    Ok(result)
 }
 
 /// Apply automatic one-step upgrades for active non-overridden accounts.
 pub async fn run_trust_evaluation(pool: &PgPool) -> (i64, i64) {
-    let result = evaluate_all(pool).await;
+    let result = evaluate_all_with_policy_guard(pool, None).await;
     match result {
         Ok(counts) => counts,
         Err(error) => {
@@ -116,7 +140,316 @@ pub async fn run_trust_evaluation(pool: &PgPool) -> (i64, i64) {
     }
 }
 
-async fn evaluate_all(pool: &PgPool) -> AppResult<(i64, i64)> {
+/// Run at most one resumable trust evaluation for the current Shanghai day.
+pub async fn run_scheduled_trust_evaluation(pool: &PgPool) -> (i64, i64) {
+    match run_scheduled(pool).await {
+        Ok(counts) => counts,
+        Err(error) => {
+            tracing::warn!(?error, "scheduled trust evaluation failed");
+            (0, 0)
+        }
+    }
+}
+
+async fn run_scheduled(pool: &PgPool) -> AppResult<(i64, i64)> {
+    let activity_date: NaiveDate =
+        sqlx::query_scalar("SELECT (now() AT TIME ZONE 'Asia/Shanghai')::date")
+            .fetch_one(pool)
+            .await?;
+    sqlx::query(
+        "INSERT INTO activity.trust_evaluation_runs (activity_date, status) \
+         VALUES ($1, 'queued') ON CONFLICT (activity_date) DO NOTHING",
+    )
+    .bind(activity_date)
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "UPDATE activity.trust_evaluation_runs \
+         SET status = 'dead', lease_token = NULL, lease_expires_at = NULL, \
+             error_code = 'attempts_exhausted', updated_at = now() \
+         WHERE activity_date = $1 AND attempts >= $2 \
+           AND (status IN ('queued', 'failed') \
+                OR (status = 'running' AND lease_expires_at < now()))",
+    )
+    .bind(activity_date)
+    .bind(TRUST_EVALUATION_MAX_ATTEMPTS)
+    .execute(pool)
+    .await?;
+    let lease_token = uuid::Uuid::new_v4();
+    let attempt = sqlx::query_scalar::<_, i32>(
+        "UPDATE activity.trust_evaluation_runs \
+         SET status = 'running', lease_token = $2, lease_expires_at = now() + interval '10 minutes', \
+             attempts = attempts + 1, started_at = COALESCE(started_at, now()), \
+             error_code = NULL, updated_at = now() \
+         WHERE activity_date = $1 \
+           AND attempts < $3 AND next_attempt_at <= now() \
+           AND (status IN ('queued', 'failed') \
+                OR (status = 'running' AND lease_expires_at < now())) \
+         RETURNING attempts",
+    )
+    .bind(activity_date)
+    .bind(lease_token)
+    .bind(TRUST_EVALUATION_MAX_ATTEMPTS)
+    .fetch_optional(pool)
+    .await?;
+    let Some(attempt) = attempt else {
+        return Ok((0, 0));
+    };
+
+    match evaluate_scheduled_with_policy_guard(pool, activity_date, lease_token).await {
+        Ok(upgraded) => {
+            finalize_scheduled_attempt(pool, activity_date, lease_token, attempt, upgraded)
+                .await
+                .map(|()| (upgraded, 0))
+        }
+        Err(error) => {
+            fail_scheduled_attempt(pool, activity_date, lease_token, attempt, "evaluation_failed")
+                .await?;
+            Err(error)
+        }
+    }
+}
+
+async fn evaluate_scheduled_with_policy_guard(
+    pool: &PgPool,
+    activity_date: NaiveDate,
+    lease_token: uuid::Uuid,
+) -> AppResult<i64> {
+    let mut policy_guard = pool.begin().await?;
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtext('activity.score_policy'))")
+        .execute(&mut *policy_guard)
+        .await?;
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtext('activity.trust_policy'))")
+        .execute(&mut *policy_guard)
+        .await?;
+    let result = evaluate_scheduled_batches(pool, activity_date, lease_token).await;
+    policy_guard.commit().await?;
+    result
+}
+
+async fn evaluate_scheduled_batches(
+    pool: &PgPool,
+    activity_date: NaiveDate,
+    lease_token: uuid::Uuid,
+) -> AppResult<i64> {
+    let mut upgraded_total = 0_i64;
+    loop {
+        let cursor: i64 = sqlx::query_scalar(
+            "SELECT cursor_account_id FROM activity.trust_evaluation_runs \
+             WHERE activity_date = $1 AND status = 'running' AND lease_token = $2 \
+               AND lease_expires_at > now()",
+        )
+        .bind(activity_date)
+        .bind(lease_token)
+        .fetch_optional(pool)
+        .await?
+        .ok_or_else(|| AppError::Conflict("trust evaluation lease was lost".into()))?;
+        let account_ids: Vec<i64> = sqlx::query_scalar(
+            "SELECT id FROM identity.accounts \
+             WHERE status = 'active' AND id > $1 ORDER BY id LIMIT $2",
+        )
+        .bind(cursor)
+        .bind(TRUST_EVALUATION_BATCH_SIZE)
+        .fetch_all(pool)
+        .await?;
+        if account_ids.is_empty() {
+            break;
+        }
+
+        let mut batch_upgraded = 0_i64;
+        let mut last_account_id = cursor;
+        for account_id in account_ids {
+            last_account_id = account_id;
+            let mut tx = pool.begin().await?;
+            let active_lease: Option<uuid::Uuid> = sqlx::query_scalar(
+                "SELECT lease_token FROM activity.trust_evaluation_runs \
+                 WHERE activity_date = $1 AND status = 'running' AND lease_token = $2 \
+                   AND lease_expires_at > now() FOR SHARE",
+            )
+            .bind(activity_date)
+            .bind(lease_token)
+            .fetch_optional(&mut *tx)
+            .await?;
+            if active_lease != Some(lease_token) {
+                return Err(AppError::Conflict("trust evaluation lease was lost".into()));
+            }
+            match evaluate_account_tx(&mut tx, account_id, Some(activity_date)).await {
+                Ok(was_upgraded) => {
+                    sqlx::query(
+                        "DELETE FROM activity.trust_evaluation_failures \
+                         WHERE activity_date = $1 AND account_id = $2",
+                    )
+                    .bind(activity_date)
+                    .bind(account_id)
+                    .execute(&mut *tx)
+                    .await?;
+                    tx.commit().await?;
+                    if was_upgraded {
+                        batch_upgraded += 1;
+                    }
+                }
+                Err(error) => {
+                    tx.rollback().await?;
+                    tracing::warn!(
+                        account_id,
+                        ?error,
+                        error_code = "account_evaluation_failed",
+                        "trust evaluation isolated an account failure"
+                    );
+                    sqlx::query(
+                        "INSERT INTO activity.trust_evaluation_failures \
+                         (activity_date, account_id, attempts, error_code) \
+                         VALUES ($1, $2, 1, 'account_evaluation_failed') \
+                         ON CONFLICT (activity_date, account_id) DO UPDATE \
+                         SET attempts = LEAST(activity.trust_evaluation_failures.attempts + 1, 8), \
+                             error_code = EXCLUDED.error_code, last_failed_at = now()",
+                    )
+                    .bind(activity_date)
+                    .bind(account_id)
+                    .execute(pool)
+                    .await?;
+                }
+            }
+        }
+        let renewed = sqlx::query(
+            "UPDATE activity.trust_evaluation_runs \
+             SET cursor_account_id = $3, lease_expires_at = now() + interval '10 minutes', \
+                 upgraded_count = upgraded_count + $4, updated_at = now() \
+             WHERE activity_date = $1 AND status = 'running' AND lease_token = $2",
+        )
+        .bind(activity_date)
+        .bind(lease_token)
+        .bind(last_account_id)
+        .bind(i32::try_from(batch_upgraded).unwrap_or(i32::MAX))
+        .execute(pool)
+        .await?
+        .rows_affected();
+        if renewed != 1 {
+            return Err(AppError::Conflict("trust evaluation lease was lost".into()));
+        }
+        upgraded_total += batch_upgraded;
+    }
+    Ok(upgraded_total)
+}
+
+async fn finalize_scheduled_attempt(
+    pool: &PgPool,
+    activity_date: NaiveDate,
+    lease_token: uuid::Uuid,
+    attempt: i32,
+    upgraded: i64,
+) -> AppResult<()> {
+    sqlx::query(
+        "DELETE FROM activity.trust_evaluation_failures failure \
+         WHERE failure.activity_date = $1 AND NOT EXISTS ( \
+           SELECT 1 FROM identity.accounts account \
+           WHERE account.id = failure.account_id AND account.status = 'active' \
+         )",
+    )
+    .bind(activity_date)
+    .execute(pool)
+    .await?;
+    let failed_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM activity.trust_evaluation_failures WHERE activity_date = $1",
+    )
+    .bind(activity_date)
+    .fetch_one(pool)
+    .await?;
+    if failed_count > 0 {
+        tracing::warn!(
+            activity_date = %activity_date,
+            failed_count,
+            attempt,
+            "trust evaluation completed its scan with isolated account failures"
+        );
+        return fail_scheduled_attempt(
+            pool,
+            activity_date,
+            lease_token,
+            attempt,
+            "account_evaluation_failed",
+        )
+        .await;
+    }
+    let completed = sqlx::query(
+        "UPDATE activity.trust_evaluation_runs \
+         SET status = 'completed', lease_token = NULL, lease_expires_at = NULL, \
+             failed_count = 0, completed_at = now(), updated_at = now() \
+         WHERE activity_date = $1 AND status = 'running' AND lease_token = $2",
+    )
+    .bind(activity_date)
+    .bind(lease_token)
+    .execute(pool)
+    .await?
+    .rows_affected();
+    if completed != 1 {
+        return Err(AppError::Internal(anyhow::anyhow!(
+            "trust evaluation lease was lost before completion"
+        )));
+    }
+    tracing::info!(activity_date = %activity_date, upgraded, "trust evaluation completed");
+    Ok(())
+}
+
+async fn fail_scheduled_attempt(
+    pool: &PgPool,
+    activity_date: NaiveDate,
+    lease_token: uuid::Uuid,
+    attempt: i32,
+    error_code: &'static str,
+) -> AppResult<()> {
+    let failed_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM activity.trust_evaluation_failures WHERE activity_date = $1",
+    )
+    .bind(activity_date)
+    .fetch_one(pool)
+    .await?;
+    let status = if attempt >= TRUST_EVALUATION_MAX_ATTEMPTS { "dead" } else { "failed" };
+    let exponent = u32::try_from((attempt - 1).clamp(0, 7)).unwrap_or(0);
+    let backoff_seconds = (30_i64 * 2_i64.pow(exponent)).min(3_600);
+    let affected = sqlx::query(
+        "UPDATE activity.trust_evaluation_runs \
+         SET status = $3, lease_token = NULL, lease_expires_at = NULL, \
+             cursor_account_id = CASE WHEN $3 = 'failed' THEN 0 ELSE cursor_account_id END, \
+             failed_count = $4, error_code = $5, \
+             next_attempt_at = now() + ($6::bigint * interval '1 second'), updated_at = now() \
+         WHERE activity_date = $1 AND status = 'running' AND lease_token = $2",
+    )
+    .bind(activity_date)
+    .bind(lease_token)
+    .bind(status)
+    .bind(i32::try_from(failed_count).unwrap_or(i32::MAX))
+    .bind(error_code)
+    .bind(backoff_seconds)
+    .execute(pool)
+    .await?
+    .rows_affected();
+    if affected != 1 {
+        return Err(AppError::Conflict("trust evaluation lease was lost".into()));
+    }
+    Ok(())
+}
+
+async fn evaluate_all_with_policy_guard(
+    pool: &PgPool,
+    scheduled_evaluation_date: Option<NaiveDate>,
+) -> AppResult<(i64, i64)> {
+    let mut policy_guard = pool.begin().await?;
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtext('activity.score_policy'))")
+        .execute(&mut *policy_guard)
+        .await?;
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtext('activity.trust_policy'))")
+        .execute(&mut *policy_guard)
+        .await?;
+    let result = evaluate_all(pool, scheduled_evaluation_date).await;
+    policy_guard.commit().await?;
+    result
+}
+
+async fn evaluate_all(
+    pool: &PgPool,
+    scheduled_evaluation_date: Option<NaiveDate>,
+) -> AppResult<(i64, i64)> {
     let account_ids: Vec<i64> = sqlx::query_scalar(
         "SELECT account.id \
          FROM identity.accounts account \
@@ -136,7 +469,7 @@ async fn evaluate_all(pool: &PgPool) -> AppResult<(i64, i64)> {
             .bind(format!("activity.trust:{account_id}"))
             .execute(&mut *tx)
             .await?;
-        if evaluate_account_tx(&mut tx, account_id).await? {
+        if evaluate_account_tx(&mut tx, account_id, scheduled_evaluation_date).await? {
             upgraded += 1;
         }
         tx.commit().await?;
@@ -144,7 +477,11 @@ async fn evaluate_all(pool: &PgPool) -> AppResult<(i64, i64)> {
     Ok((upgraded, 0))
 }
 
-async fn evaluate_account_tx(connection: &mut PgConnection, account_id: i64) -> AppResult<bool> {
+async fn evaluate_account_tx(
+    connection: &mut PgConnection,
+    account_id: i64,
+    scheduled_evaluation_date: Option<NaiveDate>,
+) -> AppResult<bool> {
     let status: Option<String> =
         sqlx::query_scalar("SELECT status::text FROM identity.accounts WHERE id = $1 FOR UPDATE")
             .bind(account_id)
@@ -165,16 +502,23 @@ async fn evaluate_account_tx(connection: &mut PgConnection, account_id: i64) -> 
                 .ok_or_else(|| AppError::Internal(anyhow::anyhow!("trust progress missing")))?
         }
     };
+    if scheduled_evaluation_date.is_some()
+        && progress.last_scheduled_evaluation_date == scheduled_evaluation_date
+    {
+        return Ok(false);
+    }
     if progress.override_level.is_some() {
         sqlx::query(
             "UPDATE activity.account_trust_progress \
              SET qualifying_score = $2, policy_version = $3, \
+                 last_scheduled_evaluation_date = COALESCE($4, last_scheduled_evaluation_date), \
                  last_evaluated_at = now(), updated_at = now() \
              WHERE account_id = $1",
         )
         .bind(account_id)
         .bind(score)
         .bind(policy.version)
+        .bind(scheduled_evaluation_date)
         .execute(&mut *connection)
         .await?;
         project_identity_level(connection, account_id, effective_level(&progress)).await?;
@@ -182,11 +526,22 @@ async fn evaluate_account_tx(connection: &mut PgConnection, account_id: i64) -> 
     }
 
     let target = level_for_score(score, &policy).max(1);
-    let next =
-        if target > progress.trust_level { progress.trust_level + 1 } else { progress.trust_level };
+    let cooldown_elapsed = match progress.promotion_blocked_until {
+        Some(blocked_until) => blocked_until <= chrono::Utc::now(),
+        None => true,
+    };
+    let has_new_activity = match progress.promotion_score_floor {
+        Some(floor) => score > floor,
+        None => true,
+    };
+    let should_upgrade = target > progress.trust_level && cooldown_elapsed && has_new_activity;
+    let next = if should_upgrade { progress.trust_level + 1 } else { progress.trust_level };
     sqlx::query(
         "UPDATE activity.account_trust_progress \
          SET trust_level = $2, qualifying_score = $3, policy_version = $4, \
+             last_scheduled_evaluation_date = COALESCE($5, last_scheduled_evaluation_date), \
+             promotion_blocked_until = CASE WHEN $6 THEN NULL ELSE promotion_blocked_until END, \
+             promotion_score_floor = CASE WHEN $6 THEN NULL ELSE promotion_score_floor END, \
              last_evaluated_at = now(), updated_at = now() \
          WHERE account_id = $1",
     )
@@ -194,10 +549,20 @@ async fn evaluate_account_tx(connection: &mut PgConnection, account_id: i64) -> 
     .bind(next)
     .bind(score)
     .bind(policy.version)
+    .bind(scheduled_evaluation_date)
+    .bind(should_upgrade)
     .execute(&mut *connection)
     .await?;
     project_identity_level(connection, account_id, next).await?;
     if next > progress.trust_level {
+        let evaluation_key = scheduled_evaluation_date
+            .map_or_else(|| "manual".to_owned(), |activity_date| activity_date.to_string());
+        let event_key = format!(
+            "trust:upgrade:{account_id}:{}:{}:{evaluation_key}:{}",
+            progress.trust_level,
+            next,
+            uuid::Uuid::new_v4()
+        );
         let inserted = insert_event_tx(
             connection,
             account_id,
@@ -210,9 +575,27 @@ async fn evaluate_account_tx(connection: &mut PgConnection, account_id: i64) -> 
             None,
             Some("automatic activity trust upgrade"),
             None,
-            &format!("trust:upgrade:{account_id}:{}:{}:{}", next, policy.version, score),
+            &event_key,
         )
         .await?;
+        if inserted {
+            platform::outbox::enqueue_notification_tx(
+                connection,
+                &format!("notification:{event_key}"),
+                account_id,
+                None,
+                "trust_level_upgraded",
+                &serde_json::json!({
+                    "fromLevel": progress.trust_level,
+                    "toLevel": next,
+                    "teaName": tea_name(next),
+                    "targetUrl": "/",
+                }),
+                None,
+                None,
+            )
+            .await?;
+        }
         return Ok(inserted);
     }
     Ok(false)
@@ -249,6 +632,23 @@ pub async fn apply_governance_demotion_tx(
         .await?
         .ok_or_else(|| AppError::Internal(anyhow::anyhow!("trust progress missing")))?;
     let current = effective_level(&progress);
+    sqlx::query(
+        "UPDATE activity.account_trust_progress \
+         SET qualifying_score = $2, policy_version = $3, \
+             promotion_blocked_until = GREATEST( \
+               COALESCE(promotion_blocked_until, now()), \
+               now() + ($4::int * interval '1 day') \
+             ), \
+             promotion_score_floor = GREATEST(COALESCE(promotion_score_floor, 0), $2), \
+             last_evaluated_at = now(), updated_at = now() \
+         WHERE account_id = $1",
+    )
+    .bind(account_id)
+    .bind(score)
+    .bind(policy.version)
+    .bind(policy.demotion_cooldown_days)
+    .execute(&mut *connection)
+    .await?;
     if current <= 1 {
         let _ = insert_event_tx(
             connection,
@@ -330,9 +730,13 @@ pub async fn append_policy(
 ) -> AppResult<TrustLevelPolicyDto> {
     validate_policy_thresholds(input)?;
     let mut tx = pool.begin().await?;
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtext('activity.score_policy'))")
+        .execute(&mut *tx)
+        .await?;
     sqlx::query("SELECT pg_advisory_xact_lock(hashtext('activity.trust_policy'))")
         .execute(&mut *tx)
         .await?;
+    crate::score_projection::lock_projection_exclusive(&mut tx).await?;
     let current_version: i64 = sqlx::query_scalar(
         "SELECT version FROM activity.trust_level_policies ORDER BY version DESC LIMIT 1",
     )
@@ -349,11 +753,12 @@ pub async fn append_policy(
     let row = sqlx::query_as::<_, TrustLevelPolicyRow>(
         "INSERT INTO activity.trust_level_policies \
          (score_policy_version, threshold_level_2, threshold_level_3, threshold_level_4, \
-          threshold_level_5, threshold_level_6, like_daily_cap, reason, changed_by) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
+          threshold_level_5, threshold_level_6, like_daily_cap, demotion_cooldown_days, \
+          reason, changed_by) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) \
          RETURNING version, score_policy_version, threshold_level_2, threshold_level_3, \
                    threshold_level_4, threshold_level_5, threshold_level_6, like_daily_cap, \
-                   reason, changed_by, created_at",
+                   demotion_cooldown_days, reason, changed_by, created_at",
     )
     .bind(score_policy_version)
     .bind(input.threshold_level_2)
@@ -362,10 +767,12 @@ pub async fn append_policy(
     .bind(input.threshold_level_5)
     .bind(input.threshold_level_6)
     .bind(input.like_daily_cap)
+    .bind(input.demotion_cooldown_days)
     .bind(input.reason.trim())
     .bind(changed_by)
     .fetch_one(&mut *tx)
     .await?;
+    crate::score_projection::reproject_all(&mut tx, row.version).await?;
     let metadata = serde_json::json!({
         "expectedVersion": input.expected_version,
         "thresholds": {
@@ -376,6 +783,7 @@ pub async fn append_policy(
             "level6": input.threshold_level_6,
         },
         "likeDailyCap": input.like_daily_cap,
+        "demotionCooldownDays": input.demotion_cooldown_days,
         "scorePolicyVersion": score_policy_version,
     });
     governance::record_account_event_tx(
@@ -403,7 +811,7 @@ pub async fn policy_history(
     let rows = sqlx::query_as::<_, TrustLevelPolicyRow>(
         "SELECT version, score_policy_version, threshold_level_2, threshold_level_3, \
                 threshold_level_4, threshold_level_5, threshold_level_6, like_daily_cap, \
-                reason, changed_by, created_at \
+                demotion_cooldown_days, reason, changed_by, created_at \
          FROM activity.trust_level_policies \
          WHERE version < $1 \
          ORDER BY version DESC \
@@ -434,18 +842,27 @@ pub async fn adjust_trust_level(
     if !(3..=500).contains(&reason.chars().count()) {
         return Err(AppError::BadRequest("reason must contain 3 to 500 characters".into()));
     }
+    if input.clear_override == input.trust_level.is_some() {
+        return Err(AppError::BadRequest(
+            "provide exactly one of trustLevel or clearOverride".into(),
+        ));
+    }
     let mut tx = pool.begin().await?;
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
         .bind(format!("activity.trust:{account_id}"))
         .execute(&mut *tx)
         .await?;
-    let status: Option<String> =
-        sqlx::query_scalar("SELECT status::text FROM identity.accounts WHERE id = $1 FOR UPDATE")
-            .bind(account_id)
-            .fetch_optional(&mut *tx)
+    let target =
+        identity::public_accounts::find_account_authorization_state_by_id(&mut tx, account_id)
             .await?;
-    if status.as_deref() == Some("purged") || status.is_none() {
+    let Some(target) = target else {
         return Err(AppError::NotFound);
+    };
+    if target.status != "active" {
+        return Err(AppError::NotFound);
+    }
+    if actor_id == account_id || role_rank(actor_role) <= role_rank(&target.role) {
+        return Err(AppError::Forbidden);
     }
     let _ = ensure_registered_progress(&mut tx, account_id).await?;
     let policy = current_policy_row_tx(&mut tx).await?;
@@ -541,6 +958,14 @@ pub async fn adjust_trust_level(
     trust_progress(pool, account_id).await
 }
 
+fn role_rank(role: &str) -> u8 {
+    match role {
+        "admin" => 2,
+        "mod" => 1,
+        _ => 0,
+    }
+}
+
 /// Append-only trust history for one account.
 pub async fn event_history(
     pool: &PgPool,
@@ -570,66 +995,6 @@ pub async fn event_history(
         rows.into_iter().take(item_count).map(event_to_dto).collect();
     let next_cursor = if has_more { items.last().map(|item| item.id.clone()) } else { None };
     Ok(Page::new(items, next_cursor))
-}
-
-/// Increment lifetime totals when a contribution activates.
-pub async fn increment_totals_tx(
-    connection: &mut PgConnection,
-    account_id: i64,
-    kind: crate::contributions::ActivityKind,
-) -> AppResult<()> {
-    let statement = match kind {
-        crate::contributions::ActivityKind::Thread => {
-            "INSERT INTO activity.account_totals (account_id, threads_created) \
-             VALUES ($1, 1) \
-             ON CONFLICT (account_id) DO UPDATE \
-             SET threads_created = activity.account_totals.threads_created + 1, \
-                 updated_at = now()"
-        }
-        crate::contributions::ActivityKind::Comment => {
-            "INSERT INTO activity.account_totals (account_id, comments_created) \
-             VALUES ($1, 1) \
-             ON CONFLICT (account_id) DO UPDATE \
-             SET comments_created = activity.account_totals.comments_created + 1, \
-                 updated_at = now()"
-        }
-        crate::contributions::ActivityKind::Like => {
-            "INSERT INTO activity.account_totals (account_id, likes_given) \
-             VALUES ($1, 1) \
-             ON CONFLICT (account_id) DO UPDATE \
-             SET likes_given = activity.account_totals.likes_given + 1, \
-                 updated_at = now()"
-        }
-    };
-    sqlx::query(statement).bind(account_id).execute(connection).await?;
-    Ok(())
-}
-
-/// Decrement lifetime totals when a contribution reverses.
-pub async fn decrement_totals_tx(
-    connection: &mut PgConnection,
-    account_id: i64,
-    kind: crate::contributions::ActivityKind,
-) -> AppResult<()> {
-    let statement = match kind {
-        crate::contributions::ActivityKind::Thread => {
-            "UPDATE activity.account_totals \
-             SET threads_created = GREATEST(threads_created - 1, 0), updated_at = now() \
-             WHERE account_id = $1"
-        }
-        crate::contributions::ActivityKind::Comment => {
-            "UPDATE activity.account_totals \
-             SET comments_created = GREATEST(comments_created - 1, 0), updated_at = now() \
-             WHERE account_id = $1"
-        }
-        crate::contributions::ActivityKind::Like => {
-            "UPDATE activity.account_totals \
-             SET likes_given = GREATEST(likes_given - 1, 0), updated_at = now() \
-             WHERE account_id = $1"
-        }
-    };
-    sqlx::query(statement).bind(account_id).execute(connection).await?;
-    Ok(())
 }
 
 fn effective_level(progress: &TrustProgressRow) -> i16 {
@@ -681,7 +1046,10 @@ fn progress_dto(
         policy_version: policy.version,
         is_max_level: level >= 6,
         override_active: progress.override_level.is_some(),
-        override_reason: progress.override_reason.clone(),
+        promotion_blocked_until: progress.promotion_blocked_until.map(|value| value.timestamp()),
+        promotion_requires_new_activity: progress
+            .promotion_score_floor
+            .is_some_and(|floor| score <= floor),
     }
 }
 
@@ -706,6 +1074,7 @@ fn policy_to_dto(row: TrustLevelPolicyRow) -> TrustLevelPolicyDto {
         threshold_level_5: row.threshold_level_5,
         threshold_level_6: row.threshold_level_6,
         like_daily_cap: row.like_daily_cap,
+        demotion_cooldown_days: row.demotion_cooldown_days,
         reason: row.reason,
         changed_by: row.changed_by.map_or_else(|| "system".into(), |id| id.to_string()),
         created_at: row.created_at.timestamp(),
@@ -743,6 +1112,9 @@ fn validate_policy_thresholds(input: &TrustLevelPolicyUpdateInput) -> AppResult<
     if !(0..=100_000).contains(&input.like_daily_cap) {
         return Err(AppError::BadRequest("likeDailyCap must be between 0 and 100000".into()));
     }
+    if !(0..=365).contains(&input.demotion_cooldown_days) {
+        return Err(AppError::BadRequest("demotionCooldownDays must be between 0 and 365".into()));
+    }
     let reason = input.reason.trim();
     if !(3..=500).contains(&reason.chars().count()) {
         return Err(AppError::BadRequest("reason must contain 3 to 500 characters".into()));
@@ -756,7 +1128,9 @@ async fn load_progress(
 ) -> AppResult<Option<TrustProgressRow>> {
     let row = sqlx::query_as::<_, TrustProgressRow>(
         "SELECT account_id, trust_level, qualifying_score, policy_version, override_level, \
-                override_reason, override_by, override_at, last_evaluated_at, updated_at \
+                override_reason, override_by, override_at, promotion_blocked_until, \
+                promotion_score_floor, last_evaluated_at, last_scheduled_evaluation_date, \
+                updated_at \
          FROM activity.account_trust_progress WHERE account_id = $1",
     )
     .bind(account_id)
@@ -769,7 +1143,7 @@ async fn current_policy_row_tx(connection: &mut PgConnection) -> AppResult<Trust
     sqlx::query_as::<_, TrustLevelPolicyRow>(
         "SELECT version, score_policy_version, threshold_level_2, threshold_level_3, \
                 threshold_level_4, threshold_level_5, threshold_level_6, like_daily_cap, \
-                reason, changed_by, created_at \
+                demotion_cooldown_days, reason, changed_by, created_at \
          FROM activity.trust_level_policies \
          ORDER BY version DESC LIMIT 1",
     )
@@ -783,30 +1157,25 @@ async fn compute_qualifying_score_tx(
     account_id: i64,
     policy: &TrustLevelPolicyRow,
 ) -> AppResult<i64> {
-    let (thread_weight, comment_weight, like_weight): (i32, i32, i32) = sqlx::query_as(
-        "SELECT thread_weight, comment_weight, like_weight \
-         FROM activity.score_policies WHERE version = $1",
-    )
-    .bind(policy.score_policy_version)
-    .fetch_one(&mut *connection)
-    .await?;
-    let score: Option<i64> = sqlx::query_scalar(
-        "SELECT COALESCE(SUM( \
-            counts.threads_created * $2 \
-            + counts.comments_created * $3 \
-            + LEAST(counts.likes_given * $4, $5) \
-         ), 0)::bigint \
-         FROM activity.daily_counts counts \
-         WHERE counts.account_id = $1",
+    let projection: Option<(i64, i64, i64)> = sqlx::query_as(
+        "SELECT qualifying_score, score_policy_version, trust_policy_version \
+         FROM activity.account_scores WHERE account_id = $1",
     )
     .bind(account_id)
-    .bind(thread_weight)
-    .bind(comment_weight)
-    .bind(like_weight)
-    .bind(policy.like_daily_cap)
-    .fetch_one(connection)
+    .fetch_optional(connection)
     .await?;
-    Ok(score.unwrap_or(0))
+    match projection {
+        None => Ok(0),
+        Some((score, score_policy_version, trust_policy_version))
+            if score_policy_version == policy.score_policy_version
+                && trust_policy_version == policy.version =>
+        {
+            Ok(score)
+        }
+        Some(_) => {
+            Err(AppError::Internal(anyhow::anyhow!("activity score projection policy is stale")))
+        }
+    }
 }
 
 async fn project_identity_level(
@@ -879,6 +1248,7 @@ mod tests {
             threshold_level_5: 1200,
             threshold_level_6: 3000,
             like_daily_cap: 20,
+            demotion_cooldown_days: 7,
             reason: "test".into(),
             changed_by: None,
             created_at: Utc::now(),

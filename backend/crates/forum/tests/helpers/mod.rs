@@ -491,7 +491,6 @@ async fn run_migrations(pool: &PgPool) {
     sqlx::query("DELETE FROM identity.account_keys").execute(pool).await.ok();
     sqlx::query("DELETE FROM activity.trust_level_events").execute(pool).await.ok();
     sqlx::query("DELETE FROM activity.account_trust_progress").execute(pool).await.ok();
-    sqlx::query("DELETE FROM activity.account_totals").execute(pool).await.ok();
     retire_test_accounts(pool).await;
 
     // Seed a default board with a deterministic id. `forum.boards.id` is

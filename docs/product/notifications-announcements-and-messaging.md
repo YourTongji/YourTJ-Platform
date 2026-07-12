@@ -6,7 +6,7 @@
 >
 > 负责人：Forum/Web/Platform maintainers、Community operations、Privacy owner
 >
-> 最近核验：2026-07-12，migration `0054`、Forum/Platform notification tests 与 Web notification tests
+> 最近核验：2026-07-12，migration `0054`、Forum/Platform notification tests 与 Web announcement auth-state tests
 
 通知告诉用户“发生了什么”，公告传达平台级信息，私信承载参与者之间的非公开交流。三者都
 涉及未读、实时、偏好和保留，但必须保持各自的权限和证据边界。
@@ -51,6 +51,9 @@
   可访问的全局弹窗队列；公告页显示有效期、revision 和本人确认状态，后台显示 receipt summary/history。
 - 匿名访客只收到 `all` 受众公告，Web 用 revision-scoped 本地 seen 避免同版本重复；登录后服务端
   receipt 重新成为唯一事实。
+- 全局公告队列等待 Auth Provider 完成账号/session 初始化并确认 onboarding 可进入应用后才挂载；loading
+  期间不先按匿名 local seen 读取再切到登录 receipt，避免同一 revision 闪现、漏记或重复展示。真正匿名
+  状态确认后才使用本地 seen；登录/退出后的下一次 mount 重新选择对应事实源。
 - 私信有 canonical 1:1 conversation、分页 inbox/messages、单调 read pointer、准确未读、
   block/sanction/trust 检查、单条举报和受限 staff evidence。
 - 私信支持 participant-local archive/unarchive、可恢复删除、会话搜索和 mute；新消息会让双方的归档/

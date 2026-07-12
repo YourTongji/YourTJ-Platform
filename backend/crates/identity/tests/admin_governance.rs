@@ -73,6 +73,15 @@ async fn admin_invitation_requires_mailbox_proof_and_records_audit() {
     .await
     .expect("invitation audit");
     assert_eq!(audit_count, 1);
+    let delivery_job: (String, String) = sqlx::query_as(
+        "SELECT kind, status FROM identity.email_delivery_jobs \
+         WHERE account_id = $1 ORDER BY id DESC LIMIT 1",
+    )
+    .bind(invitation.0)
+    .fetch_one(&pool)
+    .await
+    .expect("durable invitation delivery job");
+    assert_eq!(delivery_job, ("admin_invitation".into(), "queued".into()));
 
     helpers::insert_valid_code(&pool, &invited_email, "123456").await;
     let verification = app

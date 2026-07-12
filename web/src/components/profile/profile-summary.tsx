@@ -13,6 +13,7 @@ import {
   Volume2,
   VolumeX,
 } from "lucide-react";
+import * as React from "react";
 import { Link } from "react-router";
 
 import { TeaBadge } from "@/components/common/tea-badge";
@@ -58,6 +59,7 @@ interface ProfileSummaryProps {
   onToggleMute: () => void;
   onToggleBlock: () => void;
   onOpenRelationshipList: (kind: ProfileRelationshipListKind) => void;
+  onMediaDeliveryRefresh: () => void;
 }
 
 function Stat({
@@ -111,24 +113,44 @@ export function ProfileSummary({
   onToggleMute,
   onToggleBlock,
   onOpenRelationshipList,
+  onMediaDeliveryRefresh,
 }: ProfileSummaryProps) {
   const roleLabel = roleLabels[profile.role];
   const isBlocked = Boolean(relationship?.blockedByMe);
   const controlsPending = relationshipLoading || relationshipPending;
+  const lastMediaRecoveryAt = React.useRef(0);
+  const recoverMediaDelivery = () => {
+    const now = Date.now();
+    if (now - lastMediaRecoveryAt.current < 15_000) return;
+    lastMediaRecoveryAt.current = now;
+    onMediaDeliveryRefresh();
+  };
 
   return (
     <>
       <Card className="overflow-hidden">
-        <div
-          className="h-28 bg-gradient-to-r from-primary/20 via-primary/5 to-transparent bg-cover bg-center"
-          style={profile.bannerUrl ? { backgroundImage: `url(${profile.bannerUrl})` } : undefined}
-          aria-hidden="true"
-        />
+        <div className="relative h-28 overflow-hidden bg-gradient-to-r from-primary/20 via-primary/5 to-transparent">
+          {profile.bannerUrl ? (
+            <img
+              src={profile.bannerUrl}
+              alt=""
+              aria-hidden="true"
+              referrerPolicy="no-referrer"
+              onError={recoverMediaDelivery}
+              className="absolute inset-0 size-full object-cover"
+            />
+          ) : null}
+        </div>
         <CardContent className="-mt-10 grid gap-5 p-5 pt-0 lg:grid-cols-[minmax(0,1fr)_25rem]">
           <div className="min-w-0">
             <div className="flex flex-col gap-4 sm:flex-row sm:items-end">
               <Avatar className="size-24 border-4 border-card shadow-sm">
-                <AvatarImage src={profile.avatarUrl ?? undefined} alt={`${profile.handle} 的头像`} />
+                <AvatarImage
+                  src={profile.avatarUrl ?? undefined}
+                  alt={`${profile.handle} 的头像`}
+                  referrerPolicy="no-referrer"
+                  onError={recoverMediaDelivery}
+                />
                 <AvatarFallback className="text-xl">
                   {profile.handle.slice(0, 1).toUpperCase()}
                 </AvatarFallback>

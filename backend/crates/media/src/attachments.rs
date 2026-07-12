@@ -52,6 +52,7 @@ pub struct ForumAttachment {
     pub position: i16,
     pub alt: String,
     pub url: String,
+    pub expires_at: i64,
     pub width: Option<i32>,
     pub height: Option<i32>,
 }
@@ -62,6 +63,7 @@ struct BindableUploadRow {
     kind: String,
     status: String,
     usage: Option<String>,
+    is_published: bool,
 }
 
 #[derive(Debug, FromRow, Eq, PartialEq)]
@@ -77,7 +79,7 @@ struct AttachmentProjectionRow {
     asset_id: i64,
     position: i16,
     alt_text: String,
-    url: String,
+    object_key: String,
     image_width: Option<i32>,
     image_height: Option<i32>,
 }
@@ -89,7 +91,7 @@ struct VersionedAttachmentProjectionRow {
     asset_id: i64,
     position: i16,
     alt_text: String,
-    url: String,
+    object_key: String,
     image_width: Option<i32>,
     image_height: Option<i32>,
 }
@@ -130,8 +132,16 @@ async fn lock_bindable_uploads(
         return Ok(());
     }
     let rows = sqlx::query_as::<_, BindableUploadRow>(
-        "SELECT account_id, kind, status, usage \
-         FROM media.uploads WHERE id = ANY($1) ORDER BY id FOR SHARE",
+        "SELECT upload.account_id, upload.kind, upload.status, upload.usage, \
+                EXISTS (SELECT 1 FROM media.asset_publications publication \
+                        JOIN media.asset_variants variant \
+                          ON variant.asset_id = publication.asset_id \
+                         AND variant.policy_version = publication.policy_version \
+                         AND variant.variant_kind = 'display_1280' \
+                        WHERE publication.asset_id = upload.id \
+                          AND publication.status = 'published' \
+                          AND variant.status = 'published') AS is_published \
+         FROM media.uploads upload WHERE upload.id = ANY($1) ORDER BY upload.id FOR SHARE",
     )
     .bind(asset_ids)
     .fetch_all(&mut *connection)
@@ -144,7 +154,7 @@ async fn lock_bindable_uploads(
             || row.kind != "image"
             || row.usage.as_deref() != Some(target_type.as_str())
             || if clean_only {
-                row.status != "clean"
+                row.status != "clean" || !row.is_published
             } else {
                 !matches!(row.status.as_str(), "pending" | "clean" | "blocked")
             }
@@ -301,16 +311,21 @@ pub async fn detach_forum_asset_bindings(
     Ok(())
 }
 
-fn attachment_from_row(row: AttachmentProjectionRow) -> ForumAttachment {
-    ForumAttachment {
+fn attachment_from_row(
+    row: AttachmentProjectionRow,
+    delivery: &crate::delivery::DeliveryConfig,
+) -> AppResult<ForumAttachment> {
+    let signed = delivery.sign_object(&row.object_key)?;
+    Ok(ForumAttachment {
         asset_id: row.asset_id.to_string(),
         reference: format!("yourtj-asset:{}", row.asset_id),
         position: row.position,
         alt: row.alt_text,
-        url: row.url,
+        url: signed.url,
+        expires_at: signed.expires_at.timestamp(),
         width: row.image_width,
         height: row.image_height,
-    }
+    })
 }
 
 /// Resolve active clean bindings for a bounded set of authorized Forum targets. Storage keys,
@@ -324,21 +339,35 @@ pub async fn resolve_forum_attachments_batch(
         return Ok(HashMap::new());
     }
     let rows = sqlx::query_as::<_, AttachmentProjectionRow>(
-        "SELECT usage.target_id, usage.asset_id, usage.position, usage.alt_text, upload.url, \
-                upload.image_width, upload.image_height \
+        "SELECT usage.target_id, usage.asset_id, usage.position, usage.alt_text, \
+                variant.object_key, variant.width AS image_width, variant.height AS image_height \
          FROM media.asset_usages usage \
          JOIN media.uploads upload ON upload.id = usage.asset_id \
+         JOIN media.asset_publications publication ON publication.asset_id = upload.id \
+         JOIN media.asset_variants variant \
+           ON variant.asset_id = upload.id \
+          AND variant.policy_version = publication.policy_version \
+          AND variant.variant_kind = 'display_1280' \
          WHERE usage.target_type = $1 AND usage.target_id = ANY($2) \
            AND usage.detached_at IS NULL AND upload.kind = 'image' AND upload.status = 'clean' \
+           AND publication.status = 'published' AND variant.status = 'published' \
          ORDER BY usage.target_id, usage.position",
     )
     .bind(target_type.as_str())
     .bind(target_ids)
     .fetch_all(pool)
     .await?;
+    let delivery = if rows.is_empty() {
+        None
+    } else {
+        Some(crate::delivery::require_delivery_config_from_env()?)
+    };
     let mut attachments = HashMap::<i64, Vec<ForumAttachment>>::new();
     for row in rows {
-        attachments.entry(row.target_id).or_default().push(attachment_from_row(row));
+        let delivery = delivery.as_ref().ok_or_else(|| {
+            AppError::Internal(anyhow::anyhow!("media Delivery config disappeared"))
+        })?;
+        attachments.entry(row.target_id).or_default().push(attachment_from_row(row, delivery)?);
     }
     Ok(attachments)
 }
@@ -357,16 +386,22 @@ pub async fn resolve_forum_attachments_at_versions(
     let content_versions = content_versions.into_iter().collect::<Vec<_>>();
     let rows = sqlx::query_as::<_, VersionedAttachmentProjectionRow>(
         "SELECT version.content_version, usage.target_id, usage.asset_id, usage.position, \
-                usage.alt_text, upload.url, \
-                upload.image_width, upload.image_height \
+                usage.alt_text, variant.object_key, \
+                variant.width AS image_width, variant.height AS image_height \
          FROM unnest($3::bigint[]) AS version(content_version) \
          JOIN media.asset_usages usage \
            ON usage.target_type = $1 AND usage.target_id = $2 \
          JOIN media.uploads upload ON upload.id = usage.asset_id \
+         JOIN media.asset_publications publication ON publication.asset_id = upload.id \
+         JOIN media.asset_variants variant \
+           ON variant.asset_id = upload.id \
+          AND variant.policy_version = publication.policy_version \
+          AND variant.variant_kind = 'display_1280' \
          WHERE usage.bound_content_version <= version.content_version \
            AND (usage.detached_at IS NULL OR (usage.detached_reason = 'content_edit' \
                 AND usage.detached_content_version > version.content_version)) \
            AND upload.kind = 'image' AND upload.status = 'clean' \
+           AND publication.status = 'published' AND variant.status = 'published' \
          ORDER BY version.content_version, usage.position",
     )
     .bind(target_type.as_str())
@@ -374,20 +409,29 @@ pub async fn resolve_forum_attachments_at_versions(
     .bind(content_versions)
     .fetch_all(pool)
     .await?;
+    let delivery = if rows.is_empty() {
+        None
+    } else {
+        Some(crate::delivery::require_delivery_config_from_env()?)
+    };
     let mut attachments = HashMap::<i64, Vec<ForumAttachment>>::new();
     for row in rows {
         let content_version = row.content_version;
+        let delivery = delivery.as_ref().ok_or_else(|| {
+            AppError::Internal(anyhow::anyhow!("media Delivery config disappeared"))
+        })?;
         attachments.entry(content_version).or_default().push(attachment_from_row(
             AttachmentProjectionRow {
                 target_id: row.target_id,
                 asset_id: row.asset_id,
                 position: row.position,
                 alt_text: row.alt_text,
-                url: row.url,
+                object_key: row.object_key,
                 image_width: row.image_width,
                 image_height: row.image_height,
             },
-        ));
+            delivery,
+        )?);
     }
     Ok(attachments)
 }

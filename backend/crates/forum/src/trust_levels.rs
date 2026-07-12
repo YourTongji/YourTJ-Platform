@@ -26,7 +26,7 @@ pub fn flag_weight(trust_level: i16) -> f32 {
 
 /// Apply automatic one-step upgrades for active accounts.
 pub async fn run_daily_tl_promotion(pool: &PgPool) -> (i64, i64) {
-    activity::trust::run_trust_evaluation(pool).await
+    activity::trust::run_scheduled_trust_evaluation(pool).await
 }
 
 #[cfg(test)]

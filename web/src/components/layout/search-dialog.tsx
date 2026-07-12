@@ -10,6 +10,10 @@ import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { api } from "@/lib/api/endpoints";
 import { formatUnixTime } from "@/lib/format";
+import {
+  COMPATIBILITY_DELIVERY_REFRESH_INTERVAL_MS,
+  useBoundedDeliveryRecovery,
+} from "@/lib/media-delivery";
 
 export function SearchDialog({
   open,
@@ -23,8 +27,10 @@ export function SearchDialog({
   const result = useQuery({
     queryKey: ["search", trimmed],
     queryFn: () => api.search(trimmed),
-    enabled: trimmed.length >= 2,
+    enabled: open && trimmed.length >= 2,
+    refetchInterval: COMPATIBILITY_DELIVERY_REFRESH_INTERVAL_MS,
   });
+  const recoverAvatarDelivery = useBoundedDeliveryRecovery(() => result.refetch());
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -164,7 +170,16 @@ export function SearchDialog({
                       className="flex items-center gap-3 rounded-md border p-3 transition-colors hover:bg-accent"
                     >
                       <Avatar className="size-9 border">
-                        {user.avatarUrl ? <AvatarImage src={user.avatarUrl} alt="" /> : null}
+                        {user.avatarUrl ? (
+                          <AvatarImage
+                            src={user.avatarUrl}
+                            alt=""
+                            referrerPolicy="no-referrer"
+                            onLoadingStatusChange={(status) => {
+                              if (status === "error") recoverAvatarDelivery();
+                            }}
+                          />
+                        ) : null}
                         <AvatarFallback>{user.handle.slice(0, 1).toUpperCase()}</AvatarFallback>
                       </Avatar>
                       <div className="min-w-0">

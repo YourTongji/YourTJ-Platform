@@ -2,14 +2,16 @@
 
 use std::net::SocketAddr;
 
-use axum::http::HeaderValue;
+use axum::extract::State;
+use axum::http::header::{ACCEPT, AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE, PRAGMA};
+use axum::http::{HeaderName, HeaderValue, Method};
 use axum::routing::get;
 use axum::{Json, Router};
 use serde_json::{json, Value};
 use shared::sse::SsePayload;
 use shared::AppState;
 use tokio::sync::broadcast;
-use tower_http::cors::{Any, CorsLayer};
+use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::request_id::{MakeRequestUuid, SetRequestIdLayer};
 use tower_http::set_header::SetResponseHeaderLayer;
@@ -110,6 +112,8 @@ pub async fn run() -> anyhow::Result<()> {
         captcha_verifier,
         sse_tx: Some(sse_tx),
     };
+    media::validate_delivery_runtime(&state.config)?;
+    tracing::info!("media Delivery runtime configuration validated");
     // Meilisearch index setup and readiness check on startup.
     {
         let meili_url = state.meili_url.clone();
@@ -149,19 +153,20 @@ pub async fn run() -> anyhow::Result<()> {
         tracing::info!("forum hot rank refresh scheduled (every 5 min)");
     }
 
-    // 2. Trust level promotion (every 24 hours).
+    // 2. Trust level promotion (once per Shanghai day, lease-fenced in PostgreSQL).
     let db = state.db.clone();
     tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
         loop {
-            tokio::time::sleep(std::time::Duration::from_secs(86400)).await;
-            tracing::info!("running daily trust level promotion");
+            interval.tick().await;
+            tracing::debug!("checking scheduled trust level promotion");
             let (promoted, demoted) = forum::trust_levels::run_daily_tl_promotion(&db).await;
             if promoted > 0 || demoted > 0 {
                 tracing::info!(promoted, demoted, "trust level changes applied");
             }
         }
     });
-    tracing::info!("forum trust level promotion scheduled (every 24h)");
+    tracing::info!("forum trust level promotion scheduled (hourly lease check)");
 
     // 3. Watched words initialization (on startup, once).
     forum::watched_words::init_watched_words(&state.db).await;
@@ -171,6 +176,11 @@ pub async fn run() -> anyhow::Result<()> {
     platform::achievements::seed_achievements(&state.db).await?;
     tracing::info!("platform achievements seeded");
     crate::notification_worker::start(&state);
+    {
+        let worker_state = state.clone();
+        tokio::spawn(identity::email_delivery::run_email_delivery_worker(worker_state));
+        tracing::info!("identity email delivery worker scheduled");
+    }
 
     // 5. Auto-archive stale threads (daily).
     {
@@ -227,7 +237,7 @@ pub async fn run() -> anyhow::Result<()> {
     {
         let worker_state = state.clone();
         tokio::spawn(media::run_deletion_worker(worker_state));
-        tracing::info!("media object deletion worker scheduled");
+        tracing::info!("media variant processing and object deletion worker scheduled");
     }
     if state.config.media_retention_gc_enabled {
         let worker_state = state.clone();
@@ -304,8 +314,8 @@ pub async fn run() -> anyhow::Result<()> {
     crate::account_data::spawn_workers(state.clone());
     tracing::info!("account lifecycle and data-export workers scheduled");
 
-    let app = build_router(state);
-    let addr = SocketAddr::from(([0, 0, 0, 0], config.port));
+    let app = build_router(state)?;
+    let addr = SocketAddr::new(config.bind_address, config.port);
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!(%addr, "yourtj-platform api listening");
 
@@ -314,9 +324,37 @@ pub async fn run() -> anyhow::Result<()> {
 }
 
 /// Compose the full application router from per-domain routers.
-fn build_router(state: AppState) -> Router {
+fn build_router(state: AppState) -> anyhow::Result<Router> {
     let tip_target_resolver = std::sync::Arc::new(crate::tip_targets::ContentTipTargetResolver);
-    let cors = CorsLayer::new().allow_origin(Any).allow_methods(Any).allow_headers(Any);
+    let allowed_origins = state
+        .config
+        .cors_allowed_origins
+        .iter()
+        .map(|origin| HeaderValue::from_str(origin))
+        .collect::<Result<Vec<_>, _>>()?;
+    let cors = CorsLayer::new()
+        .allow_origin(AllowOrigin::list(allowed_origins))
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::PUT,
+            Method::PATCH,
+            Method::DELETE,
+            Method::OPTIONS,
+        ])
+        .allow_headers([
+            ACCEPT,
+            AUTHORIZATION,
+            CONTENT_TYPE,
+            HeaderName::from_static("idempotency-key"),
+            HeaderName::from_static("x-export-token"),
+            HeaderName::from_static("x-media-preview-token"),
+            HeaderName::from_static("x-recovery-token"),
+            HeaderName::from_static("x-wallet-intent"),
+            HeaderName::from_static("x-wallet-sig"),
+            HeaderName::from_static("x-request-id"),
+        ])
+        .allow_credentials(true);
 
     let request_id_layer = SetRequestIdLayer::x_request_id(MakeRequestUuid);
 
@@ -324,10 +362,15 @@ fn build_router(state: AppState) -> Router {
 
     // Limit request body to 256 KB.
     let body_limit = RequestBodyLimitLayer::new(256_000);
+    let readiness_routes = Router::new()
+        .route("/ready", get(ready))
+        .route("/api/v2/ready", get(ready))
+        .with_state(state.clone());
 
-    Router::new()
+    Ok(Router::new()
         .route("/health", get(health))
         .route("/api/v2/health", get(health))
+        .merge(readiness_routes)
         .merge(platform::routes(state.clone()))
         .merge(crate::admin::routes(state.clone()))
         .merge(crate::appeals::routes(state.clone()))
@@ -358,14 +401,47 @@ fn build_router(state: AppState) -> Router {
                 .layer(SetResponseHeaderLayer::overriding(
                     axum::http::header::REFERRER_POLICY,
                     HeaderValue::from_static("strict-origin-when-cross-origin"),
+                ))
+                .layer(SetResponseHeaderLayer::if_not_present(
+                    CACHE_CONTROL,
+                    HeaderValue::from_static("private, no-store"),
+                ))
+                .layer(SetResponseHeaderLayer::if_not_present(
+                    PRAGMA,
+                    HeaderValue::from_static("no-cache"),
                 )),
         )
-        .layer(body_limit)
+        .layer(body_limit))
 }
 
 /// Liveness probe used by SAE / load balancers.
 async fn health() -> Json<Value> {
     Json(json!({ "status": "ok", "service": "yourtj-platform", "version": "2.0.0" }))
+}
+
+/// Readiness requires the authoritative database and the latest migration.
+async fn ready(State(state): State<AppState>) -> shared::AppResult<Json<Value>> {
+    let expected_version = MIGRATOR.iter().map(|migration| migration.version).max().unwrap_or(0);
+    let applied_version: Option<i64> =
+        match sqlx::query_scalar("SELECT MAX(version) FROM _sqlx_migrations WHERE success = TRUE")
+            .fetch_one(&state.db)
+            .await
+        {
+            Ok(version) => version,
+            Err(error) => {
+                tracing::warn!(?error, "readiness database check failed");
+                return Err(shared::AppError::ServiceUnavailable);
+            }
+        };
+    if applied_version.unwrap_or(0) < expected_version {
+        tracing::warn!(applied_version, expected_version, "readiness migration check failed");
+        return Err(shared::AppError::ServiceUnavailable);
+    }
+    Ok(Json(json!({
+        "status": "ok",
+        "service": "yourtj-platform",
+        "version": "2.0.0",
+    })))
 }
 
 async fn run_migrations(pool: &sqlx::PgPool) -> anyhow::Result<()> {
@@ -464,15 +540,17 @@ fn derive_system_key(hex_key: &str) -> anyhow::Result<(Vec<u8>, String)> {
 #[cfg(test)]
 mod tests {
     use axum::body::Body;
-    use axum::http::{Request, StatusCode};
+    use axum::http::header::{
+        ACCESS_CONTROL_ALLOW_ORIGIN, ACCESS_CONTROL_REQUEST_METHOD, CACHE_CONTROL, ORIGIN,
+    };
+    use axum::http::{HeaderValue, Request, StatusCode};
     use shared::AppState;
     use tower::ServiceExt as _;
 
     use super::{build_router, legacy_marker_query};
 
-    #[tokio::test]
-    async fn health_is_available_under_versioned_api_path() {
-        let state = AppState {
+    fn test_state() -> AppState {
+        AppState {
             db: sqlx::PgPool::connect_lazy("postgres://user:password@localhost/test")
                 .expect("valid lazy postgres URL"),
             config: shared::Config::from_env().expect("test Config::from_env"),
@@ -487,9 +565,13 @@ mod tests {
             email_encryption: None,
             captcha_verifier: None,
             sse_tx: None,
-        };
+        }
+    }
 
-        let response = build_router(state)
+    #[tokio::test]
+    async fn health_is_available_under_versioned_api_path() {
+        let response = build_router(test_state())
+            .expect("router configuration is valid")
             .oneshot(
                 Request::builder()
                     .uri("/api/v2/health")
@@ -500,6 +582,46 @@ mod tests {
             .expect("request succeeds");
 
         assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get(CACHE_CONTROL),
+            Some(&HeaderValue::from_static("private, no-store"))
+        );
+    }
+
+    #[tokio::test]
+    async fn cors_echoes_only_configured_exact_origins() {
+        let allowed = build_router(test_state())
+            .expect("router configuration is valid")
+            .oneshot(
+                Request::builder()
+                    .method("OPTIONS")
+                    .uri("/api/v2/health")
+                    .header(ORIGIN, "https://pf-dev.yourtj.de")
+                    .header(ACCESS_CONTROL_REQUEST_METHOD, "GET")
+                    .body(Body::empty())
+                    .expect("allowed preflight builds"),
+            )
+            .await
+            .expect("allowed preflight succeeds");
+        assert_eq!(
+            allowed.headers().get(ACCESS_CONTROL_ALLOW_ORIGIN),
+            Some(&HeaderValue::from_static("https://pf-dev.yourtj.de"))
+        );
+
+        let denied = build_router(test_state())
+            .expect("router configuration is valid")
+            .oneshot(
+                Request::builder()
+                    .method("OPTIONS")
+                    .uri("/api/v2/health")
+                    .header(ORIGIN, "https://evil.example")
+                    .header(ACCESS_CONTROL_REQUEST_METHOD, "GET")
+                    .body(Body::empty())
+                    .expect("denied preflight builds"),
+            )
+            .await
+            .expect("denied preflight completes");
+        assert!(denied.headers().get(ACCESS_CONTROL_ALLOW_ORIGIN).is_none());
     }
 
     #[test]

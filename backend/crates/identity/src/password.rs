@@ -8,11 +8,14 @@
 //! (score ≥ 2 required), passing the email as user_inputs to weaken
 //! common passwords that include personal info.
 
+use std::sync::{Arc, LazyLock};
+
 use argon2::{
     password_hash::{rand_core::OsRng, PasswordHasher, SaltString},
     Algorithm, Argon2, Params, PasswordHash, PasswordVerifier, Version,
 };
 use shared::AppError;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use crate::error::IdentityError;
 
@@ -27,6 +30,27 @@ const MIN_LENGTH: usize = 8;
 const MAX_LENGTH: usize = 128;
 
 const DUMMY_PASSWORD_HASH: &str = "$argon2id$v=19$m=19456,t=2,p=1$lMsuCNrM/Jk4lpdAY/Gk9w$NkmJDYSq0o5US61ZPai1ajtpZWKmn7Rvn4wqQn3DR7Y";
+const MAX_CONCURRENT_ARGON2_JOBS: usize = 4;
+
+struct Argon2Limiter {
+    permits: Arc<Semaphore>,
+}
+
+impl Argon2Limiter {
+    fn new(limit: usize) -> Self {
+        Self { permits: Arc::new(Semaphore::new(limit)) }
+    }
+
+    fn try_acquire(&self) -> Result<OwnedSemaphorePermit, AppError> {
+        self.permits.clone().try_acquire_owned().map_err(|_| {
+            tracing::warn!("password hashing capacity is exhausted");
+            AppError::ServiceUnavailable
+        })
+    }
+}
+
+static ARGON2_LIMITER: LazyLock<Argon2Limiter> =
+    LazyLock::new(|| Argon2Limiter::new(MAX_CONCURRENT_ARGON2_JOBS));
 
 fn hash_blocking(password: &str) -> Result<String, AppError> {
     if password.is_empty() {
@@ -56,19 +80,27 @@ fn verify_blocking(password: &str, phc: &str) -> bool {
 
 /// Hash a password without blocking a Tokio worker thread.
 pub async fn hash(password: &str) -> Result<String, AppError> {
+    let permit = ARGON2_LIMITER.try_acquire()?;
     let password = password.to_owned();
-    tokio::task::spawn_blocking(move || hash_blocking(&password))
-        .await
-        .map_err(|error| AppError::Internal(anyhow::Error::new(error)))?
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        hash_blocking(&password)
+    })
+    .await
+    .map_err(|error| AppError::Internal(anyhow::Error::new(error)))?
 }
 
 /// Verify a password without blocking a Tokio worker thread.
 pub async fn verify(password: &str, phc: &str) -> Result<bool, AppError> {
+    let permit = ARGON2_LIMITER.try_acquire()?;
     let password = password.to_owned();
     let phc = phc.to_owned();
-    tokio::task::spawn_blocking(move || verify_blocking(&password, &phc))
-        .await
-        .map_err(|error| AppError::Internal(anyhow::Error::new(error)))
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        verify_blocking(&password, &phc)
+    })
+    .await
+    .map_err(|error| AppError::Internal(anyhow::Error::new(error)))
 }
 
 /// Perform one Argon2 verification even when an account has no stored password.
@@ -106,6 +138,15 @@ pub fn validate(password: &str, email: &str) -> Result<(), AppError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn limiter_rejects_work_beyond_its_memory_bound() {
+        let limiter = Argon2Limiter::new(1);
+        let permit = limiter.try_acquire().expect("first Argon2 job is admitted");
+        assert!(matches!(limiter.try_acquire(), Err(AppError::ServiceUnavailable)));
+        drop(permit);
+        assert!(limiter.try_acquire().is_ok());
+    }
 
     // -----------------------------------------------------------------------
     // hash / verify round-trip

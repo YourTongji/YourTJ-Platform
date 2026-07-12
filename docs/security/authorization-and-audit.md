@@ -6,7 +6,7 @@
 >
 > 负责人：Security owner、Identity/Governance maintainers
 >
-> 最近核验：2026-07-12，`origin/main@0492746`、governance/identity/media 实现与 ADMIN/委派授权决策
+> 最近核验：2026-07-12，migrations `0061`–`0062`、governance/identity/media tests、Cloudflare official CIDR
 
 后端授权每一个 staff 操作。Web 按 capability 隐藏导航只是可用性和数据最小化措施，绝不是
 安全边界。
@@ -40,12 +40,20 @@
   `operations.jobs` 只在 recent-auth 后读取 no-store operational hold/system deletion job；每次分页读取
   都审计。CAS 续期/解除 hold 或理由化重排 system dead letter 同样 recent-auth，审计不包含 provider
   key、URL 或 hash。
+- 当前持久角色 `admin` 具有 ADMIN 媒体自审专用例外。本人 preview/approve/block 必须在业务事务中
+  重验角色与当前 session recent-auth，接受 `selfReviewConfirmed=true` 和强制 reason；approve 还必须
+  使用同一 reviewer 的可信 preview evidence，fail-closed 的 self-block 不依赖预览。`selfReview=true`
+  写入对应 evidence、cleanup job 与 governance audit。Moderator、未来委派管理员和 ADMIN 的其他治理
+  对象仍执行 no-self。
+- Media Delivery processing retry 使用 `operations.jobs`，每次要求 recent-auth、reason、failed/dead-letter
+  状态重验和同事务 audit；不能通过 retry capability 直接写 publication=published。
 
 ### Partial
 
 - 目标模型已确定为 ADMIN 拥有所有平台定义的 staff capability，并且只有 ADMIN 可以任免
   普通管理员、逐账号授予审核 capability。当前 capability 仍按角色静态映射，没有
-  per-account delegation、grant expiry/revocation/history 或 ADMIN 媒体自审例外。
+  per-account delegation、grant expiry/revocation/history；ADMIN 媒体自审是已交付的唯一利益冲突例外，
+  不能被当成委派模型已经上线。
 - 缺标准 request id/source/result、失败/拒绝 attempt audit 和受控 export。
 - 缺双人审批、自动 assignment/recusal workflow、SLA escalation 和明确 retention；申诉的原处置人
   回避、reviewer 绑定与 lower-role 检查已经在服务端生效。
@@ -55,7 +63,7 @@
 
 | Capability | mod | admin | 主要用途 |
 |---|:---:|:---:|---|
-| `moderation.content` | yes | yes | forum/review/media/reported-DM 审核与恢复；所有用户目标仍受 strict lower-role 与 no-self 约束 |
+| `moderation.content` | yes | yes | forum/review/media/reported-DM 审核与恢复；strict lower-role 与 no-self 生效，只有 admin 本人媒体走专用自审条件 |
 | `users.search` | yes | yes | 隐私安全的用户目录与制裁历史 |
 | `users.silence` | yes | yes | 对 lower-role 限时禁言与撤销 |
 | `audit.read` | yes | yes | 中央审计查询 |
@@ -68,10 +76,10 @@
 | `platform.settings` | — | yes | 当前 generic settings |
 | `activity.policy` | — | yes | 活跃权重和历史 |
 | `announcements.manage` | — | yes | 当前公告管理 |
-| `promotions.manage` | — | yes | 自营推广、排期、站内目标和 clean asset reference |
+| `promotions.manage` | — | yes | 自营推广、排期、站内目标和 clean + published asset reference |
 | `badges.manage` | — | yes | versioned 成就定义、lower-role 人工授予/撤销与事件历史 |
 | `verifications.manage` | — | yes | typed 身份/特殊认证定义、低角色账号授予历史与撤销 |
-| `operations.jobs` | — | yes | selection sync/reindex；敏感 no-store media operations inventory、operational hold CAS 与 system deletion dead-letter retry |
+| `operations.jobs` | — | yes | selection sync/reindex；敏感 no-store media operations inventory、operational hold CAS、Delivery processing 与 system cleanup dead-letter retry |
 | `credit.integrity` | — | yes | 运行和读取只读 ledger/wallet reconciliation |
 
 用户角色没有 staff capability。没有 capability 可以查看任意校园邮箱/DM、编辑 wallet balance 或
@@ -81,8 +89,9 @@ capability，不能塞进过宽的 `community.manage`。
 
 ## 目标 ADMIN 与普通管理员模型
 
-本节为 `Planned`，不改写上述 Current capability 表。未来实现必须以新 migration、OpenAPI、Web 类型和
-handler→PostgreSQL 测试同步交付。
+普通管理员 assignment/grant 部分为 `Planned`，不改写上述 Current capability 表。未来实现必须以新
+migration、OpenAPI、Web 类型和 handler→PostgreSQL 测试同步交付。ADMIN 媒体自审小节明确标为
+`Current`，是可单独成立的严格例外，不依赖未来 delegated grant schema。
 
 ### 角色与授权来源
 
@@ -120,17 +129,23 @@ ADMIN 任命时可组合上述审核权限，并为每项 grant 设定 target ce
   refresh snapshot。如当前 session 模型不能保证即时失效，撤销 assignment/grant 时必须同步撤销相关 session。
 - 到期在读/写授权时 fail closed；后台空态明确区分“无 grant”、“已撤销”、“已过期”和“目标超出上限”。
 
-### ADMIN 媒体自审例外
+### ADMIN 媒体自审例外（Current）
 
 利益冲突默认仍是 no-self。唯一例外是 ADMIN 对本人媒体上传执行预览、approve 或 block，用于在
 没有第二位 staff 时恢复头像/素材上线路径。该例外必须同时满足：
 
 - actor 在 mutation 事务中重验为 ADMIN，不依赖 stale JWT role/capability；
 - 当前 session 完成 recent-auth，填写强制 reason，Web 展示“正在审核本人上传”的明确二次确认；
-- 仍先通过可信 raster preview/decoder 边界；PDF/file 在 scanner/sandbox evidence 完成前不因 ADMIN 而可批准；
+- approve 仍先通过可信 raster preview/decoder 边界；self-block 不要求读取待审内容；PDF/file 在
+  scanner/sandbox evidence 完成前不因 ADMIN 而可批准；
 - audit 显式记录 `selfReview=true`、upload id、action、reason、request id 与 result，不记 object key/URL/hash；
 - 普通管理员和 moderator 仍不得自审；ADMIN 也不得自审申诉、本人角色/grant、账号制裁、认证/成就授予、
   audit export 或积分完整性处置。
+
+可信 preview grant 与 evidence 都绑定 upload、actor 和 `selfReview`，preview token 一次消费且响应
+`private, no-store`。Approve 必须有该 evidence，仍只把 publication 置为 processing；完整的 sanitized variants 发布前，
+ADMIN 也不能建立业务 binding 或签发 CDN URL。Block/cleanup 将同一 `selfReview` provenance 带入 job
+与 audit，不能在异步边界丢失利益冲突记录。
 
 ## 授权规则
 
@@ -157,6 +172,10 @@ ADMIN 任命时可组合上述审核权限，并为每项 grant 设定 target ce
   session recent-auth，并在读取事务写 result count audit。只有 non-moderation dead letter 可在 reason 和
   当前 job/upload 状态重验后重排。Retry reason 写独立 event，不改写原始 system purpose，并与
   append-only audit 同事务。
+- Media processing retry 与 deletion retry 是不同状态机：前者只重排 clean asset 的 failed publication/
+  dead-letter variant job，后者只重排允许的 quarantined system cleanup。两者均重验 current row、
+  recent-auth 和 reason，返回 queued 不代表 published/deleted；不得复用一个“重试任务”按钮跳过 owner
+  state、moderation provenance 或 cleanup 顺序。
 - Reported-DM 只开放 participant 报告的最小 evidence，读取动作本身写 audit。
 - 内容打赏的 recipient 必须由内容 owner domain 解析为当前可见 target 的 author，再由 identity
   目的限定接口确认账号 active 且无有效 suspend；拒绝 self-tip 和客户端伪造 recipient。
@@ -205,6 +224,8 @@ Account actor 必须有 account id；system/service 不使用虚构 id `0`。Sec
 signature-as-credential、raw request body、完整内容或任意 DM 不得进入 metadata。
 认证 audit 可以记录 account id、type slug、是否公开、到期时间和是否存在 evidence，但不能记录 evidence
 reference 或实际证据内容。
+媒体自审 audit 额外记录布尔 `selfReview=true` 和稳定 upload id；不得记录 Ingest/Delivery object key、
+preview token、signed CDN URL、content hash 或 provider response。
 
 ## 原子性与异步操作
 
@@ -218,6 +239,38 @@ reference 或实际证据内容。
   365 天 purge 默认关闭，不能宣称 staff id 已清；governance actor audit 不属于该 purge，其保留期仍需批准。
 - 有界的 rejected/failed privileged attempts 需要安全事件策略，避免既无审计又被攻击者刷爆。
 - Audit export 加 watermark、purpose、rate limit、expiry 和下载审计。
+
+## Edge proxy 与客户端 IP 信任
+
+IP 只是一项易共享、可变化的反滥用信号，不是身份或授权凭据。部分 email/onebox rate limit 当前读取
+`X-Forwarded-For` 首项，因此其可信性依赖 edge proxy 覆盖输入 header，而不是让应用自行信任任意 client
+header。
+
+当前 versioned host Nginx 只对 Cloudflare 官方 IPv4/IPv6 CIDR 使用 `set_real_ip_from`，从
+`CF-Connecting-IP` 恢复 `$remote_addr`，再把上游 `X-Forwarded-For` 与 `X-Real-IP` 都设置为该单值。
+直接 origin 请求来自非 trusted CIDR，即使携带伪造 CF/XFF header，也不会改变 `$remote_addr`。网段最近于
+2026-07-12 对照 [Cloudflare IPv4](https://www.cloudflare.com/ips-v4/) 与
+[IPv6](https://www.cloudflare.com/ips-v6/) 核验；官方说明要求定期更新 trusted prefix，完整更新、
+`nginx -t`、回滚和正/负 smoke 流程见[部署 runbook](../operations/deployment-and-previews.md)。
+
+同日服务器 `ss`/Docker 实测证明 shared staging 旧 frontend/backend 直连端口绑定所有 interface，host
+iptables 默认接受；是否另被 cloud NSG 阻断不能成为可信边界。本 revision 为它启动的 app 增加 loopback
+bind 和运行时核验，但 live 旧容器要部署后才收敛。PostgreSQL/Redis/Meili 已精确绑定 `127.0.0.1`；此前
+本机 TCP 探针不代表公网暴露，不应误报。App 外部负向复测与 cloud firewall review 前，本边界不满足
+release 条件；详见部署 runbook 的 blocker。
+
+硬边界：
+
+- 不信任 `0.0.0.0/0`、`::/0`、任意 `X-Forwarded-For` chain 或客户端自报 `X-Real-IP`。
+- 公网只能经受控 edge/proxy 到达应用。Main/PR backend host-network port、PostgreSQL、Redis 与 Meili
+  必须由 security group/host firewall 限制；若 backend port 可被公网直连，攻击者可完全绕过 Nginx
+  header normalization，这不是应用代码能补救的情况。
+- 网段更新只通过 reviewed versioned config 发布，不在 deployment runtime 下载远程列表后自动信任；
+  provider endpoint/TLS 失败时 fail closed。
+- 安全日志和 rate-limit key 只保留必要、有界、受控的 IP 信息；不把完整 IP 列表、用户 IP 或合成 smoke
+  地址写入公开 PR artifact。NAT/校园出口共享会产生误伤，账号级限制和申诉/恢复路径仍必须存在。
+- Cloudflare Pseudo IPv4/header transform 是独立配置变更；改变后先确认 backend 应使用真实 IPv6 还是
+  pseudo IPv4，并更新 privacy、限流测试和 incident playbook。
 
 ## 数据库角色边界
 
@@ -238,10 +291,11 @@ reference 或实际证据内容。
 
 ## 验收基线
 
-- 每个 staff route 有缺 capability、expired/revoked grant、越 target ceiling、self/equal/higher target、无 reason 和
-  stale state 的负向测试。ADMIN 媒体自审用专用正向测试覆盖，不删除其他 route 的 no-self 负向矩阵。
-- 只有 ADMIN 可创建/修改/撤销普通管理员 grant；越权转授权、自改权限、stale version、到期竞态与会话撤销
-  都有 handler→PostgreSQL 测试。
+- 当前每个 staff route 有缺 capability、self/equal/higher target、无 reason 和 stale state 的适用负向测试；
+  ADMIN 媒体自审用专用正向测试覆盖，不删除其他 route 的 no-self 负向矩阵。
+- 普通管理员委派落地时，再增加 expired/revoked grant、越 target ceiling、越权转授权、自改权限、stale
+  version、到期竞态与 authorization/session 失效的 handler→PostgreSQL 矩阵；只有 ADMIN 可创建/修改/
+  撤销 grant。在这些测试与实现出现前，该能力保持 `Planned`。
 - Web 不显示无 capability 操作，手工请求仍被后端拒绝。
 - 敏感 mutation 与成功 audit 原子，失败不留下半状态。
 - Evidence/PII read 目的限定、最小化并可追踪。
@@ -254,3 +308,5 @@ reference 或实际证据内容。
   变更 payload 和 stale version 有 handler→PostgreSQL 负向测试。
 - Governance append-only 测试必须执行真实 `UPDATE`、`DELETE`、`TRUNCATE`，并验证失败来自
   append-only trigger；只检查 trigger metadata 或 FK 拒绝不足以证明保护有效。
+- Cloudflare CIDR 与官方 IPv4/IPv6 集合 exact-match；trusted proxy 正向恢复 source IP，direct-origin
+  伪造 CF/XFF header 的负向 smoke 保持实际 source。Backend/DB/cache/search port 不得从公网绕过 edge。

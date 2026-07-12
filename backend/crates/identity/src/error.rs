@@ -105,7 +105,7 @@ impl From<IdentityError> for AppError {
             | IdentityError::InvalidSignature
             | IdentityError::ChallengeAlreadyUsed => AppError::BadRequest(err.to_string()),
             IdentityError::ChallengeExpired => AppError::BadRequest(err.to_string()),
-            IdentityError::AlreadyHasPassword => AppError::BadRequest(err.to_string()),
+            IdentityError::AlreadyHasPassword => AppError::Conflict(err.to_string()),
             IdentityError::InvalidPassword => AppError::BadRequest(err.to_string()),
             IdentityError::WrongPassword => AppError::Unauthorized,
             IdentityError::NoPasswordSet => AppError::BadRequest(err.to_string()),

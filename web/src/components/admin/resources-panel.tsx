@@ -8,6 +8,7 @@ import {
   LockKeyhole,
   Pencil,
   Plus,
+  RefreshCw,
   ShieldCheck,
   Tags,
   Trash2,
@@ -62,6 +63,8 @@ function MediaQueue({ canRunOperations }: { canRunOperations: boolean }) {
   const [previewDecision, setPreviewDecision] = React.useState<Upload | null>(null);
   const [previewObject, setPreviewObject] = React.useState<{ uploadId: string; url: string } | null>(null);
   const [retentionDecision, setRetentionDecision] = React.useState<Upload | null>(null);
+  const [processingRetryDecision, setProcessingRetryDecision] = React.useState<Upload | null>(null);
+  const [selfReviewConfirmed, setSelfReviewConfirmed] = React.useState(false);
   const [holdKind, setHoldKind] = React.useState<"moderation" | "security">("moderation");
   const [holdUntil, setHoldUntil] = React.useState(() => localDateTimeInput(Date.now() + 30 * 24 * 60 * 60 * 1000));
   const [recentAuthRetry, setRecentAuthRetry] = React.useState<(() => void) | null>(null);
@@ -71,20 +74,39 @@ function MediaQueue({ canRunOperations }: { canRunOperations: boolean }) {
     queryFn: () => api.adminMediaUploads(cursor, status),
   });
   const moderate = useMutation({
-    mutationFn: ({ id, action, reason }: { id: string; action: "approve" | "block"; reason: string }) =>
-      api.moderateAdminMediaUpload(id, action, reason),
+    mutationFn: ({ id, action, reason, isSelfReview }: {
+      id: string;
+      action: "approve" | "block";
+      reason: string;
+      isSelfReview: boolean;
+    }) => api.moderateAdminMediaUpload(id, action, reason, isSelfReview),
     onSuccess: async (_data, variables) => {
-      toast.success(variables.action === "block" ? "媒体已隔离并进入删除队列" : "媒体已批准");
+      toast.success(
+        variables.action === "block"
+          ? "媒体已隔离并进入删除队列"
+          : "媒体已批准并进入安全版本处理",
+      );
       setDecision(null);
       setPreviewObject(null);
       await queryClient.invalidateQueries({ queryKey: ["admin", "media"] });
       await queryClient.invalidateQueries({ queryKey: ["admin", "overview"] });
     },
-    onError: (error) => toast.error(error instanceof Error ? error.message : "媒体审核失败"),
+    onError: (error, variables) => {
+      if (error instanceof ApiError && (error.status === 428 || error.code === "RECENT_AUTH_REQUIRED")) {
+        setDecision(null);
+        setRecentAuthRetry(() => () => moderate.mutate(variables));
+        return;
+      }
+      toast.error(error instanceof Error ? error.message : "媒体审核失败");
+    },
   });
   const preview = useMutation({
-    mutationFn: async ({ uploadId, reason }: { uploadId: string; reason: string }) => {
-      const grant = await api.createAdminMediaPreviewGrant(uploadId, reason);
+    mutationFn: async ({ uploadId, reason, isSelfReview }: {
+      uploadId: string;
+      reason: string;
+      isSelfReview: boolean;
+    }) => {
+      const grant = await api.createAdminMediaPreviewGrant(uploadId, reason, isSelfReview);
       return { uploadId, blob: await api.adminMediaPreview(uploadId, grant.token) };
     },
     onSuccess: async ({ uploadId, blob }) => {
@@ -92,7 +114,14 @@ function MediaQueue({ canRunOperations }: { canRunOperations: boolean }) {
       setPreviewDecision(null);
       await queryClient.invalidateQueries({ queryKey: ["admin", "media"] });
     },
-    onError: (error) => toast.error(error instanceof Error ? error.message : "媒体预览失败"),
+    onError: (error, variables) => {
+      if (error instanceof ApiError && (error.status === 428 || error.code === "RECENT_AUTH_REQUIRED")) {
+        setPreviewDecision(null);
+        setRecentAuthRetry(() => () => preview.mutate(variables));
+        return;
+      }
+      toast.error(error instanceof Error ? error.message : "媒体预览失败");
+    },
   });
   const retention = useMutation({
     mutationFn: async ({ upload, reason, kind, expiresAt }: {
@@ -125,6 +154,23 @@ function MediaQueue({ canRunOperations }: { canRunOperations: boolean }) {
       toast.error(error instanceof Error ? error.message : "媒体保留操作失败");
     },
   });
+  const retryProcessing = useMutation({
+    mutationFn: ({ uploadId, reason }: { uploadId: string; reason: string }) =>
+      api.retryAdminMediaProcessing(uploadId, reason),
+    onSuccess: async () => {
+      toast.success("媒体安全版本处理已重新排队");
+      setProcessingRetryDecision(null);
+      await queryClient.invalidateQueries({ queryKey: ["admin", "media"] });
+    },
+    onError: (error, variables) => {
+      if (error instanceof ApiError && (error.status === 428 || error.code === "RECENT_AUTH_REQUIRED")) {
+        setProcessingRetryDecision(null);
+        setRecentAuthRetry(() => () => retryProcessing.mutate(variables));
+        return;
+      }
+      toast.error(error instanceof Error ? error.message : "媒体安全版本重试失败");
+    },
+  });
 
   React.useEffect(() => {
     if (!previewObject) return;
@@ -141,7 +187,7 @@ function MediaQueue({ canRunOperations }: { canRunOperations: boolean }) {
       <div className="grid grid-cols-2 gap-1 rounded-lg bg-muted p-1 sm:grid-cols-4" role="group" aria-label="媒体状态筛选">
         {([
           ["pending", "待审核"],
-          ["clean", "已发布"],
+          ["clean", "已审核"],
           ["quarantined", "删除中"],
           ["blocked", "已阻止"],
         ] as const).map(([value, label]) => (
@@ -174,6 +220,10 @@ function MediaQueue({ canRunOperations }: { canRunOperations: boolean }) {
               <div className="flex flex-wrap items-center gap-2">
                 <FileWarning className="size-4 text-primary" aria-hidden="true" />
                 <AdminStatusBadge value={upload.status} />
+                <Badge variant={upload.deliveryState === "failed" ? "destructive" : "outline"}>
+                  交付 {upload.deliveryState}
+                </Badge>
+                {upload.isSelfReview ? <Badge variant="destructive">ADMIN 本人媒体</Badge> : null}
                 <Badge variant="outline">{upload.kind ?? "file"}</Badge>
                 {upload.deletionState ? <Badge variant="outline">删除 {upload.deletionState}</Badge> : null}
                 {upload.retentionState !== "none" ? (
@@ -189,6 +239,11 @@ function MediaQueue({ canRunOperations }: { canRunOperations: boolean }) {
                 {upload.usage ? ` · 用途 ${upload.usage}` : ""}
                 {upload.imageWidth && upload.imageHeight ? ` · ${upload.imageWidth}×${upload.imageHeight}` : ""}
               </p>
+              {upload.deliveryErrorCode ? (
+                <p className="mt-1 font-mono text-xs text-destructive">
+                  处理错误：{upload.deliveryErrorCode}
+                </p>
+              ) : null}
               {previewObject?.uploadId === upload.id ? (
                 <div className="mt-3 rounded-lg border bg-muted/30 p-2">
                   <img
@@ -204,7 +259,10 @@ function MediaQueue({ canRunOperations }: { canRunOperations: boolean }) {
             </div>
             <div className="flex flex-wrap gap-2">
               {upload.status === "pending" && upload.kind === "image" ? (
-                <Button type="button" size="sm" variant="outline" onClick={() => setPreviewDecision(upload)}>
+                <Button type="button" size="sm" variant="outline" onClick={() => {
+                  setSelfReviewConfirmed(false);
+                  setPreviewDecision(upload);
+                }}>
                   <Eye className="size-4" />安全预览
                 </Button>
               ) : null}
@@ -217,16 +275,35 @@ function MediaQueue({ canRunOperations }: { canRunOperations: boolean }) {
                   size="sm"
                   disabled={upload.approvalRequirement !== "satisfied"}
                   title={upload.approvalRequirement === "image_preview" ? "请先完成安全预览" : undefined}
-                  onClick={() => setDecision({ upload, action: "approve" })}
+                  onClick={() => {
+                    setSelfReviewConfirmed(false);
+                    setDecision({ upload, action: "approve" });
+                  }}
                 >
                   <Check className="size-4" />批准
                 </Button>
               ) : null}
               {upload.status === "pending" || upload.status === "clean" ? (
-                <Button type="button" variant="destructive" size="sm" onClick={() => setDecision({ upload, action: "block" })}><X className="size-4" />隔离并删除</Button>
+                <Button type="button" variant="destructive" size="sm" onClick={() => {
+                  setSelfReviewConfirmed(false);
+                  setDecision({ upload, action: "block" });
+                }}><X className="size-4" />隔离并删除</Button>
               ) : null}
               {upload.status === "quarantined" && upload.deletionState === "dead_letter" ? (
-                <Button type="button" variant="destructive" size="sm" onClick={() => setDecision({ upload, action: "block" })}><X className="size-4" />重试删除</Button>
+                <Button type="button" variant="destructive" size="sm" onClick={() => {
+                  setSelfReviewConfirmed(false);
+                  setDecision({ upload, action: "block" });
+                }}><X className="size-4" />重试删除</Button>
+              ) : null}
+              {canRunOperations && upload.status === "clean" && upload.deliveryState === "failed" ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setProcessingRetryDecision(upload)}
+                >
+                  <RefreshCw className="size-4" />重试安全版本处理
+                </Button>
               ) : null}
               {canRunOperations
                 && upload.retentionState === "none"
@@ -253,16 +330,46 @@ function MediaQueue({ canRunOperations }: { canRunOperations: boolean }) {
       />
       <ReasonDialog
         open={Boolean(previewDecision)}
-        onOpenChange={(open) => !open && setPreviewDecision(null)}
+        onOpenChange={(open) => {
+          if (!open) {
+            setPreviewDecision(null);
+            setSelfReviewConfirmed(false);
+          }
+        }}
         title="读取待审媒体证据"
-        description="系统会签发仅供当前管理员使用的 60 秒一次性授权，通过同源代理读取一张受 MIME 与字节上限保护的图片；读取原因会进入审计。"
+        description={previewDecision?.isSelfReview
+          ? "这是 ADMIN 本人上传的媒体。自审是受控例外：必须近期认证、明确确认并留下独立审计；系统仍会通过同源受限代理读取证据。"
+          : "系统会签发仅供当前管理员使用的 60 秒一次性授权，通过同源代理读取一张受 MIME 与字节上限保护的图片；读取原因会进入审计。"}
         confirmLabel="生成并读取预览"
         isPending={preview.isPending}
-        onConfirm={(reason) => previewDecision?.id && preview.mutate({ uploadId: previewDecision.id, reason })}
-      />
+        confirmDisabled={Boolean(previewDecision?.isSelfReview) && !selfReviewConfirmed}
+        onConfirm={(reason) => previewDecision?.id && preview.mutate({
+          uploadId: previewDecision.id,
+          reason,
+          isSelfReview: Boolean(previewDecision.isSelfReview && selfReviewConfirmed),
+        })}
+      >
+        {previewDecision?.isSelfReview ? (
+          <div className="flex items-start justify-between gap-4 rounded-lg border border-destructive/30 bg-destructive/5 p-3">
+            <Label htmlFor="media-preview-self-review" className="leading-5">
+              我确认这是本人媒体，并明确使用 ADMIN 自审例外
+            </Label>
+            <Switch
+              id="media-preview-self-review"
+              checked={selfReviewConfirmed}
+              onCheckedChange={setSelfReviewConfirmed}
+            />
+          </div>
+        ) : null}
+      </ReasonDialog>
       <ReasonDialog
         open={Boolean(decision)}
-        onOpenChange={(open) => !open && setDecision(null)}
+        onOpenChange={(open) => {
+          if (!open) {
+            setDecision(null);
+            setSelfReviewConfirmed(false);
+          }
+        }}
         title={decision?.action === "approve" ? "批准媒体对象" : "阻止媒体对象"}
         description={decision?.action === "approve"
           ? "只有完成当前审核员安全预览的图片才能批准；决定和原因会进入治理审计。"
@@ -272,7 +379,38 @@ function MediaQueue({ canRunOperations }: { canRunOperations: boolean }) {
         confirmLabel={decision?.action === "approve" ? "确认批准" : "确认阻止"}
         destructive={decision?.action === "block"}
         isPending={moderate.isPending}
-        onConfirm={(reason) => decision?.upload.id && moderate.mutate({ id: decision.upload.id, action: decision.action, reason })}
+        confirmDisabled={Boolean(decision?.upload.isSelfReview) && !selfReviewConfirmed}
+        onConfirm={(reason) => decision?.upload.id && moderate.mutate({
+          id: decision.upload.id,
+          action: decision.action,
+          reason,
+          isSelfReview: Boolean(decision.upload.isSelfReview && selfReviewConfirmed),
+        })}
+      >
+        {decision?.upload.isSelfReview ? (
+          <div className="flex items-start justify-between gap-4 rounded-lg border border-destructive/30 bg-destructive/5 p-3">
+            <Label htmlFor="media-decision-self-review" className="leading-5">
+              我确认这是本人媒体，并明确使用 ADMIN 自审例外
+            </Label>
+            <Switch
+              id="media-decision-self-review"
+              checked={selfReviewConfirmed}
+              onCheckedChange={setSelfReviewConfirmed}
+            />
+          </div>
+        ) : null}
+      </ReasonDialog>
+      <ReasonDialog
+        open={Boolean(processingRetryDecision)}
+        onOpenChange={(open) => !open && setProcessingRetryDecision(null)}
+        title="重试媒体安全版本处理"
+        description="仅重新排队当前策略下已耗尽的处理任务；不会跳过审核、直接公开原图或覆盖审计历史。"
+        confirmLabel="确认重新排队"
+        isPending={retryProcessing.isPending}
+        onConfirm={(reason) => processingRetryDecision?.id && retryProcessing.mutate({
+          uploadId: processingRetryDecision.id,
+          reason,
+        })}
       />
       <ReasonDialog
         open={Boolean(retentionDecision)}

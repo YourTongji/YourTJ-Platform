@@ -52,9 +52,28 @@ describe("media upload boundary", () => {
   afterEach(() => vi.unstubAllGlobals());
 
   it("accepts only the server-supported media kinds and size limit", () => {
-    expect(() => validateMediaFile(new File(["image"], "photo.png", { type: "image/png" }), "image")).not.toThrow();
+    for (const [name, contentType] of [
+      ["photo.jpg", "image/jpeg"],
+      ["photo.png", "image/png"],
+      ["photo.webp", "image/webp"],
+    ]) {
+      expect(() => validateMediaFile(new File(["image"], name, { type: contentType }), "image"))
+        .not.toThrow();
+    }
     expect(() => validateMediaFile(new File(["script"], "photo.svg", { type: "image/svg+xml" }), "image")).toThrow(/JPEG/);
     expect(() => validateMediaFile(new File(["text"], "notes.txt", { type: "text/plain" }), "file")).toThrow(/PDF/);
+  });
+
+  it("rejects GIF before requesting credentials and asks for a static re-upload", async () => {
+    const gif = new File(["GIF89a"], "animated.gif", { type: "image/gif" });
+
+    expect(() => validateMediaFile(gif, "image")).toThrow(
+      "仅支持静态 JPEG、PNG 或 WebP 图片；GIF 或其他动图请转换为静态图片后重新上传",
+    );
+    await expect(uploadMedia(gif, "image")).rejects.toThrow(/转换为静态图片后重新上传/);
+    expect(apiMocks.mediaUploadCredentials).not.toHaveBeenCalled();
+    expect(ossMocks.constructor).not.toHaveBeenCalled();
+    expect(ossMocks.put).not.toHaveBeenCalled();
   });
 
   it("requires the signed OSS callback to return a canonical upload id", () => {

@@ -14,6 +14,10 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { api } from "@/lib/api/endpoints";
+import {
+  COMPATIBILITY_DELIVERY_REFRESH_INTERVAL_MS,
+  useBoundedDeliveryRecovery,
+} from "@/lib/media-delivery";
 
 export type ProfileRelationshipListKind = "followers" | "following";
 
@@ -41,7 +45,9 @@ export function ProfileRelationshipListDialog({
     initialPageParam: null as string | null,
     getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
     enabled: open,
+    refetchInterval: COMPATIBILITY_DELIVERY_REFRESH_INTERVAL_MS,
   });
+  const recoverAvatarDelivery = useBoundedDeliveryRecovery(() => relationships.refetch());
   const items = relationships.data?.pages.flatMap((page) => page.items ?? []) ?? [];
   const title = kind === "followers" ? "关注者" : "正在关注";
   const removeFollower = useMutation({
@@ -87,7 +93,14 @@ export function ProfileRelationshipListDialog({
                   className="flex min-w-0 flex-1 items-center gap-3 rounded-md p-1 outline-none transition-colors hover:bg-accent focus-visible:ring-[3px] focus-visible:ring-ring/50"
                 >
                   <Avatar className="size-10">
-                    <AvatarImage src={item.avatarUrl ?? undefined} alt="" />
+                    <AvatarImage
+                      src={item.avatarUrl ?? undefined}
+                      alt=""
+                      referrerPolicy="no-referrer"
+                      onLoadingStatusChange={(status) => {
+                        if (status === "error") recoverAvatarDelivery();
+                      }}
+                    />
                     <AvatarFallback>{item.handle.slice(0, 1).toUpperCase()}</AvatarFallback>
                   </Avatar>
                   <div className="min-w-0 flex-1">

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use axum::extract::{Path, Query, State};
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::routing::{get, patch, post};
 use axum::{Json, Router};
 use chrono::{DateTime, Duration, NaiveDate, Utc};
@@ -22,6 +22,13 @@ const TRACKING_PURPOSE: &str = "promotion-event-v1";
 const TRACKING_TOKEN_TTL_SECONDS: i64 = 2 * 60 * 60;
 const METRIC_SUMMARY_DAYS: i64 = 30;
 const MAX_METRIC_RANGE_DAYS: i64 = 93;
+
+fn delivery_response_headers() -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("private, no-store"));
+    headers.insert(header::PRAGMA, HeaderValue::from_static("no-cache"));
+    headers
+}
 
 #[derive(Debug, Clone, FromRow)]
 struct PromotionRecord {
@@ -53,6 +60,7 @@ struct PromotionDto {
     cta_label: Option<String>,
     target_url: String,
     asset_id: Option<String>,
+    asset_delivery: Option<media::ImageDeliveryProjection>,
     status: String,
     effective_state: String,
     priority: i32,
@@ -324,6 +332,7 @@ fn summary_window(today: NaiveDate) -> (NaiveDate, NaiveDate) {
 
 fn dto(
     record: PromotionRecord,
+    asset_delivery: Option<media::ImageDeliveryProjection>,
     tracking_token: Option<String>,
     metrics: Option<PromotionMetricSummaryDto>,
 ) -> PromotionDto {
@@ -336,6 +345,7 @@ fn dto(
         cta_label: record.cta_label,
         target_url: record.target_url,
         asset_id: record.asset_id.map(|value| value.to_string()),
+        asset_delivery,
         status: record.status,
         priority: record.priority,
         audience: record.audience,
@@ -441,7 +451,7 @@ async fn list_active(
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(query): Query<PublicQuery>,
-) -> AppResult<Json<Vec<PromotionDto>>> {
+) -> AppResult<(HeaderMap, Json<Vec<PromotionDto>>)> {
     if query
         .placement
         .as_deref()
@@ -471,21 +481,25 @@ async fn list_active(
     .bind(staff)
     .fetch_all(&state.db)
     .await?;
+    let asset_ids = rows.iter().filter_map(|record| record.asset_id).collect::<Vec<_>>();
+    let deliveries = media::resolve_clean_image_deliveries(&state.db, &asset_ids).await?;
     let items = rows
         .into_iter()
         .map(|record| {
             let tracking_token = issue_tracking_token(&record, &state.jwt_secret)?;
-            Ok(dto(record, Some(tracking_token), None))
+            let asset_delivery =
+                record.asset_id.and_then(|asset_id| deliveries.get(&asset_id).cloned());
+            Ok(dto(record, asset_delivery, Some(tracking_token), None))
         })
         .collect::<AppResult<Vec<_>>>()?;
-    Ok(Json(items))
+    Ok((delivery_response_headers(), Json(items)))
 }
 
 async fn admin_list(
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(query): Query<AdminListQuery>,
-) -> AppResult<Json<Page<PromotionDto>>> {
+) -> AppResult<(HeaderMap, Json<Page<PromotionDto>>)> {
     staff_account(&headers, &state, Capability::ManagePromotions).await?;
     let cursor = query.cursor.as_deref().map(|cursor| parse_id(cursor, "cursor")).transpose()?;
     let limit = query.limit.unwrap_or(30).clamp(1, 100);
@@ -503,15 +517,19 @@ async fn admin_list(
     let visible = rows.into_iter().take(limit as usize).collect::<Vec<_>>();
     let next_cursor = has_more.then(|| visible.last().map(|row| row.id.to_string())).flatten();
     let promotion_ids = visible.iter().map(|record| record.id).collect::<Vec<_>>();
+    let asset_ids = visible.iter().filter_map(|record| record.asset_id).collect::<Vec<_>>();
     let mut summaries = metric_summaries(&state.db, &promotion_ids).await?;
+    let deliveries = media::resolve_clean_image_deliveries(&state.db, &asset_ids).await?;
     let items = visible
         .into_iter()
         .map(|record| {
             let metrics = summaries.remove(&record.id);
-            dto(record, None, metrics)
+            let asset_delivery =
+                record.asset_id.and_then(|asset_id| deliveries.get(&asset_id).cloned());
+            dto(record, asset_delivery, None, metrics)
         })
         .collect();
-    Ok(Json(Page::new(items, next_cursor)))
+    Ok((delivery_response_headers(), Json(Page::new(items, next_cursor))))
 }
 
 async fn admin_create(
@@ -573,7 +591,7 @@ async fn admin_create(
     )
     .await?;
     tx.commit().await?;
-    Ok((StatusCode::CREATED, Json(dto(record, None, None))))
+    Ok((StatusCode::CREATED, Json(dto(record, None, None, None))))
 }
 
 async fn admin_update(
@@ -686,7 +704,7 @@ async fn admin_update(
     )
     .await?;
     tx.commit().await?;
-    Ok(Json(dto(record, None, None)))
+    Ok(Json(dto(record, None, None, None)))
 }
 
 async fn admin_archive(

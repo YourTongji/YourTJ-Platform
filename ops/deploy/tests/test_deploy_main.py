@@ -24,29 +24,70 @@ fi
 if [[ "$1" == "image" && "$2" == "inspect" ]]; then
   exit 0
 fi
+if [[ "$1" == "ps" ]]; then
+  for path in "${state}"/container-*; do
+    [[ -e "$path" ]] || continue
+    name="${path##*/container-}"
+    [[ -f "${state}/stopped-${name}" ]] || echo "$name"
+  done
+  exit
+fi
 if [[ "$1" == "load" ]]; then
   exit 0
 fi
 if [[ "$1" == "stop" ]]; then
   test -f "${state}/container-$2"
+  touch "${state}/stopped-$2"
   exit
 fi
 if [[ "$1" == "rename" ]]; then
   mv "${state}/container-$2" "${state}/container-$3"
+  if [[ -f "${state}/stopped-$2" ]]; then
+    mv "${state}/stopped-$2" "${state}/stopped-$3"
+  fi
   exit
 fi
 if [[ "$1" == "start" ]]; then
   touch "${state}/container-$2"
+  if [[ "${FAKE_DOCKER_FAIL_BACKEND_START:-}" == "1" && "$2" == "main-be" ]]; then
+    touch "${state}/stopped-$2"
+    exit 1
+  fi
+  rm -f "${state}/stopped-$2"
   exit
 fi
 if [[ "$1" == "rm" ]]; then
   rm -f "${state}/container-$2"
+  rm -f "${state}/stopped-$2"
   exit
 fi
-if [[ "$1" == "run" ]]; then
+if [[ "$1" == "port" ]]; then
+  test "$3" = "80/tcp"
+  if [[ "$2" == "main-fe" ]]; then
+    echo "127.0.0.1:15000"
+  elif [[ "$2" =~ ^pr-([1-9][0-9]{0,2})-fe$ ]]; then
+    pr_number="${BASH_REMATCH[1]}"
+    if [[ "${FAKE_UNSAFE_PREVIEW:-}" == "$pr_number" ]]; then
+      printf '0.0.0.0:15%03d\n' "$pr_number"
+    else
+      printf '127.0.0.1:15%03d\n' "$pr_number"
+    fi
+  else
+    exit 99
+  fi
+  exit
+fi
+if [[ "$1" == "run" || "$1" == "create" ]]; then
+  command="$1"
   shift
   name=""
+  disposable=0
   while (($#)); do
+    if [[ "$1" == "--rm" ]]; then
+      disposable=1
+      shift
+      continue
+    fi
     if [[ "$1" == "--name" ]]; then
       name="$2"
       shift 2
@@ -54,6 +95,9 @@ if [[ "$1" == "run" ]]; then
     fi
     shift
   done
+  if [[ "$command" == "run" ]] && ((disposable == 1)) && [[ -z "$name" ]]; then
+    exit 0
+  fi
   test -n "$name"
   touch "${state}/container-${name}"
   echo fake-container-id
@@ -61,9 +105,31 @@ if [[ "$1" == "run" ]]; then
 fi
 if [[ "$1" == "inspect" && "$2" == "--format" ]]; then
   if [[ "$3" == *".Config.Env"* ]]; then
-    for key in OSS_REGION OSS_BUCKET OSS_ACCESS_KEY_ID OSS_ACCESS_KEY_SECRET OSS_ROLE_ARN OSS_CALLBACK_BASE_URL; do
-      echo "${key}=set"
+    for key in \
+      BIND_ADDRESS \
+      OSS_REGION OSS_BUCKET OSS_ACCESS_KEY_ID OSS_ACCESS_KEY_SECRET OSS_ROLE_ARN \
+      OSS_CALLBACK_BASE_URL MEDIA_DELIVERY_OSS_BUCKET MEDIA_DELIVERY_OSS_ACCESS_KEY_ID \
+      MEDIA_DELIVERY_OSS_ACCESS_KEY_SECRET MEDIA_CDN_BASE_URL MEDIA_CDN_PRIMARY_KEY \
+      MEDIA_CDN_SECONDARY_KEY MEDIA_CDN_SIGNING_KEY_SLOT MEDIA_CDN_URL_TTL_SECONDS \
+      CDN_ACCESS_KEY_ID CDN_ACCESS_KEY_SECRET EMAIL_ENCRYPTION_ACTIVE_VERSION \
+      EMAIL_ENCRYPTION_ACTIVE_AEAD EMAIL_ENCRYPTION_ACTIVE_BLIND \
+      EMAIL_ENCRYPTION_STRICT; do
+      if [[ "$key" == "BIND_ADDRESS" ]]; then
+        if [[ "$4" =~ ^pr-([1-9][0-9]{0,2})-be$ \
+          && "${FAKE_UNSAFE_PREVIEW:-}" == "${BASH_REMATCH[1]}" ]]; then
+          echo "BIND_ADDRESS=0.0.0.0"
+        else
+          echo "BIND_ADDRESS=127.0.0.1"
+        fi
+      elif [[ "$key" == "EMAIL_ENCRYPTION_STRICT" ]]; then
+        echo "EMAIL_ENCRYPTION_STRICT=true"
+      else
+        echo "${key}=set"
+      fi
     done
+    if [[ "$4" =~ ^pr-([1-9][0-9]{0,2})-be$ ]]; then
+      printf 'PORT=16%03d\n' "${BASH_REMATCH[1]}"
+    fi
   else
     test "$3" = "$revision_template"
     [[ "$4" == "main-be" || "$4" == "main-fe" ]]
@@ -107,7 +173,7 @@ class DeployMainTests(unittest.TestCase):
         self.write_executable(self.fake_bin / "curl", FAKE_CURL)
 
         self.frontend_root = self.root / "releases"
-        self.frontend = self.frontend_root / REVISION / "frontend"
+        self.frontend = self.frontend_root / f"{REVISION}-123-1" / "frontend"
         self.frontend.mkdir(parents=True)
         (self.frontend / "index.html").write_text("ok")
 
@@ -119,6 +185,10 @@ class DeployMainTests(unittest.TestCase):
             "MEILI_URL=set\n"
             "JWT_SECRET=set\n"
             "CREDIT_SYSTEM_PRIVATE_KEY=set\n"
+            "EMAIL_ENCRYPTION_ACTIVE_VERSION=1\n"
+            f"EMAIL_ENCRYPTION_ACTIVE_AEAD={'1' * 64}\n"
+            f"EMAIL_ENCRYPTION_ACTIVE_BLIND={'2' * 64}\n"
+            "EMAIL_ENCRYPTION_STRICT=true\n"
         )
         self.email_env = self.root / "email.env"
         self.email_env.write_text("EMAIL_PROVIDER=log\n")
@@ -133,7 +203,10 @@ class DeployMainTests(unittest.TestCase):
         oss = tempfile.NamedTemporaryFile(prefix="yourtj-main-oss-", suffix=".env", dir="/tmp", delete=False)
         oss.close()
         self.oss_env = Path(oss.name)
-        self.oss_env.write_text("OSS_REGION=cn-shanghai\n")
+        self.oss_env.write_text(
+            "OSS_REGION=cn-shanghai\n"
+            "MEDIA_CDN_BASE_URL=https://media.example.test\n"
+        )
         os.chmod(self.oss_env, 0o600)
         self.addCleanup(self.oss_env.unlink, missing_ok=True)
 
@@ -142,6 +215,17 @@ class DeployMainTests(unittest.TestCase):
         self.verifier = Path(verifier.name)
         self.verifier.write_text("#!/usr/bin/env python3\nprint('preflight ok')\n")
         self.addCleanup(self.verifier.unlink, missing_ok=True)
+
+        nginx = tempfile.NamedTemporaryFile(
+            prefix="frontend-nginx-main-", suffix=".conf.template", dir="/tmp", delete=False
+        )
+        nginx.close()
+        self.nginx = Path(nginx.name)
+        self.nginx.write_text(
+            "server { listen 80; # __MEDIA_CDN_ORIGIN__\n"
+            "root /usr/share/nginx/html; }\n"
+        )
+        self.addCleanup(self.nginx.unlink, missing_ok=True)
 
     @staticmethod
     def write_executable(path: Path, content: str) -> None:
@@ -153,6 +237,8 @@ class DeployMainTests(unittest.TestCase):
         *,
         fail_after: int | None = None,
         fake_revision: str = REVISION,
+        unsafe_preview: int | None = None,
+        fail_backend_start: bool = False,
     ) -> subprocess.CompletedProcess[str]:
         environment = os.environ.copy()
         environment.update(
@@ -169,6 +255,10 @@ class DeployMainTests(unittest.TestCase):
         )
         if fail_after is not None:
             environment["FAKE_CURL_FAIL_AFTER"] = str(fail_after)
+        if unsafe_preview is not None:
+            environment["FAKE_UNSAFE_PREVIEW"] = str(unsafe_preview)
+        if fail_backend_start:
+            environment["FAKE_DOCKER_FAIL_BACKEND_START"] = "1"
         return subprocess.run(
             [
                 str(DEPLOY_SCRIPT),
@@ -177,6 +267,7 @@ class DeployMainTests(unittest.TestCase):
                 str(self.oss_env),
                 REVISION,
                 str(self.verifier),
+                str(self.nginx),
             ],
             env=environment,
             capture_output=True,
@@ -197,24 +288,58 @@ class DeployMainTests(unittest.TestCase):
         self.assertFalse(list(self.state.glob("container-*-rollback-*")))
         self.assertIn("MAIN DEPLOYED", result.stdout)
 
-    def test_failed_new_backend_restores_previous_containers(self):
+    def test_rejects_runtime_without_strict_email_encryption(self):
+        self.runtime_env.write_text(
+            self.runtime_env.read_text().replace(
+                "EMAIL_ENCRYPTION_STRICT=true", "EMAIL_ENCRYPTION_STRICT=false"
+            )
+        )
+        result = self.run_deploy()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("requires EMAIL_ENCRYPTION_STRICT=true", result.stderr)
+        self.assertFalse((self.state / "container-main-be").exists())
+
+    def test_quarantines_legacy_preview_bound_to_wildcard_interfaces(self):
+        (self.state / "container-pr-41-fe").touch()
+        (self.state / "container-pr-41-be").touch()
+        result = self.run_deploy(unsafe_preview=41)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue((self.state / "stopped-pr-41-fe").exists())
+        self.assertTrue((self.state / "stopped-pr-41-be").exists())
+        self.assertIn("stopping unsafe legacy preview PR #41", result.stderr)
+
+    def test_failed_new_backend_keeps_previous_backend_stopped(self):
         self.seed_current_containers()
         result = self.run_deploy(fail_after=1)
         self.assertNotEqual(result.returncode, 0)
         self.assertTrue((self.state / "container-main-be").exists())
         self.assertTrue((self.state / "container-main-fe").exists())
-        self.assertFalse(list(self.state.glob("container-*-rollback-*")))
-        self.assertIn("restoring previous containers", result.stderr)
+        self.assertTrue((self.state / "stopped-main-be").exists())
+        self.assertEqual(len(list(self.state.glob("container-main-be-rollback-*"))), 1)
+        self.assertFalse(list(self.state.glob("container-main-fe-rollback-*")))
+        self.assertIn("forward-only schema cutover", result.stderr)
+        self.assertIn("previous backend remains stopped", result.stderr)
 
-    def test_mismatched_revision_label_restores_previous_containers(self):
+    def test_backend_start_failure_never_restores_the_previous_revision(self):
+        self.seed_current_containers()
+        result = self.run_deploy(fail_backend_start=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertTrue((self.state / "container-main-be").exists())
+        self.assertTrue((self.state / "stopped-main-be").exists())
+        self.assertEqual(len(list(self.state.glob("container-main-be-rollback-*"))), 1)
+        self.assertIn("forward-only schema cutover", result.stderr)
+
+    def test_post_readiness_failure_keeps_new_backend_and_restores_frontend(self):
         self.seed_current_containers()
         result = self.run_deploy(fake_revision="b" * 40)
         self.assertNotEqual(result.returncode, 0)
         self.assertTrue((self.state / "container-main-be").exists())
         self.assertTrue((self.state / "container-main-fe").exists())
-        self.assertFalse(list(self.state.glob("container-*-rollback-*")))
+        self.assertFalse((self.state / "stopped-main-be").exists())
+        self.assertEqual(len(list(self.state.glob("container-main-be-rollback-*"))), 1)
+        self.assertFalse(list(self.state.glob("container-main-fe-rollback-*")))
         self.assertIn("revision label does not match the deployment revision", result.stderr)
-        self.assertIn("restoring previous containers", result.stderr)
+        self.assertIn("forward-only schema cutover", result.stderr)
 
 
 if __name__ == "__main__":

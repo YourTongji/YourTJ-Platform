@@ -1,5 +1,9 @@
 import { api } from "@/lib/api/endpoints";
 import type { MediaUsage } from "@/lib/api/types";
+import {
+  isSupportedStaticImageContentType,
+  STATIC_IMAGE_REUPLOAD_MESSAGE,
+} from "@/lib/media-policy";
 
 export type MediaKind = "image" | "file";
 
@@ -11,7 +15,6 @@ export interface CompletedMediaUpload {
 }
 
 const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
-const IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"]);
 const FILE_TYPES = new Set(["application/pdf"]);
 
 function normalizeOssSdkRegion(region: string) {
@@ -22,9 +25,12 @@ export function validateMediaFile(file: File, kind: MediaKind) {
   if (file.size <= 0 || file.size > MAX_UPLOAD_BYTES) {
     throw new Error("文件大小必须在 1 B 到 20 MB 之间");
   }
-  const allowedTypes = kind === "image" ? IMAGE_TYPES : FILE_TYPES;
-  if (!allowedTypes.has(file.type.toLowerCase())) {
-    throw new Error(kind === "image" ? "仅支持 JPEG、PNG、GIF 或 WebP 图片" : "当前仅支持 PDF 文件");
+  const contentType = file.type.toLowerCase();
+  const isAllowed = kind === "image"
+    ? isSupportedStaticImageContentType(contentType)
+    : FILE_TYPES.has(contentType);
+  if (!isAllowed) {
+    throw new Error(kind === "image" ? STATIC_IMAGE_REUPLOAD_MESSAGE : "当前仅支持 PDF 文件");
   }
 }
 

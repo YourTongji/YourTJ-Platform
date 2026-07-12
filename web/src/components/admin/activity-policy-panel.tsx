@@ -19,6 +19,7 @@ interface WeightDraft {
   thread: number;
   comment: number;
   like: number;
+  checkIn: number;
 }
 
 function boundedInteger(value: string) {
@@ -31,6 +32,12 @@ function boundedTrustThreshold(value: string) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return 0;
   return Math.max(1, Math.min(100000, Math.round(parsed)));
+}
+
+function boundedTrustCap(value: string) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return 0;
+  return Math.max(0, Math.min(100000, Math.round(parsed)));
 }
 
 function TrustPolicyCard({ trustPolicy }: { trustPolicy: TrustLevelPolicy }) {
@@ -47,6 +54,9 @@ function TrustPolicyCard({ trustPolicy }: { trustPolicy: TrustLevelPolicy }) {
     thresholdLevel6: trustPolicy.thresholdLevel6,
   });
   const [likeDailyCap, setLikeDailyCap] = React.useState(trustPolicy.likeDailyCap);
+  const [demotionCooldownDays, setDemotionCooldownDays] = React.useState(
+    trustPolicy.demotionCooldownDays,
+  );
   const [reason, setReason] = React.useState("");
 
   const hasChanges =
@@ -55,7 +65,8 @@ function TrustPolicyCard({ trustPolicy }: { trustPolicy: TrustLevelPolicy }) {
     thresholds.thresholdLevel4 !== trustPolicy.thresholdLevel4 ||
     thresholds.thresholdLevel5 !== trustPolicy.thresholdLevel5 ||
     thresholds.thresholdLevel6 !== trustPolicy.thresholdLevel6 ||
-    likeDailyCap !== trustPolicy.likeDailyCap;
+    likeDailyCap !== trustPolicy.likeDailyCap ||
+    demotionCooldownDays !== trustPolicy.demotionCooldownDays;
 
   const update = useMutation({
     mutationFn: () =>
@@ -63,6 +74,7 @@ function TrustPolicyCard({ trustPolicy }: { trustPolicy: TrustLevelPolicy }) {
         expectedVersion: trustPolicy.version,
         ...thresholds,
         likeDailyCap,
+        demotionCooldownDays,
         reason: reason.trim(),
       }),
     onSuccess: async () => {
@@ -128,9 +140,28 @@ function TrustPolicyCard({ trustPolicy }: { trustPolicy: TrustLevelPolicy }) {
                   step={1}
                   value={likeDailyCap}
                   onChange={(event) =>
-                    setLikeDailyCap(boundedTrustThreshold(event.target.value))
+                    setLikeDailyCap(boundedTrustCap(event.target.value))
                   }
                 />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="trust-demotion-cooldown">治理降级冷却（天）</Label>
+                <Input
+                  id="trust-demotion-cooldown"
+                  type="number"
+                  min={0}
+                  max={365}
+                  step={1}
+                  value={demotionCooldownDays}
+                  onChange={(event) =>
+                    setDemotionCooldownDays(
+                      Math.max(0, Math.min(365, Math.round(Number(event.target.value) || 0))),
+                    )
+                  }
+                />
+                <p className="text-xs text-muted-foreground">
+                  冷却结束且产生新的有效活跃度后，账号才可再次升级。
+                </p>
               </div>
             </div>
             <div className="space-y-2">
@@ -190,6 +221,7 @@ function TrustPolicyCard({ trustPolicy }: { trustPolicy: TrustLevelPolicy }) {
                     {item.likeDailyCap > 0 ? (
                       <p className="mt-1 text-xs">每日点赞上限：{item.likeDailyCap}</p>
                     ) : null}
+                    <p className="mt-1 text-xs">治理降级冷却：{item.demotionCooldownDays} 天</p>
                     <p className="mt-2 text-xs leading-5 text-muted-foreground">{item.reason}</p>
                     <p className="mt-1 text-[10px] text-muted-foreground">操作人 {item.changedBy}</p>
                   </div>
@@ -208,9 +240,9 @@ export function ActivityPolicyPanel() {
   const policy = useQuery({ queryKey: ["admin", "activity-policy"], queryFn: api.adminActivityPolicy });
   const history = useQuery({ queryKey: ["admin", "activity-policy", "history"], queryFn: () => api.adminActivityPolicyHistory() });
   const trustPolicy = useQuery({ queryKey: ["admin", "trust-policy"], queryFn: api.adminTrustPolicy });
-  const [weights, setWeights] = React.useState<WeightDraft>({ thread: 10, comment: 3, like: 1 });
+  const [weights, setWeights] = React.useState<WeightDraft>({ thread: 10, comment: 3, like: 1, checkIn: 1 });
   const [reason, setReason] = React.useState("");
-  const [sample, setSample] = React.useState({ thread: 1, comment: 3, like: 5 });
+  const [sample, setSample] = React.useState({ thread: 1, comment: 3, like: 5, checkIn: 1 });
 
   React.useEffect(() => {
     if (policy.data) {
@@ -238,10 +270,18 @@ export function ActivityPolicyPanel() {
   }
 
   const current = policy.data;
-  const preview = sample.thread * weights.thread + sample.comment * weights.comment + sample.like * weights.like;
+  const likeDailyCap = trustPolicy.data?.likeDailyCap;
+  const likeContribution = likeDailyCap == null
+    ? null
+    : Math.min(sample.like * weights.like, likeDailyCap);
+  const preview = likeContribution == null ? null : sample.thread * weights.thread
+    + sample.comment * weights.comment
+    + likeContribution
+    + sample.checkIn * weights.checkIn;
   const hasChanges = weights.thread !== current.weights.thread
     || weights.comment !== current.weights.comment
-    || weights.like !== current.weights.like;
+    || weights.like !== current.weights.like
+    || weights.checkIn !== current.weights.checkIn;
 
   return (
     <div className="space-y-10">
@@ -258,12 +298,12 @@ export function ActivityPolicyPanel() {
                 <Badge variant="secondary">版本 {current.version}</Badge>
                 <Badge variant="outline">{current.timezone}</Badge>
               </div>
-              <CardDescription>权重必须是 0–1000 的整数。点赞指用户主动给出的正向点赞。</CardDescription>
+              <CardDescription>权重必须是 0–1000 的整数。点赞指用户主动给出的正向点赞；签到每天最多一次。</CardDescription>
             </CardHeader>
             <CardContent className="space-y-5">
-              <div className="grid gap-3 sm:grid-cols-3">
-                {(["thread", "comment", "like"] as const).map((key) => {
-                  const labels = { thread: "发帖权重", comment: "评论权重", like: "点赞权重" };
+              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                {(["thread", "comment", "like", "checkIn"] as const).map((key) => {
+                  const labels = { thread: "发帖权重", comment: "评论权重", like: "点赞权重", checkIn: "签到权重" };
                   return (
                     <div key={key} className="space-y-2">
                       <Label htmlFor={`activity-weight-${key}`}>{labels[key]}</Label>
@@ -282,9 +322,9 @@ export function ActivityPolicyPanel() {
               </div>
               <div className="rounded-xl border bg-muted/40 p-4">
                 <div className="flex items-center gap-2 text-sm font-medium"><Calculator className="size-4 text-primary" />样例日预览</div>
-                <div className="mt-3 grid gap-3 sm:grid-cols-3">
-                  {(["thread", "comment", "like"] as const).map((key) => {
-                    const labels = { thread: "发帖", comment: "评论", like: "点赞" };
+                <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                  {(["thread", "comment", "like", "checkIn"] as const).map((key) => {
+                    const labels = { thread: "发帖", comment: "评论", like: "点赞", checkIn: "签到" };
                     return (
                       <div key={key} className="space-y-1">
                         <Label htmlFor={`activity-sample-${key}`} className="text-xs">{labels[key]}</Label>
@@ -292,16 +332,26 @@ export function ActivityPolicyPanel() {
                           id={`activity-sample-${key}`}
                           type="number"
                           min={0}
+                          max={key === "checkIn" ? 1 : undefined}
                           value={sample[key]}
-                          onChange={(event) => setSample((previous) => ({ ...previous, [key]: Math.max(0, boundedInteger(event.target.value)) }))}
+                          onChange={(event) => setSample((previous) => ({
+                            ...previous,
+                            [key]: key === "checkIn"
+                              ? Math.min(1, boundedInteger(event.target.value))
+                              : boundedInteger(event.target.value),
+                          }))}
                         />
                       </div>
                     );
                   })}
                 </div>
                 <p className="mt-3 text-sm">
-                  {sample.thread} × {weights.thread} + {sample.comment} × {weights.comment} + {sample.like} × {weights.like}
-                  <span className="ml-2 font-semibold text-primary">= {preview} 分</span>
+                  {sample.thread} × {weights.thread} + {sample.comment} × {weights.comment}
+                  {" + "}min({sample.like} × {weights.like}, {likeDailyCap ?? "加载中"})
+                  {" + "}{sample.checkIn} × {weights.checkIn}
+                  <span className="ml-2 font-semibold text-primary">
+                    {preview == null ? "= 等待点赞上限" : `= ${preview} 分`}
+                  </span>
                 </p>
               </div>
               <div className="space-y-2">
@@ -341,7 +391,7 @@ export function ActivityPolicyPanel() {
                         <Badge variant={item.version === current.version ? "secondary" : "outline"}>v{item.version}</Badge>
                         <span className="text-xs text-muted-foreground">{formatUnixTime(item.createdAt)}</span>
                       </div>
-                      <p className="mt-2 text-xs">发帖 ×{item.weights.thread} · 评论 ×{item.weights.comment} · 点赞 ×{item.weights.like}</p>
+                      <p className="mt-2 text-xs">发帖 ×{item.weights.thread} · 评论 ×{item.weights.comment} · 点赞 ×{item.weights.like} · 签到 ×{item.weights.checkIn}</p>
                       <p className="mt-2 text-xs leading-5 text-muted-foreground">{item.reason}</p>
                       <p className="mt-1 text-[10px] text-muted-foreground">操作人 {item.changedBy}</p>
                     </div>

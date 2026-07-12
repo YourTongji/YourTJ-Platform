@@ -17,12 +17,20 @@
 
 - 校园邮箱不出现在公开 profile、论坛或现有 staff directory DTO。
 - Identity 支持 email-at-rest encryption/blind index 配置。
+- Main staging/production deployment 要求独立的 32-byte AEAD/blind-index key 与 strict mode；应用在启动
+  时完成兼容行 backfill，并在仍有 plaintext email 时 fail closed。PR preview 只允许合成邮箱且不复用
+  main key。
 - 设备 session 只向账号本人展示 bounded user-agent label 和必要时间；新认证流程不持久化精确 IP。
 - recent-auth 只在当前 session 保存服务端验证时间和受控方法标签，不保存密码、code、
   email 或第二份账号级凭据；session 撤销/保留即是其撤销/保留边界。
 - Password recent-auth 额外保存当时的账号 credential version；密码改变后旧验证即使并发返回也不能
   写回 fresh。Recovery credential 只存 SHA-256、proof method、lifecycle version、15 分钟 expiry 与
   consume time，不是普通认证 token，浏览器只放 sessionStorage。
+- Identity 密码 set/change/reset 和 refresh replay 只写 account-scoped 安全事实类型、可选 session id 与时间，
+  不写邮箱、IP、user-agent、password/code/token 或请求正文；普通登录失败不作 PII 事件流。Owner export
+  只返回尚在保留期的 `eventType/createdAt`，不返回 subject session id。
+- 密码安全通知和管理员邀请的 durable job 只持久 account id、固定 template kind、lease/retry 和有界错误码；
+  收件邮箱和正文在 worker 内存中解密/渲染，不进入 job、owner export 或日志。
 - Staff 无通用 DM 浏览接口，只能访问 participant 报告的最小证据。
 - 陌生私信请求只保存一条最多 1000 字附言；decline/withdraw/block 会立即删除未举报正文，report
   只保留被举报附言作为治理证据。请求状态、pair、时间、撤回 5 分钟防抖和拒绝/block 30 天冷却
@@ -56,7 +64,8 @@
   返回 active、未 suspended 账号的 id/handle/policy，Forum 再应用 follow/block/mute 和通知偏好。
   不满足策略、未知或生命周期关闭的 handle 仍保留为公开普通文字，不产生通知或存在性信号。
 - Forum 主题/评论图片只接受本人 clean platform asset。公开内容 DTO 返回正文精确引用所需的 asset id、
-  alt、position、可选尺寸和状态校验后的派生 URL；不返回 object key、hash、上传 owner 或原始回调信息。
+  alt、position、可选尺寸和状态校验后的派生 URL；不返回 Ingest key、bucket/provider host、独立 key/hash
+  字段、上传 owner 或原始回调信息。短期 CDN URL 自身包含可见的 immutable Delivery path。
   pending/blocked upload id 仅可留在 owner draft/status surface，不构成公开授权。
 - Forum revision body 与 historical attachment 不是公共 profile 数据：作者本人可读；staff 只可凭内容
   审核能力读取另一位严格 lower-role 作者的有界 page。普通他人、self-targeted staff 权限以及同级/
@@ -71,6 +80,8 @@
   保留，公共内容、治理事实和 credit ledger 因而仍可验证。跨域清理开始前，worker 在账号行锁中重验
   deadline 并原子写不可逆 purge marker；running/failed/marker 任一成立都禁止恢复，避免部分清理后重新
   激活。耗尽 20 次的 job 可由 `operations.jobs` 管理员 recent-auth 后审计 requeue，但不能移除 marker。
+- 账号 purge 后 Identity email worker 不再解密或投递，未完 job 进入无收件人终态并按 90 天清理。
+  安全事实可在 365 天保留期内继续关联不可反查邮箱的 tombstone account id，到期后删除；不阻止 PII purge。
 - Upload callback bearer 只在 provider flow 短暂流转，PostgreSQL 仅保存 SHA-256 digest；migration `0057`
   backfill digest 后删除 plaintext column。Credential issuance 的 account-scoped quota/attempt facts 不含
   callback token、object body、IP 或 device fingerprint。
@@ -106,6 +117,11 @@
 | 通知 outbox/receipt | account/actor id、event type、有界站内 payload、状态/error code、delivery outcome | consumer；operators 只见无 payload 元数据 | 成功/取消 30 天，dead/receipt 90 天；不含邮箱、secret、stack trace |
 | 认证凭证 | type/grant、签发/撤销原因、opaque evidence reference | `verifications.manage`；允许时为最小公开投影 | 默认私密、可到期/撤销、公开不含证据/操作者 |
 | 运营数据 | job log、metrics、aggregated promo events | operators | 聚合、去标识、有限保留 |
+
+邮箱维度的 Redis abuse-control key 只能使用 Identity 生成的 opaque blind index/HMAC subject；不得把规范化
+邮箱直接写入 Redis key 或限流错误日志。
+| Identity 安全事实 | password set/change/reset、refresh replay 类型与时间 | owner export、security code | 不含 PII/credential；365 天后由 retention worker 删除 |
+| Identity email job | account id、template kind、attempt/lease/error code | worker；无用户/staff payload API | 不含收件人/正文；succeeded 30 天、dead 90 天 |
 | Owner export artifact | 八域本人数据 JSON、job/下载时间 | 仅 owner + worker | recent-auth 创建、24 小时清除、5 分钟一次性下载 grant，不写日志 |
 | 媒体操作元数据 | operational hold/release、system deletion/retry、redacted-object evidence | `operations.jobs` 或限定的 moderation purpose | no-store inventory、理由化访问、有限保留；不包含 provider key/URL/hash |
 | Staff 授权元数据 | 普通管理员 assignment、capability、target ceiling、expiry、grant/revoke event | ADMIN/security owner；被授权人只见本人有效范围 | 不公开；变更即时失效；理由/历史随安全审计保留，不进入普通 owner export |
@@ -295,8 +311,9 @@ release 和 audit retention；其他 domain（包括 DM）的 Planned legal-hold
   DTO 中多余/损坏 binding 都 fail closed。管理审核 DTO 同样不披露 object key、hash 或持久 URL；待审
   证据只通过 capability-gated、60 秒一次性 token 的同源 bounded proxy 读取，读取 purpose/reason 以 upload id
   审计，token 仅存 hash 且不进入 URL、日志或 audit。普通管理员/moderator 仍要求独立审核且禁止自审；
-  ADMIN 的本人媒体自审是唯一例外，仍要求 recent-auth、强制 reason、可信预览边界和显式
-  `selfReview` audit，不扩展到 DM/申诉/角色/认证/积分证据。该例外尚未实现。
+  ADMIN 的本人媒体自审是唯一例外，仍要求 recent-auth、强制 reason、显式确认和 `selfReview` audit；
+  approve 必须有可信预览证据，fail-closed 的 block 不要求预览。该例外已交付且不扩展到
+  DM/申诉/角色/认证/积分证据。
 - 推广保存平台 clean asset id 和站内目标路径，不保存远程图片 URL。曝光/点击只使用两小时有效的
   随机签名展示票据去重，票据不含账号、IP、设备或 audience 身份；原始 receipt 48 小时后由 worker
   删除；worker 启动时立即执行并按小时复查，点击归因到同一票据 impression 的 UTC day。长期只保留

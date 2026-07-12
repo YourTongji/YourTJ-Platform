@@ -8,7 +8,7 @@ use media::{
     prepare_account_media_purge, process_upload_deletion_job, purge_completed_cleanup_tombstones,
     purge_expired_asset_bindings, purge_expired_preview_grants, purge_upload_credential_attempts,
     reserve_upload_intent, routes_with_object_store, schedule_expired_upload_intent_cleanup_batch,
-    schedule_retention_gc_batch, UploadObjectStore,
+    schedule_retention_gc_batch, DeliveryPurgeTaskState, UploadObjectStore,
 };
 use sha2::{Digest, Sha256};
 use shared::{AppResult, AppState};
@@ -25,6 +25,21 @@ struct SuccessfulObjectStore;
 impl UploadObjectStore for SuccessfulObjectStore {
     async fn delete_object(&self, _oss_key: &str) -> AppResult<()> {
         Ok(())
+    }
+
+    async fn delete_delivery_object(&self, _object_key: &str) -> AppResult<()> {
+        Ok(())
+    }
+
+    async fn submit_delivery_purge(&self, _object_key: &str) -> AppResult<String> {
+        Ok("1".into())
+    }
+
+    async fn delivery_purge_task_state(
+        &self,
+        _provider_task_id: &str,
+    ) -> AppResult<DeliveryPurgeTaskState> {
+        Ok(DeliveryPurgeTaskState::Complete)
     }
 }
 
@@ -193,6 +208,36 @@ async fn insert_upload(
     upload_id
 }
 
+async fn publish_synthetic_variants(pool: &PgPool, asset_id: i64, label: &str) {
+    for (variant_kind, dimension) in
+        [("thumb_256", 256_i32), ("display_1280", 1_280_i32), ("full_2048", 2_048_i32)]
+    {
+        let digest = hex::encode(Sha256::digest(format!("{label}-{variant_kind}").as_bytes()));
+        sqlx::query(
+            "INSERT INTO media.asset_variants \
+             (asset_id, variant_kind, policy_version, object_key, content_sha256, mime, \
+              bytes, width, height, status, published_at) \
+             VALUES ($1, $2, 1, $3, $4, 'image/webp', 10, $5, $5, 'published', now())",
+        )
+        .bind(asset_id)
+        .bind(variant_kind)
+        .bind(format!("assets/{asset_id}/1/{variant_kind}-{digest}.webp"))
+        .bind(digest)
+        .bind(dimension)
+        .execute(pool)
+        .await
+        .expect("insert retention test Delivery variant");
+    }
+    sqlx::query(
+        "UPDATE media.asset_publications \
+         SET status = 'published', published_at = now() WHERE asset_id = $1",
+    )
+    .bind(asset_id)
+    .execute(pool)
+    .await
+    .expect("publish retention test Delivery variants");
+}
+
 #[tokio::test]
 async fn owner_export_excludes_internal_cleanup_tombstones() {
     let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL for media retention");
@@ -243,6 +288,68 @@ async fn owner_export_excludes_internal_cleanup_tombstones() {
 }
 
 #[tokio::test]
+async fn expired_max_attempt_cleanup_lease_dead_letters_its_parent_job() {
+    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL for media retention");
+    let pool = PgPool::connect(&database_url).await.expect("media retention database");
+    MIGRATOR.run(&pool).await.expect("media retention migrations");
+    let _test_guard = serialize_retention_tests(&pool).await;
+    let suffix = uuid::Uuid::new_v4().simple().to_string();
+    let owner_id = insert_account(&pool, &suffix, "user").await;
+    let upload_id = insert_upload(&pool, owner_id, &suffix, "expired-cleanup-lease", "clean").await;
+    let progress = prepare_account_media_purge(&pool, owner_id, true)
+        .await
+        .expect("queue expired cleanup lease fixture");
+    assert_eq!(progress.scheduled, 1);
+    let job_lease = uuid::Uuid::new_v4();
+    let step_lease = uuid::Uuid::new_v4();
+    sqlx::query(
+        "UPDATE media.object_deletion_jobs \
+         SET status = 'leased', lease_token = $2, lease_expires_at = now() - interval '1 minute' \
+         WHERE upload_id = $1",
+    )
+    .bind(upload_id)
+    .bind(job_lease)
+    .execute(&pool)
+    .await
+    .expect("expire parent deletion lease");
+    sqlx::query(
+        "UPDATE media.object_cleanup_steps step \
+         SET status = 'leased', attempt_count = 8, lease_token = $2, \
+             lease_expires_at = now() - interval '1 minute' \
+         FROM media.object_deletion_jobs job \
+         WHERE job.upload_id = $1 AND step.deletion_job_id = job.id",
+    )
+    .bind(upload_id)
+    .bind(step_lease)
+    .execute(&pool)
+    .await
+    .expect("expire exhausted cleanup-step lease");
+
+    assert!(!process_upload_deletion_job(&pool, &SuccessfulObjectStore, upload_id)
+        .await
+        .expect("reconcile expired cleanup-step lease"));
+    let states: (String, String, Option<String>, Option<String>) = sqlx::query_as(
+        "SELECT job.status, step.status, job.last_error_code, step.last_error_code \
+         FROM media.object_deletion_jobs job \
+         JOIN media.object_cleanup_steps step ON step.deletion_job_id = job.id \
+         WHERE job.upload_id = $1",
+    )
+    .bind(upload_id)
+    .fetch_one(&pool)
+    .await
+    .expect("dead-lettered cleanup lease state");
+    assert_eq!(
+        states,
+        (
+            "dead_letter".into(),
+            "dead_letter".into(),
+            Some("cleanup_step_lease_expired_after_max_attempts".into()),
+            Some("lease_expired_after_max_attempts".into()),
+        )
+    );
+}
+
+#[tokio::test]
 async fn retention_hold_requires_recent_operations_auth_and_fences_provider_deletion() {
     let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL for media retention");
     let pool = PgPool::connect(&database_url).await.expect("media retention database");
@@ -271,6 +378,27 @@ async fn retention_hold_requires_recent_operations_auth_and_fences_provider_dele
     let stale_admin_token = session_token(&pool, admin_id, false).await;
     let moderator_token = session_token(&pool, moderator_id, true).await;
     let app = routes_with_object_store(test_state(pool.clone()), Arc::new(SuccessfulObjectStore));
+    let reconciliation = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            "/api/v2/admin/media/reconciliation?limit=100".into(),
+            &admin_token,
+            serde_json::json!({}),
+        ))
+        .await
+        .expect("bounded media reconciliation response");
+    assert_eq!(reconciliation.status(), StatusCode::OK);
+    let reconciliation = response_json(reconciliation).await;
+    assert_eq!(reconciliation["dryRun"], true);
+    assert_eq!(reconciliation["providerInventory"]["state"], "manual_inventory_required");
+    assert!(reconciliation["items"].as_array().expect("reconciliation findings").iter().any(
+        |item| item["issueCodes"]
+            .as_array()
+            .expect("finding issue codes")
+            .iter()
+            .any(|code| code == "deletion_dead_letter")
+    ));
     let hold_uri = format!("/api/v2/admin/media/uploads/{upload_id}/retention-hold");
     let expiry = chrono::Utc::now().timestamp() + 24 * 60 * 60;
     let hold_body = serde_json::json!({
@@ -554,6 +682,7 @@ async fn retention_gc_deletes_only_unreferenced_assets_after_grace_and_hold_end(
     let admin_id = insert_account(&pool, &suffix, "admin").await;
     let pending_id = insert_upload(&pool, owner_id, &suffix, "pending", "pending").await;
     let clean_id = insert_upload(&pool, owner_id, &suffix, "clean", "clean").await;
+    publish_synthetic_variants(&pool, clean_id, &format!("{suffix}-clean")).await;
     let bound_id = insert_upload(&pool, owner_id, &suffix, "bound", "clean").await;
     let grace_id = insert_upload(&pool, owner_id, &suffix, "grace", "clean").await;
     let held_id = insert_upload(&pool, owner_id, &suffix, "security", "clean").await;
@@ -609,9 +738,37 @@ async fn retention_gc_deletes_only_unreferenced_assets_after_grace_and_hold_end(
     .await
     .expect("retention GC job");
     assert_eq!(state, ("quarantined".into(), "queued".into(), "retention_gc".into()));
-    assert!(process_upload_deletion_job(&pool, &SuccessfulObjectStore, clean_id)
+    let cleanup_step_count: i64 = sqlx::query_scalar(
+        "SELECT count(*)::bigint FROM media.object_cleanup_steps step \
+         JOIN media.object_deletion_jobs job ON job.id = step.deletion_job_id \
+         WHERE job.upload_id = $1",
+    )
+    .bind(clean_id)
+    .fetch_one(&pool)
+    .await
+    .expect("retention GC cleanup plan");
+    assert_eq!(cleanup_step_count, 7);
+    for _ in 0..10 {
+        sqlx::query(
+            "UPDATE media.object_deletion_jobs SET available_at = now() WHERE upload_id = $1",
+        )
+        .bind(clean_id)
+        .execute(&pool)
         .await
-        .expect("process retention GC deletion"));
+        .expect("advance retention GC deletion job");
+        sqlx::query(
+            "UPDATE media.object_cleanup_steps step SET available_at = now() \
+             FROM media.object_deletion_jobs job \
+             WHERE job.upload_id = $1 AND step.deletion_job_id = job.id",
+        )
+        .bind(clean_id)
+        .execute(&pool)
+        .await
+        .expect("advance retention GC cleanup steps");
+        assert!(process_upload_deletion_job(&pool, &SuccessfulObjectStore, clean_id)
+            .await
+            .expect("process retention GC cleanup step"));
+    }
     let protected_statuses: Vec<String> =
         sqlx::query_scalar("SELECT status FROM media.uploads WHERE id = ANY($1) ORDER BY id")
             .bind(vec![pending_id, bound_id, grace_id, held_id, recently_approved_id])
@@ -1639,6 +1796,15 @@ async fn operations_can_inventory_and_retry_admin_owned_system_deletion_dead_let
             .execute(&pool)
             .await
             .expect("advance system deletion retry fixture");
+            sqlx::query(
+                "UPDATE media.object_cleanup_steps SET available_at = now() \
+                 WHERE deletion_job_id = (SELECT id FROM media.object_deletion_jobs \
+                                          WHERE upload_id = $1)",
+            )
+            .bind(upload_id)
+            .execute(&pool)
+            .await
+            .expect("advance system cleanup-step retry fixture");
         }
     }
     let dead_letter_count: i64 = sqlx::query_scalar(
@@ -1669,6 +1835,15 @@ async fn operations_can_inventory_and_retry_admin_owned_system_deletion_dead_let
         .execute(&pool)
         .await
         .expect("advance user-owned system deletion retry fixture");
+        sqlx::query(
+            "UPDATE media.object_cleanup_steps SET available_at = now() \
+             WHERE deletion_job_id = (SELECT id FROM media.object_deletion_jobs \
+                                      WHERE upload_id = $1)",
+        )
+        .bind(user_upload_id)
+        .execute(&pool)
+        .await
+        .expect("advance user cleanup-step retry fixture");
     }
 
     let admin_token = session_token(&pool, admin_id, true).await;

@@ -216,7 +216,11 @@ export function MarkdownEditor({
         <TabsContent value="preview">
           <div className="p-4" style={{ minHeight }}>
             {value.trim() ? (
-              <MarkdownContent content={value} format="markdown_v1" />
+              <MarkdownContent
+                content={value}
+                format="markdown_v1"
+                ownerPreviewAssetIds={attachmentAssetIds}
+              />
             ) : (
               <p className="text-sm text-muted-foreground">没有可预览的内容</p>
             )}

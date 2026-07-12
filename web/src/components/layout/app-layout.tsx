@@ -24,6 +24,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { useAuth } from "@/context/auth-provider";
 import { api } from "@/lib/api/endpoints";
 import { accountQueryKeys } from "@/lib/account-query-keys";
+import { mediaDeliveryRefetchInterval } from "@/lib/media-delivery";
 import { cn } from "@/lib/utils";
 
 function ThemeToggle() {
@@ -50,6 +51,14 @@ function ThemeToggle() {
   );
 }
 
+export function shouldMountAnnouncementQueue(
+  isLoading: boolean,
+  isAuthenticated: boolean,
+  onboardingRequired: boolean,
+) {
+  return !isLoading && (!isAuthenticated || !onboardingRequired);
+}
+
 export function AppLayout() {
   const [searchOpen, setSearchOpen] = React.useState(false);
   const [mobileOpen, setMobileOpen] = React.useState(false);
@@ -61,6 +70,24 @@ export function AppLayout() {
   const isOnboardingSecurity = Boolean(account?.onboardingRequired) && location.pathname === "/settings";
   const isFocusedAccountSetup = isOnboarding || isOnboardingSecurity;
   const canUseCommunity = isAuthenticated && !isLoading && !account?.onboardingRequired;
+  const canShowAnnouncements = shouldMountAnnouncementQueue(
+    isLoading,
+    isAuthenticated,
+    Boolean(account?.onboardingRequired),
+  );
+  const ownProfile = useQuery({
+    queryKey: ["my-profile", account?.id],
+    queryFn: api.myProfile,
+    enabled: canUseCommunity,
+    staleTime: 60_000,
+  });
+  const navigationAvatar = useQuery({
+    queryKey: ["navigation-avatar-delivery", ownProfile.data?.avatarAssetId],
+    queryFn: () => api.mediaUrl(ownProfile.data?.avatarAssetId ?? ""),
+    enabled: canUseCommunity && Boolean(ownProfile.data?.avatarAssetId),
+    refetchInterval: (query) => mediaDeliveryRefetchInterval(query.state.data),
+  });
+  const retriedAvatarUrl = React.useRef<string | null>(null);
 
   React.useEffect(() => {
     if (!isLoading && account?.onboardingRequired && !isOnboarding && !isOnboardingSecurity) {
@@ -128,7 +155,7 @@ export function AppLayout() {
                 className="motion-interactive flex h-[34px] w-full items-center rounded-full border border-input bg-card px-3 text-left text-sm text-muted-foreground hover:border-primary/40 hover:bg-muted dark:bg-background dark:hover:bg-accent"
               >
                 <Search className="mr-2 size-[18px] shrink-0" />
-                <span className="truncate">搜索帖子、课程、资料、WIKI...</span>
+                <span className="truncate">搜索帖子、课程、课评、用户、板块和标签...</span>
                 <span className="ml-auto rounded border px-1.5 text-[10px] leading-4">/</span>
               </button>
             </div>
@@ -189,7 +216,20 @@ export function AppLayout() {
                   <DropdownMenuTrigger asChild>
                     <button className="motion-interactive rounded-full border bg-card p-1 focus-visible:ring-[3px] focus-visible:ring-ring/50">
                       <Avatar className="size-8">
-                        <AvatarImage src={account?.avatarUrl ?? undefined} />
+                        <AvatarImage
+                          src={navigationAvatar.data?.url ?? account?.avatarUrl ?? undefined}
+                          width={navigationAvatar.data?.width}
+                          height={navigationAvatar.data?.height}
+                          referrerPolicy="no-referrer"
+                          onError={() => {
+                            if (
+                              !navigationAvatar.data?.url
+                              || retriedAvatarUrl.current === navigationAvatar.data.url
+                            ) return;
+                            retriedAvatarUrl.current = navigationAvatar.data.url;
+                            void navigationAvatar.refetch();
+                          }}
+                        />
                         <AvatarFallback>{account?.handle?.slice(0, 1).toUpperCase() ?? "我"}</AvatarFallback>
                       </Avatar>
                     </button>
@@ -246,7 +286,7 @@ export function AppLayout() {
         </div>
       </div>
       <SearchDialog open={searchOpen} onOpenChange={setSearchOpen} />
-      {canUseCommunity ? <AnnouncementModalQueue /> : null}
+      {canShowAnnouncements ? <AnnouncementModalQueue /> : null}
     </TooltipProvider>
   );
 }

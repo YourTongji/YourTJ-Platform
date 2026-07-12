@@ -12,6 +12,11 @@ const authMocks = vi.hoisted(() => ({
   requestCode: vi.fn(),
   verifyEmail: vi.fn(),
   loginWithPassword: vi.fn(),
+  acceptAuthTokens: vi.fn(),
+}));
+const apiMocks = vi.hoisted(() => ({
+  passwordForgot: vi.fn(),
+  passwordReset: vi.fn(),
 }));
 
 vi.mock("@/context/auth-provider", () => ({
@@ -22,10 +27,7 @@ vi.mock("@/context/auth-provider", () => ({
 }));
 
 vi.mock("@/lib/api/endpoints", () => ({
-  api: {
-    passwordForgot: vi.fn(),
-    passwordReset: vi.fn(),
-  },
+  api: apiMocks,
 }));
 
 vi.mock("@/components/common/yourtj-captcha", () => ({
@@ -56,6 +58,9 @@ describe("LoginPage", () => {
     authMocks.requestCode.mockReset().mockResolvedValue(undefined);
     authMocks.verifyEmail.mockReset().mockResolvedValue(undefined);
     authMocks.loginWithPassword.mockReset().mockResolvedValue(undefined);
+    authMocks.acceptAuthTokens.mockReset().mockResolvedValue(undefined);
+    apiMocks.passwordForgot.mockReset().mockResolvedValue(undefined);
+    apiMocks.passwordReset.mockReset();
   });
 
   it("offers password login as the clear default journey", async () => {
@@ -99,5 +104,25 @@ describe("LoginPage", () => {
       handle: "campus-reader",
       password: undefined,
     }));
+  });
+
+  it("adopts the replacement session returned by a successful password reset", async () => {
+    const user = userEvent.setup();
+    const tokens = {
+      accessToken: "reset-access",
+      refreshToken: "reset-refresh",
+      account: { id: "1", handle: "owner", hasPassword: true },
+    };
+    apiMocks.passwordReset.mockResolvedValue(tokens);
+    renderPage();
+
+    await user.type(screen.getByLabelText("同济邮箱"), "owner@tongji.edu.cn");
+    await user.click(screen.getByRole("button", { name: "忘记密码？" }));
+    await user.type(screen.getByLabelText("重置验证码"), "123456");
+    await user.type(screen.getByLabelText("新密码"), "correct-horse-battery-staple!");
+    await user.type(screen.getByLabelText("确认新密码"), "correct-horse-battery-staple!");
+    await user.click(screen.getByRole("button", { name: "重置密码" }));
+
+    await waitFor(() => expect(authMocks.acceptAuthTokens).toHaveBeenCalledWith(tokens));
   });
 });

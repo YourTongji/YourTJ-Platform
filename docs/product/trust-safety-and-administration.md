@@ -6,7 +6,7 @@
 >
 > 负责人：Community operations、Security owner、Identity/Forum/Reviews/Media/Web maintainers
 >
-> 最近核验：2026-07-12，`origin/main@0492746`、governance/identity/media 实现与 ADMIN/委派管理员产品决策
+> 最近核验：2026-07-12，migrations `0060`–`0062`、governance/identity/media tests 与 ADMIN/委派管理员产品决策
 
 管理后台是社区政策的执行界面，不是数据库编辑器。所有操作必须先有产品语义、capability、
 目标层级、理由、审计、恢复和通知，再决定按钮放在哪里。
@@ -46,23 +46,31 @@
 - Media operations workspace 以 `operations.jobs` 提供 `private, no-store` 的 operational hold 和 system
   deletion-job inventory；两类 inventory 每页读取、hold 创建/CAS 续期/解除及 dead-letter retry 都使用
   recent-auth，并写 purpose-limited audit。
+- 持久角色 `admin` 作为当前 ADMIN：可对本人 raster media 使用唯一自审例外，但必须逐次显式确认、
+  server-side recent-auth 和强制 reason。自审 preview 建立绑定本人/审核人的可信 evidence，approve 必须消费
+  该证据；block 是收紧可见性的 fail-closed 操作，不依赖可能已经不存在的 pending preview。对应 evidence、
+  approve/block 与 cleanup audit 都记录 `selfReview=true`。Moderator、未来委派管理员及其他业务域仍禁止自审。
+- Media 处理状态与审核状态分离；`operations.jobs` 可在 recent-auth、reason 和原子状态重验后重排
+  failed/dead-letter Delivery processing，普通审核 queue 只看到有界 error code，不能直接写 published。
+- Activity 后台同时管理发帖、评论、点赞和签到四项版本化权重；trust policy 管理升级阈值、每日点赞
+  计分上限与治理降级冷却。签到与其他有效贡献进入同一 score projection 和每日自动等级评估。
 
 ### Partial
 
 - “手动注册”只有安全的邀请流程，没有管理员设置明文密码或跳过邮箱验证；这是有意边界。
 - 目标权限模型已确定为单一 ADMIN 超级管理角色与逐账号 capability 委派的普通管理员。
   当前代码仍为静态 `user < mod < admin` 映射，没有 administrator assignment、grant/revoke/
-  expiry/history API、管理 UI 或 ADMIN 媒体自审例外，不能将本文的目标规则宣称为已上线。
-- 缺账号停用/删除/恢复/purge；申诉仍缺自动 assignment/reassignment、SLA escalation、证据访问工作台
-  和最终 retention worker。
+  expiry/history API、管理 UI 或细粒度 media/review/forum/DM grant，不能将本文的委派规则宣称为已上线。
+- 账号停用、30 天删除恢复、跨域 export/purge 和 durable lifecycle worker 已交付；仍缺跨备份/legal-hold
+  的最终删除政策与演练。申诉仍缺自动 assignment/reassignment、SLA escalation 和证据访问工作台。
 - generic settings 只有 string key/value；多数 job trigger 无 durable 状态、进度、失败日志或重试。
   Media system deletion 是已持久化、可重试的局部例外，通用 GC 与历史 purge 仍分别受默认关闭的 rollout/
   policy flag 保护，不能扩写成平台统一任务中心已完成。
 - 成就徽章使用独立 `badges.manage` capability，具备 versioned 定义、人工授予/撤销/重新授予、事件历史、
   运营 UI 与同事务审计；它不复用身份/特殊认证权限。自动贡献事实通过 durable outbox 投递，授予、
   mint 和 outbox completion 同事务幂等；人工/自动授予及撤销都有可到达的 durable 通知。
-- 推广的曝光/点击聚合、公告 receipt 保留策略、批量审核和综合服务健康视图缺失；积分完整性已有
-  只读视图，但告警/SLO 和受审批 projection 重建仍缺。
+- 推广已有最小化票据与按日曝光/点击聚合；仍缺排期重叠预警。公告 receipt 保留策略、批量审核和
+  综合服务健康视图缺失；积分完整性已有只读视图，但告警/SLO 和受审批 projection 重建仍缺。
 - Staff WebAuthn/MFA、高风险双人确认和尚未交付的 PII 操作仍缺完整安全流程。
 
 ## Trust level — 统一信任等级 1–6
@@ -70,6 +78,11 @@
 信任等级现在是 Lv.1–6 的统一尺度，由 `activity` domain 基于 lifetime 有效活动分数自动评定。
 Lv.0 仅供未注册访客 UI，注册账号最低 Lv.1。详细阈值、策略版本化、自动升/降级逻辑
 与审计见 `activity-scoring.md` 的「统一信任等级与活动分数」一节。
+
+首页主操作是每日签到，不是“查看等级任务”。签到按 Asia/Shanghai 自然日幂等记录，一天至多贡献
+一次；发帖、评论、点赞和签到按同一已发布 score policy 计算。每日 evaluator 每次最多升一级；治理
+降级后同时要求冷却期结束且产生新的有效贡献，不能只靠旧累计分立即弹回原等级。管理员手动 override
+继续优先于自动评估。
 
 ### 发帖与举报权重
 
@@ -93,9 +106,9 @@ exception：只绕过 board lock/min-trust 两个 gate，仍必须通过 active 
 内容 policy 和 rate limit。该例外不是通用发帖免检，也不授予 `community.manage`。
 
 迁移 0059 将旧 `min_trust_to_post` 值 +1 以适配统一量表（旧 TL1 → 新 Lv.2）。
-信任阈值现在由 `activity.trust_level_policies` 版本化管理，不在代码中硬编码；
-管理员可通过后台 `PUT /api/v2/admin/trust-policy` 修改阈值、like 日上限和 reason，
-并查看版本历史。
+信任阈值现在由 `activity.trust_level_policies` 版本化管理，不在代码中硬编码；管理员可通过后台
+修改阈值、like 日上限、治理降级冷却和 reason，并查看版本历史。Activity score policy 另行发布四项
+贡献权重；任一权重变更都会重投影每日 score 与 lifetime qualifying score，不能只影响新数据。
 
 ## 治理原则
 
@@ -124,6 +137,10 @@ ADMIN 的“最高权限”指最高的平台管理权限，不等于数据库 t
 本来不存在的能力：任意查看私信/校园邮箱、写入 wallet balance/任意 ledger、删改 append-only audit、
 绕过账号与媒体保留、伪装用户改写正文。核心 capability 与技术约束见
 [授权与审计](../security/authorization-and-audit.md)。
+
+当前 `admin` 已按上述 ADMIN 语义拥有静态平台 capability，并交付媒体自审专用例外；下节的普通管理员
+逐账号 assignment/grant 仍为 `Planned`。在该模型落地前，不能把当前 `mod` 或 `admin` 角色包装成已经
+支持可选权限、到期或 target ceiling 的“委派管理员”。
 
 ### 普通管理员委派
 
@@ -161,10 +178,11 @@ ADMIN 的“最高权限”指最高的平台管理权限，不等于数据库 t
 1. forum reports：uphold/reject/ignore，查看必要上下文和自动隐藏 provenance。
 2. review reports/status：决定举报、隐藏、恢复或软移除，不改写作者评分/正文。
 3. reported DM：仅具体举报消息和有限上下文，无通用私信浏览器。
-4. media review：pending/clean/quarantined/dead-letter asset；mod 和普通管理员只能在有效 grant 与目标上限内
-   审核，不能自审。ADMIN 可审核任意非 blocked 上传，并可使用本人媒体自审例外；自审必须完成
-   recent-auth、强制 reason、显式确认，且 audit 记录 `selfReview=true`。Image approve 仍必须由同一
-   reviewer 先完成可信预览，file/PDF 在 scanner
+4. media review：pending/clean/quarantined/dead-letter asset；mod 和未来普通管理员只能在有效权限/目标
+   上限内审核，不能自审。ADMIN 可审核 lower-role 的非 blocked 上传，并可使用本人媒体自审例外；
+   不能审核另一 ADMIN。自审必须完成 recent-auth、强制 reason、显式确认，且 audit 记录
+   `selfReview=true`。Image approve 仍必须由同一 reviewer 先完成可信预览；self-block 不要求预览证据；
+   file/PDF 在 scanner
    证据接入前不可批准；block 先停止公开派生，再由 durable job 删除 provider object。普通 queue 只
    显示通用 hold state，不披露 operations reason/actor。
 5. media operations：限时 `moderation/security` operational hold 与 system dead-letter 独立于 moderator
@@ -172,7 +190,10 @@ ADMIN 的“最高权限”指最高的平台管理权限，不等于数据库 t
    compare-and-set；system deletion inventory 每页读取同样要求 recent-auth 并审计 result count，retry
    另外要求 reason。所有 inventory 都是 `private, no-store`。该机制只暂停物理删除，不恢复
    quarantined 内容，也不构成 legal hold。
-6. content recovery：通过精确 id 查找 retained hidden/deleted 内容并执行理由化恢复。
+6. media processing：审核通过只进入 processing，不代表素材已可公开。Delivery job dead-letter 时，
+   `operations.jobs` actor 在 recent-auth 后填写 reason 才能重排；状态、job 与 audit 同事务重验，UI 的
+   “已重试”只表示 queued。管理员不能跳过 decoder/variant completeness 直接设置 published。
+7. content recovery：通过精确 id 查找 retained hidden/deleted 内容并执行理由化恢复。
 
 主题支持 pin/unpin、close/reopen、archive/unarchive、hide/unhide、soft-delete/restore、move；
 评论至少支持 hide/unhide、soft-delete/restore。所有动作按 target type/state 只展示当前合法转换，
@@ -239,15 +260,15 @@ sanction、trust-level rate limit 和 watched words，尚未接入同一 captcha
 | Appeals | 独立领取、维持/撤销/缩短、状态历史 | `appeals.review` |
 | Media | scan/flag queue、approve/block、asset lookup | 当前 `moderation.content`；目标 media moderation grant |
 | Community | boards、tags、watched words | `community.manage` |
-| Promotions | placement、clean asset、站内目标、排期、受众、状态 | `promotions.manage` |
+| Promotions | placement、clean + published asset、站内目标、排期、受众、状态 | `promotions.manage` |
 | Achievements | 受控定义、自动规则、人工授予/撤销与事件历史 | `badges.manage`；不可复用认证权限 |
 | Verifications | typed 身份/特殊认证定义、授予历史、到期与撤销 | `verifications.manage` |
 | Announcements | draft、排期、发布、revision、receipt summary | `announcements.manage` |
 | Policies | 社区规则、隐私政策、条款的 draft/review/publish/version/acceptance | 独立 `policies.manage` |
-| Activity | 当前权重、预览、版本历史、发布 | `activity.policy` |
+| Activity | 发帖/评论/点赞/签到权重、升级阈值、点赞日上限、降级冷却、版本历史 | `activity.policy` |
 | Courses | catalogue 管理与受保护删除 | `courses.manage` |
 | Settings | typed/versioned setting | `platform.settings` |
-| Jobs | sync/reindex/reconcile；media operational hold inventory、system deletion dead-letter/retry | `operations.jobs` |
+| Jobs | sync/reindex/reconcile；media operational hold、Delivery processing 与 system cleanup dead-letter/retry | `operations.jobs` |
 | Audit | actor/action/target/result/request filters、受控 export | `audit.read` |
 | Credit integrity | 只读 ledger verify/reconcile、逐 wallet 漂移证据 | `credit.integrity` |
 
@@ -261,7 +282,8 @@ sanction、trust-level rate limit 和 watched words，尚未接入同一 captcha
 - 操作任务持久化 `requested/queued/running/succeeded/failed/cancelled`，含 requestor、reason、
   progress、bounded log、dedupe key、retry count 和 timestamps。
 - 重试幂等；同类互斥任务有锁，UI 的“已提交”不能显示为“已完成”。
-- Media system deletion 已实现 durable retry/dead-letter；operator 只能重排非 moderation system job，
+- Media variant processing 与 system deletion 已实现 durable retry/dead-letter；processing retry 只接受
+  failed publication/dead-letter job，system cleanup retry 只能重排非 moderation system job，
   reason 进入独立 retry event，不能覆盖原 job purpose。Provider 成功后 storage locator/fingerprint redacted，
   inventory 不返回 key/URL/hash。通用 GC 是否运行仍以环境 flag、startup log 和 queue 事实为准。
 - 运营健康至少显示审核积压/时长、任务失败、索引/投影漂移、邮件/OSS 故障和恢复状态。
@@ -275,7 +297,7 @@ draft/review/published/retired、effective time、owner/approver、diff、适用
 
 ## 推广、公告和徽章治理
 
-- 推广只使用 clean asset、受控 URL、排期和 audience；第一阶段限定自营信息。
+- 推广只使用 clean + published asset、受控 URL、排期和 audience；第一阶段限定自营信息。
 - 公告修改保留 revision；删除改为 archive，强制确认由 requires-ack policy 控制。
 - 成就定义只接受受控图标 token，使用 version CAS；停用不删除历史。自动授予写入 achievement event
   和幂等 pending mint，人工授予明确不 mint；人工撤销/重新授予追加事件且不反转历史积分。
@@ -303,10 +325,11 @@ draft/review/published/retired、effective time、owner/approver、diff、适用
 ## 验收基线
 
 - Web capabilities 与后端授权独立生效，直接构造请求仍被拒绝。
-- 普通管理员任免只能由 ADMIN 执行；grant/revoke/expiry、转授权、自改权限、越 target ceiling 和 stale version
-  有 handler→PostgreSQL 负向测试。
+- 普通管理员委派落地时，任免只能由 ADMIN 执行；grant/revoke/expiry、转授权、自改权限、越 target
+  ceiling 和 stale version 必须有 handler→PostgreSQL 负向测试。在这些产物出现前保持 `Planned`。
 - 自操作、同级/更高角色、缺理由、过期 recent-auth 和利益冲突案件默认有负向测试；ADMIN 媒体自审只在
-  专用正向用例中成立，并覆盖 recent-auth、reason、预览证据、明确告警和 `selfReview` audit。
+  专用正向用例中成立，并覆盖 recent-auth、reason、approve 的预览证据、self-block fail-closed、明确告警
+  和 `selfReview` audit。
 - 内容处置、恢复、处罚、申诉和策略变更在业务事务中追加审计。
 - audit/appeal history 的 row mutation 与 table truncate 均被真实 PostgreSQL 负向测试拒绝，拒绝后
   正常 append 和申诉状态流仍可继续。
@@ -316,6 +339,8 @@ draft/review/published/retired、effective time、owner/approver、diff、适用
   冲突状态或投影修复失败都不能留下半完成的终态历史。
 - Staff 无任意 DM/PII 浏览能力，敏感 evidence read 本身被审计。
 - 管理 UI 不伪造任务完成、媒体状态、公告确认或 credit 完整性。
+- Media UI 区分 moderation 与 Delivery 状态；processing retry 返回 queued 后继续 poll，只有完整变体集
+  published 才允许 profile/forum/promotion binding 和签发 URL。
 - 用户、内容、媒体、推广、公告、徽章和任务的核心状态机都有可恢复路径和验收旅程。
 - 认证后台缺 capability、self/equal/higher target、非法展示、重复有效 grant、过期/重复撤销与非法
   evidence reference 均有 handler→PostgreSQL 负向测试。

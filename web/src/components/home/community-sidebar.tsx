@@ -1,12 +1,13 @@
-import { BellRing, CalendarCheck2, Flame, Leaf, RefreshCw, TrendingUp } from "lucide-react";
+import { BellRing, Flame, Leaf, RefreshCw, TrendingUp } from "lucide-react";
 import { Link } from "react-router";
 
 import { ActivityHeatmap } from "@/components/activity/activity-heatmap";
+import { DailyCheckInButton } from "@/components/activity/daily-check-in-button";
 import { TeaBadge } from "@/components/common/tea-badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
-import type { Account, ActivityCalendar, Announcement, ThreadFeed, TrustProgress } from "@/lib/api/types";
+import type { Account, ActivityCalendar, Announcement, CheckInStatus, ThreadFeed, TrustProgress } from "@/lib/api/types";
 import { formatDate, formatNumber } from "@/lib/format";
 
 interface ActivityState {
@@ -16,68 +17,123 @@ interface ActivityState {
   onRetry: () => void;
 }
 
-function MissionCard({
-  account,
-  activity,
-  trustProgress,
-}: {
+interface CheckInState {
+  status?: CheckInStatus;
+  isLoading: boolean;
+  isPending: boolean;
+  error?: unknown;
+  onCheckIn: () => void;
+  onRetry: () => void;
+}
+
+interface TrustProgressSummaryProps {
   account: Account | null;
-  activity: ActivityState;
   trustProgress: TrustProgress | null;
-}) {
+  trustError?: unknown;
+  onTrustRetry: () => void;
+}
+
+export function TrustProgressSummary({
+  account,
+  trustProgress,
+  trustError,
+  onTrustRetry,
+}: TrustProgressSummaryProps) {
   const level = trustProgress?.trustLevel ?? account?.trustLevel ?? 0;
   const progressPercent = trustProgress?.progressPercent ?? 0;
   const isMaxLevel = trustProgress?.isMaxLevel ?? false;
   const remainingScore = trustProgress?.remainingScore;
   const nextLevel = trustProgress?.nextLevel;
   const overrideActive = trustProgress?.overrideActive ?? false;
+  const promotionBlockedUntil = trustProgress?.promotionBlockedUntil;
+  const promotionBlocked =
+    promotionBlockedUntil != null && promotionBlockedUntil > Math.floor(Date.now() / 1000);
 
+  return (
+    <section className="mt-4" aria-label="信任等级进度">
+      <div className="flex items-center justify-between">
+        <p className="text-sm font-semibold">信任等级</p>
+        <TeaBadge level={level} />
+      </div>
+
+      <div className="mt-5 flex justify-center">
+        <div className="flex size-16 items-center justify-center rounded-lg border border-input bg-background text-primary">
+          <Leaf className="size-9" strokeWidth={1.5} />
+        </div>
+      </div>
+
+      <div className="mt-3 flex items-center justify-between gap-2 text-[10px] text-muted-foreground">
+        {isMaxLevel ? (
+          <span>已达满级 · {trustProgress?.teaName ?? ""}</span>
+        ) : promotionBlocked && promotionBlockedUntil != null ? (
+          <span>治理降级冷却至 {formatDate(promotionBlockedUntil)}</span>
+        ) : trustProgress?.promotionRequiresNewActivity ? (
+          <span>完成新的有效社区贡献后可继续升级</span>
+        ) : remainingScore === 0 ? (
+          <span>已满足升级条件，等待每日评估</span>
+        ) : remainingScore != null && nextLevel != null ? (
+          <span>距离 Lv.{nextLevel} 还需 {remainingScore} 分</span>
+        ) : trustError ? (
+          <span className="text-destructive">等级进度加载失败</span>
+        ) : (
+          <span>加载等级进度中</span>
+        )}
+        <span className="font-medium text-primary">
+          {trustProgress ? `${trustProgress.qualifyingScore} 分` : `${level} / 6`}
+        </span>
+      </div>
+      <Progress className="mt-2 h-1.5" value={progressPercent} />
+
+      {trustError ? (
+        <Button
+          type="button"
+          variant="link"
+          size="sm"
+          className="mt-1 h-auto p-0 text-xs"
+          onClick={onTrustRetry}
+        >
+          重试等级进度
+        </Button>
+      ) : null}
+
+      <Button asChild variant="outline" size="sm" className="mt-4 w-full bg-transparent">
+        <Link to={account?.handle ? `/profile/${account.handle}` : "/login"}>
+          {account ? "查看个人成长" : "了解社区等级"}
+        </Link>
+      </Button>
+
+      {overrideActive ? (
+        <p className="mt-2 text-[10px] text-amber-600 dark:text-amber-400">等级当前由管理员锁定。</p>
+      ) : null}
+    </section>
+  );
+}
+
+function MissionCard({
+  account,
+  activity,
+  checkIn,
+  trustProgress,
+  trustError,
+  onTrustRetry,
+}: {
+  account: Account | null;
+  activity: ActivityState;
+  checkIn: CheckInState;
+  trustProgress: TrustProgress | null;
+  trustError?: unknown;
+  onTrustRetry: () => void;
+}) {
   return (
     <Card className="min-h-[452px] rounded-xl">
       <CardContent className="p-4">
-        <Button asChild className="h-10 w-full rounded-lg">
-          <Link to={account?.handle ? "/wallet" : "/login"}>
-            <CalendarCheck2 className="size-4" />
-            {account ? "查看等级任务" : "登录查看任务"}
-          </Link>
-        </Button>
-
-        <div className="mt-4 flex items-center justify-between">
-          <p className="text-sm font-semibold">信任等级</p>
-          <TeaBadge level={level} />
-        </div>
-
-        <div className="mt-5 flex justify-center">
-          <div className="flex size-16 items-center justify-center rounded-lg border border-input bg-background text-primary">
-            <Leaf className="size-9" strokeWidth={1.5} />
-          </div>
-        </div>
-
-        <div className="mt-3 flex items-center justify-between gap-2 text-[10px] text-muted-foreground">
-          {isMaxLevel ? (
-            <span>已达满级 · {trustProgress?.teaName ?? ""}</span>
-          ) : remainingScore != null && nextLevel != null ? (
-            <span>距离 Lv.{nextLevel} 还需 {remainingScore} 分</span>
-          ) : (
-            <span>加载等级进度中</span>
-          )}
-          <span className="font-medium text-primary">
-            {trustProgress ? `${trustProgress.qualifyingScore} 分` : `${level} / 6`}
-          </span>
-        </div>
-        <Progress className="mt-2 h-1.5" value={progressPercent} />
-
-        <Button asChild variant="outline" size="sm" className="mt-4 w-full bg-transparent">
-          <Link to={account?.handle ? `/profile/${account.handle}` : "/login"}>
-            {account ? "查看个人成长" : "了解社区等级"}
-          </Link>
-        </Button>
-
-        {overrideActive && trustProgress?.overrideReason ? (
-          <p className="mt-2 text-[10px] text-amber-600 dark:text-amber-400">
-            等级已锁定：{trustProgress.overrideReason}
-          </p>
-        ) : null}
+        <DailyCheckInButton account={account} {...checkIn} />
+        <TrustProgressSummary
+          account={account}
+          trustProgress={trustProgress}
+          trustError={trustError}
+          onTrustRetry={onTrustRetry}
+        />
 
         <div className="my-5 border-t border-border/70" />
 
@@ -149,19 +205,32 @@ function NoticeCard({ announcements }: { announcements: Announcement[] }) {
 export function CommunitySidebar({
   account,
   activity,
+  checkIn,
   threads,
   announcements,
   trustProgress,
+  trustError,
+  onTrustRetry,
 }: {
   account: Account | null;
   activity: ActivityState;
+  checkIn: CheckInState;
   threads: ThreadFeed[];
   announcements: Announcement[];
   trustProgress: TrustProgress | null;
+  trustError?: unknown;
+  onTrustRetry: () => void;
 }) {
   return (
     <aside className="space-y-6">
-      <MissionCard account={account} activity={activity} trustProgress={trustProgress} />
+      <MissionCard
+        account={account}
+        activity={activity}
+        checkIn={checkIn}
+        trustProgress={trustProgress}
+        trustError={trustError}
+        onTrustRetry={onTrustRetry}
+      />
       <HotTopicsCard threads={threads} />
       <NoticeCard announcements={announcements} />
     </aside>

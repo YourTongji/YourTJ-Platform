@@ -1,7 +1,11 @@
 //! Runtime configuration, loaded once at startup from the environment.
 
+use std::net::IpAddr;
+
 const DEFAULT_CAPTCHA_SITEVERIFY_URL: &str = "https://captcha.07211024.xyz/api/siteverify";
 const DEFAULT_CLOUDFLARE_EMAIL_API_BASE_URL: &str = "https://api.cloudflare.com/client/v4";
+const DEFAULT_CORS_ALLOWED_ORIGINS: &str =
+    "http://localhost:5173,http://127.0.0.1:5173,https://pf-dev.yourtj.de";
 
 /// Configured outbound email transport.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -17,6 +21,7 @@ pub enum EmailProvider {
 /// Application configuration. Construct with [`Config::from_env`].
 #[derive(Debug, Clone)]
 pub struct Config {
+    pub bind_address: IpAddr,
     pub port: u16,
     pub database_url: String,
     pub database_replica_url: Option<String>,
@@ -49,6 +54,7 @@ pub struct Config {
     pub email_encryption_active_blind_hex: String,
     pub email_encryption_strict: bool,
     pub captcha_siteverify_url: String,
+    pub cors_allowed_origins: Vec<String>,
 }
 
 impl Config {
@@ -72,6 +78,9 @@ impl Config {
             .unwrap_or_default();
 
         let config = Self {
+            bind_address: env_or_default("BIND_ADDRESS", "0.0.0.0")
+                .parse()
+                .map_err(|_| anyhow::anyhow!("invalid BIND_ADDRESS"))?,
             port,
             database_url: env_or_default("DATABASE_URL", ""),
             database_replica_url: non_empty(std::env::var("DATABASE_REPLICA_URL").ok()),
@@ -118,6 +127,10 @@ impl Config {
                 "CAPTCHA_SITEVERIFY_URL",
                 DEFAULT_CAPTCHA_SITEVERIFY_URL,
             ),
+            cors_allowed_origins: parse_cors_origins(&env_or_default(
+                "CORS_ALLOWED_ORIGINS",
+                DEFAULT_CORS_ALLOWED_ORIGINS,
+            ))?,
         };
         config.validate_email_delivery()?;
         Ok(config)
@@ -173,6 +186,32 @@ impl Config {
     }
 }
 
+fn parse_cors_origins(value: &str) -> anyhow::Result<Vec<String>> {
+    let mut origins = Vec::new();
+    for candidate in value.split(',').map(str::trim).filter(|candidate| !candidate.is_empty()) {
+        let parsed = reqwest::Url::parse(candidate)
+            .map_err(|_| anyhow::anyhow!("CORS_ALLOWED_ORIGINS contains an invalid URL"))?;
+        if !matches!(parsed.scheme(), "http" | "https")
+            || parsed.host_str().is_none()
+            || !parsed.username().is_empty()
+            || parsed.password().is_some()
+            || parsed.query().is_some()
+            || parsed.fragment().is_some()
+            || parsed.path() != "/"
+            || parsed.origin().ascii_serialization() != candidate
+        {
+            anyhow::bail!("CORS_ALLOWED_ORIGINS entries must be exact HTTP(S) origins");
+        }
+        if !origins.iter().any(|origin| origin == candidate) {
+            origins.push(candidate.to_string());
+        }
+    }
+    if origins.is_empty() {
+        anyhow::bail!("CORS_ALLOWED_ORIGINS must contain at least one origin");
+    }
+    Ok(origins)
+}
+
 fn email_provider_from_env(
     cloudflare_account_id: &str,
     cloudflare_api_token: &str,
@@ -211,4 +250,27 @@ fn env_or_default_bool(key: &str, default: bool) -> anyhow::Result<bool> {
 
 fn non_empty(value: Option<String>) -> Option<String> {
     value.filter(|v| !v.trim().is_empty())
+}
+
+#[cfg(test)]
+mod cors_tests {
+    use super::parse_cors_origins;
+
+    #[test]
+    fn accepts_unique_exact_origins() {
+        assert_eq!(
+            parse_cors_origins(
+                "https://pf-dev.yourtj.de,http://localhost:5173,https://pf-dev.yourtj.de"
+            )
+            .expect("valid origins"),
+            vec!["https://pf-dev.yourtj.de", "http://localhost:5173"]
+        );
+    }
+
+    #[test]
+    fn rejects_wildcards_paths_and_credentials() {
+        for value in ["*", "https://example.com/path", "https://user@example.com"] {
+            assert!(parse_cors_origins(value).is_err());
+        }
+    }
 }

@@ -35,8 +35,9 @@ async fn request(
 }
 
 async fn seed_upload(pool: &PgPool, account_id: i64, usage: &str, status: &str) -> i64 {
+    configure_test_delivery();
     let suffix = uuid::Uuid::new_v4().simple().to_string();
-    sqlx::query_scalar(
+    let asset_id = sqlx::query_scalar(
         "INSERT INTO media.uploads \
          (account_id, kind, oss_key, url, bytes, mime, sha256, status, usage, \
           image_width, image_height) \
@@ -51,7 +52,57 @@ async fn seed_upload(pool: &PgPool, account_id: i64, usage: &str, status: &str) 
     .bind(usage)
     .fetch_one(pool)
     .await
-    .expect("seed forum image")
+    .expect("seed forum image");
+    if status == "clean" {
+        let content_hash = "b".repeat(64);
+        for (variant_kind, width, height) in
+            [("thumb_256", 256, 171), ("display_1280", 1200, 800), ("full_2048", 1200, 800)]
+        {
+            sqlx::query(
+                "INSERT INTO media.asset_variants \
+                 (asset_id, variant_kind, policy_version, object_key, content_sha256, mime, \
+                  bytes, width, height, status, published_at) \
+                 VALUES ($1, $2, 1, $3, $4, 'image/webp', 512, $5, $6, 'published', now())",
+            )
+            .bind(asset_id)
+            .bind(variant_kind)
+            .bind(format!("assets/{asset_id}/1/{variant_kind}-{content_hash}.webp"))
+            .bind(&content_hash)
+            .bind(width)
+            .bind(height)
+            .execute(pool)
+            .await
+            .expect("seed published forum variant");
+        }
+        sqlx::query(
+            "UPDATE media.asset_publications \
+             SET policy_version = 1, status = 'published', published_at = now(), \
+                 updated_at = now() WHERE asset_id = $1",
+        )
+        .bind(asset_id)
+        .execute(pool)
+        .await
+        .expect("seed complete forum publication");
+    }
+    asset_id
+}
+
+fn configure_test_delivery() {
+    for (key, value) in [
+        ("OSS_REGION", "cn-shanghai"),
+        ("MEDIA_DELIVERY_OSS_BUCKET", "yourtj-test-delivery"),
+        ("MEDIA_DELIVERY_OSS_ACCESS_KEY_ID", "test-delivery-writer"),
+        ("MEDIA_DELIVERY_OSS_ACCESS_KEY_SECRET", "test-delivery-secret"),
+        ("MEDIA_CDN_BASE_URL", "https://media.example.test"),
+        ("MEDIA_CDN_PRIMARY_KEY", "testprimarysigningkey"),
+        ("MEDIA_CDN_SECONDARY_KEY", "testsecondarysigningkey"),
+        ("MEDIA_CDN_SIGNING_KEY_SLOT", "primary"),
+        ("MEDIA_CDN_URL_TTL_SECONDS", "300"),
+        ("CDN_ACCESS_KEY_ID", "test-purge-operator"),
+        ("CDN_ACCESS_KEY_SECRET", "test-purge-secret"),
+    ] {
+        std::env::set_var(key, value);
+    }
 }
 
 async fn create_thread(app: &axum::Router, token: &str, body: Value) -> axum::response::Response {

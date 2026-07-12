@@ -80,16 +80,23 @@ pub struct PasswordForgotInput {
 
 /// POST /auth/password/reset
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PasswordResetInput {
     pub email: String,
     pub code: String,
     pub new_password: String,
 }
 
+/// POST /auth/password/set
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PasswordSetInput {
+    pub new_password: String,
+}
+
 /// POST /auth/password/change
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PasswordChangeInput {
     pub current_password: String,
     pub new_password: String,
@@ -114,6 +121,7 @@ pub struct AccountDto {
     pub role: String,
     pub capabilities: Vec<String>,
     pub trust_level: i16,
+    pub has_password: bool,
     pub onboarding_required: bool,
     pub created_at: i64,
 }

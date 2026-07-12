@@ -595,9 +595,11 @@ async fn stale_password_proof_cannot_raise_freshness_after_concurrent_credential
         identity::credential_state::replace_password_if_current(
             &change_pool,
             account_id,
-            Some(session_id),
+            session_id,
             credential_version,
             &new_hash,
+            &hex::encode(Sha256::digest(b"replacement-refresh-token")),
+            chrono::Utc::now() + chrono::Duration::days(7),
         )
         .await
     });

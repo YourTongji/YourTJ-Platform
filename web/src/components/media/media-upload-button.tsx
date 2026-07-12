@@ -9,6 +9,7 @@ import {
   uploadMedia,
 } from "@/lib/media-upload";
 import type { MediaUsage } from "@/lib/api/types";
+import { STATIC_IMAGE_ACCEPT, STATIC_IMAGE_REUPLOAD_MESSAGE } from "@/lib/media-policy";
 
 export function MediaUploadButton({
   kind,
@@ -46,7 +47,7 @@ export function MediaUploadButton({
         ref={inputRef}
         type="file"
         className="sr-only"
-        accept={kind === "image" ? "image/jpeg,image/png,image/gif,image/webp" : "application/pdf"}
+        accept={kind === "image" ? STATIC_IMAGE_ACCEPT : "application/pdf"}
         onChange={(event) => {
           const file = event.target.files?.[0];
           if (file) void handleFile(file);
@@ -57,6 +58,7 @@ export function MediaUploadButton({
       <Button
         type="button"
         variant="outline"
+        title={kind === "image" ? STATIC_IMAGE_REUPLOAD_MESSAGE : undefined}
         onClick={() => inputRef.current?.click()}
         disabled={disabled || isUploading}
       >

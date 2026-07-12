@@ -6,10 +6,11 @@ use serde::Deserialize;
 use shared::{AppError, AppResult, AppState, Page};
 
 use crate::dto::{
-    ActivityCalendarDto, ActivityPolicyDto, ActivityPolicyUpdateInput, TrustLevelAdjustInput,
-    TrustLevelEventDto, TrustLevelPolicyDto, TrustLevelPolicyUpdateInput, TrustProgressDto,
+    ActivityCalendarDto, ActivityPolicyDto, ActivityPolicyUpdateInput, CheckInStatusDto,
+    TrustLevelAdjustInput, TrustLevelEventDto, TrustLevelPolicyDto, TrustLevelPolicyUpdateInput,
+    TrustProgressDto,
 };
-use crate::{repo, trust};
+use crate::{check_ins, repo, trust};
 
 const DEFAULT_ACTIVITY_DAYS: i64 = 365;
 const MAX_ACTIVITY_DAYS: i64 = 371;
@@ -41,6 +42,25 @@ pub(crate) async fn get_my_activity(
     let (from, to) = resolve_range(&query, today)?;
     let calendar = repo::activity_calendar(&state.db, auth.id, from, to).await?;
     Ok(Json(calendar))
+}
+
+pub(crate) async fn get_check_in_status(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> AppResult<Json<CheckInStatusDto>> {
+    let auth = authenticate(&state, &headers).await?;
+    Ok(Json(check_ins::current_status(&state.db, auth.id).await?))
+}
+
+pub(crate) async fn check_in(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> AppResult<Json<CheckInStatusDto>> {
+    let auth = authenticate(&state, &headers).await?;
+    if identity::sanctions::is_silenced(state.redis.as_ref(), &state.db, auth.id).await? {
+        return Err(AppError::Forbidden);
+    }
+    Ok(Json(check_ins::check_in(&state.db, auth.id).await?))
 }
 
 pub(crate) async fn get_activity_policy(
@@ -207,7 +227,12 @@ fn parse_date(value: &str) -> AppResult<NaiveDate> {
 }
 
 fn validate_policy_input(input: &ActivityPolicyUpdateInput) -> AppResult<()> {
-    let weights = [&input.weights.thread, &input.weights.comment, &input.weights.like];
+    let weights = [
+        &input.weights.thread,
+        &input.weights.comment,
+        &input.weights.like,
+        &input.weights.check_in,
+    ];
     if weights.into_iter().any(|weight| !(0..=1000).contains(weight)) {
         return Err(AppError::BadRequest("activity weights must be between 0 and 1000".into()));
     }
@@ -247,7 +272,7 @@ mod tests {
     fn rejects_policy_reason_shorter_than_contract_minimum() {
         let input = ActivityPolicyUpdateInput {
             expected_version: 1,
-            weights: ActivityWeightsDto { thread: 10, comment: 3, like: 1 },
+            weights: ActivityWeightsDto { thread: 10, comment: 3, like: 1, check_in: 1 },
             reason: "x".into(),
         };
         assert!(validate_policy_input(&input).is_err());
