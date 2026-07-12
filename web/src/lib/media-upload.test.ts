@@ -93,6 +93,7 @@ describe("media upload boundary", () => {
           url: "https://api.example.test/api/v2/media/callback",
           contentType: "application/json",
           customValue: { sha256: "0".repeat(64) },
+          callbackSNI: true,
         }),
       }),
     );

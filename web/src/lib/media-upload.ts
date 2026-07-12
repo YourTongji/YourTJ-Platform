@@ -78,18 +78,20 @@ export async function uploadMedia(
     secure: true,
     timeout: 60_000,
   });
+  const callback = {
+    url: credentials.callbackUrl,
+    body: credentials.callbackBody,
+    contentType: "application/json",
+    customValue: { sha256 },
+    callbackSNI: true,
+  };
   const result = await client.put(credentials.ossKey, file, {
     mime: file.type,
     headers: {
       "Content-Type": file.type,
       "x-oss-forbid-overwrite": "true",
     },
-    callback: {
-      url: credentials.callbackUrl,
-      body: credentials.callbackBody,
-      contentType: "application/json",
-      customValue: { sha256 },
-    },
+    callback,
   });
 
   return {
