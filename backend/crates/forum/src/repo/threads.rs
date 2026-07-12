@@ -102,9 +102,10 @@ async fn list_threads_new(
             "SELECT t.id, t.board_id, t.author_id, t.title, t.body, t.content_version, \
                     t.reply_count, t.vote_count, t.hot_score, t.status, \
                     t.created_at, t.last_activity_at, \
-                    a.handle AS author_handle \
+                    a.handle AS author_handle, p.display_name AS author_display_name \
              FROM forum.threads t \
              JOIN identity.accounts a ON a.id = t.author_id \
+             LEFT JOIN identity.profiles p ON p.account_id = a.id \
              WHERE t.board_id = $1 AND t.deleted_at IS NULL AND t.hidden_at IS NULL \
                AND t.archived_at IS NULL \
                AND (t.created_at, t.id) < (SELECT created_at, id FROM forum.threads WHERE id = $3) \
@@ -123,9 +124,10 @@ async fn list_threads_new(
             "SELECT t.id, t.board_id, t.author_id, t.title, t.body, t.content_version, \
                     t.reply_count, t.vote_count, t.hot_score, t.status, \
                     t.created_at, t.last_activity_at, \
-                    a.handle AS author_handle \
+                    a.handle AS author_handle, p.display_name AS author_display_name \
              FROM forum.threads t \
              JOIN identity.accounts a ON a.id = t.author_id \
+             LEFT JOIN identity.profiles p ON p.account_id = a.id \
              WHERE t.board_id = $1 AND t.deleted_at IS NULL AND t.hidden_at IS NULL \
                AND t.archived_at IS NULL \
                AND ($3::bigint IS NULL OR NOT forum.user_content_hidden($3, t.author_id)) \
@@ -166,9 +168,10 @@ async fn list_threads_hot(
             "SELECT t.id, t.board_id, t.author_id, t.title, t.body, t.content_version, \
                     t.reply_count, t.vote_count, t.hot_score, t.status, \
                     t.created_at, t.last_activity_at, \
-                    a.handle AS author_handle \
+                    a.handle AS author_handle, p.display_name AS author_display_name \
              FROM forum.threads t \
              JOIN identity.accounts a ON a.id = t.author_id \
+             LEFT JOIN identity.profiles p ON p.account_id = a.id \
              WHERE t.board_id = $1 \
                AND t.deleted_at IS NULL AND t.hidden_at IS NULL \
                AND t.archived_at IS NULL \
@@ -190,9 +193,10 @@ async fn list_threads_hot(
             "SELECT t.id, t.board_id, t.author_id, t.title, t.body, t.content_version, \
                     t.reply_count, t.vote_count, t.hot_score, t.status, \
                     t.created_at, t.last_activity_at, \
-                    a.handle AS author_handle \
+                    a.handle AS author_handle, p.display_name AS author_display_name \
              FROM forum.threads t \
              JOIN identity.accounts a ON a.id = t.author_id \
+             LEFT JOIN identity.profiles p ON p.account_id = a.id \
              WHERE t.board_id = $1 AND t.deleted_at IS NULL AND t.hidden_at IS NULL \
                AND t.archived_at IS NULL \
                AND ($3::bigint IS NULL OR NOT forum.user_content_hidden($3, t.author_id)) \
@@ -252,9 +256,11 @@ pub async fn list_threads_by_tag(
     let mut query = QueryBuilder::<Postgres>::new(
         "SELECT thread.id, thread.board_id, thread.author_id, thread.title, thread.body, thread.content_version, \
                 thread.reply_count, thread.vote_count, thread.hot_score, thread.status, \
-                thread.created_at, thread.last_activity_at, account.handle AS author_handle \
+                thread.created_at, thread.last_activity_at, account.handle AS author_handle, \
+                p.display_name AS author_display_name \
          FROM forum.threads thread \
          JOIN identity.accounts account ON account.id = thread.author_id \
+         LEFT JOIN identity.profiles p ON p.account_id = account.id \
          WHERE thread.status = 'visible' AND thread.deleted_at IS NULL \
            AND thread.hidden_at IS NULL AND thread.archived_at IS NULL \
            AND EXISTS (SELECT 1 FROM forum.thread_tags thread_tag \
@@ -356,9 +362,10 @@ async fn list_threads_feed_new(
             "SELECT t.id, t.board_id, t.author_id, t.title, t.body, t.content_version, \
                     t.reply_count, t.vote_count, t.hot_score, t.status, \
                     t.created_at, t.last_activity_at, \
-                    a.handle AS author_handle \
+                    a.handle AS author_handle, p.display_name AS author_display_name \
              FROM forum.threads t \
              JOIN identity.accounts a ON a.id = t.author_id \
+             LEFT JOIN identity.profiles p ON p.account_id = a.id \
              WHERE t.board_id = $1 AND t.deleted_at IS NULL AND t.hidden_at IS NULL \
                AND t.archived_at IS NULL \
                AND (t.created_at, t.id) < (SELECT created_at, id FROM forum.threads WHERE id = $3) \
@@ -377,9 +384,10 @@ async fn list_threads_feed_new(
             "SELECT t.id, t.board_id, t.author_id, t.title, t.body, t.content_version, \
                     t.reply_count, t.vote_count, t.hot_score, t.status, \
                     t.created_at, t.last_activity_at, \
-                    a.handle AS author_handle \
+                    a.handle AS author_handle, p.display_name AS author_display_name \
              FROM forum.threads t \
              JOIN identity.accounts a ON a.id = t.author_id \
+             LEFT JOIN identity.profiles p ON p.account_id = a.id \
              WHERE t.deleted_at IS NULL AND t.hidden_at IS NULL \
                AND t.archived_at IS NULL \
                AND (t.created_at, t.id) < (SELECT created_at, id FROM forum.threads WHERE id = $2) \
@@ -397,9 +405,10 @@ async fn list_threads_feed_new(
             "SELECT t.id, t.board_id, t.author_id, t.title, t.body, t.content_version, \
                     t.reply_count, t.vote_count, t.hot_score, t.status, \
                     t.created_at, t.last_activity_at, \
-                    a.handle AS author_handle \
+                    a.handle AS author_handle, p.display_name AS author_display_name \
              FROM forum.threads t \
              JOIN identity.accounts a ON a.id = t.author_id \
+             LEFT JOIN identity.profiles p ON p.account_id = a.id \
              WHERE t.board_id = $1 AND t.deleted_at IS NULL AND t.hidden_at IS NULL \
                AND t.archived_at IS NULL \
                AND ($3::bigint IS NULL OR NOT forum.user_content_hidden($3, t.author_id)) \
@@ -416,9 +425,10 @@ async fn list_threads_feed_new(
             "SELECT t.id, t.board_id, t.author_id, t.title, t.body, t.content_version, \
                     t.reply_count, t.vote_count, t.hot_score, t.status, \
                     t.created_at, t.last_activity_at, \
-                    a.handle AS author_handle \
+                    a.handle AS author_handle, p.display_name AS author_display_name \
              FROM forum.threads t \
              JOIN identity.accounts a ON a.id = t.author_id \
+             LEFT JOIN identity.profiles p ON p.account_id = a.id \
              WHERE t.deleted_at IS NULL AND t.hidden_at IS NULL \
                AND t.archived_at IS NULL \
                AND ($2::bigint IS NULL OR NOT forum.user_content_hidden($2, t.author_id)) \
@@ -451,9 +461,10 @@ pub async fn fetch_threads_by_ids(
         "SELECT t.id, t.board_id, t.author_id, t.title, t.body, t.content_version, \
                 t.reply_count, t.vote_count, t.hot_score, t.status, \
                 t.created_at, t.last_activity_at, \
-                a.handle AS author_handle \
+                a.handle AS author_handle, p.display_name AS author_display_name \
          FROM forum.threads t \
          JOIN identity.accounts a ON a.id = t.author_id \
+         LEFT JOIN identity.profiles p ON p.account_id = a.id \
          WHERE t.id = ANY($1) AND t.deleted_at IS NULL AND t.hidden_at IS NULL \
            AND t.archived_at IS NULL \
            AND ($2::bigint IS NULL OR NOT forum.user_content_hidden($2, t.author_id))",
@@ -495,9 +506,10 @@ async fn list_threads_feed_hot(
                 "SELECT t.id, t.board_id, t.author_id, t.title, t.body, t.content_version, \
                         t.reply_count, t.vote_count, t.hot_score, t.status, \
                         t.created_at, t.last_activity_at, \
-                        a.handle AS author_handle \
+                        a.handle AS author_handle, p.display_name AS author_display_name \
                  FROM forum.threads t \
                  JOIN identity.accounts a ON a.id = t.author_id \
+                 LEFT JOIN identity.profiles p ON p.account_id = a.id \
                  WHERE t.board_id = $1 \
                    AND t.deleted_at IS NULL AND t.hidden_at IS NULL \
                    AND t.archived_at IS NULL \
@@ -520,9 +532,10 @@ async fn list_threads_feed_hot(
                 "SELECT t.id, t.board_id, t.author_id, t.title, t.body, t.content_version, \
                         t.reply_count, t.vote_count, t.hot_score, t.status, \
                         t.created_at, t.last_activity_at, \
-                        a.handle AS author_handle \
+                        a.handle AS author_handle, p.display_name AS author_display_name \
                  FROM forum.threads t \
                  JOIN identity.accounts a ON a.id = t.author_id \
+                 LEFT JOIN identity.profiles p ON p.account_id = a.id \
                  WHERE t.deleted_at IS NULL AND t.hidden_at IS NULL \
                    AND t.archived_at IS NULL \
                    AND (COALESCE(t.hot_score, 0) < $2 \
@@ -543,9 +556,10 @@ async fn list_threads_feed_hot(
                 "SELECT t.id, t.board_id, t.author_id, t.title, t.body, t.content_version, \
                         t.reply_count, t.vote_count, t.hot_score, t.status, \
                         t.created_at, t.last_activity_at, \
-                        a.handle AS author_handle \
+                        a.handle AS author_handle, p.display_name AS author_display_name \
                  FROM forum.threads t \
                  JOIN identity.accounts a ON a.id = t.author_id \
+                 LEFT JOIN identity.profiles p ON p.account_id = a.id \
                  WHERE t.board_id = $1 AND t.deleted_at IS NULL AND t.hidden_at IS NULL \
                    AND t.archived_at IS NULL \
                    AND ($3::bigint IS NULL OR NOT forum.user_content_hidden($3, t.author_id)) \
@@ -563,9 +577,10 @@ async fn list_threads_feed_hot(
                 "SELECT t.id, t.board_id, t.author_id, t.title, t.body, t.content_version, \
                         t.reply_count, t.vote_count, t.hot_score, t.status, \
                         t.created_at, t.last_activity_at, \
-                        a.handle AS author_handle \
+                        a.handle AS author_handle, p.display_name AS author_display_name \
                  FROM forum.threads t \
                  JOIN identity.accounts a ON a.id = t.author_id \
+                 LEFT JOIN identity.profiles p ON p.account_id = a.id \
                  WHERE t.deleted_at IS NULL AND t.hidden_at IS NULL \
                    AND t.archived_at IS NULL \
                    AND ($2::bigint IS NULL OR NOT forum.user_content_hidden($2, t.author_id)) \
@@ -634,9 +649,10 @@ pub async fn list_threads_feed_subscriptions(
         "SELECT t.id, t.board_id, t.author_id, t.title, t.body, t.content_version, \
                 t.reply_count, t.vote_count, t.hot_score, t.status, \
                 t.created_at, t.last_activity_at, \
-                a.handle AS author_handle \
+                a.handle AS author_handle, p.display_name AS author_display_name \
          FROM forum.threads t \
          JOIN identity.accounts a ON a.id = t.author_id \
+         LEFT JOIN identity.profiles p ON p.account_id = a.id \
          WHERE COALESCE( \
            (SELECT direct.level FROM forum.subscriptions direct \
             WHERE direct.account_id = $1 AND direct.target_type = 'thread' \
@@ -712,7 +728,11 @@ struct FollowingThreadCandidate {
 }
 
 impl FollowingThreadCandidate {
-    fn into_joined(self, author_handle: String) -> ThreadRowJoined {
+    fn into_joined(
+        self,
+        author_handle: String,
+        author_display_name: Option<String>,
+    ) -> ThreadRowJoined {
         ThreadRowJoined {
             id: self.id,
             board_id: self.board_id,
@@ -727,6 +747,7 @@ impl FollowingThreadCandidate {
             created_at: self.created_at,
             last_activity_at: self.last_activity_at,
             author_handle,
+            author_display_name,
         }
     }
 }
@@ -802,14 +823,17 @@ pub async fn list_threads_feed_following(
         scanned += candidates.len();
         scan_cursor = candidates.last().map(|candidate| (candidate.created_at, candidate.id));
         let author_ids = candidates.iter().map(|candidate| candidate.author_id).collect::<Vec<_>>();
-        let handles = identity::public_accounts::find_public_accounts_by_ids(pool, &author_ids)
+        let authors = identity::public_accounts::find_public_accounts_by_ids(pool, &author_ids)
             .await?
             .into_iter()
-            .map(|account| (account.id, account.handle))
+            .map(|account| (account.id, (account.handle, account.display_name)))
             .collect::<std::collections::HashMap<_, _>>();
         let candidate_count = candidates.len();
         rows.extend(candidates.into_iter().filter_map(|candidate| {
-            handles.get(&candidate.author_id).cloned().map(|handle| candidate.into_joined(handle))
+            authors
+                .get(&candidate.author_id)
+                .cloned()
+                .map(|(handle, display_name)| candidate.into_joined(handle, display_name))
         }));
         if candidate_count < candidate_limit {
             break;
@@ -841,9 +865,10 @@ pub async fn find_thread(pool: &PgPool, id: i64) -> AppResult<Option<ThreadRowJo
                 t.deleted_at, t.deleted_by, t.edited_at, t.hidden_at, \
                 t.solved_answer_id, \
                 t.created_at, t.last_activity_at, \
-                a.handle AS author_handle \
+                a.handle AS author_handle, p.display_name AS author_display_name \
          FROM forum.threads t \
          JOIN identity.accounts a ON a.id = t.author_id \
+         LEFT JOIN identity.profiles p ON p.account_id = a.id \
          WHERE t.id = $1 AND t.deleted_at IS NULL AND t.hidden_at IS NULL",
     )
     .bind(id)
@@ -863,9 +888,10 @@ pub async fn find_thread_for_moderation(
                 t.pinned_at, t.pinned_globally, t.featured_at, t.closed_at, t.archived_at, \
                 t.deleted_at, t.deleted_by, t.edited_at, t.hidden_at, \
                 t.solved_answer_id, t.created_at, t.last_activity_at, \
-                a.handle AS author_handle \
+                a.handle AS author_handle, p.display_name AS author_display_name \
          FROM forum.threads t \
          JOIN identity.accounts a ON a.id = t.author_id \
+         LEFT JOIN identity.profiles p ON p.account_id = a.id \
          WHERE t.id = $1",
     )
     .bind(id)
@@ -904,9 +930,10 @@ pub async fn create_thread(
                 t.deleted_at, t.deleted_by, t.edited_at, t.hidden_at, \
                 t.solved_answer_id, \
                 t.created_at, t.last_activity_at, \
-                a.handle AS author_handle \
+                a.handle AS author_handle, p.display_name AS author_display_name \
          FROM inserted t \
-         JOIN identity.accounts a ON a.id = t.author_id",
+         JOIN identity.accounts a ON a.id = t.author_id \
+         LEFT JOIN identity.profiles p ON p.account_id = a.id",
     )
     .bind(board_id)
     .bind(author_id)
@@ -1039,9 +1066,11 @@ pub async fn update_thread(
                 t.reply_count, t.vote_count, t.hot_score, t.status, \
                 t.pinned_at, t.pinned_globally, t.featured_at, t.closed_at, t.archived_at, \
                 t.deleted_at, t.deleted_by, t.edited_at, t.hidden_at, t.solved_answer_id, \
-                t.created_at, t.last_activity_at, a.handle AS author_handle \
+                t.created_at, t.last_activity_at, a.handle AS author_handle, \
+                p.display_name AS author_display_name \
          FROM forum.threads t \
          JOIN identity.accounts a ON a.id = t.author_id \
+         LEFT JOIN identity.profiles p ON p.account_id = a.id \
          WHERE t.id = $1 FOR UPDATE OF t",
     )
     .bind(id)
@@ -1109,9 +1138,10 @@ pub async fn update_thread(
                 u.deleted_at, u.deleted_by, u.edited_at, u.hidden_at, \
                 u.solved_answer_id, \
                 u.created_at, u.last_activity_at, \
-                a.handle AS author_handle \
+                a.handle AS author_handle, p.display_name AS author_display_name \
          FROM updated u \
-         JOIN identity.accounts a ON a.id = u.author_id",
+         JOIN identity.accounts a ON a.id = u.author_id \
+         LEFT JOIN identity.profiles p ON p.account_id = a.id",
     )
     .bind(input.title.as_deref())
     .bind(input.body.as_deref())
