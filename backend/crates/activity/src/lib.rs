@@ -32,13 +32,7 @@ pub fn routes(state: AppState) -> Router {
             get(handlers::get_trust_policy).put(handlers::update_trust_policy),
         )
         .route("/api/v2/admin/trust-policy/history", get(handlers::get_trust_policy_history))
-        .route(
-            "/api/v2/admin/users/{id}/trust-level",
-            patch(handlers::adjust_user_trust_level),
-        )
-        .route(
-            "/api/v2/admin/users/{id}/trust-events",
-            get(handlers::get_user_trust_events),
-        )
+        .route("/api/v2/admin/users/{id}/trust-level", patch(handlers::adjust_user_trust_level))
+        .route("/api/v2/admin/users/{id}/trust-events", get(handlers::get_user_trust_events))
         .with_state(state)
 }

@@ -71,12 +71,11 @@ pub async fn get_trust_level(pool: &PgPool, account_id: i64) -> AppResult<i16> {
     if let Some(progress) = load_progress(&mut connection, account_id).await? {
         return Ok(effective_level(&progress));
     }
-    let status: Option<String> = sqlx::query_scalar(
-        "SELECT status::text FROM identity.accounts WHERE id = $1",
-    )
-    .bind(account_id)
-    .fetch_optional(&mut *connection)
-    .await?;
+    let status: Option<String> =
+        sqlx::query_scalar("SELECT status::text FROM identity.accounts WHERE id = $1")
+            .bind(account_id)
+            .fetch_optional(&mut *connection)
+            .await?;
     match status.as_deref() {
         Some("active") => ensure_registered_progress(&mut connection, account_id).await,
         _ => Ok(0),
@@ -89,9 +88,9 @@ pub async fn trust_progress(pool: &PgPool, account_id: i64) -> AppResult<TrustPr
     let _ = ensure_registered_progress(&mut connection, account_id).await?;
     let policy = current_policy_row_tx(&mut connection).await?;
     let score = compute_qualifying_score_tx(&mut connection, account_id, &policy).await?;
-    let progress = load_progress(&mut connection, account_id)
-        .await?
-        .ok_or_else(|| AppError::Internal(anyhow::anyhow!("trust progress missing after ensure")))?;
+    let progress = load_progress(&mut connection, account_id).await?.ok_or_else(|| {
+        AppError::Internal(anyhow::anyhow!("trust progress missing after ensure"))
+    })?;
     let effective = if progress.override_level.is_some() {
         effective_level(&progress)
     } else {
@@ -143,12 +142,11 @@ async fn evaluate_all(pool: &PgPool) -> AppResult<(i64, i64)> {
 }
 
 async fn evaluate_account_tx(connection: &mut PgConnection, account_id: i64) -> AppResult<bool> {
-    let status: Option<String> = sqlx::query_scalar(
-        "SELECT status::text FROM identity.accounts WHERE id = $1 FOR UPDATE",
-    )
-    .bind(account_id)
-    .fetch_optional(&mut *connection)
-    .await?;
+    let status: Option<String> =
+        sqlx::query_scalar("SELECT status::text FROM identity.accounts WHERE id = $1 FOR UPDATE")
+            .bind(account_id)
+            .fetch_optional(&mut *connection)
+            .await?;
     if status.as_deref() != Some("active") {
         return Ok(false);
     }
@@ -181,11 +179,8 @@ async fn evaluate_account_tx(connection: &mut PgConnection, account_id: i64) -> 
     }
 
     let target = level_for_score(score, &policy).max(1);
-    let next = if target > progress.trust_level {
-        progress.trust_level + 1
-    } else {
-        progress.trust_level
-    };
+    let next =
+        if target > progress.trust_level { progress.trust_level + 1 } else { progress.trust_level };
     sqlx::query(
         "UPDATE activity.account_trust_progress \
          SET trust_level = $2, qualifying_score = $3, policy_version = $4, \
@@ -212,10 +207,7 @@ async fn evaluate_account_tx(connection: &mut PgConnection, account_id: i64) -> 
             None,
             Some("automatic activity trust upgrade"),
             None,
-            &format!(
-                "trust:upgrade:{account_id}:{}:{}:{}",
-                next, policy.version, score
-            ),
+            &format!("trust:upgrade:{account_id}:{}:{}:{}", next, policy.version, score),
         )
         .await?;
         return Ok(inserted);
@@ -444,12 +436,11 @@ pub async fn adjust_trust_level(
         .bind(format!("activity.trust:{account_id}"))
         .execute(&mut *tx)
         .await?;
-    let status: Option<String> = sqlx::query_scalar(
-        "SELECT status::text FROM identity.accounts WHERE id = $1 FOR UPDATE",
-    )
-    .bind(account_id)
-    .fetch_optional(&mut *tx)
-    .await?;
+    let status: Option<String> =
+        sqlx::query_scalar("SELECT status::text FROM identity.accounts WHERE id = $1 FOR UPDATE")
+            .bind(account_id)
+            .fetch_optional(&mut *tx)
+            .await?;
     if status.as_deref() == Some("purged") || status.is_none() {
         return Err(AppError::NotFound);
     }

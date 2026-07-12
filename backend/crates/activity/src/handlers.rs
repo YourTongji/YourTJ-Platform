@@ -150,9 +150,7 @@ pub(crate) async fn adjust_user_trust_level(
     auth.require_capability(shared::auth::Capability::ManageActivity)
         .map_err(|_| AppError::Forbidden)?;
     let account_id: i64 = id.parse().map_err(|_| AppError::NotFound)?;
-    Ok(Json(
-        trust::adjust_trust_level(&state.db, account_id, &input, auth.id, &auth.role).await?,
-    ))
+    Ok(Json(trust::adjust_trust_level(&state.db, account_id, &input, auth.id, &auth.role).await?))
 }
 
 pub(crate) async fn get_user_trust_events(

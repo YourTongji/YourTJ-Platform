@@ -4,8 +4,9 @@
 //! event, and override protection.
 
 use activity::contributions::{activate_contribution, ActivityKind};
-use activity::trust::{apply_governance_demotion_tx, ensure_registered_progress,
-    run_trust_evaluation};
+use activity::trust::{
+    apply_governance_demotion_tx, ensure_registered_progress, run_trust_evaluation,
+};
 use chrono::{TimeZone, Utc};
 use sqlx::PgPool;
 
@@ -57,24 +58,20 @@ async fn registration_grants_level_1_or_higher() {
     )
     .await;
 
-    let level = ensure_registered_progress(&mut tx, account_id)
-        .await
-        .expect("register progress");
+    let level = ensure_registered_progress(&mut tx, account_id).await.expect("register progress");
     assert!(level >= 1, "registered account must be at least Lv.1, got {level}");
 
-    let projected: i16 = sqlx::query_scalar(
-        "SELECT trust_level FROM identity.accounts WHERE id = $1",
-    )
-    .bind(account_id)
-    .fetch_one(&mut *tx)
-    .await
-    .expect("read projected level");
+    let projected: i16 =
+        sqlx::query_scalar("SELECT trust_level FROM identity.accounts WHERE id = $1")
+            .bind(account_id)
+            .fetch_one(&mut *tx)
+            .await
+            .expect("read projected level");
     assert_eq!(projected, level);
 
     // Idempotent: second call returns same level.
-    let level2 = ensure_registered_progress(&mut tx, account_id)
-        .await
-        .expect("register progress again");
+    let level2 =
+        ensure_registered_progress(&mut tx, account_id).await.expect("register progress again");
     assert_eq!(level2, level);
 
     tx.rollback().await.expect("rollback");
@@ -256,9 +253,5 @@ async fn evaluation_does_not_overwrite_manual_override() {
     .fetch_one(&pool)
     .await
     .expect("read override after evals");
-    assert_eq!(
-        override_level,
-        Some(2),
-        "override_level field must survive evaluation"
-    );
+    assert_eq!(override_level, Some(2), "override_level field must survive evaluation");
 }

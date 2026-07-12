@@ -449,7 +449,6 @@ async fn run_migrations(pool: &PgPool) {
             .expect("migration 0057 failed");
     }
 
-
     let has_trust_levels: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM information_schema.tables \
          WHERE table_schema = 'activity' AND table_name = 'trust_level_policies')",
