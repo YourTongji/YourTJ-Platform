@@ -82,11 +82,15 @@ function PasswordInput({
   );
 }
 
-export function LoginPage() {
+export function LoginPage({ defaultMode }: { defaultMode?: LoginMode } = {}) {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const { requestCode, verifyEmail, loginWithPassword, isAuthenticated } = useAuth();
-  const [mode, setMode] = React.useState<LoginMode>("password");
+  const [mode, setMode] = React.useState<LoginMode>(() => {
+    const m = searchParams.get("mode");
+    if (m === "password" || m === "code" || m === "registration") return m;
+    return defaultMode ?? "password";
+  });
   const [captchaAction, setCaptchaAction] = React.useState<CaptchaAction | null>(null);
   const [passwordEmail, setPasswordEmail] = React.useState("");
   const [password, setPassword] = React.useState("");
@@ -526,4 +530,9 @@ export function LoginPage() {
       />
     </div>
   );
+}
+
+/** Code-login-only page extracted from the multi-tab login form. */
+export function CodeLoginPage() {
+  return <LoginPage defaultMode="code" />;
 }

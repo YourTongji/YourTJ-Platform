@@ -40,6 +40,24 @@ const HomePage = React.lazy(async () => ({
 const LoginPage = React.lazy(async () => ({
   default: (await import("@/pages/login-page")).LoginPage,
 }));
+const CodeLoginPage = React.lazy(async () => ({
+  default: (await import("@/pages/login-page")).CodeLoginPage,
+}));
+const RegisterPage = React.lazy(async () => ({
+  default: (await import("@/pages/register-page")).RegisterPage,
+}));
+const ForgotPasswordPage = React.lazy(async () => ({
+  default: (await import("@/pages/forgot-password-page")).ForgotPasswordPage,
+}));
+const ResetPasswordPage = React.lazy(async () => ({
+  default: (await import("@/pages/reset-password-page")).ResetPasswordPage,
+}));
+const SettingsSecurityPage = React.lazy(async () => ({
+  default: (await import("@/pages/settings-security-page")).SettingsSecurityPage,
+}));
+const SettingsSessionsPage = React.lazy(async () => ({
+  default: (await import("@/pages/settings-sessions-page")).SettingsSessionsPage,
+}));
 const MessagesPage = React.lazy(async () => ({
   default: (await import("@/pages/messages-page")).MessagesPage,
 }));
@@ -82,6 +100,10 @@ const router = createBrowserRouter(
       children: [
         { index: true, element: <HomePage /> },
         { path: "login", element: <LoginPage /> },
+        { path: "login/code", element: <CodeLoginPage /> },
+        { path: "register", element: <RegisterPage /> },
+        { path: "forgot-password", element: <ForgotPasswordPage /> },
+        { path: "reset-password", element: <ResetPasswordPage /> },
         { path: "recover-account", element: <AccountRecoveryPage /> },
         { path: "onboarding", element: <OnboardingPage /> },
         { path: "forum", element: <ForumPage /> },
@@ -98,6 +120,8 @@ const router = createBrowserRouter(
         { path: "bookmarks", element: <BookmarksPage /> },
         { path: "profile/:handle", element: <ProfilePage /> },
         { path: "settings", element: <SettingsPage /> },
+        { path: "settings/security", element: <SettingsSecurityPage /> },
+        { path: "settings/sessions", element: <SettingsSessionsPage /> },
         { path: "admin", element: <AdminPage /> },
         { path: "*", element: <NotFoundPage /> },
       ],
