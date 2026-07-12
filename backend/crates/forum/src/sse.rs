@@ -3,12 +3,10 @@
 //! Infrastructure:
 //! - A `tokio::sync::broadcast` channel carries [`SsePayload`] events to all
 //!   connected SSE clients.
-//! - The global sender is stored as a `OnceLock` so that
-//!   [`crate::notification_hooks`] can publish events without plumbing the
-//!   sender through every call site.
-//! - On multi-instance deployments an external Redis pub/sub layer would
-//!   bridge instances; for the single-instance case the broadcast channel
-//!   suffices.
+//! - The global sender is stored as a `OnceLock` so post-commit outbox workers and the Redis bridge
+//!   can publish refresh hints without coupling domain transactions to an in-memory channel.
+//! - API runtime composition bridges post-commit refresh hints through Redis pub/sub. Redis loss
+//!   affects latency only; the authenticated list and unread APIs remain authoritative.
 //!
 //! The SSE endpoint (`GET /api/v2/notifications/stream`) authenticates,
 //! subscribes to the broadcast channel, filters by `account_id`, and streams
@@ -23,6 +21,7 @@ use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use shared::{AppState, SsePayload};
 use tokio::sync::broadcast;
+use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::StreamExt as _;
 
@@ -91,13 +90,24 @@ pub async fn handle_sse_stream(State(state): State<AppState>, headers: HeaderMap
 
     // Wrap the broadcast receiver in a stream, filter by account, and map to
     // SSE Event structs.
-    let stream = BroadcastStream::new(rx)
-        .filter(move |result| matches!(result, Ok(payload) if payload.account_id == account_id))
-        .map(|result| {
-            let payload = result.expect("already filtered for Ok");
+    let broadcast_stream = BroadcastStream::new(rx)
+        .filter_map(move |result| match result {
+            Ok(payload) if payload.account_id == account_id => Some(payload),
+            Err(BroadcastStreamRecvError::Lagged(_)) => Some(SsePayload {
+                account_id,
+                event_type: "sync".into(),
+                payload: serde_json::json!({}),
+            }),
+            _ => None,
+        })
+        .map(|payload| {
             let data = serde_json::to_string(&payload.payload).unwrap_or_default();
             Ok::<_, std::convert::Infallible>(Event::default().event(payload.event_type).data(data))
         });
+    let stream = tokio_stream::once(Ok::<_, std::convert::Infallible>(
+        Event::default().event("sync").data("{}"),
+    ))
+    .chain(broadcast_stream);
 
     Sse::new(stream)
         .keep_alive(KeepAlive::new().interval(Duration::from_secs(30)).text("heartbeat"))

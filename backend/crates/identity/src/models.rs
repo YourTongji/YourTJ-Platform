@@ -24,11 +24,9 @@ pub struct AccountRow {
 /// A row from `identity.email_codes`.
 #[derive(Debug, Clone, FromRow)]
 pub struct EmailCodeRow {
-    #[allow(dead_code)]
-    pub email: String,
+    pub id: i64,
+    pub purpose: String,
     pub code_hash: String,
-    #[allow(dead_code)]
-    pub expires_at: DateTime<Utc>,
     pub attempts: i32,
 }
 
@@ -41,6 +39,14 @@ pub struct SessionRow {
     pub refresh_hash: String,
     pub expires_at: DateTime<Utc>,
     pub revoked_at: Option<DateTime<Utc>>,
+    pub family_id: uuid::Uuid,
+    pub replaced_by_id: Option<i64>,
+    pub user_agent: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub last_used_at: DateTime<Utc>,
+    pub recent_authenticated_at: Option<DateTime<Utc>>,
+    pub recent_auth_method: Option<String>,
+    pub recent_auth_credential_version: Option<i64>,
 }
 
 /// A row from `identity.account_keys`.

@@ -77,6 +77,9 @@ pub enum IdentityError {
 
     #[error("no password set on this account")]
     NoPasswordSet,
+
+    #[error("recent authentication failed")]
+    RecentAuthFailed,
 }
 
 impl From<IdentityError> for AppError {
@@ -106,6 +109,7 @@ impl From<IdentityError> for AppError {
             IdentityError::InvalidPassword => AppError::BadRequest(err.to_string()),
             IdentityError::WrongPassword => AppError::Unauthorized,
             IdentityError::NoPasswordSet => AppError::BadRequest(err.to_string()),
+            IdentityError::RecentAuthFailed => AppError::BadRequest(err.to_string()),
         }
     }
 }

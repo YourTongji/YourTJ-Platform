@@ -143,6 +143,11 @@ pub async fn create_tag(
     )
     .await?;
     tx.commit().await?;
+    crate::discovery::reconcile_entity_in_background(
+        &state,
+        crate::discovery::DiscoveryEntityKind::Tag,
+        row.id,
+    );
 
     Ok((
         StatusCode::CREATED,
@@ -210,6 +215,11 @@ pub async fn update_tag(
     )
     .await?;
     tx.commit().await?;
+    crate::discovery::reconcile_entity_in_background(
+        &state,
+        crate::discovery::DiscoveryEntityKind::Tag,
+        tag_id,
+    );
 
     Ok(Json(TagDto {
         id: row.id.to_string(),
@@ -271,6 +281,11 @@ pub async fn delete_tag(
     )
     .await?;
     tx.commit().await?;
+    crate::discovery::reconcile_entity_in_background(
+        &state,
+        crate::discovery::DiscoveryEntityKind::Tag,
+        tag_id,
+    );
 
     Ok(Json(json!({"ok": true})))
 }

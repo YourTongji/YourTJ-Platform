@@ -57,6 +57,7 @@
 - [通知、公告与私信](product/notifications-announcements-and-messaging.md)
 - [信任安全、治理与管理后台](product/trust-safety-and-administration.md)
 - [每日活跃度计分](product/activity-scoring.md)
+- [闭环积分、内容打赏与托管交易](product/credit-and-escrow.md)
 
 ### 架构
 

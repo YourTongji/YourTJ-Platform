@@ -34,6 +34,7 @@ backend/
     media/        OSS upload intent、callback 与 quarantine
     activity/     每日贡献 projection 与计分策略
     governance/   跨域 staff/system audit
+    platform/     公告、用户 receipt、首页推广与 runtime settings
     shared/       配置、错误、auth primitive、分页、缓存与限流
     e2e/          旅程测试 harness
   migrations/    Append-only PostgreSQL migrations

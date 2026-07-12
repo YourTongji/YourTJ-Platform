@@ -82,8 +82,10 @@ pub struct ForumThreadDoc {
 #[derive(Debug, FromRow)]
 struct ForumThreadDocumentRow {
     id: i64,
+    author_id: i64,
     title: String,
     body: Option<String>,
+    content_format: String,
     board: String,
     tags: Vec<String>,
     author_handle: String,
@@ -98,7 +100,11 @@ impl From<ForumThreadDocumentRow> for ForumThreadDoc {
         Self {
             id: row.id.to_string(),
             title: row.title,
-            body_excerpt: row.body.unwrap_or_default().chars().take(2048).collect(),
+            body_excerpt: crate::content_policy::plain_text_projection(
+                row.body.as_deref().unwrap_or_default(),
+                crate::dto::ContentFormat::from_db(&row.content_format),
+                2048,
+            ),
             board: row.board,
             tags: row.tags,
             author_handle: row.author_handle,
@@ -118,12 +124,21 @@ pub async fn load_public_thread_documents(
     pool: &PgPool,
     thread_ids: &[i64],
 ) -> AppResult<Vec<ForumThreadDoc>> {
+    load_visible_thread_documents(pool, thread_ids, None).await
+}
+
+async fn load_visible_thread_documents(
+    pool: &PgPool,
+    thread_ids: &[i64],
+    viewer_id: Option<i64>,
+) -> AppResult<Vec<ForumThreadDoc>> {
     if thread_ids.is_empty() {
         return Ok(Vec::new());
     }
 
     let rows = sqlx::query_as::<_, ForumThreadDocumentRow>(
-        "SELECT thread.id, thread.title, thread.body, board.slug AS board, \
+        "SELECT thread.id, thread.author_id, thread.title, thread.body, \
+                thread.content_format, board.slug AS board, \
                 ARRAY(SELECT tag.slug FROM forum.thread_tags thread_tag \
                       JOIN forum.tags tag ON tag.id = thread_tag.tag_id \
                       WHERE thread_tag.thread_id = thread.id ORDER BY tag.name) AS tags, \
@@ -135,18 +150,21 @@ pub async fn load_public_thread_documents(
          WHERE thread.id = ANY($1) AND thread.status = 'visible' \
            AND thread.deleted_at IS NULL AND thread.hidden_at IS NULL \
            AND thread.archived_at IS NULL \
+           AND ($2::bigint IS NULL OR NOT forum.user_content_hidden($2, thread.author_id)) \
          ORDER BY thread.id",
     )
     .bind(thread_ids)
+    .bind(viewer_id)
     .fetch_all(pool)
     .await?;
 
-    Ok(rows.into_iter().map(ForumThreadDoc::from).collect())
+    filter_active_author_documents(pool, rows).await
 }
 
 async fn load_all_public_thread_documents(pool: &PgPool) -> AppResult<Vec<ForumThreadDoc>> {
     let rows = sqlx::query_as::<_, ForumThreadDocumentRow>(
-        "SELECT thread.id, thread.title, thread.body, board.slug AS board, \
+        "SELECT thread.id, thread.author_id, thread.title, thread.body, \
+                thread.content_format, board.slug AS board, \
                 ARRAY(SELECT tag.slug FROM forum.thread_tags thread_tag \
                       JOIN forum.tags tag ON tag.id = thread_tag.tag_id \
                       WHERE thread_tag.thread_id = thread.id ORDER BY tag.name) AS tags, \
@@ -162,7 +180,25 @@ async fn load_all_public_thread_documents(pool: &PgPool) -> AppResult<Vec<ForumT
     .fetch_all(pool)
     .await?;
 
-    Ok(rows.into_iter().map(ForumThreadDoc::from).collect())
+    filter_active_author_documents(pool, rows).await
+}
+
+async fn filter_active_author_documents(
+    pool: &PgPool,
+    rows: Vec<ForumThreadDocumentRow>,
+) -> AppResult<Vec<ForumThreadDoc>> {
+    let author_ids = rows.iter().map(|row| row.author_id).collect::<Vec<_>>();
+    let active_author_ids =
+        identity::public_accounts::find_public_accounts_by_ids(pool, &author_ids)
+            .await?
+            .into_iter()
+            .map(|account| account.id)
+            .collect::<HashSet<_>>();
+    Ok(rows
+        .into_iter()
+        .filter(|row| active_author_ids.contains(&row.author_id))
+        .map(ForumThreadDoc::from)
+        .collect())
 }
 
 async fn add_thread_document(client: &Client, document: &ForumThreadDoc) -> AppResult<()> {
@@ -256,50 +292,38 @@ fn order_public_documents(
 /// Searches forum threads while treating Meilisearch hits only as ranked candidates.
 ///
 /// Every returned document is reconstructed from a visibility-checked PostgreSQL
-/// row. Meilisearch failure degrades to an empty result; database failure is returned.
+/// row. Candidate-source and database failures are returned so federated search can
+/// distinguish an unavailable section from a genuine empty result.
 pub async fn search_threads(
     pool: &PgPool,
     meili_url: &str,
     meili_key: &str,
     query: &str,
     limit: usize,
-) -> AppResult<Vec<Value>> {
+    viewer_id: Option<i64>,
+) -> AppResult<Vec<ForumThreadDoc>> {
     if limit == 0 {
         return Ok(Vec::new());
     }
 
-    let client = match Client::new(meili_url, meili_api_key(meili_key)) {
-        Ok(client) => client,
-        Err(error) => {
-            tracing::warn!(%error, "forum search meilisearch client creation failed");
-            return Ok(Vec::new());
-        }
-    };
+    let client = meili_client(meili_url, meili_key)?;
     let candidate_limit = limit.saturating_mul(4).min(1_000);
-    let hits = match client
+    let hits = client
         .index(FORUM_THREADS_INDEX)
         .search()
         .with_query(query)
         .with_limit(candidate_limit)
         .execute::<Value>()
         .await
-    {
-        Ok(results) => results.hits.into_iter().map(|hit| hit.result).collect::<Vec<_>>(),
-        Err(error) => {
-            tracing::warn!(%error, "forum thread search failed");
-            return Ok(Vec::new());
-        }
-    };
+        .map_err(|error| meili_failure("candidate search", error))?
+        .hits
+        .into_iter()
+        .map(|hit| hit.result)
+        .collect::<Vec<_>>();
 
     let candidate_ids = candidate_thread_ids(&hits);
-    let documents = load_public_thread_documents(pool, &candidate_ids).await?;
-    order_public_documents(&candidate_ids, documents, limit)
-        .into_iter()
-        .map(|document| {
-            serde_json::to_value(document)
-                .map_err(|error| AppError::Internal(anyhow::anyhow!(error)))
-        })
-        .collect()
+    let documents = load_visible_thread_documents(pool, &candidate_ids, viewer_id).await?;
+    Ok(order_public_documents(&candidate_ids, documents, limit))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

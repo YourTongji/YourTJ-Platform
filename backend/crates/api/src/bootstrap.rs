@@ -168,8 +168,9 @@ pub async fn run() -> anyhow::Result<()> {
     tracing::info!("forum watched words loaded");
 
     // 4. Seed standard badges.
-    forum::badges::seed_badges(&state.db).await;
-    tracing::info!("forum badges seeded");
+    platform::achievements::seed_achievements(&state.db).await?;
+    tracing::info!("platform achievements seeded");
+    crate::notification_worker::start(&state);
 
     // 5. Auto-archive stale threads (daily).
     {
@@ -202,7 +203,46 @@ pub async fn run() -> anyhow::Result<()> {
         tracing::info!("forum email digest scheduled (every 7 days)");
     }
 
-    // 7. Badge credit mint bridge (every 60 seconds).
+    // 7. Promotion event receipt retention.
+    {
+        let db = state.db.clone();
+        tokio::spawn(async move {
+            loop {
+                match platform::purge_expired_promotion_event_receipts(&db).await {
+                    Ok(removed) if removed > 0 => {
+                        tracing::info!(removed, "expired promotion event receipts removed");
+                    }
+                    Ok(_) => {}
+                    Err(error) => {
+                        tracing::warn!(?error, "promotion event receipt retention failed");
+                    }
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+            }
+        });
+        tracing::info!("promotion event receipt retention scheduled (hourly)");
+    }
+
+    // Durable media object deletion never holds a database lock across provider I/O.
+    {
+        let worker_state = state.clone();
+        tokio::spawn(media::run_deletion_worker(worker_state));
+        tracing::info!("media object deletion worker scheduled");
+    }
+    if state.config.media_retention_gc_enabled {
+        let worker_state = state.clone();
+        tokio::spawn(media::run_retention_gc_worker(worker_state));
+        tracing::info!("media retention GC worker scheduled");
+    } else {
+        tracing::info!("media retention GC worker disabled pending rollout reconciliation");
+    }
+    {
+        let worker_state = state.clone();
+        tokio::spawn(media::run_retention_housekeeping_worker(worker_state));
+        tracing::info!("media retention metadata housekeeping scheduled");
+    }
+
+    // 8. Badge credit mint bridge (every 60 seconds).
     {
         let db = state.db.clone();
         let system_seed = state.system_private_key.clone();
@@ -261,6 +301,9 @@ pub async fn run() -> anyhow::Result<()> {
         tracing::info!("badge credit mint bridge scheduled (every 60s)");
     }
 
+    crate::account_data::spawn_workers(state.clone());
+    tracing::info!("account lifecycle and data-export workers scheduled");
+
     let app = build_router(state);
     let addr = SocketAddr::from(([0, 0, 0, 0], config.port));
     let listener = tokio::net::TcpListener::bind(addr).await?;
@@ -272,6 +315,7 @@ pub async fn run() -> anyhow::Result<()> {
 
 /// Compose the full application router from per-domain routers.
 fn build_router(state: AppState) -> Router {
+    let tip_target_resolver = std::sync::Arc::new(crate::tip_targets::ContentTipTargetResolver);
     let cors = CorsLayer::new().allow_origin(Any).allow_methods(Any).allow_headers(Any);
 
     let request_id_layer = SetRequestIdLayer::x_request_id(MakeRequestUuid);
@@ -284,13 +328,16 @@ fn build_router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/api/v2/health", get(health))
-        .merge(crate::platform::routes(state.clone()))
+        .merge(platform::routes(state.clone()))
         .merge(crate::admin::routes(state.clone()))
+        .merge(crate::appeals::routes(state.clone()))
+        .merge(crate::account_data::routes(state.clone()))
         .merge(identity::routes(state.clone()))
         .merge(activity::routes(state.clone()))
+        .merge(search::routes(state.clone()))
         .merge(courses::routes(state.clone()))
         .merge(reviews::routes(state.clone()))
-        .merge(credit::routes(state.clone()))
+        .merge(credit::routes(state.clone(), tip_target_resolver))
         .merge(forum::routes(state.clone()))
         .merge(media::routes(state.clone()))
         .merge(crate::onebox::routes(state.clone()))

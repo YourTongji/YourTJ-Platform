@@ -1,52 +1,102 @@
-//! Draft CRUD for forum posts and comments.
-//!
-//! Each account may have up to 50 drafts. The limit is enforced at the
-//! application layer in the upsert handler.
+//! Versioned draft persistence for unpublished forum content.
 
-use serde_json::Value;
-use shared::AppResult;
-use sqlx::PgPool;
+use shared::{AppError, AppResult};
+use sqlx::types::Json;
+use sqlx::{PgPool, Postgres, Transaction};
 
-/// Row returned when listing drafts.
+use crate::dto::DraftPayload;
+
+/// Row returned by draft reads and mutations.
 #[derive(Debug, sqlx::FromRow)]
 pub struct DraftRow {
     pub draft_key: String,
-    pub payload: Value,
+    pub payload: Json<DraftPayload>,
+    pub version: i64,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
-/// Upsert a draft (create or update payload).
-///
-/// The caller is responsible for enforcing the 50-draft-per-account limit
-/// before calling this function with a *new* draft key. Updating an existing
-/// key does not increase the count.
-pub async fn upsert_draft(
-    pool: &PgPool,
+/// Serialize an account's draft mutations with account lifecycle writes.
+pub async fn lock_draft_owner(
+    transaction: &mut Transaction<'_, Postgres>,
+    account_id: i64,
+) -> AppResult<()> {
+    identity::public_accounts::lock_active_account_for_owned_mutation(transaction, account_id).await
+}
+
+/// Count drafts belonging to an account inside the current transaction.
+pub async fn count_drafts(
+    transaction: &mut Transaction<'_, Postgres>,
+    account_id: i64,
+) -> AppResult<i64> {
+    let count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*)::bigint FROM forum.drafts WHERE account_id = $1")
+            .bind(account_id)
+            .fetch_one(&mut **transaction)
+            .await?;
+    Ok(count)
+}
+
+/// Check for one account-owned draft inside the current serialized mutation.
+pub async fn draft_exists(
+    transaction: &mut Transaction<'_, Postgres>,
     account_id: i64,
     draft_key: &str,
-    payload: &Value,
-) -> AppResult<()> {
-    sqlx::query(
-        "INSERT INTO forum.drafts (account_id, draft_key, payload) \
-         VALUES ($1, $2, $3) \
-         ON CONFLICT (account_id, draft_key) \
-         DO UPDATE SET payload = EXCLUDED.payload, updated_at = now()",
+) -> AppResult<bool> {
+    let exists = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM forum.drafts WHERE account_id = $1 AND draft_key = $2)",
     )
     .bind(account_id)
     .bind(draft_key)
-    .bind(payload)
-    .execute(pool)
+    .fetch_one(&mut **transaction)
     .await?;
-    Ok(())
+    Ok(exists)
+}
+
+/// Create version 1 when `expected_version` is zero, otherwise compare-and-swap an existing draft.
+pub async fn save_draft(
+    transaction: &mut Transaction<'_, Postgres>,
+    account_id: i64,
+    draft_key: &str,
+    payload: &DraftPayload,
+    expected_version: i64,
+) -> AppResult<DraftRow> {
+    let row = if expected_version == 0 {
+        sqlx::query_as::<_, DraftRow>(
+            "INSERT INTO forum.drafts (account_id, draft_key, payload) \
+             VALUES ($1, $2, $3) \
+             ON CONFLICT (account_id, draft_key) DO NOTHING \
+             RETURNING draft_key, payload, version, updated_at",
+        )
+        .bind(account_id)
+        .bind(draft_key)
+        .bind(Json(payload))
+        .fetch_optional(&mut **transaction)
+        .await?
+    } else {
+        sqlx::query_as::<_, DraftRow>(
+            "UPDATE forum.drafts \
+             SET payload = $3, version = version + 1, updated_at = now() \
+             WHERE account_id = $1 AND draft_key = $2 AND version = $4 \
+             RETURNING draft_key, payload, version, updated_at",
+        )
+        .bind(account_id)
+        .bind(draft_key)
+        .bind(Json(payload))
+        .bind(expected_version)
+        .fetch_optional(&mut **transaction)
+        .await?
+    };
+
+    row.ok_or_else(|| AppError::Conflict("draft changed in another session".into()))
 }
 
 /// List all drafts belonging to an account, newest first.
 pub async fn list_drafts(pool: &PgPool, account_id: i64) -> AppResult<Vec<DraftRow>> {
-    let rows: Vec<DraftRow> = sqlx::query_as(
-        "SELECT draft_key, payload, updated_at \
+    let rows = sqlx::query_as::<_, DraftRow>(
+        "SELECT draft_key, payload, version, updated_at \
          FROM forum.drafts \
          WHERE account_id = $1 \
-         ORDER BY updated_at DESC",
+         ORDER BY updated_at DESC, draft_key ASC",
     )
     .bind(account_id)
     .fetch_all(pool)
@@ -54,44 +104,24 @@ pub async fn list_drafts(pool: &PgPool, account_id: i64) -> AppResult<Vec<DraftR
     Ok(rows)
 }
 
-/// Count drafts belonging to an account.
-pub async fn count_drafts(pool: &PgPool, account_id: i64) -> AppResult<i64> {
-    let count: (i64,) =
-        sqlx::query_as("SELECT COUNT(*)::bigint FROM forum.drafts WHERE account_id = $1")
-            .bind(account_id)
-            .fetch_one(pool)
-            .await?;
-    Ok(count.0)
-}
-
-/// Check whether a specific draft key already exists for this account.
-pub async fn draft_exists(pool: &PgPool, account_id: i64, draft_key: &str) -> AppResult<bool> {
-    let exists: (bool,) = sqlx::query_as(
-        "SELECT EXISTS(SELECT 1 FROM forum.drafts WHERE account_id = $1 AND draft_key = $2)",
-    )
-    .bind(account_id)
-    .bind(draft_key)
-    .fetch_one(pool)
-    .await?;
-    Ok(exists.0)
-}
-
-/// Get a single draft's payload by key.
+/// Get one account-owned draft by its stable key.
 pub async fn get_draft(
     pool: &PgPool,
     account_id: i64,
     draft_key: &str,
-) -> AppResult<Option<Value>> {
-    let row: Option<(Value,)> =
-        sqlx::query_as("SELECT payload FROM forum.drafts WHERE account_id = $1 AND draft_key = $2")
-            .bind(account_id)
-            .bind(draft_key)
-            .fetch_optional(pool)
-            .await?;
-    Ok(row.map(|r| r.0))
+) -> AppResult<Option<DraftRow>> {
+    let row = sqlx::query_as::<_, DraftRow>(
+        "SELECT draft_key, payload, version, updated_at \
+         FROM forum.drafts WHERE account_id = $1 AND draft_key = $2",
+    )
+    .bind(account_id)
+    .bind(draft_key)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row)
 }
 
-/// Delete a single draft by key.
+/// Delete a single account-owned draft.
 pub async fn delete_draft(pool: &PgPool, account_id: i64, draft_key: &str) -> AppResult<()> {
     sqlx::query("DELETE FROM forum.drafts WHERE account_id = $1 AND draft_key = $2")
         .bind(account_id)

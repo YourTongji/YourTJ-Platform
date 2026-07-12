@@ -15,6 +15,23 @@ use crate::ledger::{compute_hash, sign_with_seed};
 use crate::models::{LedgerEntryRow, ProductRow, PurchaseRow, TaskRow};
 
 const GENESIS_HASH: &str = "0000000000000000000000000000000000000000000000000000000000000000";
+const MAX_PAGE_LIMIT: i64 = 100;
+
+fn fetch_limit(limit: i64) -> AppResult<i64> {
+    if !(1..=MAX_PAGE_LIMIT).contains(&limit) {
+        return Err(AppError::BadRequest("limit must be between 1 and 100".into()));
+    }
+    Ok(limit + 1)
+}
+
+fn finish_page<T>(mut rows: Vec<T>, limit: i64, cursor_for: impl Fn(&T) -> String) -> Page<T> {
+    let has_more = rows.len() > limit as usize;
+    if has_more {
+        rows.truncate(limit as usize);
+    }
+    let next_cursor = if has_more { rows.last().map(cursor_for) } else { None };
+    Page::new(rows, next_cursor)
+}
 
 // ---------------------------------------------------------------------------
 // Ledger: append, list, verify
@@ -163,6 +180,7 @@ pub async fn list_ledger(
     limit: i64,
 ) -> AppResult<Page<LedgerEntryDto>> {
     let since_seq = cursor.unwrap_or(0);
+    let fetch_limit = fetch_limit(limit)?;
     let rows: Vec<LedgerEntryRow> = sqlx::query_as(
         "SELECT seq, tx_id, type, from_account, to_account, amount, nonce, \
                 metadata, signer, signature, prev_hash, hash, created_at \
@@ -172,12 +190,13 @@ pub async fn list_ledger(
     )
     .bind(account_id)
     .bind(since_seq)
-    .bind(limit)
+    .bind(fetch_limit)
     .fetch_all(pool)
     .await?;
 
-    let next_cursor = rows.last().map(|r| r.seq.to_string());
-    let items: Vec<LedgerEntryDto> = rows
+    let page = finish_page(rows, limit, |row| row.seq.to_string());
+    let items: Vec<LedgerEntryDto> = page
+        .items
         .into_iter()
         .map(|r| LedgerEntryDto {
             seq: r.seq,
@@ -195,7 +214,7 @@ pub async fn list_ledger(
         })
         .collect();
 
-    Ok(Page::new(items, next_cursor))
+    Ok(Page::new(items, page.next_cursor))
 }
 
 /// Recompute the hash chain and verify every Ed25519 signature for all ledger
@@ -204,6 +223,15 @@ pub async fn list_ledger(
 /// (`identity.account_keys`).
 pub async fn verify_full_ledger(
     pool: &PgPool,
+    system_public_key_b64: &str,
+) -> AppResult<LedgerVerify> {
+    let mut conn = pool.acquire().await?;
+    verify_full_ledger_conn(&mut conn, system_public_key_b64).await
+}
+
+/// Connection-scoped ledger verification for callers that need one database snapshot.
+pub(crate) async fn verify_full_ledger_conn(
+    conn: &mut sqlx::PgConnection,
     system_public_key_b64: &str,
 ) -> AppResult<LedgerVerify> {
     use std::collections::HashMap;
@@ -222,7 +250,7 @@ pub async fn verify_full_ledger(
                 metadata, signer, signature, prev_hash, hash, created_at \
          FROM credit.ledger ORDER BY seq ASC",
     )
-    .fetch_all(pool)
+    .fetch_all(&mut *conn)
     .await?;
 
     if rows.is_empty() {
@@ -243,7 +271,7 @@ pub async fn verify_full_ledger(
             "SELECT account_id, public_key FROM identity.account_keys WHERE account_id = ANY($1)",
         )
         .bind(&signer_ids)
-        .fetch_all(pool)
+        .fetch_all(&mut *conn)
         .await?;
         for (account_id, public_key) in key_rows {
             pk_map.entry(account_id).or_default().push(public_key);
@@ -268,7 +296,7 @@ pub async fn verify_full_ledger(
              FROM credit.signing_intents WHERE id = ANY($1)",
         )
         .bind(&intent_ids)
-        .fetch_all(pool)
+        .fetch_all(&mut *conn)
         .await?
     };
     let intent_map: HashMap<uuid::Uuid, IntentVerificationRow> =
@@ -491,6 +519,7 @@ pub async fn list_tasks(
     limit: i64,
 ) -> AppResult<Page<TaskRow>> {
     let since_id = cursor.unwrap_or(0);
+    let fetch_limit = fetch_limit(limit)?;
 
     let rows: Vec<TaskRow> = if let Some(st) = status {
         sqlx::query_as(
@@ -501,7 +530,7 @@ pub async fn list_tasks(
         )
         .bind(st)
         .bind(since_id)
-        .bind(limit)
+        .bind(fetch_limit)
         .fetch_all(pool)
         .await?
     } else {
@@ -512,45 +541,15 @@ pub async fn list_tasks(
              ORDER BY id ASC LIMIT $2",
         )
         .bind(since_id)
-        .bind(limit)
+        .bind(fetch_limit)
         .fetch_all(pool)
         .await?
     };
 
-    let next_cursor = rows.last().map(|r| r.id.to_string());
-    Ok(Page::new(rows, next_cursor))
+    Ok(finish_page(rows, limit, |row| row.id.to_string()))
 }
 
-/// Insert a new task row. Returns the inserted row.
-pub async fn insert_task(
-    pool: &PgPool,
-    creator_id: i64,
-    title: &str,
-    description: Option<&str>,
-    reward_amount: i64,
-    contact_info: Option<&str>,
-    hold_tx_id: &str,
-) -> AppResult<TaskRow> {
-    let row = sqlx::query_as(
-        "INSERT INTO credit.tasks \
-         (creator_id, title, description, reward_amount, contact_info, hold_tx_id) \
-         VALUES ($1, $2, $3, $4, $5, $6) \
-         RETURNING id, creator_id, acceptor_id, title, description, \
-                   reward_amount, contact_info, status::text, hold_tx_id, created_at",
-    )
-    .bind(creator_id)
-    .bind(title)
-    .bind(description)
-    .bind(reward_amount)
-    .bind(contact_info)
-    .bind(hold_tx_id)
-    .fetch_one(pool)
-    .await?;
-
-    Ok(row)
-}
-
-/// Transaction-internal variant of [`insert_task`].
+/// Insert a task inside the transaction that creates its escrow hold.
 pub async fn insert_task_tx(
     conn: &mut sqlx::PgConnection,
     creator_id: i64,
@@ -579,20 +578,6 @@ pub async fn insert_task_tx(
     Ok(row)
 }
 
-/// Look up a task by id.
-pub async fn find_task(pool: &PgPool, id: i64) -> AppResult<Option<TaskRow>> {
-    let row = sqlx::query_as(
-        "SELECT id, creator_id, acceptor_id, title, description, \
-                reward_amount, contact_info, status::text, hold_tx_id, created_at \
-         FROM credit.tasks WHERE id = $1",
-    )
-    .bind(id)
-    .fetch_optional(pool)
-    .await?;
-
-    Ok(row)
-}
-
 /// Lock and return a task inside an existing state-transition transaction.
 pub async fn find_task_for_update_tx(
     conn: &mut sqlx::PgConnection,
@@ -609,92 +594,69 @@ pub async fn find_task_for_update_tx(
     Ok(row)
 }
 
-/// Update a task's acceptor and transition status to `in_progress`.
-pub async fn accept_task(pool: &PgPool, id: i64, acceptor_id: i64) -> AppResult<()> {
-    sqlx::query(
+/// Claim an open task with a compare-and-set transition inside the caller's transaction.
+pub async fn accept_task_tx(
+    conn: &mut sqlx::PgConnection,
+    id: i64,
+    acceptor_id: i64,
+) -> AppResult<()> {
+    let affected = sqlx::query(
         "UPDATE credit.tasks \
          SET acceptor_id = $1, \
              status = 'in_progress'::credit.task_status, \
              updated_at = now() \
-         WHERE id = $2 AND status = 'open'::credit.task_status",
+         WHERE id = $2 AND status = 'open'::credit.task_status \
+           AND creator_id <> $1 AND acceptor_id IS NULL",
     )
     .bind(acceptor_id)
     .bind(id)
-    .execute(pool)
-    .await?;
-
-    Ok(())
-}
-
-/// Transition a task to a new `credit.task_status` value.
-///
-/// `new_status` must be a valid enum value that a caller legitimately sets
-/// through this function (`submitted`, `completed`, `cancelled`); `open` and
-/// `in_progress` are set by insert/accept, not here. Task removal goes through
-/// [`delete_task_tx`], not a status transition — there is no `deleted` status.
-pub async fn update_task_status(
-    pool: &PgPool,
-    id: i64,
-    new_status: &str,
-    caller_id: i64,
-) -> AppResult<()> {
-    if !matches!(new_status, "submitted" | "completed" | "cancelled") {
-        return Err(CreditError::InvalidAction(format!("unknown task status: {new_status}")).into());
+    .execute(&mut *conn)
+    .await?
+    .rows_affected();
+    if affected != 1 {
+        return Err(CreditError::StateConflict.into());
     }
 
-    sqlx::query(
-        "UPDATE credit.tasks \
-         SET status = $1::credit.task_status, updated_at = now() \
-         WHERE id = $2",
-    )
-    .bind(new_status)
-    .bind(id)
-    .execute(pool)
-    .await?;
-
-    let _ = caller_id;
     Ok(())
 }
 
-/// Transaction-internal variant of [`update_task_status`].
-pub async fn update_task_status_tx(
+/// Compare-and-set a valid task transition and optionally consume its escrow hold.
+pub async fn transition_task_status_tx(
     conn: &mut sqlx::PgConnection,
     id: i64,
+    expected_status: &str,
     new_status: &str,
+    clear_hold: bool,
 ) -> AppResult<()> {
-    if !matches!(new_status, "submitted" | "completed" | "cancelled") {
-        return Err(CreditError::InvalidAction(format!("unknown task status: {new_status}")).into());
+    let is_valid = matches!(
+        (expected_status, new_status),
+        ("in_progress", "submitted")
+            | ("submitted", "completed")
+            | ("open", "cancelled")
+            | ("in_progress", "cancelled")
+            | ("submitted", "cancelled")
+    );
+    if !is_valid || clear_hold != matches!(new_status, "completed" | "cancelled") {
+        return Err(CreditError::InvalidAction("invalid task state transition".into()).into());
     }
 
-    sqlx::query(
+    let affected = sqlx::query(
         "UPDATE credit.tasks \
-         SET status = $1::credit.task_status, updated_at = now() \
-         WHERE id = $2",
+         SET status = $1::credit.task_status, \
+             hold_tx_id = CASE WHEN $4 THEN NULL ELSE hold_tx_id END, \
+             updated_at = now() \
+         WHERE id = $2 AND status = $3::credit.task_status",
     )
     .bind(new_status)
     .bind(id)
+    .bind(expected_status)
+    .bind(clear_hold)
     .execute(&mut *conn)
-    .await?;
-
-    Ok(())
-}
-
-/// Clear a task's hold_tx_id (e.g., after escrow release).
-pub async fn clear_task_hold(pool: &PgPool, id: i64) -> AppResult<()> {
-    sqlx::query("UPDATE credit.tasks SET hold_tx_id = NULL WHERE id = $1")
-        .bind(id)
-        .execute(pool)
-        .await?;
-
-    Ok(())
-}
-
-/// Transaction-internal variant of [`clear_task_hold`].
-pub async fn clear_task_hold_tx(conn: &mut sqlx::PgConnection, id: i64) -> AppResult<()> {
-    sqlx::query("UPDATE credit.tasks SET hold_tx_id = NULL WHERE id = $1")
-        .bind(id)
-        .execute(&mut *conn)
-        .await?;
+    .await?
+    .rows_affected();
+    if affected != 1 {
+        return Err(CreditError::StateConflict.into());
+    }
 
     Ok(())
 }
@@ -702,8 +664,21 @@ pub async fn clear_task_hold_tx(conn: &mut sqlx::PgConnection, id: i64) -> AppRe
 /// Transaction-internal hard delete of a task row. There is no `deleted`
 /// status in `credit.task_status`; the `delete` action removes the record
 /// entirely (any active escrow hold must be refunded first by the caller).
-pub async fn delete_task_tx(conn: &mut sqlx::PgConnection, id: i64) -> AppResult<()> {
-    sqlx::query("DELETE FROM credit.tasks WHERE id = $1").bind(id).execute(&mut *conn).await?;
+pub async fn delete_task_tx(
+    conn: &mut sqlx::PgConnection,
+    id: i64,
+    expected_status: &str,
+) -> AppResult<()> {
+    let affected =
+        sqlx::query("DELETE FROM credit.tasks WHERE id = $1 AND status = $2::credit.task_status")
+            .bind(id)
+            .bind(expected_status)
+            .execute(&mut *conn)
+            .await?
+            .rows_affected();
+    if affected != 1 {
+        return Err(CreditError::StateConflict.into());
+    }
 
     Ok(())
 }
@@ -720,6 +695,7 @@ pub async fn list_products(
     limit: i64,
 ) -> AppResult<Page<ProductRow>> {
     let since_id = cursor.unwrap_or(0);
+    let fetch_limit = fetch_limit(limit)?;
 
     let rows: Vec<ProductRow> = if let Some(st) = status {
         sqlx::query_as(
@@ -730,7 +706,7 @@ pub async fn list_products(
         )
         .bind(st)
         .bind(since_id)
-        .bind(limit)
+        .bind(fetch_limit)
         .fetch_all(pool)
         .await?
     } else {
@@ -741,13 +717,12 @@ pub async fn list_products(
              ORDER BY id ASC LIMIT $2",
         )
         .bind(since_id)
-        .bind(limit)
+        .bind(fetch_limit)
         .fetch_all(pool)
         .await?
     };
 
-    let next_cursor = rows.last().map(|r| r.id.to_string());
-    Ok(Page::new(rows, next_cursor))
+    Ok(finish_page(rows, limit, |row| row.id.to_string()))
 }
 
 /// Insert a new product row.
@@ -762,8 +737,10 @@ pub async fn insert_product(
 ) -> AppResult<ProductRow> {
     let row = sqlx::query_as(
         "INSERT INTO credit.products \
-         (seller_id, title, description, price, stock, delivery_info) \
-         VALUES ($1, $2, $3, $4, $5, $6) \
+         (seller_id, title, description, price, stock, delivery_info, status) \
+         VALUES ($1, $2, $3, $4, $5, $6, \
+                 CASE WHEN $5 = 0 THEN 'sold_out'::credit.product_status \
+                      ELSE 'on_sale'::credit.product_status END) \
          RETURNING id, seller_id, title, description, price, stock, \
                    delivery_info, status::text, created_at",
     )
@@ -809,18 +786,7 @@ pub async fn find_product_for_update_tx(
     Ok(row)
 }
 
-/// Update product status.
-pub async fn update_product_status(pool: &PgPool, id: i64, status: &str) -> AppResult<()> {
-    sqlx::query("UPDATE credit.products SET status = $1::credit.product_status WHERE id = $2")
-        .bind(status)
-        .bind(id)
-        .execute(pool)
-        .await?;
-
-    Ok(())
-}
-
-/// Transaction-internal variant of [`update_product_status`].
+/// Update product status inside the purchase transaction that changed stock.
 pub async fn update_product_status_tx(
     conn: &mut sqlx::PgConnection,
     id: i64,
@@ -835,17 +801,7 @@ pub async fn update_product_status_tx(
     Ok(())
 }
 
-/// Decrement product stock.
-pub async fn decrement_stock(pool: &PgPool, id: i64) -> AppResult<()> {
-    sqlx::query("UPDATE credit.products SET stock = stock - 1 WHERE id = $1 AND stock > 0")
-        .bind(id)
-        .execute(pool)
-        .await?;
-
-    Ok(())
-}
-
-/// Transaction-internal variant of [`decrement_stock`].
+/// Decrement product stock inside a purchase transaction.
 pub async fn decrement_stock_tx(conn: &mut sqlx::PgConnection, id: i64) -> AppResult<()> {
     let affected =
         sqlx::query("UPDATE credit.products SET stock = stock - 1 WHERE id = $1 AND stock > 0")
@@ -872,50 +828,27 @@ pub async fn list_purchases(
     limit: i64,
 ) -> AppResult<Page<PurchaseRow>> {
     let since_id = cursor.unwrap_or(0);
+    let fetch_limit = fetch_limit(limit)?;
 
     let rows: Vec<PurchaseRow> = sqlx::query_as(
-        "SELECT id, product_id, buyer_id, seller_id, amount, status::text, hold_tx_id \
-         FROM credit.purchases \
-         WHERE (buyer_id = $1 OR seller_id = $1) AND id > $2 \
-         ORDER BY id ASC LIMIT $3",
+        "SELECT purchase.id, purchase.product_id, purchase.buyer_id, purchase.seller_id, \
+                purchase.amount, purchase.status::text, purchase.hold_tx_id, \
+                product.delivery_info, purchase.created_at \
+         FROM credit.purchases purchase \
+         JOIN credit.products product ON product.id = purchase.product_id \
+         WHERE (purchase.buyer_id = $1 OR purchase.seller_id = $1) AND purchase.id > $2 \
+         ORDER BY purchase.id ASC LIMIT $3",
     )
     .bind(account_id)
     .bind(since_id)
-    .bind(limit)
+    .bind(fetch_limit)
     .fetch_all(pool)
     .await?;
 
-    let next_cursor = rows.last().map(|r| r.id.to_string());
-    Ok(Page::new(rows, next_cursor))
+    Ok(finish_page(rows, limit, |row| row.id.to_string()))
 }
 
-/// Insert a new purchase row.
-pub async fn insert_purchase(
-    pool: &PgPool,
-    product_id: i64,
-    buyer_id: i64,
-    seller_id: i64,
-    amount: i64,
-    hold_tx_id: &str,
-) -> AppResult<PurchaseRow> {
-    let row = sqlx::query_as(
-        "INSERT INTO credit.purchases \
-         (product_id, buyer_id, seller_id, amount, hold_tx_id) \
-         VALUES ($1, $2, $3, $4, $5) \
-         RETURNING id, product_id, buyer_id, seller_id, amount, status::text, hold_tx_id",
-    )
-    .bind(product_id)
-    .bind(buyer_id)
-    .bind(seller_id)
-    .bind(amount)
-    .bind(hold_tx_id)
-    .fetch_one(pool)
-    .await?;
-
-    Ok(row)
-}
-
-/// Transaction-internal variant of [`insert_purchase`].
+/// Insert a purchase inside the transaction that creates its escrow hold.
 pub async fn insert_purchase_tx(
     conn: &mut sqlx::PgConnection,
     product_id: i64,
@@ -924,11 +857,11 @@ pub async fn insert_purchase_tx(
     amount: i64,
     hold_tx_id: &str,
 ) -> AppResult<PurchaseRow> {
-    let row = sqlx::query_as(
+    let purchase_id: i64 = sqlx::query_scalar(
         "INSERT INTO credit.purchases \
          (product_id, buyer_id, seller_id, amount, hold_tx_id) \
          VALUES ($1, $2, $3, $4, $5) \
-         RETURNING id, product_id, buyer_id, seller_id, amount, status::text, hold_tx_id",
+         RETURNING id",
     )
     .bind(product_id)
     .bind(buyer_id)
@@ -937,21 +870,9 @@ pub async fn insert_purchase_tx(
     .bind(hold_tx_id)
     .fetch_one(&mut *conn)
     .await?;
-
-    Ok(row)
-}
-
-/// Look up a purchase by id.
-pub async fn find_purchase(pool: &PgPool, id: i64) -> AppResult<Option<PurchaseRow>> {
-    let row = sqlx::query_as(
-        "SELECT id, product_id, buyer_id, seller_id, amount, status::text, hold_tx_id \
-         FROM credit.purchases WHERE id = $1",
-    )
-    .bind(id)
-    .fetch_optional(pool)
-    .await?;
-
-    Ok(row)
+    find_purchase_for_update_tx(conn, purchase_id)
+        .await?
+        .ok_or(CreditError::PurchaseNotFound.into())
 }
 
 /// Lock and return a purchase inside an existing state-transition transaction.
@@ -960,8 +881,12 @@ pub async fn find_purchase_for_update_tx(
     id: i64,
 ) -> AppResult<Option<PurchaseRow>> {
     let row = sqlx::query_as(
-        "SELECT id, product_id, buyer_id, seller_id, amount, status::text, hold_tx_id \
-         FROM credit.purchases WHERE id = $1 FOR UPDATE",
+        "SELECT purchase.id, purchase.product_id, purchase.buyer_id, purchase.seller_id, \
+                purchase.amount, purchase.status::text, purchase.hold_tx_id, \
+                product.delivery_info, purchase.created_at \
+         FROM credit.purchases purchase \
+         JOIN credit.products product ON product.id = purchase.product_id \
+         WHERE purchase.id = $1 FOR UPDATE OF purchase",
     )
     .bind(id)
     .fetch_optional(&mut *conn)
@@ -969,28 +894,43 @@ pub async fn find_purchase_for_update_tx(
     Ok(row)
 }
 
-/// Update purchase status.
-pub async fn update_purchase_status(pool: &PgPool, id: i64, status: &str) -> AppResult<()> {
-    sqlx::query("UPDATE credit.purchases SET status = $1::credit.purchase_status WHERE id = $2")
-        .bind(status)
-        .bind(id)
-        .execute(pool)
-        .await?;
-
-    Ok(())
-}
-
-/// Transaction-internal variant of [`update_purchase_status`].
-pub async fn update_purchase_status_tx(
+/// Compare-and-set a valid purchase transition and optionally consume its escrow hold.
+pub async fn transition_purchase_status_tx(
     conn: &mut sqlx::PgConnection,
     id: i64,
-    status: &str,
+    expected_status: &str,
+    new_status: &str,
+    clear_hold: bool,
 ) -> AppResult<()> {
-    sqlx::query("UPDATE credit.purchases SET status = $1::credit.purchase_status WHERE id = $2")
-        .bind(status)
-        .bind(id)
-        .execute(&mut *conn)
-        .await?;
+    let is_valid = matches!(
+        (expected_status, new_status),
+        ("pending", "accepted")
+            | ("accepted", "delivered")
+            | ("delivered", "completed")
+            | ("pending", "cancelled")
+            | ("accepted", "cancelled")
+    );
+    if !is_valid || clear_hold != matches!(new_status, "completed" | "cancelled") {
+        return Err(CreditError::InvalidAction("invalid purchase state transition".into()).into());
+    }
+
+    let affected = sqlx::query(
+        "UPDATE credit.purchases \
+         SET status = $1::credit.purchase_status, \
+             hold_tx_id = CASE WHEN $4 THEN NULL ELSE hold_tx_id END, \
+             completed_at = CASE WHEN $1 IN ('completed', 'cancelled') THEN now() ELSE NULL END \
+         WHERE id = $2 AND status = $3::credit.purchase_status",
+    )
+    .bind(new_status)
+    .bind(id)
+    .bind(expected_status)
+    .bind(clear_hold)
+    .execute(&mut *conn)
+    .await?
+    .rows_affected();
+    if affected != 1 {
+        return Err(CreditError::StateConflict.into());
+    }
 
     Ok(())
 }

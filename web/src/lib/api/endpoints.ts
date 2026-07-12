@@ -1,6 +1,16 @@
-import { apiRequest } from "./client";
+import { apiBlobRequest, apiRequest } from "./client";
 import type {
   Account,
+  AccountDataExport,
+  AccountLifecycle,
+  AccountLifecycleMutation,
+  AccountLifecycleMutationInput,
+  Achievement,
+  AchievementCreateInput,
+  AchievementEvent,
+  AchievementGrant,
+  AchievementGrantInput,
+  AchievementUpdateInput,
   ActivityPolicy,
   ActivityPolicyUpdateInput,
   ActivityCalendar,
@@ -16,34 +26,69 @@ import type {
   AdminTagCreateInput,
   AdminTagUpdateInput,
   Announcement,
-  AnnouncementInput,
+  AdminVersionedArchiveInput,
+  AnnouncementCreateInput,
+  AnnouncementReceipt,
+  AnnouncementReceiptInput,
+  AnnouncementRevision,
+  AnnouncementUpdateInput,
+  Appeal,
+  AppealAccessToken,
+  AppealStatus,
+  AdminAppeal,
+  AuthTokens,
   Board,
   Bookmark,
   Calendar,
   Campus,
   Comment,
+  ContentFormat,
   Course,
   CourseDetail,
   CourseNature,
+  CreditReconciliationRun,
+  CreditReconciliationStats,
+  CreditReconciliationWallet,
   Department,
+  DataExportDownloadGrant,
+  DataExportJob,
+  DeviceSessionPage,
   DmConversation,
+  DmCounts,
   DmMessage,
   DmReportReason,
   DmReport,
+  Draft,
+  DraftSaveInput,
+  EmailCodePurpose,
   Faculty,
+  GovernanceNotice,
   LatestUpdate,
   LedgerEntry,
   LedgerVerify,
   Major,
+  MediaDeletionJob,
+  MediaRetentionHold,
+  MediaRetentionHoldInput,
+  MediaUsage,
+  ModerationPreviewGrant,
   Notification,
+  NotificationOutboxEvent,
+  NotificationOutboxState,
+  NotificationPreferences,
   Page,
   Poll,
   Product,
+  Promotion,
+  PromotionCreateInput,
+  PromotionMetrics,
+  PromotionUpdateInput,
   Purchase,
   Review,
   ReviewReport,
   Sanction,
   SearchResult,
+  SigningIntent,
   SelectionCourse,
   Setting,
   SettingUpdateInput,
@@ -53,71 +98,408 @@ import type {
   ThreadFeed,
   TimeSlot,
   Upload,
+  UploadCredentials,
+  UploadUrl,
+  VerificationGrant,
+  VerificationGrantInput,
+  VerificationType,
+  VerificationTypeInput,
   IgnoreUser,
+  MyProfile,
+  OnboardingCompleteInput,
+  OnboardingState,
+  MyUpload,
+  ProfilePrivacy,
+  ProfilePrivacyUpdateInput,
+  ProfileUpdateInput,
+  RecentAuthStatus,
+  RecentAuthVerifyInput,
+  RecoveryCredential,
   UserComment,
   UserProfile,
+  UserRelationship,
+  UserSummary,
   UserThread,
   WatchedWord,
   WatchedWordInput,
   Wallet,
 } from "./types";
 
+export interface WalletAuthorization {
+  idempotencyKey: string;
+  intentId: string;
+  signature: string;
+}
+
+function walletHeaders(authorization: WalletAuthorization) {
+  return {
+    "Idempotency-Key": authorization.idempotencyKey,
+    "X-Wallet-Intent": authorization.intentId,
+    "X-Wallet-Sig": authorization.signature,
+  };
+}
+
 export const api = {
-  requestEmailCode(email: string, captchaToken: string) {
+  requestEmailCode(email: string, captchaToken: string, purpose?: EmailCodePurpose) {
     return apiRequest<void>("/auth/email/request-code", {
+      method: "POST",
+      body: { email, captchaToken, purpose },
+      auth: false,
+    });
+  },
+
+  verifyEmail(input: {
+    email: string;
+    code: string;
+    purpose?: EmailCodePurpose;
+    handle?: string;
+    password?: string;
+  }) {
+    return apiRequest<AuthTokens>("/auth/email/verify", {
+      method: "POST",
+      body: input,
+      auth: false,
+    });
+  },
+
+  passwordLogin(input: { email: string; password: string }) {
+    return apiRequest<AuthTokens>("/auth/password/login", {
+      method: "POST",
+      body: input,
+      auth: false,
+    });
+  },
+
+  recoveryPassword(input: { email: string; password: string }) {
+    return apiRequest<RecoveryCredential>("/auth/recovery/password", {
+      method: "POST",
+      body: input,
+      auth: false,
+    });
+  },
+
+  recoveryEmailVerify(input: { email: string; code: string }) {
+    return apiRequest<RecoveryCredential>("/auth/recovery/email/verify", {
+      method: "POST",
+      body: input,
+      auth: false,
+    });
+  },
+
+  inspectRecovery(recoveryToken: string) {
+    return apiRequest<AccountLifecycle>("/auth/recovery", {
+      auth: false,
+      headers: { "X-Recovery-Token": recoveryToken },
+    });
+  },
+
+  reactivateAccount(recoveryToken: string) {
+    return apiRequest<AccountLifecycle>("/auth/recovery", {
+      method: "POST",
+      auth: false,
+      headers: { "X-Recovery-Token": recoveryToken },
+    });
+  },
+
+  appealPasswordLogin(input: { email: string; password: string }) {
+    return apiRequest<AppealAccessToken>("/auth/appeal/password", {
+      method: "POST",
+      body: input,
+      auth: false,
+    });
+  },
+
+  appealEmailVerify(input: { email: string; code: string }) {
+    return apiRequest<AppealAccessToken>("/auth/appeal/email/verify", {
+      method: "POST",
+      body: input,
+      auth: false,
+    });
+  },
+
+  passwordForgot(email: string, captchaToken: string) {
+    return apiRequest<void>("/auth/password/forgot", {
       method: "POST",
       body: { email, captchaToken },
       auth: false,
     });
   },
 
-  verifyEmail(input: { email: string; code: string; handle?: string; password?: string }) {
-    return apiRequest<{ accessToken: string; refreshToken: string; account: Account }>(
-      "/auth/email/verify",
-      { method: "POST", body: input, auth: false },
-    );
+  passwordReset(input: { email: string; code: string; newPassword: string }) {
+    return apiRequest<void>("/auth/password/reset", {
+      method: "POST",
+      body: input,
+      auth: false,
+    });
+  },
+
+  passwordChange(input: { currentPassword: string; newPassword: string }) {
+    return apiRequest<void>("/auth/password/change", { method: "POST", body: input });
+  },
+
+  recentAuthStatus() {
+    return apiRequest<RecentAuthStatus>("/auth/recent-auth");
+  },
+
+  requestRecentAuthCode() {
+    return apiRequest<void>("/auth/recent-auth/email/request-code", { method: "POST" });
+  },
+
+  verifyRecentAuth(input: RecentAuthVerifyInput) {
+    return apiRequest<RecentAuthStatus>("/auth/recent-auth/verify", {
+      method: "POST",
+      body: input,
+    });
   },
 
   logout() {
     return apiRequest<void>("/auth/logout", { method: "POST" });
   },
 
+  logoutAll() {
+    return apiRequest<void>("/auth/logout-all", { method: "POST" });
+  },
+
+  sessions(cursor?: string | null) {
+    return apiRequest<DeviceSessionPage>("/me/sessions", { query: { cursor, limit: 30 } });
+  },
+
+  revokeSession(id: string) {
+    return apiRequest<void>(`/me/sessions/${encodeURIComponent(id)}`, { method: "DELETE" });
+  },
+
+  revokeOtherSessions() {
+    return apiRequest<void>("/me/sessions/revoke-others", { method: "POST" });
+  },
+
   me() {
     return apiRequest<Account>("/me");
   },
 
-  updateMe(input: { handle?: string; avatarUrl?: string }) {
+  updateMe(input: { handle?: string }) {
     return apiRequest<Account>("/me", { method: "PATCH", body: input });
+  },
+
+  onboarding() {
+    return apiRequest<OnboardingState>("/me/onboarding");
+  },
+
+  completeOnboarding(input: OnboardingCompleteInput) {
+    return apiRequest<OnboardingState>("/me/onboarding", { method: "PUT", body: input });
+  },
+
+  accountLifecycle() {
+    return apiRequest<AccountLifecycle>("/me/lifecycle");
+  },
+
+  deactivateAccount(input: AccountLifecycleMutationInput, idempotencyKey: string) {
+    return apiRequest<AccountLifecycleMutation>("/me/lifecycle/deactivate", {
+      method: "POST",
+      headers: { "Idempotency-Key": idempotencyKey },
+      body: input,
+    });
+  },
+
+  deleteAccount(input: AccountLifecycleMutationInput, idempotencyKey: string) {
+    return apiRequest<AccountLifecycleMutation>("/me/lifecycle/delete", {
+      method: "POST",
+      headers: { "Idempotency-Key": idempotencyKey },
+      body: input,
+    });
+  },
+
+  createDataExport(idempotencyKey: string) {
+    return apiRequest<DataExportJob>("/me/data-exports", {
+      method: "POST",
+      headers: { "Idempotency-Key": idempotencyKey },
+    });
+  },
+
+  dataExports() {
+    return apiRequest<DataExportJob[]>("/me/data-exports");
+  },
+
+  dataExport(exportId: string) {
+    return apiRequest<DataExportJob>(`/me/data-exports/${encodeURIComponent(exportId)}`);
+  },
+
+  createDataExportDownloadGrant(exportId: string) {
+    return apiRequest<DataExportDownloadGrant>(
+      `/me/data-exports/${encodeURIComponent(exportId)}/download-grant`,
+      { method: "POST" },
+    );
+  },
+
+  downloadDataExport(exportId: string, token: string) {
+    return apiRequest<AccountDataExport>(
+      `/me/data-exports/${encodeURIComponent(exportId)}/download`,
+      { headers: { "X-Export-Token": token } },
+    );
+  },
+
+  myProfile() {
+    return apiRequest<MyProfile>("/me/profile");
+  },
+
+  updateMyProfile(input: ProfileUpdateInput) {
+    return apiRequest<MyProfile>("/me/profile", { method: "PUT", body: input });
+  },
+
+  myPrivacy() {
+    return apiRequest<ProfilePrivacy>("/me/privacy");
+  },
+
+  updateMyPrivacy(input: ProfilePrivacyUpdateInput) {
+    return apiRequest<ProfilePrivacy>("/me/privacy", { method: "PUT", body: input });
   },
 
   myActivity(from?: string, to?: string) {
     return apiRequest<ActivityCalendar>("/me/activity", { query: { from, to } });
   },
 
+  drafts() {
+    return apiRequest<Page<Draft>>("/me/drafts");
+  },
+
+  draft(draftKey: string) {
+    return apiRequest<Draft>(`/me/drafts/${encodeURIComponent(draftKey)}`);
+  },
+
+  saveDraft(input: DraftSaveInput) {
+    return apiRequest<Draft>("/me/drafts", { method: "PUT", body: input });
+  },
+
+  deleteDraft(draftKey: string) {
+    return apiRequest<void>(`/me/drafts/${encodeURIComponent(draftKey)}`, {
+      method: "DELETE",
+    });
+  },
+
   publicUser(handle: string) {
-    return apiRequest<UserProfile>(`/users/${encodeURIComponent(handle)}`, { auth: false });
+    return apiRequest<UserProfile>(`/users/${encodeURIComponent(handle)}`, { auth: "optional" });
   },
 
   userThreads(handle: string, cursor?: string | null) {
     return apiRequest<Page<UserThread>>(`/users/${encodeURIComponent(handle)}/threads`, {
       query: { cursor, limit: 20 },
-      auth: false,
+      auth: "optional",
     });
   },
 
   userComments(handle: string, cursor?: string | null) {
     return apiRequest<Page<UserComment>>(`/users/${encodeURIComponent(handle)}/comments`, {
       query: { cursor, limit: 20 },
-      auth: false,
+      auth: "optional",
     });
   },
 
+  userRelationship(handle: string) {
+    return apiRequest<UserRelationship>(`/users/${encodeURIComponent(handle)}/relationship`);
+  },
+
+  followUser(handle: string) {
+    return apiRequest<void>(`/users/${encodeURIComponent(handle)}/follow`, { method: "PUT" });
+  },
+
+  unfollowUser(handle: string) {
+    return apiRequest<void>(`/users/${encodeURIComponent(handle)}/follow`, { method: "DELETE" });
+  },
+
+  removeFollower(handle: string) {
+    return apiRequest<void>(`/me/followers/${encodeURIComponent(handle)}`, {
+      method: "DELETE",
+    });
+  },
+
+  userFollowers(handle: string, cursor?: string | null) {
+    return apiRequest<Page<UserSummary>>(`/users/${encodeURIComponent(handle)}/followers`, {
+      query: { cursor, limit: 30 },
+      auth: "optional",
+    });
+  },
+
+  userFollowing(handle: string, cursor?: string | null) {
+    return apiRequest<Page<UserSummary>>(`/users/${encodeURIComponent(handle)}/following`, {
+      query: { cursor, limit: 30 },
+      auth: "optional",
+    });
+  },
+
+  muteUser(handle: string) {
+    return apiRequest<void>(`/users/${encodeURIComponent(handle)}/mute`, { method: "PUT" });
+  },
+
+  unmuteUser(handle: string) {
+    return apiRequest<void>(`/users/${encodeURIComponent(handle)}/mute`, { method: "DELETE" });
+  },
+
+  blockUser(handle: string) {
+    return apiRequest<void>(`/users/${encodeURIComponent(handle)}/block`, { method: "PUT" });
+  },
+
+  unblockUser(handle: string) {
+    return apiRequest<void>(`/users/${encodeURIComponent(handle)}/block`, { method: "DELETE" });
+  },
+
   announcements() {
-    return apiRequest<Announcement[]>("/announcements", { auth: false });
+    return apiRequest<Announcement[]>("/announcements");
+  },
+
+  unreadAnnouncements() {
+    return apiRequest<Announcement[]>("/announcements/unread");
+  },
+
+  recordAnnouncementReceipt(id: string, body: AnnouncementReceiptInput) {
+    return apiRequest<AnnouncementReceipt>(`/announcements/${encodeURIComponent(id)}/receipt`, {
+      method: "POST",
+      body,
+    });
+  },
+
+  promotions(placement?: Promotion["placement"]) {
+    return apiRequest<Promotion[]>("/promotions", { query: { placement } });
+  },
+
+  recordPromotionEvent(id: string, eventType: "impression" | "click", trackingToken: string) {
+    return apiRequest<void>(`/promotions/${encodeURIComponent(id)}/events`, {
+      method: "POST",
+      auth: false,
+      keepalive: true,
+      body: { eventType, trackingToken },
+    });
   },
 
   settings() {
     return apiRequest<Setting[]>("/settings", { auth: false });
+  },
+
+  mediaUploadCredentials(kind: "image" | "file", contentType: string, usage?: MediaUsage) {
+    return apiRequest<UploadCredentials>("/media/upload-credentials", {
+      method: "POST",
+      body: { kind, contentType, usage },
+    });
+  },
+
+  mediaUrl(id: string) {
+    return apiRequest<UploadUrl>(`/media/${encodeURIComponent(id)}/url`);
+  },
+
+  myMediaUploads(usage?: MediaUsage, cursor?: string | null) {
+    return apiRequest<Page<MyUpload>>("/me/media/uploads", {
+      query: { usage, cursor, limit: 12 },
+    });
+  },
+
+  myMediaUpload(id: string) {
+    return apiRequest<MyUpload>(`/me/media/uploads/${encodeURIComponent(id)}`);
+  },
+
+  bindMyProfileMedia(slot: "avatar" | "banner", assetId: string) {
+    return apiRequest<void>(`/me/profile/${slot}`, { method: "PUT", body: { assetId } });
+  },
+
+  clearMyProfileMedia(slot: "avatar" | "banner") {
+    return apiRequest<void>(`/me/profile/${slot}`, { method: "DELETE" });
   },
 
   departments() {
@@ -186,10 +568,15 @@ export const api = {
     });
   },
 
-  search(q: string, type: "course" | "teacher" | "review" | "all" = "all") {
+  search(
+    q: string,
+    type: "course" | "teacher" | "review" | "thread" | "user" | "board" | "tag" | "all" = "all",
+    limit = 12,
+    cursor?: string | null,
+  ) {
     return apiRequest<SearchResult>("/search", {
-      query: { q, type, limit: 12 },
-      auth: false,
+      query: { q, type, limit, cursor },
+      auth: "optional",
     });
   },
 
@@ -261,7 +648,7 @@ export const api = {
   },
 
   boards() {
-    return apiRequest<Board[]>("/forum/boards", { auth: false });
+    return apiRequest<Board[]>("/forum/boards");
   },
 
   tags() {
@@ -271,7 +658,7 @@ export const api = {
   threads(query: {
     board?: string;
     tag?: string;
-    feed?: "hot" | "new" | "following" | "unread";
+    feed?: "hot" | "new" | "subscriptions" | "following" | "unread";
     cursor?: string | null;
   }) {
     return apiRequest<Page<ThreadFeed>>("/forum/threads", {
@@ -283,7 +670,9 @@ export const api = {
     boardId: string;
     title: string;
     body?: string;
+    contentFormat?: ContentFormat;
     tags?: string[];
+    attachmentAssetIds?: string[];
     poll?: { question: string; multiSelect?: boolean; options: string[] };
   }) {
     return apiRequest<ThreadDetailWithPoll>("/forum/threads", { method: "POST", body });
@@ -293,16 +682,60 @@ export const api = {
     return apiRequest<ThreadDetailWithPoll>(`/forum/threads/${encodeURIComponent(id)}`);
   },
 
+  updateThread(id: string, body: {
+    expectedVersion: number;
+    title?: string;
+    body?: string;
+    contentFormat?: ContentFormat;
+    tags?: string[];
+    attachmentAssetIds?: string[];
+  }) {
+    return apiRequest<ThreadDetailWithPoll>(`/forum/threads/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body,
+    });
+  },
+
+  deleteThread(id: string) {
+    return apiRequest<{ ok: boolean }>(`/forum/threads/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    });
+  },
+
   comments(threadId: string, cursor?: string | null) {
     return apiRequest<Page<Comment>>(`/forum/threads/${encodeURIComponent(threadId)}/comments`, {
       query: { cursor, limit: 50 },
     });
   },
 
-  addComment(threadId: string, body: string, parentId?: string) {
+  addComment(
+    threadId: string,
+    body: string,
+    contentFormat: ContentFormat = "markdown_v1",
+    parentId?: string,
+    attachmentAssetIds: string[] = [],
+  ) {
     return apiRequest<Comment>(`/forum/threads/${encodeURIComponent(threadId)}/comments`, {
       method: "POST",
-      body: { body, parentId },
+      body: { body, contentFormat, parentId, attachmentAssetIds },
+    });
+  },
+
+  updateComment(id: string, body: {
+    expectedVersion: number;
+    body: string;
+    contentFormat: ContentFormat;
+    attachmentAssetIds?: string[];
+  }) {
+    return apiRequest<Comment>(`/forum/comments/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body,
+    });
+  },
+
+  deleteComment(id: string) {
+    return apiRequest<{ ok: boolean }>(`/forum/comments/${encodeURIComponent(id)}`, {
+      method: "DELETE",
     });
   },
 
@@ -340,10 +773,17 @@ export const api = {
   },
 
   votePost(id: string, value: "up" | "down", postType: "thread" | "comment" = "thread") {
-    return apiRequest<{ ok: boolean; voteCount: number }>(`/forum/posts/${encodeURIComponent(id)}/vote`, {
+    return apiRequest<{ ok: boolean; voteCount: number; viewerVote: "up" | "down" | null }>(`/forum/posts/${encodeURIComponent(id)}/vote`, {
       method: "POST",
       body: { value, postType },
     });
+  },
+
+  removePostVote(id: string, postType: "thread" | "comment" = "thread") {
+    return apiRequest<{ ok: boolean; voteCount: number; viewerVote: null }>(
+      `/forum/posts/${encodeURIComponent(id)}/vote`,
+      { method: "DELETE", query: { postType } },
+    );
   },
 
   flagPost(
@@ -358,10 +798,17 @@ export const api = {
     });
   },
 
-  bookmarkPost(id: string, note?: string) {
+  bookmarkPost(id: string, postType: "thread" | "comment" = "thread", note?: string) {
     return apiRequest<void>(`/forum/posts/${encodeURIComponent(id)}/bookmark`, {
       method: "PUT",
-      body: { note },
+      body: { postType, note },
+    });
+  },
+
+  removeBookmark(id: string, postType: "thread" | "comment" = "thread") {
+    return apiRequest<void>(`/forum/posts/${encodeURIComponent(id)}/bookmark`, {
+      method: "DELETE",
+      query: { postType },
     });
   },
 
@@ -369,14 +816,26 @@ export const api = {
     return apiRequest<Page<Bookmark>>("/forum/bookmarks", { query: { cursor, limit: 30 } });
   },
 
-  subscriptions() {
-    return apiRequest<Array<{ targetType?: string; targetId?: string; level?: string }>>(
+  subscriptions(cursor?: string | null, targetType?: "board" | "thread") {
+    return apiRequest<Page<{ targetType: "board" | "thread"; targetId: string; level: string; createdAt: number }>>(
       "/forum/subscriptions",
+      { query: { cursor, type: targetType, limit: 30 } },
     );
   },
 
   setSubscription(body: { targetType: "board" | "thread"; targetId: string; level: string }) {
     return apiRequest<void>("/forum/subscriptions", { method: "PUT", body });
+  },
+
+  deleteSubscription(body: { targetType: "board" | "thread"; targetId: string }) {
+    return apiRequest<void>("/forum/subscriptions", { method: "DELETE", body });
+  },
+
+  reportThreadRead(id: string, lastReadCommentId?: string | null) {
+    return apiRequest<void>(`/forum/threads/${encodeURIComponent(id)}/read`, {
+      method: "POST",
+      body: { lastReadCommentId },
+    });
   },
 
   ignoredUsers(cursor?: string | null) {
@@ -393,16 +852,44 @@ export const api = {
     });
   },
 
-  dmConversations(cursor?: string | null) {
+  dmConversations(query: {
+    cursor?: string | null;
+    view?: "inbox" | "requests" | "sent" | "archived" | "deleted";
+    q?: string;
+  } = {}) {
     return apiRequest<Page<DmConversation>>("/forum/dm/conversations", {
-      query: { cursor, limit: 30 },
+      query: { ...query, limit: 30 },
     });
   },
 
-  createDmConversation(recipientHandle: string) {
+  dmUnreadCount() {
+    return apiRequest<DmCounts>("/forum/dm/unread-count");
+  },
+
+  createDmConversation(recipientHandle: string, requestMessage: string, idempotencyKey: string) {
     return apiRequest<DmConversation>("/forum/dm/conversations", {
       method: "POST",
-      body: { recipientHandle },
+      headers: { "Idempotency-Key": idempotencyKey },
+      body: { recipientHandle, requestMessage },
+    });
+  },
+
+  acceptDmRequest(id: string) {
+    return apiRequest<DmConversation>(`/forum/dm/requests/${encodeURIComponent(id)}/accept`, {
+      method: "POST",
+    });
+  },
+
+  declineDmRequest(id: string) {
+    return apiRequest<void>(`/forum/dm/requests/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    });
+  },
+
+  reportDmRequest(id: string, reason: DmReportReason, note?: string) {
+    return apiRequest<void>(`/forum/dm/requests/${encodeURIComponent(id)}/report`, {
+      method: "POST",
+      body: { reason, note },
     });
   },
 
@@ -426,6 +913,30 @@ export const api = {
     });
   },
 
+  setDmConversationArchived(id: string, isArchived: boolean) {
+    return apiRequest<void>(`/forum/dm/conversations/${encodeURIComponent(id)}/archive`, {
+      method: isArchived ? "PUT" : "DELETE",
+    });
+  },
+
+  setDmConversationMuted(id: string, isMuted: boolean) {
+    return apiRequest<void>(`/forum/dm/conversations/${encodeURIComponent(id)}/mute`, {
+      method: isMuted ? "PUT" : "DELETE",
+    });
+  },
+
+  deleteDmConversation(id: string) {
+    return apiRequest<void>(`/forum/dm/conversations/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    });
+  },
+
+  recoverDmConversation(id: string) {
+    return apiRequest<void>(`/forum/dm/conversations/${encodeURIComponent(id)}/recover`, {
+      method: "POST",
+    });
+  },
+
   reportDmMessage(id: string, reason: DmReportReason, note?: string) {
     return apiRequest<void>(`/forum/dm/messages/${encodeURIComponent(id)}/report`, {
       method: "POST",
@@ -434,10 +945,17 @@ export const api = {
   },
 
   votePoll(id: string, optionId: string) {
-    return apiRequest<{ ok: boolean }>(`/forum/polls/${encodeURIComponent(id)}/vote`, {
+    return apiRequest<{ ok: boolean; myVotes: string[] }>(`/forum/polls/${encodeURIComponent(id)}/vote`, {
       method: "POST",
       body: { optionId },
     });
+  },
+
+  removePollVote(id: string, optionId: string) {
+    return apiRequest<{ ok: boolean; myVotes: string[] }>(
+      `/forum/polls/${encodeURIComponent(id)}/vote`,
+      { method: "DELETE", query: { optionId } },
+    );
   },
 
   pollResults(id: string) {
@@ -458,17 +976,67 @@ export const api = {
   },
 
   markNotificationsRead(ids?: string[]) {
-    return apiRequest<void>("/notifications/read", { method: "POST", body: { ids } });
+    return apiRequest<void>("/notifications/read", {
+      method: "POST",
+      body: ids ? { ids } : { all: true },
+    });
   },
 
   notificationPrefs() {
-    return apiRequest<{ prefs?: Record<string, unknown> }>("/me/notification-prefs");
+    return apiRequest<{ prefs: NotificationPreferences }>("/me/notification-prefs");
   },
 
-  updateNotificationPrefs(prefs: Record<string, unknown>) {
-    return apiRequest<{ prefs?: Record<string, unknown> }>("/me/notification-prefs", {
+  updateNotificationPrefs(prefs: NotificationPreferences) {
+    return apiRequest<{ prefs: NotificationPreferences }>("/me/notification-prefs", {
       method: "PUT",
       body: { prefs },
+    });
+  },
+
+  myAppeals(cursor?: string | null, authToken?: string) {
+    return apiRequest<Page<Appeal>>("/me/appeals", {
+      query: { cursor, limit: 30 },
+      authToken,
+    });
+  },
+
+  submitAppeal(
+    body: { governanceEventId: string; reason: string },
+    idempotencyKey: string,
+    authToken?: string,
+  ) {
+    return apiRequest<Appeal>("/me/appeals", {
+      method: "POST",
+      body,
+      headers: { "Idempotency-Key": idempotencyKey },
+      authToken,
+    });
+  },
+
+  withdrawAppeal(id: string, expectedVersion: number, reason: string, authToken?: string) {
+    return apiRequest<Appeal>(`/me/appeals/${encodeURIComponent(id)}/withdraw`, {
+      method: "POST",
+      body: { expectedVersion, reason },
+      authToken,
+    });
+  },
+
+  governanceNotices(unread?: boolean, cursor?: string | null, authToken?: string) {
+    return apiRequest<Page<GovernanceNotice>>("/me/governance-notices", {
+      query: { unread, cursor, limit: 30 },
+      authToken,
+    });
+  },
+
+  governanceNoticeUnreadCount(authToken?: string) {
+    return apiRequest<{ count: number }>("/me/governance-notices/unread-count", { authToken });
+  },
+
+  markGovernanceNoticesRead(ids?: string[], authToken?: string) {
+    return apiRequest<void>("/me/governance-notices/read", {
+      method: "POST",
+      body: ids ? { ids } : { all: true },
+      authToken,
     });
   },
 
@@ -498,15 +1066,73 @@ export const api = {
     return apiRequest<LedgerVerify>("/wallet/ledger/verify", { auth: false });
   },
 
+  adminCreditReconciliationStats() {
+    return apiRequest<CreditReconciliationStats>("/admin/credit/reconciliations/stats");
+  },
+
+  adminCreditReconciliations(cursor?: string | null) {
+    return apiRequest<Page<CreditReconciliationRun>>("/admin/credit/reconciliations", {
+      query: { cursor, limit: 30 },
+    });
+  },
+
+  requestAdminCreditReconciliation(reason: string, idempotencyKey: string) {
+    return apiRequest<CreditReconciliationRun>("/admin/credit/reconciliations", {
+      method: "POST",
+      body: { reason },
+      headers: { "Idempotency-Key": idempotencyKey },
+    });
+  },
+
+  adminCreditReconciliation(id: string) {
+    return apiRequest<CreditReconciliationRun>(
+      `/admin/credit/reconciliations/${encodeURIComponent(id)}`,
+    );
+  },
+
+  resumeAdminCreditReconciliation(id: string, reason: string) {
+    return apiRequest<CreditReconciliationRun>(
+      `/admin/credit/reconciliations/${encodeURIComponent(id)}/resume`,
+      { method: "POST", body: { reason } },
+    );
+  },
+
+  adminCreditReconciliationWallets(
+    id: string,
+    cursor?: string | null,
+    driftOnly = true,
+  ) {
+    return apiRequest<Page<CreditReconciliationWallet>>(
+      `/admin/credit/reconciliations/${encodeURIComponent(id)}/wallets`,
+      { query: { cursor, driftOnly, limit: 50 } },
+    );
+  },
+
+  creditSigningIntent(
+    action:
+      | "credit.tip"
+      | "credit.task.create"
+      | "credit.task.action"
+      | "credit.product.purchase"
+      | "credit.purchase.action",
+    request: Record<string, unknown>,
+    idempotencyKey: string,
+  ) {
+    return apiRequest<SigningIntent>("/credit/signing-intents", {
+      method: "POST",
+      body: { action, request },
+      headers: { "Idempotency-Key": idempotencyKey },
+    });
+  },
+
   tip(
     body: { toAccountId: string; amount: number; targetType: "review" | "thread" | "comment"; targetId: string },
-    walletSig: string,
-    idempotencyKey: string,
+    authorization: WalletAuthorization,
   ) {
     return apiRequest<void>("/credit/tip", {
       method: "POST",
       body,
-      headers: { "X-Wallet-Sig": walletSig, "Idempotency-Key": idempotencyKey },
+      headers: walletHeaders(authorization),
     });
   },
 
@@ -516,23 +1142,30 @@ export const api = {
     });
   },
 
-  createTask(body: { title: string; description?: string; rewardAmount: number; contactInfo?: string }, walletSig: string) {
+  createTask(
+    body: { title: string; description?: string; rewardAmount: number; contactInfo?: string },
+    authorization: WalletAuthorization,
+  ) {
     return apiRequest<Task>("/credit/tasks", {
       method: "POST",
       body,
-      headers: { "X-Wallet-Sig": walletSig },
+      headers: walletHeaders(authorization),
     });
   },
 
   acceptTask(id: string) {
-    return apiRequest<Task>(`/credit/tasks/${encodeURIComponent(id)}/accept`, { method: "POST" });
+    return apiRequest<void>(`/credit/tasks/${encodeURIComponent(id)}/accept`, { method: "POST" });
   },
 
-  taskAction(id: string, action: "submit" | "confirm" | "cancel" | "reject" | "delete", walletSig: string) {
-    return apiRequest<Task>(`/credit/tasks/${encodeURIComponent(id)}/action`, {
+  taskAction(
+    id: string,
+    action: "submit" | "confirm" | "cancel" | "reject" | "delete",
+    authorization?: WalletAuthorization,
+  ) {
+    return apiRequest<void>(`/credit/tasks/${encodeURIComponent(id)}/action`, {
       method: "POST",
       body: { action },
-      headers: { "X-Wallet-Sig": walletSig },
+      headers: authorization ? walletHeaders(authorization) : undefined,
     });
   },
 
@@ -544,10 +1177,10 @@ export const api = {
     return apiRequest<Product>("/credit/products", { method: "POST", body });
   },
 
-  purchaseProduct(id: string, walletSig: string) {
+  purchaseProduct(id: string, authorization: WalletAuthorization) {
     return apiRequest<Purchase>(`/credit/products/${encodeURIComponent(id)}/purchase`, {
       method: "POST",
-      headers: { "X-Wallet-Sig": walletSig },
+      headers: walletHeaders(authorization),
     });
   },
 
@@ -555,11 +1188,15 @@ export const api = {
     return apiRequest<Page<Purchase>>("/credit/purchases", { query: { cursor, limit: 30 } });
   },
 
-  purchaseAction(id: string, action: "accept" | "deliver" | "confirm", walletSig: string) {
-    return apiRequest<Purchase>(`/credit/purchases/${encodeURIComponent(id)}/action`, {
+  purchaseAction(
+    id: string,
+    action: "accept" | "deliver" | "confirm" | "cancel",
+    authorization?: WalletAuthorization,
+  ) {
+    return apiRequest<void>(`/credit/purchases/${encodeURIComponent(id)}/action`, {
       method: "POST",
       body: { action },
-      headers: { "X-Wallet-Sig": walletSig },
+      headers: authorization ? walletHeaders(authorization) : undefined,
     });
   },
 
@@ -575,6 +1212,50 @@ export const api = {
   }) {
     return apiRequest<Page<AdminAuditEvent>>("/admin/audit-events", {
       query: { ...query, limit: 30 },
+    });
+  },
+
+  adminNotificationOutbox(
+    state: NotificationOutboxState = "dead",
+    cursor?: string | null,
+  ) {
+    return apiRequest<Page<NotificationOutboxEvent>>("/admin/notification-outbox", {
+      query: { state, cursor, limit: 30 },
+    });
+  },
+
+  retryAdminNotificationOutbox(id: string, reason: string) {
+    return apiRequest<NotificationOutboxEvent>(
+      `/admin/notification-outbox/${encodeURIComponent(id)}/retry`,
+      { method: "POST", body: { reason } },
+    );
+  },
+
+  adminAppeals(status?: AppealStatus, cursor?: string | null) {
+    return apiRequest<Page<AdminAppeal>>("/admin/appeals", {
+      query: { status, cursor, limit: 30 },
+    });
+  },
+
+  startAdminAppealReview(id: string, expectedVersion: number, reason: string) {
+    return apiRequest<AdminAppeal>(`/admin/appeals/${encodeURIComponent(id)}/review`, {
+      method: "POST",
+      body: { expectedVersion, reason },
+    });
+  },
+
+  decideAdminAppeal(
+    id: string,
+    body: {
+      expectedVersion: number;
+      outcome: "upheld" | "overturned" | "amended";
+      reason: string;
+      amendedEndsAt?: number;
+    },
+  ) {
+    return apiRequest<AdminAppeal>(`/admin/appeals/${encodeURIComponent(id)}/decision`, {
+      method: "POST",
+      body,
     });
   },
 
@@ -595,7 +1276,7 @@ export const api = {
   adminUsers(query: {
     q?: string;
     role?: "user" | "mod" | "admin";
-    status?: "active" | "suspended" | "deleted";
+    status?: "active" | "suspended" | "deactivated" | "deletion_requested" | "deleted" | "purged";
     cursor?: string | null;
   }) {
     return apiRequest<Page<AdminUser>>("/admin/users", { query: { ...query, limit: 30 } });
@@ -720,27 +1401,138 @@ export const api = {
     });
   },
 
+  adminVerificationTypes(cursor?: string | null) {
+    return apiRequest<Page<VerificationType>>("/admin/verifications/types", {
+      query: { cursor, limit: 50 },
+    });
+  },
+
+  createAdminVerificationType(body: VerificationTypeInput) {
+    return apiRequest<VerificationType>("/admin/verifications/types", { method: "POST", body });
+  },
+
+  adminUserVerifications(accountId: string, cursor?: string | null) {
+    return apiRequest<Page<VerificationGrant>>(
+      `/admin/users/${encodeURIComponent(accountId)}/verifications`,
+      { query: { cursor, limit: 50 } },
+    );
+  },
+
+  grantAdminUserVerification(accountId: string, body: VerificationGrantInput) {
+    return apiRequest<VerificationGrant>(
+      `/admin/users/${encodeURIComponent(accountId)}/verifications`,
+      { method: "POST", body },
+    );
+  },
+
+  revokeAdminUserVerification(grantId: string, reason: string) {
+    return apiRequest<VerificationGrant>(
+      `/admin/verifications/grants/${encodeURIComponent(grantId)}/revoke`,
+      { method: "POST", body: { reason } },
+    );
+  },
+
+  adminAchievements(cursor?: string | null) {
+    return apiRequest<Page<Achievement>>("/admin/achievements", {
+      query: { cursor, limit: 50 },
+    });
+  },
+
+  createAdminAchievement(body: AchievementCreateInput) {
+    return apiRequest<Achievement>("/admin/achievements", { method: "POST", body });
+  },
+
+  updateAdminAchievement(id: string, body: AchievementUpdateInput) {
+    return apiRequest<Achievement>(`/admin/achievements/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body,
+    });
+  },
+
+  adminUserAchievements(accountId: string, cursor?: string | null) {
+    return apiRequest<Page<AchievementGrant>>(
+      `/admin/users/${encodeURIComponent(accountId)}/achievements`,
+      { query: { cursor, limit: 50 } },
+    );
+  },
+
+  grantAdminUserAchievement(accountId: string, body: AchievementGrantInput) {
+    return apiRequest<AchievementGrant>(
+      `/admin/users/${encodeURIComponent(accountId)}/achievements`,
+      { method: "POST", body },
+    );
+  },
+
+  revokeAdminUserAchievement(accountId: string, achievementId: string, reason: string) {
+    return apiRequest<AchievementGrant>(
+      `/admin/users/${encodeURIComponent(accountId)}/achievements/${encodeURIComponent(achievementId)}/revoke`,
+      { method: "POST", body: { reason } },
+    );
+  },
+
+  adminUserAchievementEvents(accountId: string, cursor?: string | null) {
+    return apiRequest<Page<AchievementEvent>>(
+      `/admin/users/${encodeURIComponent(accountId)}/achievement-events`,
+      { query: { cursor, limit: 50 } },
+    );
+  },
+
   adminAnnouncements(cursor?: string | null) {
     return apiRequest<Page<Announcement>>("/admin/announcements", {
       query: { cursor, limit: 30 },
     });
   },
 
-  createAdminAnnouncement(body: AnnouncementInput) {
+  createAdminAnnouncement(body: AnnouncementCreateInput) {
     return apiRequest<Announcement>("/admin/announcements", { method: "POST", body });
   },
 
-  updateAdminAnnouncement(id: string, body: AnnouncementInput) {
+  updateAdminAnnouncement(id: string, body: AnnouncementUpdateInput) {
     return apiRequest<Announcement>(`/admin/announcements/${encodeURIComponent(id)}`, {
       method: "PATCH",
       body,
     });
   },
 
-  deleteAdminAnnouncement(id: string, reason: string) {
+  archiveAdminAnnouncement(id: string, body: AdminVersionedArchiveInput) {
     return apiRequest<void>(`/admin/announcements/${encodeURIComponent(id)}`, {
       method: "DELETE",
-      body: { reason },
+      body,
+    });
+  },
+
+  adminAnnouncementRevisions(id: string, cursor?: string | null) {
+    return apiRequest<Page<AnnouncementRevision>>(
+      `/admin/announcements/${encodeURIComponent(id)}/revisions`,
+      { query: { cursor, limit: 30 } },
+    );
+  },
+
+  adminPromotions(cursor?: string | null) {
+    return apiRequest<Page<Promotion>>("/admin/promotions", { query: { cursor, limit: 30 } });
+  },
+
+  createAdminPromotion(body: PromotionCreateInput) {
+    return apiRequest<Promotion>("/admin/promotions", { method: "POST", body });
+  },
+
+  updateAdminPromotion(id: string, body: PromotionUpdateInput) {
+    return apiRequest<Promotion>(`/admin/promotions/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body,
+    });
+  },
+
+  archiveAdminPromotion(id: string, body: AdminVersionedArchiveInput) {
+    return apiRequest<void>(`/admin/promotions/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      body,
+    });
+  },
+
+  adminPromotionMetrics(id: string, from?: string, to?: string) {
+    return apiRequest<PromotionMetrics>(`/admin/promotions/${encodeURIComponent(id)}/metrics`, {
+      query: { from, to },
     });
   },
 
@@ -766,8 +1558,26 @@ export const api = {
     });
   },
 
-  adminMediaUploads(cursor?: string | null) {
-    return apiRequest<Page<Upload>>("/admin/media/uploads", { query: { cursor, limit: 30 } });
+  adminMediaUploads(
+    cursor?: string | null,
+    status: "pending" | "clean" | "quarantined" | "blocked" = "pending",
+  ) {
+    return apiRequest<Page<Upload>>("/admin/media/uploads", {
+      query: { cursor, limit: 30, status },
+    });
+  },
+
+  createAdminMediaPreviewGrant(id: string, reason: string) {
+    return apiRequest<ModerationPreviewGrant>(
+      `/admin/media/uploads/${encodeURIComponent(id)}/preview-grants`,
+      { method: "POST", body: { reason } },
+    );
+  },
+
+  adminMediaPreview(id: string, token: string) {
+    return apiBlobRequest(`/admin/media/uploads/${encodeURIComponent(id)}/preview`, {
+      "X-Media-Preview-Token": token,
+    });
   },
 
   moderateAdminMediaUpload(id: string, action: "approve" | "block", reason: string) {
@@ -775,6 +1585,48 @@ export const api = {
       method: "POST",
       body: { reason },
     });
+  },
+
+  placeAdminMediaRetentionHold(
+    id: string,
+    body: MediaRetentionHoldInput,
+  ) {
+    return apiRequest<void>(
+      `/admin/media/uploads/${encodeURIComponent(id)}/retention-hold`,
+      { method: "POST", body },
+    );
+  },
+
+  releaseAdminMediaRetentionHold(id: string, expectedHoldId: string, reason: string) {
+    return apiRequest<void>(
+      `/admin/media/uploads/${encodeURIComponent(id)}/retention-hold`,
+      { method: "DELETE", body: { expectedHoldId, reason } },
+    );
+  },
+
+  adminMediaRetentionHolds(
+    cursor?: string | null,
+    state: "active" | "expired" = "active",
+  ) {
+    return apiRequest<Page<MediaRetentionHold>>("/admin/media/retention-holds", {
+      query: { cursor, limit: 30, state },
+    });
+  },
+
+  adminMediaDeletionJobs(
+    cursor?: string | null,
+    status: "queued" | "leased" | "succeeded" | "dead_letter" = "dead_letter",
+  ) {
+    return apiRequest<Page<MediaDeletionJob>>("/admin/media/deletion-jobs", {
+      query: { cursor, limit: 30, status },
+    });
+  },
+
+  retryAdminMediaDeletionJob(id: string, reason: string) {
+    return apiRequest<void>(
+      `/admin/media/deletion-jobs/${encodeURIComponent(id)}/retry`,
+      { method: "POST", body: { reason } },
+    );
   },
 
   createAdminBoard(body: AdminBoardCreateInput) {
@@ -834,6 +1686,10 @@ export const api = {
 
   triggerSelectionSync(reason: string) {
     return apiRequest<void>("/admin/selection/sync", { method: "POST", body: { reason } });
+  },
+
+  reindexCourses(reason: string) {
+    return apiRequest<void>("/admin/courses/reindex", { method: "POST", body: { reason } });
   },
 
   reindexReviews(reason: string) {

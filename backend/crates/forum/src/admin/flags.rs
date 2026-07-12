@@ -165,16 +165,33 @@ pub async fn resolve_flag(
         None,
     )
     .await?;
-    governance::record_account_event_tx(
+    let metadata = serde_json::json!({ "contentChanged": outcome.content_changed });
+    let governance_event_id = governance::record_account_event_with_id_tx(
         &mut tx,
         governance::AccountActor { account_id: auth.id, role: &auth.role },
         &format!("forum.flag.{}", body.action),
         "forum_content",
         &format!("{}:{}", outcome.flag.target_type, outcome.flag.target_id),
         note,
-        None,
+        Some(&metadata),
     )
     .await?;
+    if body.action == "uphold" && outcome.content_changed {
+        if let Some(author_id) = author_id {
+            governance::notices::create_notice_tx(
+                &mut tx,
+                author_id,
+                "content_restricted",
+                &format!("audit:{governance_event_id}:forum-flag"),
+                Some(governance_event_id),
+                None,
+                if outcome.flag.target_type == "thread" { "forum_thread" } else { "forum_comment" },
+                &outcome.flag.target_id.to_string(),
+                "你的社区内容在举报复核后被软移除，可在申诉中心查看并申请复核。",
+            )
+            .await?;
+        }
+    }
     tx.commit().await?;
     crate::cache::invalidate_thread_surfaces(
         state.redis.as_ref(),

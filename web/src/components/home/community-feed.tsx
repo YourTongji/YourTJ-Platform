@@ -1,38 +1,21 @@
 import {
-  Bookmark,
-  CalendarDays,
-  Gamepad2,
-  GraduationCap,
-  ListFilter,
-  MapPin,
+  Loader2,
   MessageCircle,
-  MoreHorizontal,
-  Share2,
-  ShoppingBag,
   ThumbsUp,
 } from "lucide-react";
 import { Link } from "react-router";
 
 import { EmptyState, ErrorState } from "@/components/common/states";
-import { TeaBadge } from "@/components/common/tea-badge";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { ThreadFeed } from "@/lib/api/types";
 import { formatNumber, formatRelativeTime } from "@/lib/format";
 
-export type CommunityFeedMode = "hot" | "new" | "following";
-
-const discoveryChannels = [
-  { label: "嘉定校区", icon: MapPin },
-  { label: "四平校区", icon: GraduationCap },
-  { label: "选课排课", icon: CalendarDays },
-  { label: "闲置交易", icon: ShoppingBag },
-  { label: "泛 ACG", icon: Gamepad2 },
-] as const;
+export type CommunityFeedMode = "hot" | "new" | "following" | "subscriptions";
 
 function FeedSkeleton() {
   return (
@@ -64,7 +47,7 @@ function FeedSkeleton() {
   );
 }
 
-function PostCard({ thread, index }: { thread: ThreadFeed; index: number }) {
+function PostCard({ thread }: { thread: ThreadFeed }) {
   const threadUrl = thread.id ? `/forum/threads/${thread.id}` : "/forum";
   const author = thread.authorHandle || "YourTJ 用户";
   const tag = thread.tags?.[0];
@@ -81,7 +64,6 @@ function PostCard({ thread, index }: { thread: ThreadFeed; index: number }) {
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="truncate text-sm font-bold text-foreground">{author}</span>
-                  <TeaBadge level={(index % 3) + 2} />
                 </div>
                 <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                   <span>{formatRelativeTime(thread.lastActivityAt ?? thread.createdAt)}</span>
@@ -93,17 +75,28 @@ function PostCard({ thread, index }: { thread: ThreadFeed; index: number }) {
                 </div>
               </div>
             </div>
-            <MoreHorizontal className="size-4 shrink-0 text-muted-foreground" />
           </div>
 
           <h2 className="mt-3 line-clamp-2 text-lg font-semibold leading-7 text-foreground transition-colors group-hover:text-primary">
             {thread.title || "未命名社区讨论"}
           </h2>
-          <p className="mt-1.5 line-clamp-3 text-sm leading-6 text-[#3d4947] dark:text-muted-foreground">
-            {thread.tags?.length
-              ? `围绕 ${thread.tags.join("、")} 的校园讨论正在进行，点击查看完整内容和最新回复。`
-              : "打开帖子查看完整内容、参与讨论并关注后续更新。"}
-          </p>
+          {thread.bodyExcerpt ? (
+            <p className="mt-2 line-clamp-2 text-sm leading-6 text-muted-foreground">
+              {thread.bodyExcerpt}
+            </p>
+          ) : null}
+          {thread.attachments?.[0] ? (
+            <img
+              src={thread.attachments[0].url}
+              alt={thread.attachments[0].alt}
+              width={thread.attachments[0].width ?? undefined}
+              height={thread.attachments[0].height ?? undefined}
+              loading="lazy"
+              decoding="async"
+              referrerPolicy="no-referrer"
+              className="mt-3 max-h-80 w-full rounded-xl border object-cover"
+            />
+          ) : null}
         </Link>
 
         <div className="mt-3 flex items-center gap-5 border-t border-border/70 pt-3 text-xs text-muted-foreground">
@@ -114,14 +107,6 @@ function PostCard({ thread, index }: { thread: ThreadFeed; index: number }) {
           <span className="inline-flex items-center gap-1.5">
             <ThumbsUp className="size-4" />
             {formatNumber(thread.voteCount)}
-          </span>
-          <span className="inline-flex items-center gap-1.5">
-            <Bookmark className="size-4" />
-            收藏
-          </span>
-          <span className="ml-auto hidden items-center gap-1.5 sm:inline-flex">
-            <Share2 className="size-4" />
-            分享
           </span>
         </div>
       </CardContent>
@@ -136,6 +121,10 @@ export function CommunityFeed({
   isLoading,
   error,
   onRetry,
+  hasMore,
+  isLoadingMore,
+  onLoadMore,
+  isAuthenticated,
 }: {
   mode: CommunityFeedMode;
   onModeChange: (mode: CommunityFeedMode) => void;
@@ -143,11 +132,19 @@ export function CommunityFeed({
   isLoading: boolean;
   error?: unknown;
   onRetry: () => void;
+  hasMore?: boolean;
+  isLoadingMore?: boolean;
+  onLoadMore?: () => void;
+  isAuthenticated: boolean;
 }) {
   return (
     <section aria-label="社区信息流">
-      <div className="mb-6 flex h-10 items-start justify-between border-b border-border/50">
-        <Tabs value={mode} onValueChange={(value) => onModeChange(value as CommunityFeedMode)}>
+      <Tabs
+        value={mode}
+        onValueChange={(value) => onModeChange(value as CommunityFeedMode)}
+        className="gap-0"
+      >
+        <div className="mb-6 flex h-10 items-start justify-between border-b border-border/50">
           <TabsList className="h-auto gap-4 rounded-none bg-transparent p-0">
             <TabsTrigger
               value="hot"
@@ -163,55 +160,59 @@ export function CommunityFeed({
             </TabsTrigger>
             <TabsTrigger
               value="following"
+              disabled={!isAuthenticated}
               className="h-10 rounded-none border-b-2 border-transparent px-0 pb-3 pt-0 text-sm shadow-none data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none"
             >
               关注
             </TabsTrigger>
+            <TabsTrigger
+              value="subscriptions"
+              disabled={!isAuthenticated}
+              className="h-10 rounded-none border-b-2 border-transparent px-0 pb-3 pt-0 text-sm shadow-none data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none"
+            >
+              订阅
+            </TabsTrigger>
           </TabsList>
-        </Tabs>
-        <Button variant="ghost" size="sm" className="h-8 px-1 text-muted-foreground">
-          <ListFilter className="size-3.5" />
-          筛选
-        </Button>
-      </div>
-
-      <nav
-        aria-label="热门社区频道"
-        className="scrollbar-none mb-4 flex gap-3 overflow-x-auto pb-2"
-      >
-        {discoveryChannels.map((channel) => (
-          <Link
-            key={channel.label}
-            to={`/forum?tag=${encodeURIComponent(channel.label)}`}
-            className="inline-flex h-[38px] shrink-0 items-center gap-2 rounded-full border border-input bg-transparent px-4 text-sm font-medium text-[#3d4947] transition-colors hover:border-primary/40 hover:bg-primary/5 hover:text-primary dark:text-muted-foreground"
-          >
-            <channel.icon className="size-4 text-primary" strokeWidth={1.8} />
-            {channel.label}
-          </Link>
-        ))}
-      </nav>
-
-      {isLoading ? (
-        <FeedSkeleton />
-      ) : error ? (
-        <ErrorState title="社区动态加载失败" error={error} onRetry={onRetry} />
-      ) : items.length === 0 ? (
-        <EmptyState
-          title="还没有社区动态"
-          description="去社区发布第一条讨论吧。"
-          action={
-            <Button asChild size="sm" className="rounded-full px-4">
-              <Link to="/forum">进入社区</Link>
-            </Button>
-          }
-        />
-      ) : (
-        <div className="space-y-4">
-          {items.map((thread, index) => (
-            <PostCard key={thread.id ?? `${thread.title}-${index}`} thread={thread} index={index} />
-          ))}
         </div>
-      )}
+
+        <TabsContent value={mode}>
+          {isLoading ? (
+            <FeedSkeleton />
+          ) : error ? (
+            <ErrorState title="社区动态加载失败" error={error} onRetry={onRetry} />
+          ) : items.length === 0 ? (
+            <EmptyState
+              title="还没有社区动态"
+              description="去社区发布第一条讨论吧。"
+              action={
+                <Button asChild size="sm" className="rounded-full px-4">
+                  <Link to="/forum">进入社区</Link>
+                </Button>
+              }
+            />
+          ) : (
+            <div className="space-y-4">
+              <div className="space-y-4">
+                {items.map((thread, index) => (
+                  <PostCard key={thread.id ?? `${thread.title}-${index}`} thread={thread} />
+                ))}
+              </div>
+              {hasMore && onLoadMore ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="w-full rounded-full"
+                  disabled={isLoadingMore}
+                  onClick={onLoadMore}
+                >
+                  {isLoadingMore ? <Loader2 className="size-4 animate-spin" /> : null}
+                  {isLoadingMore ? "正在加载" : "加载更多动态"}
+                </Button>
+              ) : null}
+            </div>
+          )}
+        </TabsContent>
+      </Tabs>
     </section>
   );
 }

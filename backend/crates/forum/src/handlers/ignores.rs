@@ -5,6 +5,8 @@
 //! - `DELETE /api/v2/me/ignores/{account_id}` — unignore a user
 //! - `GET /api/v2/me/ignores`                 — list ignored account ids
 
+use std::collections::HashMap;
+
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
@@ -52,17 +54,9 @@ pub async fn ignore_user_handler(
         return Err(AppError::BadRequest("cannot ignore yourself".into()));
     }
 
-    // Verify the target account exists.
-    let exists: bool = sqlx::query_scalar::<_, bool>(
-        "SELECT EXISTS(SELECT 1 FROM identity.accounts WHERE id = $1)",
-    )
-    .bind(ignored_account_id)
-    .fetch_one(&state.db)
-    .await?;
-
-    if !exists {
-        return Err(AppError::NotFound);
-    }
+    identity::public_accounts::find_public_account_by_id(&state.db, ignored_account_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
 
     crate::repo::insert_ignore(&state.db, auth.id, ignored_account_id).await?;
 
@@ -125,13 +119,22 @@ pub async fn list_ignores_handler(
         rows.truncate(limit as usize);
     }
     let next_cursor = has_more.then(|| rows.last().map(|row| row.account_id.to_string())).flatten();
+    let account_ids: Vec<i64> = rows.iter().map(|row| row.account_id).collect();
+    let accounts =
+        identity::public_accounts::find_public_accounts_by_ids(&state.db, &account_ids).await?;
+    let accounts: HashMap<i64, _> = accounts.into_iter().map(|row| (row.id, row)).collect();
+    let asset_ids: Vec<i64> = accounts.values().filter_map(|row| row.avatar_asset_id).collect();
+    let avatar_urls = media::resolve_clean_profile_images(&state.db, &asset_ids).await?;
     let items = rows
         .into_iter()
-        .map(|row| IgnoreUserDto {
-            account_id: row.account_id.to_string(),
-            handle: row.handle,
-            avatar_url: row.avatar_url,
-            created_at: row.created_at.timestamp(),
+        .filter_map(|row| {
+            let account = accounts.get(&row.account_id)?;
+            Some(IgnoreUserDto {
+                account_id: row.account_id.to_string(),
+                handle: account.handle.clone(),
+                avatar_url: account.avatar_asset_id.and_then(|id| avatar_urls.get(&id).cloned()),
+                created_at: row.created_at.timestamp(),
+            })
         })
         .collect();
     Ok(Json(shared::Page::new(items, next_cursor)))

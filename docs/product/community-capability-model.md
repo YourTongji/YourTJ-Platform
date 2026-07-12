@@ -42,6 +42,7 @@
 | 信誉与徽章 | 信任等级、成就徽章、身份认证、特殊标识的独立语义和后台 | [信任安全与后台](trust-safety-and-administration.md) |
 | 信任与安全 | 反滥用、举报、可逆审核、处罚、通知、申诉和利益冲突控制 | [信任安全与后台](trust-safety-and-administration.md) |
 | 管理与运营 | 用户、内容、板块、推广、公告、政策、任务、审计、健康指标 | [信任安全与后台](trust-safety-and-administration.md) |
+| 闭环积分 | 贡献 mint、内容打赏、悬赏/商品托管、可验证账本与 projection | [积分与托管](credit-and-escrow.md) |
 | 数据权利 | 导出、停用、删除、恢复、匿名化、保留、legal hold | [隐私生命周期](../security/privacy-and-data-lifecycle.md) |
 | 可靠性 | outbox、durable jobs、reconciliation、SLO、备份恢复、降级 | [架构规范](../architecture/contracts-and-data.md) |
 | 无障碍与质量 | 键盘、读屏、响应式、性能预算、兼容、前端和旅程测试 | [设计与无障碍](design-system-and-accessibility.md) |

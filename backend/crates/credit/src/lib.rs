@@ -13,18 +13,37 @@
 //! source of truth. Appends are serialized (advisory lock) to keep the chain linear.
 
 pub mod auth;
+pub mod data_export;
 pub mod dto;
 pub mod error;
 pub mod handlers;
 pub mod ledger;
 pub mod models;
+pub mod reconciliation;
 pub mod repo;
 pub mod signing;
+pub mod tip_targets;
 
+use std::sync::Arc;
+
+use axum::extract::FromRef;
 use axum::routing::{get, post};
 use axum::Router;
 use shared::AppState;
 use sqlx::PgPool;
+
+/// Router state that keeps cross-domain content resolution at the application boundary.
+#[derive(Clone)]
+pub(crate) struct CreditState {
+    app: AppState,
+    tip_target_resolver: Arc<dyn tip_targets::TipTargetResolver>,
+}
+
+impl FromRef<CreditState> for AppState {
+    fn from_ref(state: &CreditState) -> Self {
+        state.app.clone()
+    }
+}
 
 /// System-signed mint for contributions with idempotency protection.
 ///
@@ -65,7 +84,10 @@ pub async fn mint_for_contribution(
 }
 
 /// All routes owned by the credit domain.
-pub fn routes(state: AppState) -> Router {
+pub fn routes(
+    state: AppState,
+    tip_target_resolver: Arc<dyn tip_targets::TipTargetResolver>,
+) -> Router {
     Router::new()
         // Wallet
         .route("/api/v2/wallet", get(handlers::get_wallet))
@@ -75,6 +97,20 @@ pub fn routes(state: AppState) -> Router {
         .route("/api/v2/wallet/tip", post(handlers::tip))
         .route("/api/v2/wallet/ledger", get(handlers::get_ledger))
         .route("/api/v2/wallet/ledger/verify", get(handlers::verify_ledger))
+        .route(
+            "/api/v2/admin/credit/reconciliations",
+            get(handlers::list_reconciliation_runs).post(handlers::request_reconciliation_run),
+        )
+        .route("/api/v2/admin/credit/reconciliations/stats", get(handlers::reconciliation_stats))
+        .route("/api/v2/admin/credit/reconciliations/{id}", get(handlers::get_reconciliation_run))
+        .route(
+            "/api/v2/admin/credit/reconciliations/{id}/resume",
+            post(handlers::resume_reconciliation_run),
+        )
+        .route(
+            "/api/v2/admin/credit/reconciliations/{id}/wallets",
+            get(handlers::list_reconciliation_wallets),
+        )
         // Tasks
         .route("/api/v2/credit/tasks", get(handlers::list_tasks).post(handlers::create_task))
         .route("/api/v2/credit/tasks/{id}/accept", post(handlers::accept_task))
@@ -88,5 +124,5 @@ pub fn routes(state: AppState) -> Router {
         // Purchases
         .route("/api/v2/credit/purchases", get(handlers::list_purchases))
         .route("/api/v2/credit/purchases/{id}/action", post(handlers::action_purchase))
-        .with_state(state)
+        .with_state(CreditState { app: state, tip_target_resolver })
 }

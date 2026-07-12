@@ -1,10 +1,58 @@
 //! Shared test helpers for the credit integration test suite.
 
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
+
 use axum::body::{to_bytes, Body};
 use axum::http::{Request, Response, StatusCode};
+use credit::tip_targets::{ResolvedTipTarget, TipTargetResolver};
 use serde_json::Value;
-use shared::AppState;
-use sqlx::PgPool;
+use shared::{AppResult, AppState};
+use sqlx::{PgConnection, PgPool};
+
+struct ContentTipTargetResolver;
+
+impl TipTargetResolver for ContentTipTargetResolver {
+    fn resolve<'a>(
+        &'a self,
+        conn: &'a mut PgConnection,
+        target_type: &'a str,
+        target_id: i64,
+    ) -> Pin<Box<dyn Future<Output = AppResult<Option<ResolvedTipTarget>>> + Send + 'a>> {
+        Box::pin(async move {
+            let target =
+                match target_type {
+                    "review" => reviews::tip_targets::resolve_tip_target(conn, target_id)
+                        .await?
+                        .map(|target| ResolvedTipTarget {
+                            canonical_type: target.canonical_type.to_string(),
+                            canonical_id: target.canonical_id,
+                            author_id: target.author_id,
+                        }),
+                    "thread" | "comment" => {
+                        forum::tip_targets::resolve_tip_target(conn, target_type, target_id)
+                            .await?
+                            .map(|target| ResolvedTipTarget {
+                                canonical_type: target.canonical_type.to_string(),
+                                canonical_id: target.canonical_id,
+                                author_id: target.author_id,
+                            })
+                    }
+                    _ => None,
+                };
+            let Some(target) = target else {
+                return Ok(None);
+            };
+            if !identity::public_accounts::is_credit_recipient_eligible(conn, target.author_id)
+                .await?
+            {
+                return Ok(None);
+            }
+            Ok(Some(target))
+        })
+    }
+}
 
 /// Create a complete test application with credit routes.
 pub async fn create_test_app() -> (PgPool, axum::Router) {
@@ -39,7 +87,7 @@ pub async fn create_test_app() -> (PgPool, axum::Router) {
         sse_tx: None,
     };
 
-    let router = credit::routes(state);
+    let router = credit::routes(state, Arc::new(ContentTipTargetResolver));
     (pool, router)
 }
 
@@ -52,7 +100,7 @@ async fn run_migrations(pool: &PgPool) {
     .await
     .unwrap_or(false);
     if is_fresh {
-        let migrations: [&str; 15] = [
+        let migrations: [&str; 21] = [
             include_str!("../../../../migrations/0001_init.sql"),
             include_str!("../../../../migrations/0002_escrow_selection.sql"),
             include_str!("../../../../migrations/0003_platform.sql"),
@@ -67,7 +115,13 @@ async fn run_migrations(pool: &PgPool) {
             include_str!("../../../../migrations/0012_natural_key_upsert.sql"),
             include_str!("../../../../migrations/0013_teacher_names.sql"),
             include_str!("../../../../migrations/0014_credit_signing_intents.sql"),
+            include_str!("../../../../migrations/0016_email_encryption.sql"),
             include_str!("../../../../migrations/0017_credit_prepared_ledger.sql"),
+            include_str!("../../../../migrations/0018_email_encrypted_storage.sql"),
+            include_str!("../../../../migrations/0022_governance.sql"),
+            include_str!("../../../../migrations/0032_credit_integrity_constraints.sql"),
+            include_str!("../../../../migrations/0033_identity_auth_hardening.sql"),
+            include_str!("../../../../migrations/0038_credit_reconciliation.sql"),
         ];
         for (i, sql) in migrations.iter().enumerate() {
             sqlx::raw_sql(sql)
@@ -77,20 +131,115 @@ async fn run_migrations(pool: &PgPool) {
         }
     }
 
+    let has_integrity_constraints: bool = sqlx::query_scalar(
+        "SELECT EXISTS( \
+           SELECT 1 FROM pg_constraint \
+           WHERE conname = 'credit_ledger_controlled_flow_type' \
+         )",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or(false);
+    if !has_integrity_constraints {
+        sqlx::raw_sql(include_str!("../../../../migrations/0032_credit_integrity_constraints.sql"))
+            .execute(pool)
+            .await
+            .expect("migration 0032 failed");
+    }
+
+    let has_governance: bool = sqlx::query_scalar(
+        "SELECT EXISTS( \
+           SELECT 1 FROM information_schema.tables \
+           WHERE table_schema = 'governance' AND table_name = 'audit_events' \
+         )",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or(false);
+    if !has_governance {
+        sqlx::raw_sql(include_str!("../../../../migrations/0022_governance.sql"))
+            .execute(pool)
+            .await
+            .expect("migration 0022 failed");
+    }
+
+    let has_reconciliation: bool = sqlx::query_scalar(
+        "SELECT EXISTS( \
+           SELECT 1 FROM information_schema.tables \
+           WHERE table_schema = 'credit' AND table_name = 'reconciliation_runs' \
+         )",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or(false);
+    if !has_reconciliation {
+        sqlx::raw_sql(include_str!("../../../../migrations/0038_credit_reconciliation.sql"))
+            .execute(pool)
+            .await
+            .expect("migration 0038 failed");
+    }
+
+    let database_name: String = sqlx::query_scalar("SELECT current_database()")
+        .fetch_one(pool)
+        .await
+        .expect("test db name");
+    assert!(database_name.ends_with("_test"), "refuse destructive cleanup outside a test database");
+
     // Clean test data from previous runs (always run, even if migrations were skipped).
+    sqlx::query("TRUNCATE credit.reconciliation_runs CASCADE").execute(pool).await.ok();
     sqlx::query("DELETE FROM credit.purchases").execute(pool).await.ok();
     sqlx::query("DELETE FROM credit.products").execute(pool).await.ok();
     sqlx::query("DELETE FROM credit.tasks").execute(pool).await.ok();
     sqlx::query("DELETE FROM credit.signing_intents").execute(pool).await.ok();
-    sqlx::query("DELETE FROM credit.ledger").execute(pool).await.ok();
+    sqlx::query("TRUNCATE credit.ledger RESTART IDENTITY").execute(pool).await.ok();
     sqlx::query("DELETE FROM credit.wallets").execute(pool).await.ok();
     sqlx::query("DELETE FROM identity.sessions").execute(pool).await.ok();
     sqlx::query("DELETE FROM identity.email_codes").execute(pool).await.ok();
     sqlx::query("DELETE FROM identity.account_keys").execute(pool).await.ok();
-    // TRUNCATE ... CASCADE removes accounts and every row referencing them
-    // (across crates), so leftover FK references never block cleanup and cause
-    // cross-suite email collisions. Plain DELETE silently fails on such refs.
-    sqlx::query("TRUNCATE identity.accounts CASCADE").execute(pool).await.ok();
+    sqlx::query("TRUNCATE courses.courses RESTART IDENTITY CASCADE").execute(pool).await.ok();
+    retire_test_accounts(pool).await;
+}
+
+async fn retire_test_accounts(pool: &PgPool) {
+    let has_account_lifecycle: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM information_schema.columns \
+         WHERE table_schema = 'identity' AND table_name = 'accounts' \
+           AND column_name = 'lifecycle_version')",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or(false);
+    if has_account_lifecycle {
+        sqlx::query(
+            "UPDATE identity.accounts SET \
+               status = 'purged', \
+               email = ('retired-' || id || '@test.invalid')::citext, \
+               handle = ('retired-' || id)::citext, \
+               email_ciphertext = NULL, email_key_version = NULL, \
+               email_blind_index = NULL, password_hash = NULL, password_email_blind = NULL, \
+               deactivated_at = NULL, deletion_requested_at = now() - interval '31 days', \
+               deletion_recover_until = now() - interval '1 day', \
+               deleted_at = now() - interval '1 day', purge_started_at = now(), \
+               purged_at = now(), tombstone_id = COALESCE(tombstone_id, gen_random_uuid()), \
+               lifecycle_version = lifecycle_version + 1, \
+               credential_version = credential_version + 1, auth_version = auth_version + 1",
+        )
+        .execute(pool)
+        .await
+        .expect("retire lifecycle-aware test accounts");
+        return;
+    }
+    sqlx::query(
+        "UPDATE identity.accounts SET \
+           status = 'deleted', \
+           email = ('retired-' || id || '@test.invalid')::citext, \
+           handle = ('retired-' || id)::citext, \
+           email_ciphertext = NULL, email_key_version = NULL, \
+           email_blind_index = NULL, password_email_blind = NULL",
+    )
+    .execute(pool)
+    .await
+    .expect("retire prior test accounts without truncating append-only governance history");
 }
 
 /// Build a wallet-signed POST request using the production signing-intent protocol.
@@ -139,7 +288,11 @@ pub async fn signed_post_request(
         )
         .await
         .expect("create signing intent response");
-    assert_eq!(intent_response.status(), StatusCode::OK);
+    if intent_response.status() != StatusCode::OK {
+        let status = intent_response.status();
+        let error_body = read_json(intent_response).await;
+        panic!("signing intent failed with {status}: {error_body}");
+    }
     let intent = read_json(intent_response).await;
     let signing_bytes = intent["signingBytes"].as_str().expect("intent signingBytes");
     let signature = credit::ledger::sign_with_seed(signing_bytes, &seed);
@@ -200,6 +353,56 @@ pub async fn create_test_account(pool: &PgPool, email: &str, handle: &str) -> i6
     .ok();
 
     row.0
+}
+
+/// Insert a visible forum thread owned by `author_id` for tip tests.
+#[allow(dead_code)]
+pub async fn create_tip_thread(pool: &PgPool, author_id: i64) -> i64 {
+    sqlx::query_scalar(
+        "INSERT INTO forum.threads (author_id, title, body, status) \
+         VALUES ($1, 'Tip target', 'Visible body', 'visible') RETURNING id",
+    )
+    .bind(author_id)
+    .fetch_one(pool)
+    .await
+    .expect("create tip thread")
+}
+
+/// Insert a visible forum comment owned by `author_id` for tip tests.
+#[allow(dead_code)]
+pub async fn create_tip_comment(pool: &PgPool, author_id: i64) -> i64 {
+    let thread_id = create_tip_thread(pool, author_id).await;
+    sqlx::query_scalar(
+        "INSERT INTO forum.comments (thread_id, author_id, body) \
+         VALUES ($1, $2, 'Visible comment') RETURNING id",
+    )
+    .bind(thread_id)
+    .bind(author_id)
+    .fetch_one(pool)
+    .await
+    .expect("create tip comment")
+}
+
+/// Insert a visible course review owned by `author_id` for tip tests.
+#[allow(dead_code)]
+pub async fn create_tip_review(pool: &PgPool, author_id: i64) -> i64 {
+    let course_id: i64 = sqlx::query_scalar(
+        "INSERT INTO courses.courses (code, name) \
+         VALUES ($1, 'Tip target course') RETURNING id",
+    )
+    .bind(format!("TIP-{author_id}-{}", uuid::Uuid::new_v4()))
+    .fetch_one(pool)
+    .await
+    .expect("create tip course");
+    sqlx::query_scalar(
+        "INSERT INTO reviews.reviews (course_id, account_id, rating, comment, status) \
+         VALUES ($1, $2, 5, 'Visible review', 'visible') RETURNING id",
+    )
+    .bind(course_id)
+    .bind(author_id)
+    .fetch_one(pool)
+    .await
+    .expect("create tip review")
 }
 
 /// Mint points to an account via the production system-signed mint path.

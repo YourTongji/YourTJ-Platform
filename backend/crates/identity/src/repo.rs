@@ -6,8 +6,9 @@
 use chrono::{DateTime, Utc};
 use shared::email_crypto::EmailEncryption;
 use shared::{AppError, AppResult};
-use sqlx::PgPool;
+use sqlx::{PgConnection, PgPool};
 
+use crate::email_code::{verify_code, CodePurpose};
 use crate::models::{AccountRow, EmailCodeRow, SessionRow};
 
 #[derive(sqlx::FromRow)]
@@ -35,6 +36,21 @@ pub(crate) struct AdminUserRow {
     pub trust_level: i16,
     pub last_active_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub(crate) struct DeviceSessionRow {
+    pub id: i64,
+    pub user_agent: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub last_used_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
+}
+
+pub(crate) struct RotatedSession {
+    pub account_id: i64,
+    pub session_id: i64,
+    pub auth_version: i64,
 }
 
 impl StoredAccountRow {
@@ -73,157 +89,289 @@ impl StoredAccountRow {
 // email_codes
 // ---------------------------------------------------------------------------
 
-/// Invalidate existing active codes for `email`, then insert a new row.
+/// Invalidate active codes for the same purpose, then insert an undelivered code.
 pub async fn insert_email_code(
     pool: &PgPool,
     encryption: Option<&EmailEncryption>,
     email: &str,
+    purpose: CodePurpose,
     code_hash: &str,
     expires_at: DateTime<Utc>,
-) -> AppResult<()> {
+) -> AppResult<uuid::Uuid> {
     let blind_index = encryption.map(|encryption| encryption.blind_index(email));
-    // Mark previous codes as exhausted.
+    let request_id = uuid::Uuid::new_v4();
+    let mut tx = pool.begin().await?;
     sqlx::query(
-        "UPDATE identity.email_codes SET attempts = 99 \
-         WHERE (email = $1 OR email_blind_index = $2) AND expires_at > now()",
+        "UPDATE identity.email_codes SET used_at = now(), attempts = 99 \
+         WHERE (email = $1 OR email_blind_index = $2) AND purpose = $3 \
+           AND used_at IS NULL",
     )
     .bind(email)
     .bind(&blind_index)
-    .execute(pool)
+    .bind(purpose.as_str())
+    .execute(&mut *tx)
     .await?;
 
     sqlx::query(
         "INSERT INTO identity.email_codes \
-         (email, email_blind_index, email_key_version, code_hash, expires_at) \
-         VALUES ($1, $2, $3, $4, $5)",
+         (email, email_blind_index, email_key_version, purpose, request_id, code_hash, expires_at) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7)",
     )
     .bind(encryption.is_none().then_some(email))
     .bind(&blind_index)
     .bind(encryption.map(|encryption| i16::from(encryption.active_version())))
+    .bind(purpose.as_str())
+    .bind(request_id)
     .bind(code_hash)
     .bind(expires_at)
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
 
+    tx.commit().await?;
+    Ok(request_id)
+}
+
+/// Mark a code usable only after the mail provider accepted its envelope.
+pub async fn mark_email_code_delivered(pool: &PgPool, request_id: uuid::Uuid) -> AppResult<()> {
+    sqlx::query(
+        "UPDATE identity.email_codes SET delivery_accepted_at = now() \
+         WHERE request_id = $1 AND used_at IS NULL",
+    )
+    .bind(request_id)
+    .execute(pool)
+    .await?;
     Ok(())
 }
 
 /// Exhaust one generated code after outbound delivery fails.
-pub async fn invalidate_email_code(pool: &PgPool, code_hash: &str) -> AppResult<()> {
+pub async fn invalidate_email_code(pool: &PgPool, request_id: uuid::Uuid) -> AppResult<()> {
     sqlx::query(
-        "UPDATE identity.email_codes SET attempts = 99 \
-         WHERE code_hash = $1 AND expires_at > now()",
+        "UPDATE identity.email_codes SET used_at = now(), attempts = 99 \
+         WHERE request_id = $1 AND used_at IS NULL",
     )
-    .bind(code_hash)
+    .bind(request_id)
     .execute(pool)
     .await?;
     Ok(())
 }
 
-/// Look up the most recent live code for `email` (not expired & not exhausted).
-pub async fn find_email_code(
-    pool: &PgPool,
+/// Lock the newest live code matching one email and optional purpose.
+async fn lock_email_code_tx(
+    connection: &mut PgConnection,
     encryption: Option<&EmailEncryption>,
     email: &str,
-) -> AppResult<Option<EmailCodeRow>> {
+    purpose: Option<CodePurpose>,
+) -> AppResult<EmailCodeRow> {
     let blind_index = encryption.map(|encryption| encryption.blind_index(email));
-    let row = sqlx::query_as::<_, EmailCodeRow>(
-        "SELECT $1::text AS email, code_hash, expires_at, attempts \
+    let purpose_filter = purpose.map(CodePurpose::as_str);
+    sqlx::query_as::<_, EmailCodeRow>(
+        "SELECT id, purpose, code_hash, attempts \
          FROM identity.email_codes \
          WHERE (email = $1 OR email_blind_index = $2) \
-           AND expires_at > now() AND attempts < 5 \
-         ORDER BY created_at DESC LIMIT 1",
+           AND expires_at > now() AND used_at IS NULL \
+           AND delivery_accepted_at IS NOT NULL \
+           AND (($3::text IS NULL AND purpose IN ('login', 'registration')) OR purpose = $3) \
+         ORDER BY created_at DESC, id DESC LIMIT 1 FOR UPDATE",
     )
     .bind(email)
-    .bind(&blind_index)
-    .fetch_optional(pool)
-    .await?;
-    Ok(row)
+    .bind(blind_index)
+    .bind(purpose_filter)
+    .fetch_optional(connection)
+    .await?
+    .ok_or_else(|| crate::error::IdentityError::CodeExpired.into())
 }
 
-/// Bump the attempt counter for the active code of `email`.
-pub async fn increment_code_attempts(
+/// Lock and consume one purpose-compatible code exactly once.
+pub async fn consume_email_code(
     pool: &PgPool,
     encryption: Option<&EmailEncryption>,
     email: &str,
-) -> AppResult<()> {
-    let blind_index = encryption.map(|encryption| encryption.blind_index(email));
+    purpose: Option<CodePurpose>,
+    attempted_code: &str,
+) -> AppResult<CodePurpose> {
+    let mut tx = pool.begin().await?;
+    let row = lock_email_code_tx(&mut tx, encryption, email, purpose).await?;
+    if row.attempts >= 5 {
+        return Err(crate::error::IdentityError::CodeExhausted.into());
+    }
+    if !verify_code(attempted_code, &row.code_hash) {
+        sqlx::query("UPDATE identity.email_codes SET attempts = attempts + 1 WHERE id = $1")
+            .bind(row.id)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        return Err(crate::error::IdentityError::InvalidCode.into());
+    }
     sqlx::query(
-        "UPDATE identity.email_codes \
-         SET attempts = attempts + 1 \
-         WHERE (email = $1 OR email_blind_index = $2) \
-           AND expires_at > now() AND attempts < 5",
+        "UPDATE identity.email_codes SET attempts = attempts + 1, used_at = now() WHERE id = $1",
+    )
+    .bind(row.id)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    CodePurpose::from_stored(&row.purpose)
+        .ok_or_else(|| AppError::Internal(anyhow::anyhow!("invalid persisted email code purpose")))
+}
+
+/// Consume a recent-auth code and mark the same active session in one transaction.
+pub async fn consume_recent_auth_code(
+    pool: &PgPool,
+    encryption: Option<&EmailEncryption>,
+    account_id: i64,
+    session_id: i64,
+    email: &str,
+    attempted_code: &str,
+) -> AppResult<DateTime<Utc>> {
+    let blind_index = encryption.map(|encryption| encryption.blind_index(email));
+    let mut tx = pool.begin().await?;
+    let session_exists: Option<i64> = sqlx::query_scalar(
+        "SELECT id FROM identity.sessions \
+         WHERE id = $1 AND account_id = $2 AND revoked_at IS NULL AND expires_at > now() \
+         FOR UPDATE",
+    )
+    .bind(session_id)
+    .bind(account_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    if session_exists.is_none() {
+        return Err(AppError::RecentAuthRequired);
+    }
+    let row = sqlx::query_as::<_, EmailCodeRow>(
+        "SELECT id, purpose, code_hash, attempts FROM identity.email_codes \
+         WHERE (email = $1 OR email_blind_index = $2) AND purpose = 'recent_auth' \
+           AND expires_at > now() AND used_at IS NULL \
+           AND delivery_accepted_at IS NOT NULL \
+         ORDER BY created_at DESC, id DESC LIMIT 1 FOR UPDATE",
     )
     .bind(email)
     .bind(&blind_index)
-    .execute(pool)
+    .fetch_optional(&mut *tx)
     .await?;
-    Ok(())
+    let row = row.ok_or(crate::error::IdentityError::CodeExpired)?;
+    if row.attempts >= 5 {
+        return Err(crate::error::IdentityError::CodeExhausted.into());
+    }
+    if !verify_code(attempted_code, &row.code_hash) {
+        sqlx::query("UPDATE identity.email_codes SET attempts = attempts + 1 WHERE id = $1")
+            .bind(row.id)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        return Err(crate::error::IdentityError::InvalidCode.into());
+    }
+    sqlx::query(
+        "UPDATE identity.email_codes SET attempts = attempts + 1, used_at = now() WHERE id = $1",
+    )
+    .bind(row.id)
+    .execute(&mut *tx)
+    .await?;
+    let authenticated_at: DateTime<Utc> = sqlx::query_scalar(
+        "UPDATE identity.sessions SET recent_authenticated_at = now(), \
+                recent_auth_method = 'email_code', recent_auth_credential_version = NULL \
+         WHERE id = $1 RETURNING recent_authenticated_at",
+    )
+    .bind(session_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(authenticated_at)
 }
 
 // ---------------------------------------------------------------------------
 // accounts
 // ---------------------------------------------------------------------------
 
-/// Insert a new account row.  If `handle` is `None` it is derived from the
-/// email prefix; if the handle collides a random 4-digit suffix is appended
-/// (up to 3 retries).
-pub async fn insert_account(
+/// Atomically consume a registration code and persist exactly the selected public handle.
+#[allow(clippy::too_many_arguments)] // reason: registration binds proof, encrypted identity fields, chosen handle, and optional password in one transaction
+pub async fn register_account_with_code(
     pool: &PgPool,
     encryption: Option<&EmailEncryption>,
     email: &str,
-    handle: Option<&str>,
+    purpose: Option<CodePurpose>,
+    attempted_code: &str,
+    handle: &str,
+    password_hash: Option<&str>,
 ) -> AppResult<AccountRow> {
-    let base = handle
-        .map(|h| h.to_string())
-        .unwrap_or_else(|| email.split('@').next().unwrap_or("user").to_string());
-
-    let mut attempts = 0;
-    loop {
-        let h = if attempts == 0 {
-            base.clone()
-        } else {
-            let suffix: u16 = {
-                use ring::rand::{SecureRandom, SystemRandom};
-                let rng = SystemRandom::new();
-                let mut buf = [0u8; 2];
-                rng.fill(&mut buf).expect("CSPRNG");
-                u16::from_be_bytes(buf) % 10000
-            };
-            format!("{base}{suffix:04}")
-        };
-
-        let ciphertext = encryption
-            .map(|encryption| encryption.encrypt(email))
-            .transpose()
-            .map_err(AppError::Internal)?;
-        let blind_index = encryption.map(|encryption| encryption.blind_index(email));
-        let result = sqlx::query_as::<_, StoredAccountRow>(
-            "INSERT INTO identity.accounts \
-             (email, email_ciphertext, email_key_version, email_blind_index, \
-              password_email_blind, handle, email_verified_at) \
-             VALUES ($1, $2, $3, $4, $4, $5, now()) \
-             ON CONFLICT (handle) DO NOTHING \
-             RETURNING id, email::text AS email, email_ciphertext, \
-                       handle, avatar_url, role::text, status::text, trust_level, created_at",
-        )
-        .bind(encryption.is_none().then_some(email))
-        .bind(ciphertext)
-        .bind(encryption.map(|encryption| i16::from(encryption.active_version())))
-        .bind(blind_index)
-        .bind(&h)
-        .fetch_optional(pool)
-        .await?;
-
-        if let Some(row) = result {
-            return row.decrypt(encryption);
-        }
-
-        attempts += 1;
-        if attempts > 3 {
-            return Err(crate::error::IdentityError::HandleTaken.into());
-        }
+    let ciphertext = encryption
+        .map(|encryption| encryption.encrypt(email))
+        .transpose()
+        .map_err(AppError::Internal)?;
+    let blind_index = encryption.map(|encryption| encryption.blind_index(email));
+    let mut tx = pool.begin().await?;
+    let code = lock_email_code_tx(&mut tx, encryption, email, purpose).await?;
+    if code.attempts >= 5 {
+        return Err(crate::error::IdentityError::CodeExhausted.into());
     }
+    if !verify_code(attempted_code, &code.code_hash) {
+        sqlx::query("UPDATE identity.email_codes SET attempts = attempts + 1 WHERE id = $1")
+            .bind(code.id)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        return Err(crate::error::IdentityError::InvalidCode.into());
+    }
+    let code_purpose = CodePurpose::from_stored(&code.purpose).ok_or_else(|| {
+        AppError::Internal(anyhow::anyhow!("invalid persisted email code purpose"))
+    })?;
+    if code_purpose != CodePurpose::Registration {
+        sqlx::query(
+            "UPDATE identity.email_codes SET attempts = attempts + 1, used_at = now() \
+             WHERE id = $1",
+        )
+        .bind(code.id)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        return if code_purpose == CodePurpose::Login {
+            Err(AppError::Conflict("account state changed; request a new code".into()))
+        } else {
+            Err(crate::error::IdentityError::InvalidCode.into())
+        };
+    }
+    let result = sqlx::query_as::<_, StoredAccountRow>(
+        "INSERT INTO identity.accounts \
+         (email, email_ciphertext, email_key_version, email_blind_index, \
+          password_email_blind, handle, password_hash, email_verified_at) \
+         VALUES ($1, $2, $3, $4, $4, $5, $6, now()) \
+         ON CONFLICT (handle) DO NOTHING \
+         RETURNING id, email::text AS email, email_ciphertext, \
+                   handle, avatar_url, role::text, status::text, trust_level, password_hash, \
+                   created_at",
+    )
+    .bind(encryption.is_none().then_some(email))
+    .bind(ciphertext)
+    .bind(encryption.map(|encryption| i16::from(encryption.active_version())))
+    .bind(blind_index)
+    .bind(handle)
+    .bind(password_hash)
+    .fetch_optional(&mut *tx)
+    .await;
+    let result = match result {
+        Ok(result) => result,
+        Err(error)
+            if error.as_database_error().is_some_and(|database| database.is_unique_violation()) =>
+        {
+            return Err(AppError::Conflict("account is already registered".into()));
+        }
+        Err(error) => return Err(error.into()),
+    };
+    let row = result.ok_or(crate::error::IdentityError::HandleTaken)?;
+    sqlx::query(
+        "UPDATE identity.email_codes SET attempts = attempts + 1, used_at = now() WHERE id = $1",
+    )
+    .bind(code.id)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "UPDATE identity.account_onboarding SET accepted_terms_version = NULL, \
+             accepted_at = NULL, completed_at = NULL, updated_at = now() \
+         WHERE account_id = $1",
+    )
+    .bind(row.id)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    row.decrypt(encryption)
 }
 
 /// Provision an unverified account that must still prove campus mailbox ownership.
@@ -257,9 +405,16 @@ pub async fn insert_invited_account(
     .bind(handle)
     .bind(role)
     .bind(invited_by)
-    .fetch_optional(tx)
+    .fetch_optional(&mut *tx)
     .await?
     .ok_or_else(|| AppError::Conflict("email or handle is already registered".into()))?;
+    sqlx::query(
+        "UPDATE identity.account_onboarding SET accepted_terms_version = NULL, \
+             accepted_at = NULL, completed_at = NULL, updated_at = now() WHERE account_id = $1",
+    )
+    .bind(row.id)
+    .execute(&mut *tx)
+    .await?;
     row.decrypt(encryption)
 }
 
@@ -284,7 +439,7 @@ pub async fn ensure_invitation_valid(pool: &PgPool, account_id: i64) -> AppResul
     let is_valid: bool = sqlx::query_scalar(
         "SELECT invited_at IS NULL OR email_verified_at IS NOT NULL \
                 OR invitation_expires_at > now() \
-         FROM identity.accounts WHERE id = $1",
+         FROM identity.accounts WHERE id = $1 AND status <> 'purged'",
     )
     .bind(account_id)
     .fetch_optional(pool)
@@ -386,7 +541,7 @@ pub async fn find_account_by_id(
     let row = sqlx::query_as::<_, StoredAccountRow>(
         "SELECT id, email::text AS email, email_ciphertext, handle, \
                 avatar_url, role::text, status::text, trust_level, password_hash, created_at \
-         FROM identity.accounts WHERE id = $1",
+         FROM identity.accounts WHERE id = $1 AND status <> 'purged'",
     )
     .bind(id)
     .fetch_optional(pool)
@@ -394,45 +549,25 @@ pub async fn find_account_by_id(
     row.map(|row| row.decrypt(encryption)).transpose()
 }
 
-/// Partial update: handle and/or avatar_url. Returns the updated row.
+/// Update the public handle while profile images remain media-owned assets.
 pub async fn update_account(
     pool: &PgPool,
     encryption: Option<&EmailEncryption>,
     id: i64,
     handle: Option<&str>,
-    avatar_url: Option<&str>,
 ) -> AppResult<AccountRow> {
-    // We build a minimal dynamic UPDATE so unused fields stay untouched.
-    let mut set = Vec::new();
-    let mut idx = 0u32;
-
-    if let Some(h) = handle {
-        idx += 1;
-        set.push((format!("handle = ${idx}"), h.to_string()));
-    }
-    if let Some(a) = avatar_url {
-        idx += 1;
-        set.push((format!("avatar_url = ${idx}"), a.to_string()));
-    }
-    if set.is_empty() {
+    let Some(handle) = handle else {
         return find_account_by_id(pool, encryption, id).await?.ok_or(shared::AppError::NotFound);
-    }
-
-    // Positional: parameters come from set, then id as last. `updated_at` is set
-    // to the SQL `now()` function directly — it must not be a bound parameter,
-    // as the text "now()" is not a valid timestamptz literal.
-    let mut sql = String::from("UPDATE identity.accounts SET ");
-    let parts: Vec<&str> = set.iter().map(|(c, _)| c.as_str()).collect();
-    sql.push_str(&parts.join(", "));
-    sql.push_str(", updated_at = now()");
-    idx += 1;
-    sql.push_str(&format!(" WHERE id = ${idx} RETURNING id, email::text AS email, email_ciphertext, handle, avatar_url, role::text, status::text, trust_level, created_at"));
-
-    let mut q = sqlx::query_as::<_, StoredAccountRow>(&sql);
-    for (_, val) in &set {
-        q = q.bind(val);
-    }
-    let row = q.bind(id).fetch_one(pool).await?;
+    };
+    let row = sqlx::query_as::<_, StoredAccountRow>(
+        "UPDATE identity.accounts SET handle = $1, updated_at = now() WHERE id = $2 \
+         RETURNING id, email::text AS email, email_ciphertext, handle, avatar_url, \
+                   role::text, status::text, trust_level, created_at",
+    )
+    .bind(handle)
+    .bind(id)
+    .fetch_one(pool)
+    .await?;
     row.decrypt(encryption)
 }
 
@@ -446,53 +581,368 @@ pub async fn insert_session(
     account_id: i64,
     refresh_hash: &str,
     expires_at: DateTime<Utc>,
-) -> AppResult<i64> {
-    let row: (i64,) = sqlx::query_as(
-        "INSERT INTO identity.sessions (account_id, refresh_hash, expires_at) \
-         VALUES ($1, $2, $3) RETURNING id",
+    user_agent: Option<&str>,
+) -> AppResult<(i64, i64)> {
+    let mut tx = pool.begin().await?;
+    let auth_version: i64 =
+        sqlx::query_scalar("SELECT auth_version FROM identity.accounts WHERE id = $1 FOR UPDATE")
+            .bind(account_id)
+            .fetch_one(&mut *tx)
+            .await?;
+    let family_id = uuid::Uuid::new_v4();
+    let session_id: i64 = sqlx::query_scalar(
+        "INSERT INTO identity.sessions \
+         (account_id, refresh_hash, family_id, user_agent, expires_at) \
+         VALUES ($1, $2, $3, $4, $5) RETURNING id",
     )
     .bind(account_id)
     .bind(refresh_hash)
+    .bind(family_id)
+    .bind(user_agent)
     .bind(expires_at)
-    .fetch_one(pool)
+    .fetch_one(&mut *tx)
     .await?;
-    Ok(row.0)
+    tx.commit().await?;
+    Ok((session_id, auth_version))
 }
 
-/// Look up a non-revoked, non-expired session by id + refresh hash.
-pub async fn find_session(
-    pool: &PgPool,
-    session_id: i64,
-    refresh_hash: &str,
-) -> AppResult<Option<SessionRow>> {
-    let row = sqlx::query_as::<_, SessionRow>(
-        "SELECT id, account_id, refresh_hash, expires_at, revoked_at \
-         FROM identity.sessions \
-         WHERE id = $1 AND refresh_hash = $2 \
-           AND expires_at > now() AND revoked_at IS NULL",
+fn constant_time_equal(left: &[u8], right: &[u8]) -> bool {
+    if left.len() != right.len() {
+        return false;
+    }
+    let mut difference = 0u8;
+    for (left_byte, right_byte) in left.iter().zip(right) {
+        difference |= left_byte ^ right_byte;
+    }
+    difference == 0
+}
+
+async fn invalidate_account_access(tx: &mut sqlx::PgConnection, account_id: i64) -> AppResult<()> {
+    sqlx::query(
+        "UPDATE identity.accounts \
+         SET auth_version = auth_version + 1, legacy_access_revoked_before = now() \
+         WHERE id = $1",
     )
-    .bind(session_id)
-    .bind(refresh_hash)
-    .fetch_optional(pool)
+    .bind(account_id)
+    .execute(&mut *tx)
     .await?;
-    Ok(row)
-}
-
-/// Soft-revoke a single session.
-pub async fn revoke_session(pool: &PgPool, session_id: i64) -> AppResult<()> {
-    sqlx::query("UPDATE identity.sessions SET revoked_at = now() WHERE id = $1")
-        .bind(session_id)
-        .execute(pool)
-        .await?;
     Ok(())
 }
 
-/// Soft-revoke every session belonging to an account.
-pub async fn revoke_all_sessions(pool: &PgPool, account_id: i64) -> AppResult<()> {
-    sqlx::query("UPDATE identity.sessions SET revoked_at = now() WHERE account_id = $1")
-        .bind(account_id)
-        .execute(pool)
+/// Atomically rotate a refresh token and detect replay of a consumed token.
+pub async fn rotate_session(
+    pool: &PgPool,
+    session_id: i64,
+    presented_hash: &str,
+    successor_hash: &str,
+    successor_expires_at: DateTime<Utc>,
+    user_agent: Option<&str>,
+) -> AppResult<RotatedSession> {
+    let mut tx = pool.begin().await?;
+    let row = sqlx::query_as::<_, SessionRow>(
+        "SELECT id, account_id, refresh_hash, expires_at, revoked_at, family_id, \
+                replaced_by_id, user_agent, created_at, last_used_at, \
+                recent_authenticated_at, recent_auth_method, recent_auth_credential_version \
+         FROM identity.sessions WHERE id = $1 FOR UPDATE",
+    )
+    .bind(session_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let row = row.ok_or(AppError::Unauthorized)?;
+
+    if !constant_time_equal(row.refresh_hash.as_bytes(), presented_hash.as_bytes()) {
+        return Err(AppError::Unauthorized);
+    }
+    if row.revoked_at.is_some() || row.replaced_by_id.is_some() {
+        sqlx::query(
+            "UPDATE identity.sessions SET revoked_at = COALESCE(revoked_at, now()) \
+             WHERE family_id = $1",
+        )
+        .bind(row.family_id)
+        .execute(&mut *tx)
         .await?;
+        invalidate_account_access(&mut tx, row.account_id).await?;
+        tx.commit().await?;
+        return Err(AppError::Unauthorized);
+    }
+    if row.expires_at <= Utc::now() {
+        sqlx::query("UPDATE identity.sessions SET revoked_at = now() WHERE id = $1")
+            .bind(row.id)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        return Err(AppError::Unauthorized);
+    }
+
+    let successor_id: i64 = sqlx::query_scalar(
+        "INSERT INTO identity.sessions \
+         (account_id, refresh_hash, family_id, rotated_from_id, user_agent, expires_at, \
+          recent_authenticated_at, recent_auth_method, recent_auth_credential_version) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id",
+    )
+    .bind(row.account_id)
+    .bind(successor_hash)
+    .bind(row.family_id)
+    .bind(row.id)
+    .bind(user_agent.or(row.user_agent.as_deref()))
+    .bind(successor_expires_at)
+    .bind(row.recent_authenticated_at)
+    .bind(row.recent_auth_method)
+    .bind(row.recent_auth_credential_version)
+    .fetch_one(&mut *tx)
+    .await?;
+    sqlx::query(
+        "UPDATE identity.sessions \
+         SET revoked_at = now(), replaced_by_id = $2, last_used_at = now() WHERE id = $1",
+    )
+    .bind(row.id)
+    .bind(successor_id)
+    .execute(&mut *tx)
+    .await?;
+    let auth_version: i64 =
+        sqlx::query_scalar("SELECT auth_version FROM identity.accounts WHERE id = $1")
+            .bind(row.account_id)
+            .fetch_one(&mut *tx)
+            .await?;
+    tx.commit().await?;
+    Ok(RotatedSession { account_id: row.account_id, session_id: successor_id, auth_version })
+}
+
+/// Mark a password-verified active session as recently authenticated.
+pub async fn mark_recent_auth_password(
+    pool: &PgPool,
+    account_id: i64,
+    session_id: i64,
+    expected_credential_version: i64,
+) -> AppResult<DateTime<Utc>> {
+    let mut tx = pool.begin().await?;
+    let current_version: Option<i64> = sqlx::query_scalar(
+        "SELECT credential_version FROM identity.accounts \
+         WHERE id = $1 AND status = 'active' FOR SHARE",
+    )
+    .bind(account_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    if current_version != Some(expected_credential_version) {
+        return Err(crate::error::IdentityError::RecentAuthFailed.into());
+    }
+    let authenticated_at = sqlx::query_scalar(
+        "UPDATE identity.sessions SET recent_authenticated_at = now(), \
+                recent_auth_method = 'password', recent_auth_credential_version = $3 \
+         WHERE id = $1 AND account_id = $2 AND revoked_at IS NULL AND expires_at > now() \
+         RETURNING recent_authenticated_at",
+    )
+    .bind(session_id)
+    .bind(account_id)
+    .bind(expected_credential_version)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or(AppError::RecentAuthRequired)?;
+    tx.commit().await?;
+    Ok(authenticated_at)
+}
+
+/// Revoke a named session owned by an account.
+pub async fn revoke_account_session(
+    pool: &PgPool,
+    account_id: i64,
+    session_id: i64,
+) -> AppResult<bool> {
+    let mut tx = pool.begin().await?;
+    let family_id: Option<uuid::Uuid> = sqlx::query_scalar(
+        "SELECT family_id FROM identity.sessions \
+         WHERE id = $1 AND account_id = $2 FOR UPDATE",
+    )
+    .bind(session_id)
+    .bind(account_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some(family_id) = family_id else {
+        tx.rollback().await?;
+        return Ok(false);
+    };
+    sqlx::query(
+        "UPDATE identity.sessions SET revoked_at = COALESCE(revoked_at, now()) \
+         WHERE family_id = $1",
+    )
+    .bind(family_id)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(true)
+}
+
+/// Revoke all sessions and invalidate every outstanding access token.
+pub async fn revoke_all_sessions(pool: &PgPool, account_id: i64) -> AppResult<()> {
+    let mut tx = pool.begin().await?;
+    sqlx::query(
+        "UPDATE identity.sessions SET revoked_at = COALESCE(revoked_at, now()) \
+         WHERE account_id = $1",
+    )
+    .bind(account_id)
+    .execute(&mut *tx)
+    .await?;
+    invalidate_account_access(&mut tx, account_id).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Revoke all sessions except the current one while preserving its access token.
+pub async fn revoke_other_sessions(
+    pool: &PgPool,
+    account_id: i64,
+    current_session_id: i64,
+) -> AppResult<()> {
+    let mut tx = pool.begin().await?;
+    let current_family_id: uuid::Uuid = sqlx::query_scalar(
+        "SELECT family_id FROM identity.sessions \
+         WHERE id = $1 AND account_id = $2 FOR UPDATE",
+    )
+    .bind(current_session_id)
+    .bind(account_id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or(AppError::Unauthorized)?;
+    sqlx::query(
+        "UPDATE identity.sessions SET revoked_at = COALESCE(revoked_at, now()) \
+         WHERE account_id = $1 AND family_id <> $2",
+    )
+    .bind(account_id)
+    .bind(current_family_id)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query("UPDATE identity.accounts SET legacy_access_revoked_before = now() WHERE id = $1")
+        .bind(account_id)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// List live device sessions for an account, newest activity first.
+pub async fn list_sessions(
+    pool: &PgPool,
+    account_id: i64,
+    cursor: Option<i64>,
+    limit: i64,
+) -> AppResult<Vec<DeviceSessionRow>> {
+    let rows = sqlx::query_as::<_, DeviceSessionRow>(
+        "SELECT id, user_agent, created_at, last_used_at, expires_at \
+         FROM identity.sessions WHERE account_id = $1 AND revoked_at IS NULL \
+           AND expires_at > now() AND ($2::bigint IS NULL OR id < $2) \
+         ORDER BY id DESC LIMIT $3",
+    )
+    .bind(account_id)
+    .bind(cursor)
+    .bind(limit.clamp(1, 100) + 1)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+/// Atomically update a password and revoke all access, including legacy JWTs.
+pub async fn reset_password_and_revoke_all(
+    pool: &PgPool,
+    account_id: i64,
+    password_hash: &str,
+) -> AppResult<()> {
+    let mut tx = pool.begin().await?;
+    sqlx::query(
+        "UPDATE identity.accounts SET password_hash = $1, \
+                credential_version = credential_version + 1, auth_version = auth_version + 1, \
+                legacy_access_revoked_before = now() WHERE id = $2",
+    )
+    .bind(password_hash)
+    .bind(account_id)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "UPDATE identity.sessions SET revoked_at = COALESCE(revoked_at, now()) \
+         WHERE account_id = $1",
+    )
+    .bind(account_id)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Update a password and preserve only the identified current session.
+pub async fn change_password_preserving_session(
+    pool: &PgPool,
+    account_id: i64,
+    current_session_id: Option<i64>,
+    expected_credential_version: i64,
+    password_hash: &str,
+) -> AppResult<()> {
+    let mut tx = pool.begin().await?;
+    let current_credential_version: Option<i64> = sqlx::query_scalar(
+        "SELECT credential_version FROM identity.accounts WHERE id = $1 FOR UPDATE",
+    )
+    .bind(account_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    if current_credential_version != Some(expected_credential_version) {
+        return Err(AppError::Conflict(
+            "credentials changed; verify the current password again".into(),
+        ));
+    }
+    if let Some(session_id) = current_session_id {
+        let current_family_id: uuid::Uuid = sqlx::query_scalar(
+            "SELECT family_id FROM identity.sessions \
+             WHERE id = $1 AND account_id = $2 FOR UPDATE",
+        )
+        .bind(session_id)
+        .bind(account_id)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or(AppError::Unauthorized)?;
+        sqlx::query(
+            "UPDATE identity.accounts SET password_hash = $1, \
+                    credential_version = credential_version + 1, \
+                    legacy_access_revoked_before = now() WHERE id = $2",
+        )
+        .bind(password_hash)
+        .bind(account_id)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "UPDATE identity.sessions SET recent_authenticated_at = NULL, \
+                 recent_auth_method = NULL, recent_auth_credential_version = NULL \
+             WHERE account_id = $1 AND family_id = $2",
+        )
+        .bind(account_id)
+        .bind(current_family_id)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "UPDATE identity.sessions SET revoked_at = COALESCE(revoked_at, now()) \
+             WHERE account_id = $1 AND family_id <> $2",
+        )
+        .bind(account_id)
+        .bind(current_family_id)
+        .execute(&mut *tx)
+        .await?;
+    } else {
+        sqlx::query(
+            "UPDATE identity.accounts SET password_hash = $1, \
+                    credential_version = credential_version + 1, \
+                    auth_version = auth_version + 1, legacy_access_revoked_before = now() \
+             WHERE id = $2",
+        )
+        .bind(password_hash)
+        .bind(account_id)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "UPDATE identity.sessions SET revoked_at = COALESCE(revoked_at, now()) \
+             WHERE account_id = $1",
+        )
+        .bind(account_id)
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
     Ok(())
 }
 
@@ -534,11 +984,14 @@ pub async fn insert_account_key(pool: &PgPool, account_id: i64, public_key: &str
 
 /// Update (or set) the password hash for an account.
 pub async fn update_password_hash(pool: &PgPool, account_id: i64, hash: &str) -> AppResult<()> {
-    sqlx::query("UPDATE identity.accounts SET password_hash = $1 WHERE id = $2")
-        .bind(hash)
-        .bind(account_id)
-        .execute(pool)
-        .await?;
+    sqlx::query(
+        "UPDATE identity.accounts SET password_hash = $1, \
+             credential_version = credential_version + 1 WHERE id = $2",
+    )
+    .bind(hash)
+    .bind(account_id)
+    .execute(pool)
+    .await?;
     Ok(())
 }
 
@@ -573,6 +1026,21 @@ pub async fn find_password_hash_by_account_id(
         .await?
         .flatten();
     Ok(hash)
+}
+
+/// Return the password hash and credential epoch captured before expensive verification.
+pub async fn find_password_state_by_account_id(
+    pool: &PgPool,
+    account_id: i64,
+) -> AppResult<Option<(String, i64)>> {
+    let state = sqlx::query_as(
+        "SELECT password_hash, credential_version FROM identity.accounts \
+         WHERE id = $1 AND password_hash IS NOT NULL",
+    )
+    .bind(account_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(state)
 }
 
 /// Encrypt legacy plaintext emails and clear their plaintext columns before serving traffic.

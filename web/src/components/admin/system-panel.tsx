@@ -1,17 +1,23 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { DatabaseZap, RefreshCcw, Settings2 } from "lucide-react";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { AlertTriangle, DatabaseZap, RefreshCcw, Settings2 } from "lucide-react";
 import * as React from "react";
 import { toast } from "sonner";
 
-import { AdminSectionHeader, ReasonDialog } from "@/components/admin/admin-primitives";
+import {
+  AdminSectionHeader,
+  AdminStatusBadge,
+  ReasonDialog,
+} from "@/components/admin/admin-primitives";
 import { EmptyState, ErrorState, LoadingState } from "@/components/common/states";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { api } from "@/lib/api/endpoints";
+import type { NotificationOutboxEvent } from "@/lib/api/types";
+import { formatUnixTime } from "@/lib/format";
 
-type JobKind = "selection" | "reviews" | "forum";
+type JobKind = "selection" | "courses" | "reviews" | "forum";
 
 function SettingsPanel() {
   const queryClient = useQueryClient();
@@ -87,6 +93,7 @@ function JobsPanel() {
   const job = useMutation({
     mutationFn: ({ kind, reason }: { kind: JobKind; reason: string }) => {
       if (kind === "selection") return api.triggerSelectionSync(reason);
+      if (kind === "courses") return api.reindexCourses(reason);
       if (kind === "reviews") return api.reindexReviews(reason);
       return api.reindexForum(reason);
     },
@@ -98,6 +105,7 @@ function JobsPanel() {
   });
   const jobs = [
     { kind: "selection" as const, title: "选课数据同步", description: "从一系统镜像选课目录。", icon: DatabaseZap },
+    { kind: "courses" as const, title: "课程索引重建", description: "重建 Meilisearch course documents。", icon: RefreshCcw },
     { kind: "reviews" as const, title: "点评索引重建", description: "重建 Meilisearch reviews 索引。", icon: RefreshCcw },
     { kind: "forum" as const, title: "论坛索引重建", description: "重建 Meilisearch forum 索引。", icon: RefreshCcw },
   ];
@@ -106,7 +114,7 @@ function JobsPanel() {
   return (
     <div className="space-y-3">
       <p className="text-xs text-muted-foreground">当前接口只返回 202，没有持久任务 ID、进度、失败日志或安全重试状态。确认仅表示已提交，不表示已完成。</p>
-      <div className="grid gap-3 md:grid-cols-3">
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
         {jobs.map((item) => (
           <Card key={item.kind} className="rounded-xl">
             <CardHeader>
@@ -132,6 +140,85 @@ function JobsPanel() {
   );
 }
 
+function NotificationDeadLetterPanel() {
+  const queryClient = useQueryClient();
+  const [selected, setSelected] = React.useState<NotificationOutboxEvent | null>(null);
+  const events = useInfiniteQuery({
+    queryKey: ["admin", "notification-outbox", "dead"],
+    queryFn: ({ pageParam }) => api.adminNotificationOutbox("dead", pageParam),
+    initialPageParam: null as string | null,
+    getNextPageParam: (page) => page.hasMore ? page.nextCursor ?? undefined : undefined,
+  });
+  const retry = useMutation({
+    mutationFn: ({ event, reason }: { event: NotificationOutboxEvent; reason: string }) =>
+      api.retryAdminNotificationOutbox(event.id, reason),
+    onSuccess: async () => {
+      toast.success("通知任务已重新排队");
+      setSelected(null);
+      await queryClient.invalidateQueries({ queryKey: ["admin", "notification-outbox"] });
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : "重新排队失败"),
+  });
+  const items = events.data?.pages.flatMap((page) => page.items ?? []) ?? [];
+
+  return (
+    <div className="space-y-3">
+      <p className="text-xs text-muted-foreground">
+        系统已自动指数退避重试；这里只显示达到上限的任务。重新排队不会展示或允许修改私密通知载荷。
+      </p>
+      {events.isLoading ? <LoadingState label="加载通知失败队列" /> : null}
+      {events.isError ? (
+        <ErrorState error={events.error} onRetry={() => void events.refetch()} />
+      ) : null}
+      {!events.isLoading && !events.isError && items.length === 0 ? (
+        <EmptyState title="没有停止重试的通知任务" />
+      ) : null}
+      {items.map((event) => (
+        <Card key={event.id}>
+          <CardContent className="flex flex-col gap-3 p-4 md:flex-row md:items-center">
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <p className="font-medium">{event.eventType}</p>
+                <AdminStatusBadge value={event.state} />
+              </div>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {event.topic} · 收件账号 {event.recipientAccountId} · 尝试 {event.attempts}/{event.maxAttempts}
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                错误码 {event.lastErrorCode ?? "unknown"} · 停止于 {formatUnixTime(event.deadAt ?? event.updatedAt)}
+              </p>
+            </div>
+            <Button type="button" variant="outline" onClick={() => setSelected(event)}>
+              说明原因并重试
+            </Button>
+          </CardContent>
+        </Card>
+      ))}
+      {events.hasNextPage ? (
+        <div className="flex justify-center">
+          <Button
+            type="button"
+            variant="outline"
+            disabled={events.isFetchingNextPage}
+            onClick={() => void events.fetchNextPage()}
+          >
+            {events.isFetchingNextPage ? "加载中…" : "加载更多"}
+          </Button>
+        </div>
+      ) : null}
+      <ReasonDialog
+        open={Boolean(selected)}
+        onOpenChange={(open) => !open && setSelected(null)}
+        title={`重试通知任务 ${selected?.id ?? ""}`}
+        description="请先确认依赖服务已经恢复。操作原因和任务元数据会进入不可变审计记录。"
+        confirmLabel="重新排队"
+        isPending={retry.isPending}
+        onConfirm={(reason) => selected && retry.mutate({ event: selected, reason })}
+      />
+    </div>
+  );
+}
+
 export function SystemPanel({ canManageSettings, canRunJobs }: { canManageSettings: boolean; canRunJobs: boolean }) {
   return (
     <div className="space-y-6">
@@ -146,10 +233,18 @@ export function SystemPanel({ canManageSettings, canRunJobs }: { canManageSettin
         </section>
       ) : null}
       {canRunJobs ? (
-        <section className="space-y-3" aria-labelledby="platform-jobs-heading">
-          <h3 id="platform-jobs-heading" className="font-semibold">运维任务</h3>
-          <JobsPanel />
-        </section>
+        <>
+          <section className="space-y-3" aria-labelledby="notification-dead-letter-heading">
+            <h3 id="notification-dead-letter-heading" className="flex items-center gap-2 font-semibold">
+              <AlertTriangle className="size-4 text-primary" />通知失败队列
+            </h3>
+            <NotificationDeadLetterPanel />
+          </section>
+          <section className="space-y-3" aria-labelledby="platform-jobs-heading">
+            <h3 id="platform-jobs-heading" className="font-semibold">运维任务</h3>
+            <JobsPanel />
+          </section>
+        </>
       ) : null}
     </div>
   );

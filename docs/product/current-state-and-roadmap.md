@@ -6,7 +6,7 @@
 >
 > 负责人：Product owner、Platform maintainers
 >
-> 最近核验：2026-07-11，`origin/main@33584db`
+> 最近核验：2026-07-12，migrations `0053`–`0058`、owner-domain/media lease-fencing integration tests、Onebox TLS fixture 与 Web tests
 
 本盘点以当前源码、OpenAPI、migration 和 Web 为基线。它说明已经存在什么、哪里只有骨架、
 哪些界面承诺与实际行为不一致。后续 PR 改变这些结论时，必须在同一 PR 同步更新本文件的
@@ -21,6 +21,8 @@
 - canonical 1:1 私信、未读指针、双向发送阻断、单条举报和最小化后台证据。
 - capability RBAC、用户邀请、角色/禁言/封禁、会话撤销、多域审核、审计和管理 UI。
 - 论坛搜索候选由 PostgreSQL 重新验证可见性，索引可以全量重建。
+- 积分 ledger 有 signing intent、hash chain、数据库 append-only 防护；tip 与 escrow 状态机有
+  target/party 校验、事务锁和 CAS，Web 使用服务端返回的 exact signing bytes。
 
 这些基础降低了下一阶段成本，但不能掩盖用户主流程和语义仍未闭环。
 
@@ -28,55 +30,77 @@
 
 | 领域 | 状态 | 已验证问题 |
 |---|---|---|
-| 登录注册 | `Partial` | 后端密码接口存在，Web 只有混合验证码表单；验证码缺 purpose/真正一次性消费；密码变更未撤销旧会话；错误差异可枚举账号 |
-| 账号与会话 | `Partial` | 默认 handle 可能来自邮箱前缀；无 onboarding、设备中心、recent-auth、自助导出/停用/删除；Web refresh token 存 localStorage |
-| 社交图 | `Planned` | 无用户 follow 表、接口、计数或列表；现有 `following` 只是 board/thread subscription |
-| block/mute | `Partial` | `user_ignores` 同时承担单向隐藏与双向私信阻断，UI 却称完整屏蔽；资料、搜索和直接互动规则不一致 |
-| 个人资料 | `Partial` | 有公开 profile、内容列表和徽章；缺 display name、bio、banner、受控链接、关系数、隐私和 handle history；头像接受任意 URL |
-| 内容正确性 | `Partial` | 编辑没有复用创建校验，存在绕过敏感词/长度的风险；评论更新 SQL 返回列不一致；tags、subscription、poll/vote viewer state 和 read tracking 未接齐 |
-| Trust/板块权限 | `Partial` | TL2/TL3 promotion 缺 active-days；TL3 demotion 可一次降两级；board `is_locked/min_trust_to_post` 字段存在但发帖路径未执行 |
-| 创作体验 | `Partial` | Web 仍为 textarea + 纯文本；草稿 API/实现/前端不一致；无 Markdown、预览、autosave、附件和编辑冲突处理 |
-| Link preview/Onebox | `Partial` | 初始 host 有 allowlist，但 redirect 后不重验 host/私网 IP；response 先无界读取再按 byte 截 UTF-8，存在 SSRF、内存和 panic 风险 |
-| 媒体 | `Partial` | 后端 STS、回调和审核已存在；头像、帖子、评论、课评、私信没有 asset binding；缺缩略图、EXIF 清理、配额、孤儿回收和 CDN 访问策略；管理 UI 对 block 是否删除 OSS 的文案与后端相反 |
-| Feed | `Partial` | 首页有固定摘要、按列表位置伪造徽章和无行为的收藏/分享/筛选；缺真实 following feed 和明确 recommended 规则 |
-| 聚合搜索 | `Partial` | 后端/契约/Web 对 courses、reviews、threads 的 shape 和类型过滤不一致；论坛、课程、课评尚未形成稳定 typed federated search |
-| 通知 | `Partial` | 全部已读传空 body 而后端期待 ids；unread 参数被忽略；偏好 key 与事件类型不一致；无 target URL、全局角标和 Web SSE |
-| 公告 | `Partial` | 只有 CRUD 和首页标题；无状态、排期、受众、revision、seen/ack receipt 和未读全局弹窗 |
-| 私信 | `Partial` | 核心 1:1 可用；缺 DM policy、消息请求、archive/delete/recover、附件、搜索、会话 mute、实时与全局角标 |
-| 推广位 | `Planned` | 左侧推广卡硬编码；无后台模型、排期、素材、受众、审计和聚合效果指标 |
-| 徽章与认证 | `Partial` | 成就徽章后端存在，缺授予/撤销 UI；身份认证、特殊认证和角色标识尚未拆分 |
-| 治理 | `Partial` | 审核和制裁基础较强；缺当事人通知、申诉、冲突回避、账号生命周期、保留 worker 和高风险 recent-auth |
-| 运维 | `Partial` | 设置仍为 string key/value；任务只确认提交，无持久状态、进度、失败日志和重试；缺 SLO/恢复演练 |
-| 测试 | `Partial` | 后端 CI 有 lint/集成，Web 有 lint/type/build；无前端单元/浏览器 E2E/axe，许多契约与 UI 行为差异无法被 CI 捕获 |
+| 登录注册 | `Current` | purpose-bound 一次性 code、密码防枚举与 reset/change 撤销语义已完成；Web 已拆分密码、验证码、注册和找回流程，注册要求显式公开 handle |
+| 账号与会话 | `Partial` | session-bound access、refresh replay、防 stale-password recent-auth、focused onboarding、recovery-only credential、30 天停用/删除恢复、八域 owner export/purge、durable worker 与 Web 自助入口已完成；仍缺 versioned policy publish、handle history、legal-hold/备份/OSS 全闭环，refresh token 仍存 localStorage |
+| 社交图 | `Current` | 已有公开单向 follow、幂等接口、owner remove-follower、followers/following、relationship API 与 trigger 维护的准确计数；移除关注者不等于 block，第一阶段明确不做私密账号审批 |
+| block/mute | `Current` | mute 为单向私密 feed/通知过滤，block 为双向安全边界并原子移除双方 follow；profile、feed、通知、DM、回复与投票已接统一规则 |
+| 个人资料 | `Partial` | display name、bio、HTTPS website、clean OSS avatar/banner reference、owner 上传/状态恢复/绑定 UI、关系数和 profile/list/DM/discoverability/activity/mention 隐私已落地；Profile 提供 `canViewActivity` 私密状态，mention 按接收方 policy 批量授权；仍缺 handle history 和公开 media/likes tabs |
+| 内容正确性 | `Partial` | 主题/评论 canonical policy 和事务边界已完成；tags/exact filter、有效 subscription、poll/vote/bookmark viewer state、read tracking 与撤销互动已接齐并有 handler→DB 验证；draft 与已发布内容均使用 CAS version，revision/canonical 原子，revision history 使用层级授权、有界 cursor 和 batch media projection，DTO 返回服务端 author/moderation 权限；通知 side effect 已使用 durable outbox，仍缺显式 pending 与搜索/媒体等其余可靠投影 |
+| Trust/板块权限 | `Partial` | promotion 已检查 active-days，单次扫描至多升降一级；create-thread 在预检和写事务内执行 board lock/min-trust，`moderation.content` 只豁免这两个 gate；仍需确定 staff 被普通举报自动隐藏政策并把 trust policy 版本化 |
+| 创作体验 | `Partial` | 主题/评论已持久化显式 content format，Web 已接 CodeMirror 编辑/预览、安全 renderer、debounced 云端草稿和 clean OSS 图片插入；作者可编辑/软删除已发布内容，跨设备冲突保留本地输入并显式恢复；仍缺跨客户端 conformance |
+| Link preview/Onebox | `Partial` | HTTPS 抓取边界已有逐跳 allowlist/DNS/public-IP pin、禁用代理、精确 HTML MIME/UTF-8、流式 body 上限、HTML5 parser、规范化 URL、无远程预览图、版本化成功/失败 cache 和不访问公网的受控 TLS fixture；Web 尚未消费 `/onebox`，若未来展示预览图还需 media proxy |
+| 媒体 | `Partial` | 后端 STS、digest-only callback、DB fail-closed credential/storage limits、owner-only 状态、clean avatar/banner/thread/comment/推广 binding、Forum draft reference、durable 隔离删除、operations inventory 与测试已存在。通用 GC 只扫描 approval `cleaned_at` 已满 30 天且无 live reference/grace/operational hold 的 clean object；pending 不按年龄删除。GC 与账号 purge system enqueue 默认关闭，部署不等于启用，必须完成 breaking worker/API cutover、DB preflight、published Markdown 和 OSS 三项 reconciliation。课评/私信仍无 binding，且缺 scanner/缩略图/EXIF/CDN；本域 hold 仅 moderation/security operational retention，legal hold 仍待决 |
+| Feed | `Partial` | latest/hot/subscriptions/following 已拆分真实后端语义，following 基于 user_follows 并执行账号/内容/block/mute 过滤；列表已有 canonical 摘要与 viewer state，首页和论坛页均以明确“加载更多”控件消费稳定游标；仍缺透明的 recommended 规则 |
+| 聚合搜索 | `Partial` | courses/reviews/threads/users/boards/tags 已由独立 search domain 返回 typed、可跳转且回表重验的结果；type/limit、query+scope 绑定的有界 cursor、all→单类“查看更多”、局部失败保真、安全 canonical 字符区间高亮、保守拼写建议和 Web 综合页已生效；仍缺拼音/别名与可靠 outbox 更新 |
+| 通知 | `Partial` | 论坛/互动/关注/DM/成就/认证 producer 与业务事实同事务写 0054 outbox，consumer 有 lease/SKIP LOCKED、幂等 receipt、聚合、当前 privacy/prefs/content 与可撤销 source generation 重验、自动重试/dead-letter、理由化人工重试；target、Redis 多实例 SSE hint、账号/受限凭证分区 Web cache 已完成。治理通知继续使用同处置事务 private store；仍缺 digest delivery status/retry、dead-letter 告警/SLO 与外部渠道运营验证 |
+| 公告 | `Current` | 有状态、排期、受众、严重度、presentation、version/revision、seen/dismiss/ack receipt、全局未看弹窗、公告页和后台 revision history；匿名访客用 revision-scoped 本地 seen，登录用户以服务端 receipt 为准 |
+| 私信 | `Partial` | canonical 1:1、DM policy、单条陌生请求、incoming/sent 请求箱、accept/decline/withdraw/report、独立 unread/request 角标、幂等/限流/冷却、archive/delete/recover、搜索、mute、durable 多实例刷新提示和最小举报证据已接通；仍缺附件、request expiry、typing/presence 及 retention/legal-hold worker |
+| 推广位 | `Partial` | 左侧已由 API 返回明确标识的自营站内推广，具备 clean owned asset id、原子 asset binding/解绑 grace、状态、排期、受众、位置、优先级、独立 capability、审计和后台 UI；两小时无身份展示票据、50%/500ms 曝光门槛、点击补曝光、幂等日聚合、48 小时 receipt 清理及后台汇总/趋势已完成，仍缺匿名素材图交付 |
+| 徽章与认证 | `Partial` | 成就徽章、人工身份/特殊认证和实时角色标识已经拆分；成就具备独立 capability、versioned 受控定义、durable 自动幂等授予/mint、人工非 mint 授予、撤销/重新授予、append-only history、同事务审计、通知、后台 UI 与公开投影。人工认证具备 typed definition、可到期/撤销 grant、排期到期/撤销取消通知、私有 evidence reference、后台 UI 与安全公开投影；仍缺认证证据对象存储/复核政策 |
+| 治理 | `Partial` | 账号/论坛/课评处置已有当事人通知、30 天一次申诉、受限账号 purpose-bound access、拒绝 update/delete/truncate 的 append-only history、SQL 分页前 hierarchy/recusal、独立复核 capability 与 owner-domain 原子撤销/缩短；comment overturn 使用 thread→comment lock 并保留 media rebind；角色/suspend/强制注销和账号自助关闭已有 session-bound recent-auth，lifecycle worker 在 owner cleanup 前持久化不可逆 purge marker，以 UUID lease fence 等待 rollout-gated OSS 删除任务终态并可审计 requeue；仍缺 assignment/SLA、证据工作台、通用 legal hold/保留控制、Staff WebAuthn/MFA 和双人审批 |
+| 积分运营 | `Partial` | 用户侧 verify、内容打赏和 escrow 完整性已加固；持久化只读 reconcile、单并发/幂等执行、逐钱包漂移指标、独立 capability、审计和管理视图已接通；仍缺告警/SLO 与受审批 projection 重建，历史 constraint anomaly 需单独兼容策略 |
+| 运维 | `Partial` | 通知 outbox、account lifecycle/export 和 Media system deletion 都有持久状态、lease/退避、dead-letter inventory 及 capability + recent-auth + audit 的人工重试；Media general GC/history purge 仍受默认关闭的 rollout/policy flag 保护。其他设置仍为 string key/value，平台缺统一 operator UI/job center、告警、SLO 与恢复演练 |
+| 测试 | `Partial` | 后端 CI 有 lint/集成，Web 有 lint/type/build 与最小 Vitest/Testing Library/axe harness；仍无浏览器 E2E、完整前端覆盖，许多契约与 UI 行为差异无法被 CI 捕获 |
+
+Web shell 已采用路由级 lazy loading、可朗读 loading state、受控页面/操作反馈动画和
+`prefers-reduced-motion` 降级；这只建立了体验基础，不代表各业务页面已完成视觉与旅程验收。
 
 ## P0：先恢复正确性、安全与产品真实性
 
-1. 验证码增加 purpose、原子一次性消费和统一防枚举响应；密码重置/修改撤销其他会话。
-2. Web 拆分登录、注册、忘记/重置密码；提供明确密码登录并避免邮箱前缀成为公开 handle。
-3. 创建与编辑共享 canonical 内容验证/治理管线，修复评论更新 SQL 和草稿契约漂移。
-4. 修复 Onebox：每次 redirect 重验 scheme/host/DNS/private IP，流式限制 body，UTF-8 安全解析，
-   禁止未代理的远程预览图；Markdown 上线前覆盖 SSRF/redirect/body-size 测试。
-5. 修正 trust promotion/demotion，并在发主题时执行 board lock/min-trust；明确 staff 内容达到普通
-   举报阈值时自动隐藏还是升级复核，并为阈值与角色边界补测试。
-6. 接通 tags、tag filter、subscription、poll/vote/viewer state、read tracking 与撤销互动。
-7. 删除伪造等级/徽章/摘要和无行为按钮；界面只能展示后端真实能力。
-8. 修复通知 read/unread、事件偏好、target URL、导航角标和基本实时消费。
-9. 定义公告 revision/seen/ack，完成“该用户未看过公告”的全局提示/弹窗决策与实现。
-10. 停止持久化任意头像/UGC 外链，确定 OSS asset/clean/binding；修正 block 会永久删除对象的后台文案。
-11. 对齐聚合搜索 OpenAPI、Rust DTO、索引和 Web；所有公开结果重验权限与治理状态。
-12. 为上述身份、通知、内容、搜索和公告行为补 handler→DB 与前端关键旅程验证。
+1. 主题/评论 canonical policy、评论 SQL、引用约束、事务边界、versioned typed draft 与已发布内容
+   `contentVersion/expectedVersion`、通知 side-effect outbox 已完成；下一步补显式 pending 和搜索/媒体
+   等剩余 projection outbox。
+2. Onebox 的维护中 HTML5 parser、规范化 URL、版本化缓存和受控 HTTPS 网络 fixture 已完成；逐跳
+   scheme/allowlist/DNS/public-IP pin、禁用代理、精确 MIME/charset、流式 body 限制和禁用远程预览图
+   继续作为安全基线。下一步是在不自动请求正文中的任意链接前提下设计 Web opt-in 预览旅程；只有
+   产品决定展示图片时才引入 media proxy。
+3. Trust active-days/单步升降、board lock/min-trust、tags/filter/subscription/viewer/read/cancel 和
+   伪 UI 清理已完成；下一步明确 staff 内容达到普通举报阈值时自动隐藏还是升级复核，并将 trust
+   policy 版本化。
+4. typed 通知偏好、target、durable outbox、账号分区 Web cache 和 multi-instance SSE refresh 已对齐；
+   下一步接 dead-letter 告警/SLO 和 digest delivery status/retry。
+5. 公告 revision/seen/ack 和全局未看弹窗已完成；继续为公告受众、强制确认和保留期限形成运营政策。
+6. 任意头像 URL 已停写，avatar/banner/thread/comment 已完成上传、状态恢复和 clean binding UI；下一步
+   接课评/私信并完成 scanner/variants/CDN。后台只通过一次性审计同源代理预览，不展示 object
+   key/hash/vendor URL，并如实说明 block 会永久删除对象。
+7. 六类 typed 聚合搜索已补 query/scope 绑定 cursor、240 条窗口、all→单类续页、局部失败、安全高亮和
+   仅从已回表可见结果推导的保守拼写建议；下一步补可靠 outbox/reconciliation、拼音和别名。User discoverability、profile visibility、
+   block/mute 和账号状态继续作为服务端硬边界。
+8. 为上述身份、通知、内容、搜索和公告行为补 handler→DB 与前端关键旅程验证。
+9. credit 只读 reconcile job、指标和管理视图已完成；下一步接告警/SLO，并为确需重建的 wallet
+   projection 设计独立审批流程。历史 constraint anomaly 走单独兼容决策，不在 migration 中改写
+   ledger，也不提供 balance editor 或任意 ledger append。
 
 ## P1：形成完整社区闭环
 
-- 用户 follow graph、relationship API、粉丝/关注列表与准确计数。
-- 明确并拆分 follow、subscription、mute、block；实现 profile/activity/DM/discoverability 隐私。
-- display name、bio、banner、受控链接、handle history/cooldown 和 OSS 头像。
-- `plain_v1/markdown_v1` 契约、安全 renderer、编辑器、预览、autosave 与 OSS 图片。
-- latest/hot/subscription/following feed 和 typed 聚合搜索。
-- DM policy、消息请求、archive/delete/recover、附件与保留 worker。
-- 管理员推广位、认证/特殊徽章、typed settings、durable job center。
-- 当事人治理通知、申诉流程、账号导出/停用/删除/恢复。
-- notification/search/media/activity outbox 与 reconciliation，多实例实时广播。
+- 已完成用户 follow graph、relationship API、粉丝/关注列表、owner remove-follower、准确计数与公开账号
+  第一阶段状态机；私密账号审批若进入后续版本仍需独立产品决策和 pending 状态机。
+- Follow/subscription/mute/block 已拆分，profile/list/new-DM/discoverability/activity/mention 与账号搜索
+  隐私已实现；下一步补 likes/media activity tabs 和全站浏览器验证。
+- Display name、bio、banner、受控链接、OSS 头像 binding 与 retention-aware orphan GC 代码/测试已落地；
+  GC 仍需按 runbook 完成 rollout reconciliation 后逐环境启用。下一步补 handle history/cooldown、
+  scanner/variants。
+- `plain_v1/markdown_v1` 契约、安全 renderer、编辑器、预览、CAS autosave、已发布内容冲突恢复和
+  clean Forum 图片已完成；下一步补跨客户端 conformance corpus、scanner/variants 与真实浏览器旅程。
+- 现有 latest/hot/subscription/following feed 和 typed 搜索已补 Web 游标续页、安全 canonical 高亮与
+  保守拼写建议；下一步完成拼音/别名和可靠索引更新。
+- DM policy、单消息请求状态机、archive/delete/recover 已完成；下一步补 private attachment、request
+  expiry 与 retention/legal-hold worker。
+- 认证证据复核、typed settings 和统一 durable job center；推广仍需匿名 clean 素材交付。
+- 治理通知、申诉与账号导出/停用/删除/恢复已完成基础链路；purge 在 owner cleanup 前持久写不可逆
+  marker，并等待 Media durable deletion 达到可安全终止状态；耗尽任务可审计 requeue。下一步补 reviewer assignment/SLA/evidence access policy、legal hold、
+  统一 operator UI/job center 和 backup/OSS deletion rehearsal。
+- search/media/activity outbox 与 reconciliation；通知 outbox 与多实例实时刷新已经交付。
 - 对齐并验证现有 weekly digest 的 preference、投递状态、retry 和运营指标。
 
 ## P2：增长和高级社交
@@ -84,7 +108,8 @@
 - 有透明输入和安全过滤的 recommended feed、趋势与关注建议。
 - 独立短动态、repost/quote-post；不复用公共论坛隐私语义硬凑。
 - 私密账号审批、搜索个性化、digest 个性化、typing/presence 和 group DM。
-- 推广位效果分析、复杂 audience targeting 和更丰富的身份认证流程。
+- 推广位实验/归因政策、复杂 audience targeting 和更丰富的身份认证流程；基础匿名日聚合不扩展为
+  跨域个人画像。
 
 ## 依赖顺序
 
@@ -113,12 +138,13 @@ flowchart LR
 - 密码登录标识、毕业账号恢复和首次注册是否强制设置密码。
 - Markdown 支持的内容类型和历史纯文本兼容方式。
 - OSS private/public、签名 URL、审核前发布和媒体保留策略。
-- 推广位是否仅自营、身份认证代表什么、管理员恢复机制。
-- 数据导出、删除恢复窗、举报证据/审计/备份保留期。
+- 推广位是否仅自营、各认证类型的具体证据/复核/保留政策、管理员恢复机制。
+- 数据导出的字段/短期 artifact、30 天删除恢复窗已落地；仍需确认举报证据、审计、公共内容、OSS、
+  cache/log 和备份的具体保留期及 legal-hold 机制。
 
 ## 核验入口
 
 本盘点主要核对 `backend/crates/identity`、`forum`、`reviews`、`media`、`activity`、
-`governance`、`api/src/platform.rs`、`contract/openapi.yaml`、`web/src/pages`、
+`governance`、`platform`、`contract/openapi.yaml`、`web/src/pages`、
 `web/src/components`、`web/src/lib/api` 和 `.github/workflows`。不要把本文件当作 API 或 schema
 字段清单；对应细节仍以契约和 migration 为准。

@@ -19,6 +19,7 @@ pub struct FlagResolutionOutcome {
     pub flag: FlagRow,
     pub thread_id: i64,
     pub board_id: i64,
+    pub content_changed: bool,
 }
 
 #[derive(Debug, FromRow)]
@@ -26,8 +27,6 @@ struct FlagTargetRow {
     author_id: Option<i64>,
     thread_id: i64,
     board_id: i64,
-    can_reactivate: bool,
-    created_at: DateTime<Utc>,
     deleted_at: Option<DateTime<Utc>>,
     hidden_at: Option<DateTime<Utc>>,
 }
@@ -37,30 +36,68 @@ async fn lock_target(
     target_type: &str,
     target_id: i64,
 ) -> AppResult<FlagTargetRow> {
-    let query = match target_type {
-        "thread" => {
-            "SELECT author_id, id AS thread_id, board_id, \
-                    status = 'visible' AND archived_at IS NULL AS can_reactivate, \
-                    created_at, deleted_at, hidden_at \
-             FROM forum.threads WHERE id = $1 FOR UPDATE"
-        }
-        "comment" => {
-            "SELECT c.author_id, c.thread_id, t.board_id, \
-                    t.status = 'visible' AND t.deleted_at IS NULL \
-                      AND t.hidden_at IS NULL AND t.archived_at IS NULL AS can_reactivate, \
-                    c.created_at, \
-                    c.deleted_at, c.hidden_at \
-             FROM forum.comments c \
-             JOIN forum.threads t ON t.id = c.thread_id \
-             WHERE c.id = $1 FOR UPDATE OF c"
-        }
-        _ => return Err(AppError::BadRequest("postType must be thread/comment".into())),
-    };
-    sqlx::query_as(query)
+    if target_type == "thread" {
+        return sqlx::query_as(
+            "SELECT author_id, id AS thread_id, board_id, deleted_at, hidden_at \
+             FROM forum.threads WHERE id = $1 FOR UPDATE",
+        )
         .bind(target_id)
         .fetch_optional(connection)
         .await?
-        .ok_or(AppError::NotFound)
+        .ok_or(AppError::NotFound);
+    }
+    if target_type != "comment" {
+        return Err(AppError::BadRequest("postType must be thread/comment".into()));
+    }
+
+    let thread_id: i64 = sqlx::query_scalar("SELECT thread_id FROM forum.comments WHERE id = $1")
+        .bind(target_id)
+        .fetch_optional(&mut *connection)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    sqlx::query("SELECT id FROM forum.threads WHERE id = $1 FOR UPDATE")
+        .bind(thread_id)
+        .execute(&mut *connection)
+        .await?;
+    sqlx::query_as(
+        "SELECT comment.author_id, comment.thread_id, thread.board_id, \
+                comment.deleted_at, comment.hidden_at \
+         FROM forum.comments comment \
+         JOIN forum.threads thread ON thread.id = comment.thread_id \
+         WHERE comment.id = $1 AND comment.thread_id = $2 FOR UPDATE OF comment",
+    )
+    .bind(target_id)
+    .bind(thread_id)
+    .fetch_optional(connection)
+    .await?
+    .ok_or(AppError::NotFound)
+}
+
+async fn synchronize_target_activity(
+    connection: &mut PgConnection,
+    target_type: &str,
+    target_id: i64,
+    transition_at: DateTime<Utc>,
+) -> AppResult<()> {
+    match target_type {
+        "thread" => {
+            super::activity_projection::synchronize_thread_activity_subtree(
+                connection,
+                target_id,
+                transition_at,
+            )
+            .await
+        }
+        "comment" => {
+            super::activity_projection::synchronize_comment_activity(
+                connection,
+                target_id,
+                transition_at,
+            )
+            .await
+        }
+        _ => Err(AppError::BadRequest("postType must be thread/comment".into())),
+    }
 }
 
 /// Lock an open report and its target, returning the target author's account id.
@@ -152,20 +189,31 @@ pub async fn insert_flag(
             .bind(flag_id)
             .execute(&mut *connection)
             .await?;
-        activity::contributions::deactivate_contribution(
-            connection,
-            &format!("forum_{target_type}:{target_id}"),
-            hidden_at,
-        )
-        .await?;
-        super::votes::deactivate_target_vote_contributions(
-            connection,
-            target_type,
-            target_id,
-            hidden_at,
-        )
-        .await?;
+        synchronize_target_activity(connection, target_type, target_id, hidden_at).await?;
         super::boards::refresh_board_thread_counts(connection, &affected_board_ids).await?;
+        if let Some(author_id) = target.author_id {
+            let governance_event_id = governance::record_system_event_with_id_tx(
+                connection,
+                "forum.content.auto_hidden",
+                "forum_content",
+                &format!("{target_type}:{target_id}"),
+                "community report threshold reached",
+                Some(&serde_json::json!({ "threshold": 3.0 })),
+            )
+            .await?;
+            governance::notices::create_notice_tx(
+                connection,
+                author_id,
+                "content_restricted",
+                &format!("audit:{governance_event_id}:forum-auto-hide"),
+                Some(governance_event_id),
+                None,
+                if target_type == "thread" { "forum_thread" } else { "forum_comment" },
+                &target_id.to_string(),
+                "你的社区内容因举报阈值被自动隐藏，可在申诉中心查看并申请复核。",
+            )
+            .await?;
+        }
         return Ok(FlagInsertOutcome {
             auto_hidden: true,
             author_id: target.author_id,
@@ -272,6 +320,7 @@ pub async fn resolve_flag(
     .bind(flag.target_id)
     .fetch_one(&mut *connection)
     .await?;
+    let mut content_changed = false;
 
     if action == "uphold" {
         let statement = match flag.target_type.as_str() {
@@ -290,21 +339,22 @@ pub async fn resolve_flag(
             .bind(flag.target_id)
             .fetch_optional(&mut *connection)
             .await?;
-        activity::contributions::deactivate_contribution(
-            connection,
-            &format!("forum_{}:{}", flag.target_type, flag.target_id),
-            Utc::now(),
-        )
-        .await?;
-        super::votes::deactivate_target_vote_contributions(
-            connection,
-            &flag.target_type,
-            flag.target_id,
-            Utc::now(),
-        )
-        .await?;
+        content_changed = newly_deleted.is_some();
+        synchronize_target_activity(connection, &flag.target_type, flag.target_id, Utc::now())
+            .await?;
 
         if newly_deleted.is_some() {
+            let target_type = match flag.target_type.as_str() {
+                "thread" => media::attachments::ForumTargetType::Thread,
+                "comment" => media::attachments::ForumTargetType::Comment,
+                _ => return Err(AppError::Internal(anyhow::anyhow!("invalid flag target type"))),
+            };
+            media::attachments::detach_forum_asset_bindings(
+                connection,
+                target_type,
+                flag.target_id,
+            )
+            .await?;
             if flag.target_type == "comment" {
                 sqlx::query(
                     "UPDATE forum.threads SET reply_count = GREATEST(reply_count - 1, 0) \
@@ -353,31 +403,9 @@ pub async fn resolve_flag(
             .bind(auto_hidden_at)
             .fetch_optional(&mut *connection)
             .await?;
-        if unhidden.is_some() && target.deleted_at.is_none() && target.can_reactivate {
-            if let Some(author_id) = target.author_id {
-                activity::contributions::activate_contribution(
-                    connection,
-                    author_id,
-                    match flag.target_type.as_str() {
-                        "thread" => activity::contributions::ActivityKind::Thread,
-                        "comment" => activity::contributions::ActivityKind::Comment,
-                        _ => {
-                            return Err(AppError::Internal(anyhow::anyhow!(
-                                "invalid flag target type"
-                            )))
-                        }
-                    },
-                    &format!("forum_{}:{}", flag.target_type, flag.target_id),
-                    target.created_at,
-                )
+        if unhidden.is_some() {
+            synchronize_target_activity(connection, &flag.target_type, flag.target_id, Utc::now())
                 .await?;
-            }
-            super::votes::reactivate_target_vote_contributions(
-                connection,
-                &flag.target_type,
-                flag.target_id,
-            )
-            .await?;
         }
     }
 
@@ -408,5 +436,6 @@ pub async fn resolve_flag(
         flag: resolved_flag,
         thread_id: target.thread_id,
         board_id: target.board_id,
+        content_changed,
     })
 }

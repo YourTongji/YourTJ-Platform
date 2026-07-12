@@ -13,6 +13,7 @@ mod ignores;
 mod polls;
 mod profiles;
 mod read_tracking;
+mod relationships;
 mod subscriptions;
 mod tags;
 mod threads;
@@ -31,6 +32,7 @@ pub use ignores::*;
 pub use polls::*;
 pub use profiles::*;
 pub use read_tracking::*;
+pub use relationships::*;
 pub use subscriptions::*;
 pub use tags::*;
 pub use threads::*;
@@ -47,12 +49,21 @@ pub(crate) fn thread_to_dto(row: &crate::models::ThreadRowJoined) -> ThreadDto {
         board_id: row.board_id.to_string(),
         author_handle: row.author_handle.clone(),
         title: row.title.clone(),
+        body_excerpt: None,
+        content_version: row.content_version,
         reply_count: row.reply_count,
         vote_count: row.vote_count,
         hot_score: row.hot_score,
+        status: row.status.clone(),
         tags: vec![],
+        attachments: vec![],
         created_at: row.created_at.timestamp(),
         last_activity_at: row.last_activity_at.timestamp(),
+        viewer_vote: None,
+        is_bookmarked: false,
+        can_edit: false,
+        can_delete: false,
+        can_moderate: false,
         unread_count: None,
     }
 }
@@ -65,10 +76,13 @@ pub(crate) fn thread_to_detail_dto(row: &crate::models::ThreadRowJoinedFull) -> 
         author_id: row.author_id.to_string(),
         title: row.title.clone(),
         body: row.body.clone(),
+        content_format: crate::dto::ContentFormat::from_db(&row.content_format),
+        content_version: row.content_version,
         reply_count: row.reply_count,
         vote_count: row.vote_count,
         hot_score: row.hot_score,
         tags: vec![],
+        attachments: vec![],
         status: row.status.clone(),
         pinned_at: row.pinned_at.map(|v| v.timestamp()),
         pinned_globally: row.pinned_globally,
@@ -81,9 +95,14 @@ pub(crate) fn thread_to_detail_dto(row: &crate::models::ThreadRowJoinedFull) -> 
         created_at: row.created_at.timestamp(),
         last_activity_at: row.last_activity_at.timestamp(),
         solved_answer_id: row.solved_answer_id.map(|v| v.to_string()),
+        viewer_vote: None,
+        is_bookmarked: false,
         my_last_read_comment_id: None,
         my_subscription_level: None,
         poll: None,
+        can_edit: false,
+        can_delete: false,
+        can_moderate: false,
     }
 }
 
@@ -99,17 +118,29 @@ pub(crate) fn comment_to_dto(
         author_handle: row.author_handle.clone(),
         author_id: row.author_id.to_string(),
         body: row.body.clone(),
+        content_format: crate::dto::ContentFormat::from_db(&row.content_format),
+        content_version: row.content_version,
+        attachments: vec![],
         vote_count: row.vote_count,
+        viewer_vote: None,
+        is_bookmarked: false,
         is_deleted: row.deleted_at.is_some(),
         is_hidden: row.hidden_at.is_some(),
         edited_at: row.edited_at.map(|v| v.timestamp()),
         created_at: row.created_at.timestamp(),
         quoted_comment_id: row.quoted_comment_id.map(|v| v.to_string()),
         is_solved: Some(row.id) == solved_comment_id,
+        can_edit: false,
+        can_delete: false,
+        can_moderate: false,
     }
 }
 
-pub(crate) fn board_to_dto(row: &crate::models::BoardRow) -> BoardDto {
+pub(crate) fn board_to_dto(
+    row: &crate::models::BoardRow,
+    actor: Option<crate::repo::boards::BoardPostingActor>,
+) -> BoardDto {
+    let posting_restriction = crate::repo::boards::posting_restriction(row, actor);
     BoardDto {
         id: row.id.to_string(),
         slug: row.slug.clone(),
@@ -121,6 +152,8 @@ pub(crate) fn board_to_dto(row: &crate::models::BoardRow) -> BoardDto {
         min_trust_to_post: row.min_trust_to_post,
         is_qa: row.is_qa,
         thread_count: row.thread_count,
+        can_post: posting_restriction.is_none(),
+        posting_restriction: posting_restriction.map(|restriction| restriction.as_str().to_owned()),
     }
 }
 

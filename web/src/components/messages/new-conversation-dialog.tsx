@@ -13,32 +13,56 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import type { DmConversation } from "@/lib/api/types";
+import { idempotencyKey } from "@/lib/format";
 
 export function NewConversationDialog({
   canCreate,
+  initialHandle,
   isPending,
   error,
   onReset,
+  onDismiss,
   onCreate,
 }: {
   canCreate: boolean;
+  initialHandle?: string;
   isPending: boolean;
   error?: unknown;
   onReset: () => void;
-  onCreate: (handle: string) => Promise<DmConversation>;
+  onDismiss?: () => void;
+  onCreate: (handle: string, requestMessage: string, idempotencyKey: string) => Promise<DmConversation>;
 }) {
-  const [open, setOpen] = React.useState(false);
-  const [handle, setHandle] = React.useState("");
+  const [open, setOpen] = React.useState(Boolean(initialHandle));
+  const [handle, setHandle] = React.useState(initialHandle ?? "");
+  const [requestMessage, setRequestMessage] = React.useState("");
   const normalizedHandle = handle.trim();
-  const isValid = normalizedHandle.length >= 3 && normalizedHandle.length <= 30;
+  const normalizedMessage = requestMessage.trim();
+  const handleLength = [...normalizedHandle].length;
+  const messageLength = [...normalizedMessage].length;
+  const isValid = handleLength >= 3 && handleLength <= 30
+    && messageLength >= 1 && messageLength <= 1000;
+
+  React.useEffect(() => {
+    if (!initialHandle) return;
+    setHandle(initialHandle);
+    setOpen(true);
+    onReset();
+  }, [initialHandle, onReset]);
+
+  function closeDialog() {
+    setOpen(false);
+    onDismiss?.();
+  }
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
     if (!isValid) return;
     try {
-      await onCreate(normalizedHandle);
+      await onCreate(normalizedHandle, normalizedMessage, idempotencyKey("dm-request"));
       setHandle("");
+      setRequestMessage("");
       setOpen(false);
     } catch {
       // The mutation error remains visible in the dialog so the user can correct the handle.
@@ -51,6 +75,7 @@ export function NewConversationDialog({
       onOpenChange={(nextOpen) => {
         setOpen(nextOpen);
         if (nextOpen) onReset();
+        else onDismiss?.();
       }}
     >
       <DialogTrigger asChild>
@@ -63,7 +88,7 @@ export function NewConversationDialog({
           <DialogHeader>
             <DialogTitle>发起私信</DialogTitle>
             <DialogDescription>
-              输入对方的公开 handle。已屏蔽关系、被封禁账号或无效 handle 会由服务端拒绝。
+              若对方尚未关注你，这段附言会进入独立的消息请求；对方接受前你不能继续发送。
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-2 py-5">
@@ -78,18 +103,32 @@ export function NewConversationDialog({
               maxLength={30}
               aria-describedby={error ? "dm-recipient-error" : undefined}
             />
+            <Label htmlFor="dm-request-message">请求附言</Label>
+            <Textarea
+              id="dm-request-message"
+              value={requestMessage}
+              onChange={(event) => setRequestMessage(event.target.value)}
+              placeholder="说明来意，避免发送校园身份或联系方式等敏感信息"
+              maxLength={1000}
+              rows={4}
+              required
+              aria-describedby={error ? "dm-recipient-error" : "dm-request-message-help"}
+            />
             {error ? (
               <p id="dm-recipient-error" role="alert" className="text-sm text-destructive">
                 {error instanceof Error ? error.message : "无法创建会话"}
               </p>
             ) : (
-              <p className="text-xs text-muted-foreground">无需填写账号 ID，也不会展示校园邮箱。</p>
+              <p id="dm-request-message-help" className="flex justify-between gap-3 text-xs text-muted-foreground">
+                <span>无需填写账号 ID，也不会展示校园邮箱。</span>
+                <span className="shrink-0 tabular-nums">{messageLength}/1000</span>
+              </p>
             )}
           </div>
           <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => setOpen(false)}>取消</Button>
+            <Button type="button" variant="outline" onClick={closeDialog}>取消</Button>
             <Button type="submit" disabled={!isValid || isPending}>
-              {isPending ? "创建中" : "开始对话"}
+              {isPending ? "发送中" : "发送并开始"}
             </Button>
           </DialogFooter>
         </form>

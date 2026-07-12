@@ -272,3 +272,188 @@ async fn role_endpoint_rejects_administrator_provisioning() {
             .expect("persisted target role");
     assert_eq!(persisted_role, "user");
 }
+
+#[tokio::test]
+async fn lifecycle_dead_letter_is_visible_and_recent_auth_requeue_is_audited() {
+    let (pool, app) = helpers::create_test_app().await;
+    let suffix = uuid::Uuid::new_v4().simple().to_string();
+    let admin_id: i64 = sqlx::query_scalar(
+        "INSERT INTO identity.accounts (email, handle, role) \
+         VALUES ($1, $2, 'admin') RETURNING id",
+    )
+    .bind(format!("lifecycle-operator-{suffix}@tongji.edu.cn"))
+    .bind(format!("operator-{suffix}"))
+    .fetch_one(&pool)
+    .await
+    .expect("seed lifecycle operator");
+    let moderator_id: i64 = sqlx::query_scalar(
+        "INSERT INTO identity.accounts (email, handle, role) \
+         VALUES ($1, $2, 'mod') RETURNING id",
+    )
+    .bind(format!("lifecycle-moderator-{suffix}@tongji.edu.cn"))
+    .bind(format!("lifecycle-mod-{suffix}"))
+    .fetch_one(&pool)
+    .await
+    .expect("seed lifecycle moderator");
+    let target_id: i64 = sqlx::query_scalar(
+        "INSERT INTO identity.accounts (email, handle) VALUES ($1, $2) RETURNING id",
+    )
+    .bind(format!("lifecycle-dead-letter-{suffix}@tongji.edu.cn"))
+    .bind(format!("dead-letter-{suffix}"))
+    .fetch_one(&pool)
+    .await
+    .expect("seed lifecycle target");
+    sqlx::query(
+        "UPDATE identity.accounts SET status = 'deleted', \
+             deletion_requested_at = now() - interval '31 days', \
+             deletion_recover_until = now() - interval '1 day', deleted_at = now(), \
+             purge_started_at = now(), lifecycle_version = lifecycle_version + 1 \
+         WHERE id = $1",
+    )
+    .bind(target_id)
+    .execute(&pool)
+    .await
+    .expect("make target an irreversible purge");
+    let job_id: i64 = sqlx::query_scalar(
+        "INSERT INTO identity.account_lifecycle_jobs \
+         (account_id, job_type, status, attempts, next_attempt_at, last_error_code) \
+         VALUES ($1, 'purge', 'failed', 20, now(), 'owner_cleanup_failed') RETURNING id",
+    )
+    .bind(target_id)
+    .fetch_one(&pool)
+    .await
+    .expect("seed exhausted lifecycle job");
+
+    let legacy_admin_token =
+        identity::auth::create_access_token(admin_id, "integration-test-secret-32bytes!", 3600)
+            .expect("legacy admin token");
+    let moderator_token =
+        identity::auth::create_access_token(moderator_id, "integration-test-secret-32bytes!", 3600)
+            .expect("moderator token");
+    let denied = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!(
+                    "/api/v2/admin/account-lifecycle/jobs?accountId={target_id}&status=failed"
+                ))
+                .header(header::AUTHORIZATION, format!("Bearer {moderator_token}"))
+                .body(Body::empty())
+                .expect("moderator lifecycle jobs request"),
+        )
+        .await
+        .expect("moderator lifecycle jobs response");
+    assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+
+    let listed = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!(
+                    "/api/v2/admin/account-lifecycle/jobs?accountId={target_id}&status=failed"
+                ))
+                .header(header::AUTHORIZATION, format!("Bearer {legacy_admin_token}"))
+                .body(Body::empty())
+                .expect("admin lifecycle jobs request"),
+        )
+        .await
+        .expect("admin lifecycle jobs response");
+    assert_eq!(listed.status(), StatusCode::OK);
+    let listed_body = helpers::read_json(listed).await;
+    assert_eq!(listed_body["items"][0]["id"], job_id.to_string());
+    assert_eq!(listed_body["items"][0]["attempts"], 20);
+    assert!(listed_body["items"][0]["purgeStartedAt"].is_number());
+
+    let missing_step_up = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri(format!("/api/v2/admin/account-lifecycle/jobs/{job_id}/requeue"))
+                .header(header::AUTHORIZATION, format!("Bearer {legacy_admin_token}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({ "reason": "retry exhausted account erasure" }).to_string(),
+                ))
+                .expect("non-recent requeue request"),
+        )
+        .await
+        .expect("non-recent requeue response");
+    assert_eq!(missing_step_up.status(), StatusCode::PRECONDITION_REQUIRED);
+
+    let session_id: i64 = sqlx::query_scalar(
+        "INSERT INTO identity.sessions \
+         (account_id, refresh_hash, family_id, expires_at, recent_authenticated_at, \
+          recent_auth_method) \
+         VALUES ($1, $2, $3, now() + interval '1 day', now(), 'email_code') RETURNING id",
+    )
+    .bind(admin_id)
+    .bind(uuid::Uuid::new_v4().simple().to_string())
+    .bind(uuid::Uuid::new_v4())
+    .fetch_one(&pool)
+    .await
+    .expect("seed recent operator session");
+    let auth_version: i64 =
+        sqlx::query_scalar("SELECT auth_version FROM identity.accounts WHERE id = $1")
+            .bind(admin_id)
+            .fetch_one(&pool)
+            .await
+            .expect("operator auth version");
+    let recent_admin_token = identity::auth::create_session_access_token(
+        admin_id,
+        session_id,
+        auth_version,
+        "integration-test-secret-32bytes!",
+        3600,
+    )
+    .expect("recent admin token");
+    let requeued = app
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri(format!("/api/v2/admin/account-lifecycle/jobs/{job_id}/requeue"))
+                .header(header::AUTHORIZATION, format!("Bearer {recent_admin_token}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({ "reason": "retry exhausted account erasure" }).to_string(),
+                ))
+                .expect("recent requeue request"),
+        )
+        .await
+        .expect("recent requeue response");
+    assert_eq!(requeued.status(), StatusCode::OK);
+    let requeued_body = helpers::read_json(requeued).await;
+    assert_eq!(requeued_body["status"], "queued");
+    assert_eq!(requeued_body["attempts"], 0);
+    assert!(requeued_body["purgeStartedAt"].is_number());
+    let audit_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM governance.audit_events \
+         WHERE action = 'identity.lifecycle_job.requeued' \
+           AND target_type = 'account_lifecycle_job' AND target_id = $1 \
+           AND actor_account_id = $2",
+    )
+    .bind(job_id.to_string())
+    .bind(admin_id)
+    .fetch_one(&pool)
+    .await
+    .expect("read lifecycle requeue audit");
+    assert_eq!(audit_count, 1);
+
+    let retry = identity::lifecycle::claim_due_job(&pool)
+        .await
+        .expect("claim repaired lifecycle job")
+        .expect("repaired lifecycle job is due");
+    assert_eq!(retry.id, job_id);
+    identity::lifecycle::complete_purge(&pool, &retry)
+        .await
+        .expect("finish repaired lifecycle job");
+    let final_state: String =
+        sqlx::query_scalar("SELECT status::text FROM identity.accounts WHERE id = $1")
+            .bind(target_id)
+            .fetch_one(&pool)
+            .await
+            .expect("read repaired account tombstone");
+    assert_eq!(final_state, "purged");
+}

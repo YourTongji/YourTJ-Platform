@@ -6,7 +6,7 @@
 >
 > 负责人：Product design、Web maintainers
 >
-> 最近核验：2026-07-11，`origin/main@33584db`
+> 最近核验：2026-07-12，`codex/x-content-versioning`
 
 YourTJ Community Web 的 Figma 第三版是当前视觉方向来源：
 [Figma node 106:2](https://www.figma.com/design/dndgylImv8ZuVAXg9uWU3y/YourTJ-Community-Web?node-id=106-2)。
@@ -72,8 +72,21 @@ empty、error、success 和 permission-denied。Mutation：
 
 - 防重复提交并显示进度；失败保留用户输入和可重试路径。
 - Optimistic update 有 rollback/服务端校正，不把局部 toast 当持久成功事实。
+- 作者编辑器遇到版本冲突时保留本地输入，以可朗读 alert 同时提供“载入线上版本”和“基于最新版重试”；
+  refetch 不得自动替换正在编辑的内容。
 - Destructive action 展示 target、影响、可恢复性和 reason；确认不能只靠红色。
 - Skeleton 与最终布局尺寸接近，避免大幅 layout shift。
+
+## Motion 基线
+
+- 全局 motion token 由 `web/src/styles/index.css` 维护：fast 120 ms、normal 200 ms、slow 320 ms，
+  分别用于直接操作反馈、页面/状态过渡和低频强调。
+- 路由页面按需加载，切换时使用结构接近正文的可朗读 loading state；进入动画只做轻微透明度与
+  纵向位移，不以长动画阻塞阅读或操作。
+- Button、导航和其他直接操作 surface 复用 `motion-interactive`；状态 icon 可以使用低幅
+  `motion-pop`，内容区不做持续漂浮、弹跳或自动播放。
+- `prefers-reduced-motion: reduce` 时关闭位移反馈并将 animation/transition 缩短到近乎即时；
+  功能和状态表达不得依赖动画是否播放。
 
 ## 无障碍基线
 
@@ -99,7 +112,8 @@ empty、error、success 和 permission-denied。Mutation：
 - 全局 token、shell breakpoint、导航 IA 或共享 component 行为变化时更新本规范。
 - 单个功能的 user journey/业务状态更新对应领域文档，不在本文件复制。
 - Figma 变化但代码未交付标 `Planned`；代码变化偏离 Figma 时记录有意决定，而非悄悄漂移。
-- Frontend automated component/browser/axe coverage 尚未建立，见[测试策略](../development/testing.md)。
+- Web 已有 Vitest + Testing Library + axe-core 的最小 component/a11y harness；browser E2E 和完整
+  journey coverage 仍未建立，见[测试策略](../development/testing.md)。
 
 ## 验收基线
 

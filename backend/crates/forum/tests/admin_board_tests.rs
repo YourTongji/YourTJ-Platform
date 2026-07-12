@@ -31,6 +31,11 @@ async fn admin_can_create_and_update_board_with_complete_row_mapping() {
                     json!({
                         "slug": "campus-life",
                         "name": "Campus Life",
+                        "description": "Campus discussion",
+                        "position": 7,
+                        "isLocked": true,
+                        "minTrustToPost": 2,
+                        "isQa": true,
                         "reason": "create the campus discussion board"
                     })
                     .to_string(),
@@ -42,7 +47,11 @@ async fn admin_can_create_and_update_board_with_complete_row_mapping() {
     assert_eq!(create_response.status(), StatusCode::CREATED);
     let created = read_json(create_response).await;
     assert_eq!(created["slug"], "campus-life");
-    assert_eq!(created["isQa"], false);
+    assert_eq!(created["description"], "Campus discussion");
+    assert_eq!(created["position"], 7);
+    assert_eq!(created["isLocked"], true);
+    assert_eq!(created["minTrustToPost"], 2);
+    assert_eq!(created["isQa"], true);
     let board_id = created["id"].as_str().expect("created board id");
 
     let update_response = app
@@ -55,6 +64,11 @@ async fn admin_can_create_and_update_board_with_complete_row_mapping() {
                 .body(Body::from(
                     json!({
                         "name": "Campus Community",
+                        "description": "",
+                        "position": 3,
+                        "isLocked": false,
+                        "minTrustToPost": 1,
+                        "isQa": false,
                         "reason": "clarify the board scope"
                     })
                     .to_string(),
@@ -66,6 +80,10 @@ async fn admin_can_create_and_update_board_with_complete_row_mapping() {
     assert_eq!(update_response.status(), StatusCode::OK);
     let updated = read_json(update_response).await;
     assert_eq!(updated["name"], "Campus Community");
+    assert!(updated["description"].is_null());
+    assert_eq!(updated["position"], 3);
+    assert_eq!(updated["isLocked"], false);
+    assert_eq!(updated["minTrustToPost"], 1);
     assert_eq!(updated["isQa"], false);
 
     let audit_count: i64 = sqlx::query_scalar(

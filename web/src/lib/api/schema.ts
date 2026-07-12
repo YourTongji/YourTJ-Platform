@@ -23,11 +23,7 @@ export interface paths {
             };
             requestBody: {
                 content: {
-                    "application/json": {
-                        /** Format: email */
-                        email: string;
-                        captchaToken: string;
-                    };
+                    "application/json": components["schemas"]["EmailCodeRequest"];
                 };
             };
             responses: {
@@ -67,11 +63,7 @@ export interface paths {
             };
             requestBody: {
                 content: {
-                    "application/json": {
-                        email: string;
-                        code: string;
-                        handle?: string;
-                    };
+                    "application/json": components["schemas"]["EmailCodeVerification"];
                 };
             };
             responses: {
@@ -85,6 +77,266 @@ export interface paths {
                     };
                 };
                 400: components["responses"]["BadRequest"];
+                409: components["responses"]["Conflict"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/appeal/email/verify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Exchange an appeal-purpose email code for an appeal-only credential
+         * @description Suspended accounts may use this credential only for their own appeal cases and governance notices.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["AppealEmailVerification"];
+                };
+            };
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AppealAccessToken"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/appeal/password": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Verify campus email and password for appeal-only access
+         * @description Returns no refresh token and does not authorize any non-appeal route.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** Format: email */
+                        email: string;
+                        /** Format: password */
+                        password: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AppealAccessToken"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/recovery/password": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Prove control of a recoverable closed account with its password
+         * @description Returns only a short-lived recovery credential; no access session or refresh token is created. Ineligible accounts and wrong credentials share the same unauthorized response.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** Format: email */
+                        email: string;
+                        /** Format: password */
+                        password: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description recovery credential */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["RecoveryCredential"];
+                    };
+                };
+                401: components["responses"]["Unauthorized"];
+                403: components["responses"]["Forbidden"];
+                429: components["responses"]["RateLimited"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/recovery/email/verify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Consume a recovery-purpose email code without opening a normal session */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** Format: email */
+                        email: string;
+                        code: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description recovery credential */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["RecoveryCredential"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                403: components["responses"]["Forbidden"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/recovery": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Inspect a purpose-bound recovery credential */
+        get: {
+            parameters: {
+                query?: never;
+                header: {
+                    "X-Recovery-Token": string;
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description current recoverable lifecycle */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AccountLifecycle"];
+                    };
+                };
+                401: components["responses"]["Unauthorized"];
+                403: components["responses"]["Forbidden"];
+            };
+        };
+        put?: never;
+        /**
+         * Reactivate a deactivated or not-yet-purged account
+         * @description Atomically consumes the recovery credential, revokes all old sessions, and returns the account to active without creating a session. The user must then sign in normally.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header: {
+                    "X-Recovery-Token": string;
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description reactivated lifecycle */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AccountLifecycle"];
+                    };
+                };
+                401: components["responses"]["Unauthorized"];
+                403: components["responses"]["Forbidden"];
             };
         };
         delete?: never;
@@ -102,7 +354,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Exchange a refresh token for new tokens */
+        /**
+         * Exchange a refresh token for new tokens
+         * @description Rotates the token exactly once. Reuse of a consumed token revokes its session family.
+         */
         post: {
             parameters: {
                 query?: never;
@@ -110,7 +365,11 @@ export interface paths {
                 path?: never;
                 cookie?: never;
             };
-            requestBody?: never;
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["RefreshInput"];
+                };
+            };
             responses: {
                 /** @description ok */
                 200: {
@@ -139,7 +398,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Revoke the current session */
+        /** Revoke the current device session family */
         post: {
             parameters: {
                 query?: never;
@@ -156,6 +415,167 @@ export interface paths {
                     };
                     content?: never;
                 };
+                401: components["responses"]["Unauthorized"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/logout-all": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Revoke every session for the current account */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description all sessions revoked */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                401: components["responses"]["Unauthorized"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/recent-auth": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get current session recent-auth status
+         * @description Reads only the active server-side session timestamp; JWT iat is never accepted as freshness.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description status */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["RecentAuthStatus"];
+                    };
+                };
+                401: components["responses"]["Unauthorized"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/recent-auth/email/request-code": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Send a purpose-bound step-up code to the authenticated account
+         * @description The server resolves the current account's campus email; no email identifier is accepted or returned.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description provider accepted the message */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                401: components["responses"]["Unauthorized"];
+                428: components["responses"]["RecentAuthRequired"];
+                429: components["responses"]["RateLimited"];
+                503: components["responses"]["ServiceUnavailable"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/recent-auth/verify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Refresh recent authentication for the current revocable session */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["RecentAuthVerifyInput"];
+                };
+            };
+            responses: {
+                /** @description fresh status */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["RecentAuthStatus"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
+                428: components["responses"]["RecentAuthRequired"];
+                429: components["responses"]["RateLimited"];
             };
         };
         delete?: never;
@@ -198,7 +618,7 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        /** Update handle / avatar */
+        /** Update the stable public handle */
         patch: {
             parameters: {
                 query?: never;
@@ -210,7 +630,6 @@ export interface paths {
                 content: {
                     "application/json": {
                         handle?: string;
-                        avatarUrl?: string;
                     };
                 };
             };
@@ -226,6 +645,637 @@ export interface paths {
                 };
             };
         };
+        trace?: never;
+    };
+    "/me/onboarding": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read resumable first-run onboarding state */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description onboarding state */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["OnboardingState"];
+                    };
+                };
+                401: components["responses"]["Unauthorized"];
+            };
+        };
+        /** Complete required handle, profile, privacy and current-terms choices atomically */
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["OnboardingCompleteInput"];
+                };
+            };
+            responses: {
+                /** @description completed onboarding state */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["OnboardingState"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
+                409: components["responses"]["Conflict"];
+            };
+        };
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/me/lifecycle": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read the authenticated account lifecycle state */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description lifecycle */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AccountLifecycle"];
+                    };
+                };
+                401: components["responses"]["Unauthorized"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/me/lifecycle/deactivate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Deactivate the current account and revoke every session
+         * @description Requires server-side recent authentication. The response contains a purpose-bound recovery credential so a lost response is not the only recovery path; password/email recovery remains available.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header: {
+                    "Idempotency-Key": components["parameters"]["ReconciliationIdempotencyKey"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["DeactivateAccountInput"];
+                };
+            };
+            responses: {
+                /** @description deactivated */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AccountLifecycleMutation"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
+                409: components["responses"]["Conflict"];
+                428: components["responses"]["RecentAuthRequired"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/me/lifecycle/delete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Request account deletion with a 30-day recovery window
+         * @description Requires server-side recent authentication, immediately closes public/new-interaction access, revokes every session, and enqueues durable deletion and purge stages.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header: {
+                    "Idempotency-Key": components["parameters"]["ReconciliationIdempotencyKey"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["DeleteAccountInput"];
+                };
+            };
+            responses: {
+                /** @description deletion requested */
+                202: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AccountLifecycleMutation"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
+                409: components["responses"]["Conflict"];
+                428: components["responses"]["RecentAuthRequired"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/me/data-exports": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List up to 20 recent owner-data export jobs */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description recent export jobs, newest first */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["DataExportJob"][];
+                    };
+                };
+                401: components["responses"]["Unauthorized"];
+            };
+        };
+        put?: never;
+        /**
+         * Create or return an idempotent owner-data export job
+         * @description Requires server-side recent authentication. The durable job is assembled through owner-domain projections and expires after 24 hours.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header: {
+                    "Idempotency-Key": components["parameters"]["ReconciliationIdempotencyKey"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description export queued or existing */
+                202: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["DataExportJob"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
+                428: components["responses"]["RecentAuthRequired"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/me/data-exports/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read an owner data-export job status */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description export status */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["DataExportJob"];
+                    };
+                };
+                401: components["responses"]["Unauthorized"];
+                404: components["responses"]["NotFound"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/me/data-exports/{id}/download-grant": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Issue a five-minute one-time download grant for a ready owner export
+         * @description Requires server-side recent authentication so a later session compromise cannot fetch an earlier export artifact.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description download grant */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["DataExportDownloadGrant"];
+                    };
+                };
+                401: components["responses"]["Unauthorized"];
+                404: components["responses"]["NotFound"];
+                409: components["responses"]["Conflict"];
+                428: components["responses"]["RecentAuthRequired"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/me/data-exports/{id}/download": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Consume a one-time grant and download the machine-readable owner export */
+        get: {
+            parameters: {
+                query?: never;
+                header: {
+                    "X-Export-Token": string;
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description JSON export */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AccountDataExport"];
+                    };
+                };
+                401: components["responses"]["Unauthorized"];
+                404: components["responses"]["NotFound"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/me/profile": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get owner-editable public profile fields */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["MyProfile"];
+                    };
+                };
+                401: components["responses"]["Unauthorized"];
+            };
+        };
+        /** Replace owner-editable text profile fields */
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["ProfileUpdateInput"];
+                };
+            };
+            responses: {
+                /** @description saved */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["MyProfile"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
+            };
+        };
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/me/privacy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get profile, activity, relationship-list, discovery, new-DM, and mention privacy settings */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ProfilePrivacy"];
+                    };
+                };
+                401: components["responses"]["Unauthorized"];
+            };
+        };
+        /** Replace profile privacy settings */
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["ProfilePrivacyUpdateInput"];
+                };
+            };
+            responses: {
+                /** @description saved */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ProfilePrivacy"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
+            };
+        };
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/me/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List active device sessions */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description Opaque pagination cursor */
+                    cursor?: components["parameters"]["Cursor"];
+                    limit?: components["parameters"]["Limit"];
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["SessionPage"];
+                    };
+                };
+                401: components["responses"]["Unauthorized"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/me/sessions/revoke-others": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Revoke every session except the current one */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description other sessions revoked */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                401: components["responses"]["Unauthorized"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/me/sessions/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Revoke one device session */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description session revoked */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                401: components["responses"]["Unauthorized"];
+                404: components["responses"]["NotFound"];
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/me/activity": {
@@ -279,14 +1329,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List my drafts */
+        /** List my cross-device forum drafts */
         get: {
             parameters: {
-                query?: {
-                    /** @description Opaque pagination cursor */
-                    cursor?: components["parameters"]["Cursor"];
-                    limit?: components["parameters"]["Limit"];
-                };
+                query?: never;
                 header?: never;
                 path?: never;
                 cookie?: never;
@@ -302,9 +1348,10 @@ export interface paths {
                         "application/json": components["schemas"]["DraftPage"];
                     };
                 };
+                401: components["responses"]["Unauthorized"];
             };
         };
-        /** Save a draft */
+        /** Create or compare-and-swap a typed forum draft */
         put: {
             parameters: {
                 query?: never;
@@ -314,7 +1361,7 @@ export interface paths {
             };
             requestBody: {
                 content: {
-                    "application/json": components["schemas"]["DraftPayload"];
+                    "application/json": components["schemas"]["DraftSaveInput"];
                 };
             };
             responses: {
@@ -327,6 +1374,9 @@ export interface paths {
                         "application/json": components["schemas"]["DraftOutput"];
                     };
                 };
+                400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
+                409: components["responses"]["Conflict"];
             };
         };
         post?: never;
@@ -343,7 +1393,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Get a draft by key */
+        /** Get one account-owned draft by key */
         get: {
             parameters: {
                 query?: never;
@@ -364,11 +1414,13 @@ export interface paths {
                         "application/json": components["schemas"]["DraftOutput"];
                     };
                 };
+                401: components["responses"]["Unauthorized"];
+                404: components["responses"]["NotFound"];
             };
         };
         put?: never;
         post?: never;
-        /** Delete a draft */
+        /** Idempotently delete one account-owned draft */
         delete: {
             parameters: {
                 query?: never;
@@ -387,6 +1439,7 @@ export interface paths {
                     };
                     content?: never;
                 };
+                401: components["responses"]["Unauthorized"];
             };
         };
         options?: never;
@@ -402,7 +1455,10 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        /** Ignore a user */
+        /**
+         * Compatibility alias for blocking a user by account id
+         * @deprecated
+         */
         put: {
             parameters: {
                 query?: never;
@@ -424,7 +1480,10 @@ export interface paths {
             };
         };
         post?: never;
-        /** Unignore a user */
+        /**
+         * Compatibility alias for unblocking a user by account id
+         * @deprecated
+         */
         delete: {
             parameters: {
                 query?: never;
@@ -457,7 +1516,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List ignored users */
+        /**
+         * Compatibility alias for the current account's block list
+         * @deprecated
+         */
         get: {
             parameters: {
                 query?: {
@@ -497,7 +1559,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Public user profile */
+        /** User profile subject to the account's visibility policy */
         get: {
             parameters: {
                 query?: never;
@@ -518,6 +1580,7 @@ export interface paths {
                         "application/json": components["schemas"]["UserProfile"];
                     };
                 };
+                404: components["responses"]["NotFound"];
             };
         };
         put?: never;
@@ -535,7 +1598,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** User's threads */
+        /** User's visible threads subject to profile, activity visibility, and block rules */
         get: {
             parameters: {
                 query?: {
@@ -560,6 +1623,7 @@ export interface paths {
                         "application/json": components["schemas"]["UserThreadPage"];
                     };
                 };
+                404: components["responses"]["NotFound"];
             };
         };
         put?: never;
@@ -577,7 +1641,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** User's comments */
+        /** User's visible comments subject to profile, activity visibility, and block rules */
         get: {
             parameters: {
                 query?: {
@@ -602,11 +1666,351 @@ export interface paths {
                         "application/json": components["schemas"]["UserCommentPage"];
                     };
                 };
+                404: components["responses"]["NotFound"];
             };
         };
         put?: never;
         post?: never;
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/users/{handle}/relationship": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Current account's social relationship with an active user */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    handle: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["UserRelationship"];
+                    };
+                };
+                401: components["responses"]["Unauthorized"];
+                404: components["responses"]["NotFound"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/users/{handle}/follow": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Follow a public account; no approval state is created */
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    handle: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description following */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+            };
+        };
+        post?: never;
+        /** Unfollow an account idempotently */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    handle: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description not following */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                404: components["responses"]["NotFound"];
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/me/followers/{handle}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Remove an account from the authenticated user's followers without blocking it */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    handle: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description follower removed or relationship already absent */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                401: components["responses"]["Unauthorized"];
+                404: components["responses"]["NotFound"];
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/users/{handle}/followers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Followers subject to the owner's list visibility and member discoverability */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description Opaque pagination cursor */
+                    cursor?: components["parameters"]["Cursor"];
+                    limit?: components["parameters"]["Limit"];
+                };
+                header?: never;
+                path: {
+                    handle: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["UserSummaryPage"];
+                    };
+                };
+                404: components["responses"]["NotFound"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/users/{handle}/following": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Followed accounts subject to the owner's list visibility and member discoverability */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description Opaque pagination cursor */
+                    cursor?: components["parameters"]["Cursor"];
+                    limit?: components["parameters"]["Limit"];
+                };
+                header?: never;
+                path: {
+                    handle: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["UserSummaryPage"];
+                    };
+                };
+                404: components["responses"]["NotFound"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/users/{handle}/mute": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Privately hide an account's content without changing access or follow state */
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    handle: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description muted */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                404: components["responses"]["NotFound"];
+            };
+        };
+        post?: never;
+        /** Unmute an account idempotently */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    handle: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description not muted */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                404: components["responses"]["NotFound"];
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/users/{handle}/block": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Create a bilateral safety boundary and remove follows in both directions */
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    handle: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description blocked */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                404: components["responses"]["NotFound"];
+            };
+        };
+        post?: never;
+        /** Unblock without restoring prior follows */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    handle: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description not blocked */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                404: components["responses"]["NotFound"];
+            };
+        };
         options?: never;
         head?: never;
         patch?: never;
@@ -927,15 +2331,8 @@ export interface paths {
                     };
                     content?: never;
                 };
-                /** @description insufficient balance */
-                402: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": components["schemas"]["Error"];
-                    };
-                };
+                400: components["responses"]["BadRequest"];
+                404: components["responses"]["NotFound"];
             };
         };
         delete?: never;
@@ -1000,7 +2397,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Request a password-reset code */
+        /**
+         * Request a password-reset code
+         * @description Always returns the same successful response for valid campus-email syntax, whether or not an eligible password account exists.
+         */
         post: {
             parameters: {
                 query?: never;
@@ -1018,7 +2418,7 @@ export interface paths {
                 };
             };
             responses: {
-                /** @description sent */
+                /** @description Request accepted without revealing account eligibility or provider delivery */
                 204: {
                     headers: {
                         [name: string]: unknown;
@@ -1044,7 +2444,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Reset password with code */
+        /**
+         * Reset password with code
+         * @description Accepts only a password-reset-purpose code and revokes every access and refresh session on success.
+         */
         post: {
             parameters: {
                 query?: never;
@@ -1058,6 +2461,7 @@ export interface paths {
                         /** Format: email */
                         email: string;
                         code: string;
+                        /** Format: password */
                         newPassword: string;
                     };
                 };
@@ -1088,7 +2492,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Change the authenticated account's password */
+        /**
+         * Change the authenticated account's password
+         * @description Requires the current password, preserves the current device session, and revokes other sessions.
+         */
         post: {
             parameters: {
                 query?: never;
@@ -1099,7 +2506,9 @@ export interface paths {
             requestBody: {
                 content: {
                     "application/json": {
+                        /** Format: password */
                         currentPassword: string;
+                        /** Format: password */
                         newPassword: string;
                     };
                 };
@@ -1133,7 +2542,7 @@ export interface paths {
         get: {
             parameters: {
                 query?: {
-                    status?: "open" | "in_progress" | "submitted" | "completed" | "all";
+                    status?: "open" | "in_progress" | "submitted" | "completed" | "cancelled" | "all";
                     /** @description Opaque pagination cursor */
                     cursor?: components["parameters"]["Cursor"];
                     limit?: components["parameters"]["Limit"];
@@ -1185,15 +2594,7 @@ export interface paths {
                         "application/json": components["schemas"]["Task"];
                     };
                 };
-                /** @description insufficient balance */
-                402: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": components["schemas"]["Error"];
-                    };
-                };
+                400: components["responses"]["BadRequest"];
             };
         };
         delete?: never;
@@ -1230,6 +2631,8 @@ export interface paths {
                     };
                     content?: never;
                 };
+                400: components["responses"]["BadRequest"];
+                409: components["responses"]["Conflict"];
             };
         };
         delete?: never;
@@ -1247,16 +2650,19 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Two-phase confirm — submit / confirm(release) / cancel / reject / delete */
+        /**
+         * Two-phase confirm — submit / confirm(release) / cancel / reject / delete
+         * @description confirm/cancel/reject and an open-task delete require wallet intent, signature and idempotency headers; submit and deletion after cancellation do not move value.
+         */
         post: {
             parameters: {
                 query?: never;
-                header: {
-                    /** @description One-time signing intent returned by POST /credit/signing-intents */
-                    "X-Wallet-Intent": components["parameters"]["WalletIntent"];
-                    /** @description Base64 Ed25519 signature over the intent's exact signingBytes */
-                    "X-Wallet-Sig": components["parameters"]["WalletSig"];
-                    "Idempotency-Key": components["parameters"]["WalletIdempotencyKey"];
+                header?: {
+                    /** @description Required only for the value-moving actions documented on this operation */
+                    "X-Wallet-Intent"?: components["parameters"]["OptionalWalletIntent"];
+                    /** @description Required only for the value-moving actions documented on this operation */
+                    "X-Wallet-Sig"?: components["parameters"]["OptionalWalletSig"];
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
                 };
                 path: {
                     id: string;
@@ -1276,6 +2682,8 @@ export interface paths {
                     };
                     content?: never;
                 };
+                400: components["responses"]["BadRequest"];
+                409: components["responses"]["Conflict"];
             };
         };
         delete?: never;
@@ -1295,6 +2703,7 @@ export interface paths {
         get: {
             parameters: {
                 query?: {
+                    status?: "on_sale" | "off_sale" | "sold_out" | "all";
                     /** @description Opaque pagination cursor */
                     cursor?: components["parameters"]["Cursor"];
                     limit?: components["parameters"]["Limit"];
@@ -1384,15 +2793,7 @@ export interface paths {
                         "application/json": components["schemas"]["Purchase"];
                     };
                 };
-                /** @description insufficient balance */
-                402: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": components["schemas"]["Error"];
-                    };
-                };
+                400: components["responses"]["BadRequest"];
             };
         };
         delete?: never;
@@ -1450,16 +2851,19 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Escrow steps — accept / deliver / confirm(release) */
+        /**
+         * Escrow steps — accept / deliver / confirm(release) / cancel(refund)
+         * @description confirm and cancel require wallet intent, signature and idempotency headers; accept and deliver are non-value seller transitions.
+         */
         post: {
             parameters: {
                 query?: never;
-                header: {
-                    /** @description One-time signing intent returned by POST /credit/signing-intents */
-                    "X-Wallet-Intent": components["parameters"]["WalletIntent"];
-                    /** @description Base64 Ed25519 signature over the intent's exact signingBytes */
-                    "X-Wallet-Sig": components["parameters"]["WalletSig"];
-                    "Idempotency-Key": components["parameters"]["WalletIdempotencyKey"];
+                header?: {
+                    /** @description Required only for the value-moving actions documented on this operation */
+                    "X-Wallet-Intent"?: components["parameters"]["OptionalWalletIntent"];
+                    /** @description Required only for the value-moving actions documented on this operation */
+                    "X-Wallet-Sig"?: components["parameters"]["OptionalWalletSig"];
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
                 };
                 path: {
                     id: string;
@@ -1479,6 +2883,8 @@ export interface paths {
                     };
                     content?: never;
                 };
+                400: components["responses"]["BadRequest"];
+                409: components["responses"]["Conflict"];
             };
         };
         delete?: never;
@@ -1494,13 +2900,18 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Realtime search (course / teacher / location / alias / pinyin / review text) */
+        /**
+         * Privacy-safe typed federated search across catalogue and community objects
+         * @description Meilisearch ranks candidate ids. Owner domains rehydrate and authorize every hit before canonical highlight ranges or conservative spelling suggestions are computed.
+         */
         get: {
             parameters: {
                 query: {
                     q: string;
-                    type?: "course" | "teacher" | "review" | "all";
+                    type?: "course" | "teacher" | "review" | "thread" | "user" | "board" | "tag" | "all";
                     limit?: number;
+                    /** @description Opaque cursor returned for the same q and a specific non-all type; all-scope pagination uses hasMoreScopes then switches type. */
+                    cursor?: string;
                 };
                 header?: never;
                 path?: never;
@@ -1517,6 +2928,8 @@ export interface paths {
                         "application/json": components["schemas"]["SearchResult"];
                     };
                 };
+                400: components["responses"]["BadRequest"];
+                429: components["responses"]["RateLimited"];
             };
         };
         put?: never;
@@ -2429,7 +3842,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List boards */
+        /** List boards with optional viewer posting access */
         get: {
             parameters: {
                 query?: never;
@@ -2501,13 +3914,14 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Thread feed (hot/new/following/unread) */
+        /** Thread feed (hot/new/subscriptions/following/unread) */
         get: {
             parameters: {
                 query?: {
                     board?: string;
+                    /** @description Exact tag slug */
                     tag?: string;
-                    sort?: "hot" | "new" | "following" | "unread";
+                    sort?: "hot" | "new" | "subscriptions" | "following" | "unread";
                     /** @description Opaque pagination cursor */
                     cursor?: components["parameters"]["Cursor"];
                     limit?: components["parameters"]["Limit"];
@@ -2530,7 +3944,10 @@ export interface paths {
             };
         };
         put?: never;
-        /** Create thread (TL/sanction/word-filter check) */
+        /**
+         * Create thread with board, trust-level, sanction, and content-policy checks
+         * @description Ordinary accounts require an unlocked board and trustLevel >= minTrustToPost. Accounts with moderation.content may bypass only those two board gates.
+         */
         post: {
             parameters: {
                 query?: never;
@@ -2561,6 +3978,51 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/forum/boards/{boardId}/threads": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List visible threads in one board */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description Exact tag slug */
+                    tag?: string;
+                    sort?: "hot" | "new";
+                    /** @description Opaque pagination cursor */
+                    cursor?: components["parameters"]["Cursor"];
+                    limit?: components["parameters"]["Limit"];
+                };
+                header?: never;
+                path: {
+                    boardId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ThreadFeedPage"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/forum/threads/{id}": {
         parameters: {
             query?: never;
@@ -2568,7 +4030,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Thread detail */
+        /** Thread detail with optional viewer state */
         get: {
             parameters: {
                 query?: never;
@@ -2621,7 +4083,7 @@ export interface paths {
         };
         options?: never;
         head?: never;
-        /** Edit thread */
+        /** Compare-and-swap edit thread */
         patch: {
             parameters: {
                 query?: never;
@@ -2646,6 +4108,7 @@ export interface paths {
                         "application/json": components["schemas"]["ThreadDetail"];
                     };
                 };
+                409: components["responses"]["Conflict"];
             };
         };
         trace?: never;
@@ -2697,10 +4160,17 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Revision history */
+        /**
+         * Bounded thread revision history
+         * @description The author may read their own history. Staff may read only another strictly lower-role author's history.
+         */
         get: {
             parameters: {
-                query?: never;
+                query?: {
+                    /** @description Opaque pagination cursor */
+                    cursor?: components["parameters"]["Cursor"];
+                    limit?: components["parameters"]["Limit"];
+                };
                 header?: never;
                 path: {
                     id: string;
@@ -2718,6 +4188,9 @@ export interface paths {
                         "application/json": components["schemas"]["RevisionPage"];
                     };
                 };
+                400: components["responses"]["BadRequest"];
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
             };
         };
         put?: never;
@@ -2735,7 +4208,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Comments */
+        /** Comments with optional viewer state */
         get: {
             parameters: {
                 query?: {
@@ -2833,7 +4306,7 @@ export interface paths {
         };
         options?: never;
         head?: never;
-        /** Edit comment */
+        /** Compare-and-swap edit comment */
         patch: {
             parameters: {
                 query?: never;
@@ -2858,6 +4331,7 @@ export interface paths {
                         "application/json": components["schemas"]["Comment"];
                     };
                 };
+                409: components["responses"]["Conflict"];
             };
         };
         trace?: never;
@@ -2869,10 +4343,17 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Comment revision history */
+        /**
+         * Bounded comment revision history
+         * @description The author may read their own history. Staff may read only another strictly lower-role author's history.
+         */
         get: {
             parameters: {
-                query?: never;
+                query?: {
+                    /** @description Opaque pagination cursor */
+                    cursor?: components["parameters"]["Cursor"];
+                    limit?: components["parameters"]["Limit"];
+                };
                 header?: never;
                 path: {
                     id: string;
@@ -2890,6 +4371,9 @@ export interface paths {
                         "application/json": components["schemas"]["RevisionPage"];
                     };
                 };
+                400: components["responses"]["BadRequest"];
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
             };
         };
         put?: never;
@@ -2936,7 +4420,31 @@ export interface paths {
                 };
             };
         };
-        delete?: never;
+        /** Remove the current account's vote */
+        delete: {
+            parameters: {
+                query: {
+                    postType: "thread" | "comment";
+                };
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description removed or already absent */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["VoteResponse"];
+                    };
+                };
+            };
+        };
         options?: never;
         head?: never;
         patch?: never;
@@ -3002,7 +4510,7 @@ export interface paths {
                 };
                 cookie?: never;
             };
-            requestBody?: {
+            requestBody: {
                 content: {
                     "application/json": components["schemas"]["BookmarkInput"];
                 };
@@ -3021,7 +4529,9 @@ export interface paths {
         /** Remove bookmark */
         delete: {
             parameters: {
-                query?: never;
+                query: {
+                    postType: "thread" | "comment";
+                };
                 header?: never;
                 path: {
                     id: string;
@@ -3030,7 +4540,7 @@ export interface paths {
             };
             requestBody?: never;
             responses: {
-                /** @description ok */
+                /** @description removed or already absent */
                 204: {
                     headers: {
                         [name: string]: unknown;
@@ -3112,7 +4622,7 @@ export interface paths {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": components["schemas"]["Subscription"][];
+                        "application/json": components["schemas"]["SubscriptionPage"];
                     };
                 };
             };
@@ -3276,6 +4786,8 @@ export interface paths {
         get: {
             parameters: {
                 query?: {
+                    view?: "inbox" | "requests" | "sent" | "archived" | "deleted";
+                    q?: string;
                     /** @description Opaque pagination cursor */
                     cursor?: components["parameters"]["Cursor"];
                     limit?: components["parameters"]["Limit"];
@@ -3298,11 +4810,13 @@ export interface paths {
             };
         };
         put?: never;
-        /** Create or get DM conversation */
+        /** Create or get a direct conversation or bounded message request */
         post: {
             parameters: {
                 query?: never;
-                header?: never;
+                header?: {
+                    "Idempotency-Key"?: string;
+                };
                 path?: never;
                 cookie?: never;
             };
@@ -3312,7 +4826,7 @@ export interface paths {
                 };
             };
             responses: {
-                /** @description ok */
+                /** @description direct conversation or pending request */
                 200: {
                     headers: {
                         [name: string]: unknown;
@@ -3321,9 +4835,358 @@ export interface paths {
                         "application/json": components["schemas"]["DmConversation"];
                     };
                 };
+                400: components["responses"]["BadRequest"];
+                403: components["responses"]["Forbidden"];
+                409: components["responses"]["Conflict"];
+                429: components["responses"]["RateLimited"];
             };
         };
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/forum/dm/unread-count": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Count unread private messages across active conversations */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["DmCounts"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/forum/dm/requests/{id}/accept": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Accept an incoming message request */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description accepted conversation */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["DmConversation"];
+                    };
+                };
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+                409: components["responses"]["Conflict"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/forum/dm/requests/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Decline an incoming request or withdraw an outgoing request without blocking or notifying */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description removed */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                404: components["responses"]["NotFound"];
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/forum/dm/requests/{id}/report": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Report the one request message and remove the incoming request */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["DmReportInput"];
+                };
+            };
+            responses: {
+                /** @description queued and request removed */
+                202: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                404: components["responses"]["NotFound"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/forum/dm/conversations/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Hide a conversation for the current participant */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description hidden for this participant */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                404: components["responses"]["NotFound"];
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/forum/dm/conversations/{id}/recover": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Recover a participant-hidden conversation */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description recovered */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                404: components["responses"]["NotFound"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/forum/dm/conversations/{id}/archive": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Archive a conversation for the current participant */
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description archived */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                404: components["responses"]["NotFound"];
+            };
+        };
+        post?: never;
+        /** Return an archived conversation to the inbox */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description unarchived */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                404: components["responses"]["NotFound"];
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/forum/dm/conversations/{id}/mute": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Mute notifications for a conversation */
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description muted */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                404: components["responses"]["NotFound"];
+            };
+        };
+        post?: never;
+        /** Restore notifications for a conversation */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description unmuted */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                404: components["responses"]["NotFound"];
+            };
+        };
         options?: never;
         head?: never;
         patch?: never;
@@ -3516,9 +5379,35 @@ export interface paths {
                         "application/json": components["schemas"]["PollVoteResponse"];
                     };
                 };
+                409: components["responses"]["Conflict"];
             };
         };
-        delete?: never;
+        /** Remove the current account's vote for one poll option */
+        delete: {
+            parameters: {
+                query: {
+                    optionId: string;
+                };
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description removed or already absent */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["PollVoteResponse"];
+                    };
+                };
+                409: components["responses"]["Conflict"];
+            };
+        };
         options?: never;
         head?: never;
         patch?: never;
@@ -3571,7 +5460,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Issue an OSS upload intent and scoped STS credentials */
+        /**
+         * Issue an OSS upload intent and scoped STS credentials
+         * @description The server enforces bounded active intents, rolling daily issuance, live-object, retained-record, and reserved-byte quotas before requesting exact-key STS credentials.
+         */
         post: {
             parameters: {
                 query?: never;
@@ -3596,6 +5488,7 @@ export interface paths {
                 };
                 400: components["responses"]["BadRequest"];
                 401: components["responses"]["Unauthorized"];
+                429: components["responses"]["RateLimited"];
             };
         };
         delete?: never;
@@ -3650,7 +5543,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Get CDN/object URL for an uploaded object */
+        /**
+         * Get CDN/object URL for an uploaded object
+         * @description Pending objects are owner-only; staff review must use the audited same-origin preview grant flow. Blocked objects are never returned.
+         */
         get: {
             parameters: {
                 query?: never;
@@ -3677,6 +5573,466 @@ export interface paths {
         };
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/me/media/uploads": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the current account's recent uploads for review-status recovery */
+        get: {
+            parameters: {
+                query?: {
+                    usage?: components["schemas"]["MediaUsage"];
+                    /** @description Opaque pagination cursor */
+                    cursor?: components["parameters"]["Cursor"];
+                    limit?: components["parameters"]["Limit"];
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["MyUploadPage"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/me/media/uploads/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Poll one owned upload's moderation status */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["MyUpload"];
+                    };
+                };
+                401: components["responses"]["Unauthorized"];
+                404: components["responses"]["NotFound"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/me/profile/avatar": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Bind an owned clean OSS image as the current account's avatar */
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["ProfileAssetInput"];
+                };
+            };
+            responses: {
+                /** @description bound */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
+                404: components["responses"]["NotFound"];
+            };
+        };
+        post?: never;
+        /** Remove the current account's avatar binding */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description removed */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                401: components["responses"]["Unauthorized"];
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/me/profile/banner": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Bind an owned clean OSS image as the current account's profile banner */
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["ProfileAssetInput"];
+                };
+            };
+            responses: {
+                /** @description bound */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
+                404: components["responses"]["NotFound"];
+            };
+        };
+        post?: never;
+        /** Remove the current account's profile banner binding */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description removed */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                401: components["responses"]["Unauthorized"];
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/me/appeals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List my appeal cases and immutable status history
+         * @description Accepts either a normal account bearer or a short-lived appeal-only bearer.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description Opaque pagination cursor */
+                    cursor?: components["parameters"]["Cursor"];
+                    limit?: components["parameters"]["Limit"];
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AppealPage"];
+                    };
+                };
+                401: components["responses"]["Unauthorized"];
+            };
+        };
+        put?: never;
+        /**
+         * Submit an appeal for my own active governance disposition
+         * @description One case per original event. The original action must be within 30 days and still active.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header: {
+                    /** @description Account-scoped key. Reuse with a different event or reason returns conflict. */
+                    "Idempotency-Key": components["parameters"]["AppealIdempotencyKey"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["SubmitAppealInput"];
+                };
+            };
+            responses: {
+                /** @description idempotent replay */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Appeal"];
+                    };
+                };
+                /** @description created */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Appeal"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
+                404: components["responses"]["NotFound"];
+                409: components["responses"]["Conflict"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/me/appeals/{id}/withdraw": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Withdraw my unclaimed appeal without erasing history */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["AppealTransitionInput"];
+                };
+            };
+            responses: {
+                /** @description withdrawn */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Appeal"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
+                404: components["responses"]["NotFound"];
+                409: components["responses"]["Conflict"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/me/governance-notices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List mandatory account-private governance notices
+         * @description Notices contain no staff identity, reporter identity, or private evidence.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    unread?: boolean;
+                    /** @description Opaque pagination cursor */
+                    cursor?: components["parameters"]["Cursor"];
+                    limit?: components["parameters"]["Limit"];
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["GovernanceNoticePage"];
+                    };
+                };
+                401: components["responses"]["Unauthorized"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/me/governance-notices/unread-count": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Count unread mandatory governance notices */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            count: number;
+                        };
+                    };
+                };
+                401: components["responses"]["Unauthorized"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/me/governance-notices/read": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Mark selected or all governance notices read */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["GovernanceNoticeReadInput"];
+                };
+            };
+            responses: {
+                /** @description marked */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
+            };
+        };
         delete?: never;
         options?: never;
         head?: never;
@@ -3733,7 +6089,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Mark notifications read */
+        /**
+         * Mark notifications read
+         * @description Send ids to mark selected notifications or all=true to mark every notification. For rolling compatibility, an empty object still means mark all; new clients must send all=true explicitly.
+         */
         post: {
             parameters: {
                 query?: never;
@@ -3741,21 +6100,21 @@ export interface paths {
                 path?: never;
                 cookie?: never;
             };
-            requestBody?: {
+            requestBody: {
                 content: {
-                    "application/json": {
-                        ids?: string[];
-                    };
+                    "application/json": components["schemas"]["NotificationReadInput"];
                 };
             };
             responses: {
-                /** @description ok */
+                /** @description marked */
                 204: {
                     headers: {
                         [name: string]: unknown;
                     };
                     content?: never;
                 };
+                400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
             };
         };
         delete?: never;
@@ -3809,7 +6168,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** SSE stream for real-time notifications */
+        /**
+         * SSE stream for real-time notifications
+         * @description Best-effort refresh hints only. The stream emits sync immediately after every connection; clients must refetch durable notification and unread-count endpoints after sync or any event.
+         */
         get: {
             parameters: {
                 query?: never;
@@ -3946,7 +6308,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Public announcements */
+        /** Active announcements applicable to the current viewer */
         get: {
             parameters: {
                 query?: never;
@@ -3969,6 +6331,170 @@ export interface paths {
         };
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/announcements/unread": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Active current announcement revisions not yet seen by the current account */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Announcement"][];
+                    };
+                };
+                401: components["responses"]["Unauthorized"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/announcements/{id}/receipt": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Record seen, dismissed, or acknowledged state for the current revision */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["AnnouncementReceiptInput"];
+                };
+            };
+            responses: {
+                /** @description recorded */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AnnouncementReceipt"];
+                    };
+                };
+                401: components["responses"]["Unauthorized"];
+                404: components["responses"]["NotFound"];
+                409: components["responses"]["Conflict"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/promotions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Active first-party promotions applicable to the current viewer */
+        get: {
+            parameters: {
+                query?: {
+                    placement?: "home-left-primary" | "home-left-secondary";
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Promotion"][];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/promotions/{id}/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Record one deduplicated anonymous promotion impression or click
+         * @description A click implicitly records the matching impression when it was not delivered first. The signed presentation token contains no account, IP, or device identifier.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["PromotionEventInput"];
+                };
+            };
+            responses: {
+                /** @description recorded or already recorded */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                400: components["responses"]["BadRequest"];
+            };
+        };
         delete?: never;
         options?: never;
         head?: never;
@@ -4130,6 +6656,492 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/notification-outbox": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List durable notification outbox operations by state
+         * @description Requires operations.jobs. Payloads and source keys are intentionally excluded.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    state?: "queued" | "running" | "succeeded" | "dead" | "cancelled";
+                    /** @description Opaque pagination cursor */
+                    cursor?: components["parameters"]["Cursor"];
+                    limit?: components["parameters"]["Limit"];
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["NotificationOutboxEventPage"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                403: components["responses"]["Forbidden"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/notification-outbox/{id}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Retry one dead-letter notification operation
+         * @description Requires operations.jobs. The reason and retry metadata are written to the immutable admin audit log.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["NotificationOutboxRetryInput"];
+                };
+            };
+            responses: {
+                /** @description queued */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["NotificationOutboxEvent"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                403: components["responses"]["Forbidden"];
+                409: components["responses"]["Conflict"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/appeals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List lower-role appeal cases visible to an independent reviewer */
+        get: {
+            parameters: {
+                query?: {
+                    status?: components["schemas"]["AppealStatus"];
+                    /** @description Opaque pagination cursor */
+                    cursor?: components["parameters"]["Cursor"];
+                    limit?: components["parameters"]["Limit"];
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AdminAppealPage"];
+                    };
+                };
+                403: components["responses"]["Forbidden"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/appeals/{id}/review": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Claim a submitted appeal for independent review
+         * @description The reviewer must outrank the appellant and cannot be the original disposition actor.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["AppealTransitionInput"];
+                };
+            };
+            responses: {
+                /** @description in review */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AdminAppeal"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+                409: components["responses"]["Conflict"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/appeals/{id}/decision": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Decide an assigned appeal and atomically apply any owner-domain reversal
+         * @description Content targets support upheld/overturned. Sanctions additionally support a shortening amendment; unsupported adjustments fail closed.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["AppealDecisionInput"];
+                };
+            };
+            responses: {
+                /** @description decided */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AdminAppeal"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+                409: components["responses"]["Conflict"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/credit/reconciliations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List persistent read-only credit reconciliation runs */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description Opaque pagination cursor */
+                    cursor?: components["parameters"]["Cursor"];
+                    limit?: components["parameters"]["Limit"];
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["CreditReconciliationRunPage"];
+                    };
+                };
+                403: components["responses"]["Forbidden"];
+            };
+        };
+        put?: never;
+        /**
+         * Request an idempotent read-only ledger and wallet projection reconciliation
+         * @description Verifies the append-only ledger before comparing every derived wallet balance. It never changes wallet balances or ledger rows.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header: {
+                    "Idempotency-Key": components["parameters"]["ReconciliationIdempotencyKey"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["ReconciliationRunInput"];
+                };
+            };
+            responses: {
+                /** @description idempotent replay */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["CreditReconciliationRun"];
+                    };
+                };
+                /** @description created */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["CreditReconciliationRun"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                403: components["responses"]["Forbidden"];
+                409: components["responses"]["Conflict"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/credit/reconciliations/stats": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read aggregate credit reconciliation health counters */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["CreditReconciliationStats"];
+                    };
+                };
+                403: components["responses"]["Forbidden"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/credit/reconciliations/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read one credit reconciliation run */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["CreditReconciliationRun"];
+                    };
+                };
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/credit/reconciliations/{id}/resume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Resume a queued or interrupted credit reconciliation run
+         * @description Target-state idempotent. A terminal run is returned unchanged and never executed again.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["ReconciliationRunInput"];
+                };
+            };
+            responses: {
+                /** @description current run state */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["CreditReconciliationRun"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/credit/reconciliations/{id}/wallets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read per-wallet projection comparisons for one reconciliation run */
+        get: {
+            parameters: {
+                query?: {
+                    driftOnly?: boolean;
+                    /** @description Opaque pagination cursor */
+                    cursor?: components["parameters"]["Cursor"];
+                    limit?: components["parameters"]["Limit"];
+                };
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["CreditReconciliationWalletPage"];
+                    };
+                };
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/activity-policy": {
         parameters: {
             query?: never;
@@ -4247,7 +7259,7 @@ export interface paths {
                 query?: {
                     q?: string;
                     role?: "user" | "mod" | "admin";
-                    status?: "active" | "suspended" | "deleted";
+                    status?: "active" | "suspended" | "deactivated" | "deletion_requested" | "deleted" | "purged";
                     /** @description Opaque pagination cursor */
                     cursor?: components["parameters"]["Cursor"];
                     limit?: components["parameters"]["Limit"];
@@ -4304,6 +7316,96 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/account-lifecycle/jobs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Inspect durable account lifecycle jobs, including exhausted dead letters */
+        get: {
+            parameters: {
+                query?: {
+                    accountId?: string;
+                    jobType?: "mark_deleted" | "purge";
+                    status?: "queued" | "running" | "succeeded" | "failed";
+                    /** @description Opaque pagination cursor */
+                    cursor?: components["parameters"]["Cursor"];
+                    limit?: components["parameters"]["Limit"];
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description lifecycle job page */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AdminLifecycleJobPage"];
+                    };
+                };
+                403: components["responses"]["Forbidden"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/account-lifecycle/jobs/{id}/requeue": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Requeue one failed account lifecycle job without reopening account recovery */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["AdminReasonInput"];
+                };
+            };
+            responses: {
+                /** @description requeued lifecycle job */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AdminLifecycleJob"];
+                    };
+                };
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+                409: components["responses"]["Conflict"];
+                428: components["responses"]["RecentAuthRequired"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/users/{id}/role": {
         parameters: {
             query?: never;
@@ -4345,6 +7447,7 @@ export interface paths {
                 403: components["responses"]["Forbidden"];
                 404: components["responses"]["NotFound"];
                 409: components["responses"]["Conflict"];
+                428: components["responses"]["RecentAuthRequired"];
             };
         };
         trace?: never;
@@ -4383,6 +7486,7 @@ export interface paths {
                 };
                 403: components["responses"]["Forbidden"];
                 404: components["responses"]["NotFound"];
+                428: components["responses"]["RecentAuthRequired"];
             };
         };
         delete?: never;
@@ -4927,7 +8031,7 @@ export interface paths {
             };
         };
         put?: never;
-        /** Publish an announcement */
+        /** Create a draft, scheduled, or published announcement */
         post: {
             parameters: {
                 query?: never;
@@ -4937,7 +8041,7 @@ export interface paths {
             };
             requestBody: {
                 content: {
-                    "application/json": components["schemas"]["AnnouncementInput"];
+                    "application/json": components["schemas"]["AnnouncementCreateInput"];
                 };
             };
             responses: {
@@ -4969,7 +8073,7 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
-        /** Delete an announcement */
+        /** Archive an announcement while retaining revisions and receipts */
         delete: {
             parameters: {
                 query?: never;
@@ -4981,11 +8085,11 @@ export interface paths {
             };
             requestBody: {
                 content: {
-                    "application/json": components["schemas"]["AdminReasonInput"];
+                    "application/json": components["schemas"]["AdminVersionedArchiveInput"];
                 };
             };
             responses: {
-                /** @description deleted */
+                /** @description archived */
                 204: {
                     headers: {
                         [name: string]: unknown;
@@ -4994,11 +8098,12 @@ export interface paths {
                 };
                 403: components["responses"]["Forbidden"];
                 404: components["responses"]["NotFound"];
+                409: components["responses"]["Conflict"];
             };
         };
         options?: never;
         head?: never;
-        /** Update an announcement */
+        /** Update announcement copy, audience, presentation, or scheduling with optimistic concurrency */
         patch: {
             parameters: {
                 query?: never;
@@ -5010,7 +8115,7 @@ export interface paths {
             };
             requestBody: {
                 content: {
-                    "application/json": components["schemas"]["AnnouncementInput"];
+                    "application/json": components["schemas"]["AnnouncementUpdateInput"];
                 };
             };
             responses: {
@@ -5025,8 +8130,238 @@ export interface paths {
                 };
                 403: components["responses"]["Forbidden"];
                 404: components["responses"]["NotFound"];
+                409: components["responses"]["Conflict"];
             };
         };
+        trace?: never;
+    };
+    "/admin/announcements/{id}/revisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Immutable announcement mutation history */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description Opaque pagination cursor */
+                    cursor?: components["parameters"]["Cursor"];
+                    limit?: components["parameters"]["Limit"];
+                };
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AnnouncementRevisionPage"];
+                    };
+                };
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/promotions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List first-party promotions for administration */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description Opaque pagination cursor */
+                    cursor?: components["parameters"]["Cursor"];
+                    limit?: components["parameters"]["Limit"];
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["PromotionPage"];
+                    };
+                };
+                403: components["responses"]["Forbidden"];
+            };
+        };
+        put?: never;
+        /** Create a first-party promotion with an optional clean platform asset reference */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["PromotionCreateInput"];
+                };
+            };
+            responses: {
+                /** @description created */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Promotion"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                403: components["responses"]["Forbidden"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/promotions/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Archive a promotion */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["AdminVersionedArchiveInput"];
+                };
+            };
+            responses: {
+                /** @description archived */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+                409: components["responses"]["Conflict"];
+            };
+        };
+        options?: never;
+        head?: never;
+        /** Update a promotion with optimistic concurrency */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["PromotionUpdateInput"];
+                };
+            };
+            responses: {
+                /** @description updated */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Promotion"];
+                    };
+                };
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+                409: components["responses"]["Conflict"];
+            };
+        };
+        trace?: never;
+    };
+    "/admin/promotions/{id}/metrics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read privacy-minimal daily promotion delivery metrics */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description Inclusive UTC date; defaults to 29 days before today. */
+                    from?: string;
+                    /** @description Inclusive UTC date; defaults to today and cannot be in the future. */
+                    to?: string;
+                };
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["PromotionMetrics"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/admin/media/uploads": {
@@ -5043,6 +8378,8 @@ export interface paths {
                     /** @description Opaque pagination cursor */
                     cursor?: components["parameters"]["Cursor"];
                     limit?: components["parameters"]["Limit"];
+                    /** @description Moderation state selected before hierarchy-safe pagination. */
+                    status?: "pending" | "clean" | "quarantined" | "blocked";
                 };
                 header?: never;
                 path?: never;
@@ -5070,6 +8407,251 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/media/retention-holds": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List detailed media retention holds by nearest expiry
+         * @description Requires operations.jobs and a recent-authenticated revocable session. This purpose-bearing inventory is unavailable to ordinary moderators and is audited on every read.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description Opaque pagination cursor */
+                    cursor?: components["parameters"]["Cursor"];
+                    limit?: components["parameters"]["Limit"];
+                    /** @description Unreleased holds are split by whether expiresAt is in the future. */
+                    state?: "active" | "expired";
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description holds ordered by expiresAt then id */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["MediaRetentionHoldPage"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
+                403: components["responses"]["Forbidden"];
+                428: components["responses"]["RecentAuthRequired"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/media/deletion-jobs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List durable system-owned media deletion jobs
+         * @description Requires operations.jobs and a recent-authenticated revocable session. Moderation-owned deletion work is excluded so system jobs remain operable independently from target role hierarchy; every inventory read is audited.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description Opaque pagination cursor */
+                    cursor?: components["parameters"]["Cursor"];
+                    limit?: components["parameters"]["Limit"];
+                    status?: "queued" | "leased" | "succeeded" | "dead_letter";
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description jobs ordered newest first */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["MediaDeletionJobPage"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
+                403: components["responses"]["Forbidden"];
+                428: components["responses"]["RecentAuthRequired"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/media/deletion-jobs/{id}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Requeue one dead-lettered system media deletion job
+         * @description Requires operations.jobs and recent authentication. Only quarantined, system-owned dead letters can be retried; the operator's reason is stored separately from the job's immutable business purpose.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["AdminReasonInput"];
+                };
+            };
+            responses: {
+                /** @description job requeued */
+                202: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+                409: components["responses"]["Conflict"];
+                428: components["responses"]["RecentAuthRequired"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/media/uploads/{id}/preview-grants": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Issue a one-time same-origin media preview grant
+         * @description Requires moderation.content. The moderator must be independent from the uploader and provide an evidence-read reason. No provider identifier or URL is returned.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["AdminReasonInput"];
+                };
+            };
+            responses: {
+                /** @description one-time grant */
+                200: {
+                    headers: {
+                        "Cache-Control"?: string;
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ModerationPreviewGrant"];
+                    };
+                };
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+                409: components["responses"]["Conflict"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/media/uploads/{id}/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Consume a one-time grant and proxy bounded image evidence
+         * @description Requires moderation.content and the same moderator who created the unexpired grant. The response is same-origin, no-store, MIME checked, bounded to 20 MiB / 20,000 px per side / 40 MP before the first byte, and audited without persisting a URL or key.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header: {
+                    "X-Media-Preview-Token": string;
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description bounded image stream */
+                200: {
+                    headers: {
+                        "Cache-Control"?: string;
+                        "X-Content-Type-Options"?: string;
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "image/jpeg": string;
+                        "image/png": string;
+                        "image/gif": string;
+                        "image/webp": string;
+                    };
+                };
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/media/uploads/{id}/approve": {
         parameters: {
             query?: never;
@@ -5079,7 +8661,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Approve a pending upload */
+        /**
+         * Approve an evidence-backed pending image
+         * @description Requires strict role hierarchy and a trusted image preview completed by the same moderator. Generic files cannot be approved until malware and sandbox scanner evidence exists.
+         */
         post: {
             parameters: {
                 query?: never;
@@ -5122,7 +8707,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Block a pending upload */
+        /**
+         * Quarantine an upload and enqueue durable provider deletion
+         * @description Supports pending and already-published clean uploads under strict role hierarchy. The database becomes non-public before any provider I/O; deletion is retried from a durable queue and finalizes the blocked state. An active retention hold does not prevent quarantine, but pauses physical provider deletion until release or expiry.
+         */
         post: {
             parameters: {
                 query?: never;
@@ -5138,8 +8726,8 @@ export interface paths {
                 };
             };
             responses: {
-                /** @description blocked */
-                200: {
+                /** @description quarantined and deletion queued */
+                202: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -5156,6 +8744,88 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/media/uploads/{id}/retention-hold": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Place a purpose-bound, time-bounded hold that pauses provider deletion
+         * @description Requires operations.jobs and a recent-authenticated revocable session. Fails once provider deletion is leased or complete. expectedHoldId provides compare-and-set semantics so a reviewed hold can be renewed without an unprotected gap or overwriting concurrent work.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["MediaRetentionHoldInput"];
+                };
+            };
+            responses: {
+                /** @description hold placed */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+                409: components["responses"]["Conflict"];
+                428: components["responses"]["RecentAuthRequired"];
+            };
+        };
+        /**
+         * Release the current media retention hold
+         * @description Requires operations.jobs and recent authentication. The release reason and bounded hold metadata are append-only audited.
+         */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["MediaRetentionHoldReleaseInput"];
+                };
+            };
+            responses: {
+                /** @description hold released */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+                409: components["responses"]["Conflict"];
+                428: components["responses"]["RecentAuthRequired"];
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/selection/sync": {
         parameters: {
             query?: never;
@@ -5166,6 +8836,44 @@ export interface paths {
         get?: never;
         put?: never;
         /** Trigger 一系统 sync job */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["AdminReasonInput"];
+                };
+            };
+            responses: {
+                /** @description queued */
+                202: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/courses/reindex": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Rebuild the Meilisearch course documents */
         post: {
             parameters: {
                 query?: never;
@@ -5241,7 +8949,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Rebuild the Meilisearch forum index */
+        /** Rebuild thread */
         post: {
             parameters: {
                 query?: never;
@@ -6007,6 +9715,7 @@ export interface paths {
                 };
                 403: components["responses"]["Forbidden"];
                 404: components["responses"]["NotFound"];
+                428: components["responses"]["RecentAuthRequired"];
             };
         };
         delete?: never;
@@ -6024,7 +9733,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Revoke sanction */
+        /**
+         * Revoke sanction
+         * @description Revoking a suspension requires recent authentication; revoking an ordinary silence does not.
+         */
         post: {
             parameters: {
                 query?: never;
@@ -6049,6 +9761,7 @@ export interface paths {
                 };
                 403: components["responses"]["Forbidden"];
                 404: components["responses"]["NotFound"];
+                428: components["responses"]["RecentAuthRequired"];
             };
         };
         delete?: never;
@@ -6097,17 +9810,21 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/admin/platform/badges": {
+    "/admin/achievements": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** List all badges */
+        /** List versioned contribution achievement definitions */
         get: {
             parameters: {
-                query?: never;
+                query?: {
+                    /** @description Opaque pagination cursor */
+                    cursor?: components["parameters"]["Cursor"];
+                    limit?: components["parameters"]["Limit"];
+                };
                 header?: never;
                 path?: never;
                 cookie?: never;
@@ -6120,13 +9837,14 @@ export interface paths {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": components["schemas"]["Badge"][];
+                        "application/json": components["schemas"]["AchievementPage"];
                     };
                 };
+                403: components["responses"]["Forbidden"];
             };
         };
         put?: never;
-        /** Create a badge */
+        /** Create a controlled contribution achievement definition */
         post: {
             parameters: {
                 query?: never;
@@ -6136,7 +9854,7 @@ export interface paths {
             };
             requestBody: {
                 content: {
-                    "application/json": components["schemas"]["BadgeInput"];
+                    "application/json": components["schemas"]["AchievementCreateInput"];
                 };
             };
             responses: {
@@ -6146,9 +9864,481 @@ export interface paths {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": components["schemas"]["Badge"];
+                        "application/json": components["schemas"]["Achievement"];
                     };
                 };
+                400: components["responses"]["BadRequest"];
+                403: components["responses"]["Forbidden"];
+                409: components["responses"]["Conflict"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/achievements/{achievementId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Update or retire an achievement with optimistic concurrency */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    achievementId: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["AchievementUpdateInput"];
+                };
+            };
+            responses: {
+                /** @description updated */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Achievement"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+                409: components["responses"]["Conflict"];
+            };
+        };
+        trace?: never;
+    };
+    "/admin/users/{id}/achievements": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List an account's active and revoked contribution achievements */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description Opaque pagination cursor */
+                    cursor?: components["parameters"]["Cursor"];
+                    limit?: components["parameters"]["Limit"];
+                };
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AchievementGrantPage"];
+                    };
+                };
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+            };
+        };
+        put?: never;
+        /** Manually award or re-award an achievement without minting points */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["AchievementGrantInput"];
+                };
+            };
+            responses: {
+                /** @description awarded */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AchievementGrant"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+                409: components["responses"]["Conflict"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/users/{id}/achievements/{achievementId}/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Revoke an account achievement without reversing historical contribution points */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                    achievementId: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["AchievementRevokeInput"];
+                };
+            };
+            responses: {
+                /** @description revoked */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AchievementGrant"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+                409: components["responses"]["Conflict"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/users/{id}/achievement-events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List append-only achievement award and revocation history */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description Opaque pagination cursor */
+                    cursor?: components["parameters"]["Cursor"];
+                    limit?: components["parameters"]["Limit"];
+                };
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AchievementEventPage"];
+                    };
+                };
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/platform/badges": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Deprecated alias for listing contribution achievements
+         * @deprecated
+         */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description Opaque pagination cursor */
+                    cursor?: components["parameters"]["Cursor"];
+                    limit?: components["parameters"]["Limit"];
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AchievementPage"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        /**
+         * Deprecated alias for creating a contribution achievement
+         * @deprecated
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["AchievementCreateInput"];
+                };
+            };
+            responses: {
+                /** @description created */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Achievement"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/verifications/types": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List staff-managed identity and special verification definitions */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description Opaque pagination cursor */
+                    cursor?: components["parameters"]["Cursor"];
+                    limit?: components["parameters"]["Limit"];
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["VerificationTypePage"];
+                    };
+                };
+                403: components["responses"]["Forbidden"];
+            };
+        };
+        put?: never;
+        /** Create a typed verification definition */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["VerificationTypeInput"];
+                };
+            };
+            responses: {
+                /** @description created */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["VerificationType"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                403: components["responses"]["Forbidden"];
+                409: components["responses"]["Conflict"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/users/{id}/verifications": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List an account's verification grant history */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description Opaque pagination cursor */
+                    cursor?: components["parameters"]["Cursor"];
+                    limit?: components["parameters"]["Limit"];
+                };
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["VerificationGrantPage"];
+                    };
+                };
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+            };
+        };
+        put?: never;
+        /** Grant an identity or special verification to a lower-role account */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["VerificationGrantInput"];
+                };
+            };
+            responses: {
+                /** @description granted */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["VerificationGrant"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+                409: components["responses"]["Conflict"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/verifications/grants/{id}/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Revoke an active verification grant without erasing its history */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["VerificationRevokeInput"];
+                };
+            };
+            responses: {
+                /** @description revoked */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["VerificationGrant"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+                409: components["responses"]["Conflict"];
             };
         };
         delete?: never;
@@ -6175,19 +10365,300 @@ export interface components {
             hasMore?: boolean;
         };
         Account: {
-            id?: string;
-            handle?: string;
-            avatarUrl?: string | null;
+            id: string;
+            handle: string;
+            /**
+             * @deprecated
+             * @description Legacy compatibility field; profile images are controlled media assets.
+             */
+            avatarUrl: string | null;
             /** @enum {string} */
-            role?: "user" | "mod" | "admin";
-            capabilities?: string[];
-            trustLevel?: number;
-            createdAt?: number;
+            role: "user" | "mod" | "admin";
+            capabilities: string[];
+            trustLevel: number;
+            /** @description True until the current terms version and required profile/privacy choices are accepted. */
+            onboardingRequired: boolean;
+            createdAt: number;
+        };
+        /** @enum {string} */
+        AccountLifecycleState: "active" | "deactivated" | "deletion_requested" | "deleted" | "purged";
+        AccountLifecycle: {
+            state: components["schemas"]["AccountLifecycleState"];
+            deactivatedAt: number | null;
+            deletionRequestedAt: number | null;
+            recoverUntil: number | null;
+            deletedAt: number | null;
+            purgedAt: number | null;
+            lifecycleVersion: number;
+        };
+        /** @description Purpose-bound credential accepted only by account-recovery routes. It never creates a session or refresh token. */
+        RecoveryCredential: {
+            recoveryToken: string;
+            expiresAt: number;
+            lifecycle: components["schemas"]["AccountLifecycle"];
+        };
+        OnboardingState: {
+            required: boolean;
+            currentTermsVersion: string;
+            acceptedTermsVersion: string | null;
+            handle: string;
+            displayName: string | null;
+            bio: string | null;
+            profileVisibility: components["schemas"]["ProfileVisibility"];
+            activityVisibility: components["schemas"]["ActivityVisibility"];
+            discoverable: boolean;
+            completedAt: number | null;
+        };
+        OnboardingCompleteInput: {
+            handle: string;
+            displayName: string | null;
+            bio: string | null;
+            profileVisibility: components["schemas"]["ProfileVisibility"];
+            activityVisibility: components["schemas"]["ActivityVisibility"];
+            discoverable: boolean;
+            acceptedTermsVersion: string;
+        };
+        AccountLifecycleMutationInput: {
+            /** @enum {string} */
+            confirmation: "DEACTIVATE" | "DELETE";
+        };
+        DeactivateAccountInput: {
+            /** @enum {string} */
+            confirmation: "DEACTIVATE";
+        };
+        DeleteAccountInput: {
+            /** @enum {string} */
+            confirmation: "DELETE";
+        };
+        AccountLifecycleMutation: {
+            lifecycle: components["schemas"]["AccountLifecycle"];
+            recovery: components["schemas"]["RecoveryCredential"];
+        };
+        /** @enum {string} */
+        DataExportStatus: "queued" | "running" | "ready" | "failed" | "expired";
+        DataExportJob: {
+            id: string;
+            status: components["schemas"]["DataExportStatus"];
+            createdAt: number;
+            updatedAt: number;
+            expiresAt: number;
+            errorCode: string | null;
+        };
+        DataExportDownloadGrant: {
+            token: string;
+            expiresAt: number;
+        };
+        /** @description Machine-readable owner export assembled through domain-owned projections. Internal evidence, reporter/staff identity, inbound private-message bodies, secrets, and provider metadata are excluded. */
+        AccountDataExport: {
+            schemaVersion: string;
+            generatedAt: number;
+            includedSections: string[];
+            identity: Record<string, never>;
+            forum: Record<string, never>;
+            reviews: Record<string, never>;
+            governance: Record<string, never>;
+            credit: Record<string, never>;
+            activity: Record<string, never>[];
+            platform: Record<string, never>;
+            media: Record<string, never>[];
+        };
+        /** @enum {string} */
+        ProfileVisibility: "public" | "campus" | "only_me";
+        /** @enum {string} */
+        RelationshipListVisibility: "public" | "campus" | "followers" | "only_me";
+        /**
+         * @description following means accounts the recipient follows may start a new conversation.
+         * @enum {string}
+         */
+        DmPolicy: "everyone" | "following" | "nobody";
+        /**
+         * @description Controls profile activity lists, not the visibility of canonical public forum content.
+         * @enum {string}
+         */
+        ActivityVisibility: "public" | "campus" | "only_me";
+        /**
+         * @description following means accounts the recipient follows may create a semantic mention notification.
+         * @enum {string}
+         */
+        MentionPolicy: "everyone" | "following" | "nobody";
+        MyProfile: {
+            accountId: string;
+            displayName: string | null;
+            bio: string | null;
+            /** Format: uri */
+            website: string | null;
+            avatarAssetId: string | null;
+            bannerAssetId: string | null;
+        };
+        ProfileUpdateInput: {
+            displayName: string | null;
+            bio: string | null;
+            /**
+             * Format: uri
+             * @description HTTPS URLs only.
+             */
+            website: string | null;
+        };
+        ProfilePrivacy: {
+            profileVisibility: components["schemas"]["ProfileVisibility"];
+            activityVisibility: components["schemas"]["ActivityVisibility"];
+            followersVisibility: components["schemas"]["RelationshipListVisibility"];
+            followingVisibility: components["schemas"]["RelationshipListVisibility"];
+            /** @description Controls third-party relationship-list discovery and future account search, not exact-handle navigation. */
+            discoverable: boolean;
+            dmPolicy: components["schemas"]["DmPolicy"];
+            mentionPolicy: components["schemas"]["MentionPolicy"];
+        };
+        /** @description New activity and mention fields are optional only for rolling compatibility with older clients; current clients send both. */
+        ProfilePrivacyUpdateInput: {
+            profileVisibility: components["schemas"]["ProfileVisibility"];
+            activityVisibility?: components["schemas"]["ActivityVisibility"];
+            followersVisibility: components["schemas"]["RelationshipListVisibility"];
+            followingVisibility: components["schemas"]["RelationshipListVisibility"];
+            discoverable: boolean;
+            dmPolicy: components["schemas"]["DmPolicy"];
+            mentionPolicy?: components["schemas"]["MentionPolicy"];
+        };
+        ProfileAssetInput: {
+            assetId: string;
         };
         AuthTokens: {
-            accessToken?: string;
-            refreshToken?: string;
-            account?: components["schemas"]["Account"];
+            accessToken: string;
+            refreshToken: string;
+            account: components["schemas"]["Account"];
+        };
+        /** @enum {string} */
+        EmailCodePurpose: "login" | "registration" | "appeal" | "recovery";
+        EmailCodeRequest: {
+            /** Format: email */
+            email: string;
+            captchaToken: string;
+            /** @description Optional only for rolling compatibility. Appeal and recovery codes are consumed only by their purpose-bound routes. */
+            purpose?: components["schemas"]["EmailCodePurpose"];
+        };
+        EmailCodeVerification: {
+            /** Format: email */
+            email: string;
+            code: string;
+            /** @description Optional only for rolling compatibility. This full-login endpoint rejects appeal- and recovery-purpose codes. */
+            purpose?: components["schemas"]["EmailCodePurpose"];
+            handle?: string;
+            /** Format: password */
+            password?: string;
+        };
+        RefreshInput: {
+            refreshToken: string;
+        };
+        Session: {
+            id: string;
+            isCurrent: boolean;
+            deviceLabel?: string | null;
+            createdAt: number;
+            lastUsedAt: number;
+            expiresAt: number;
+        };
+        SessionPage: components["schemas"]["Page"] & {
+            items?: components["schemas"]["Session"][];
+        };
+        /** @enum {string} */
+        RecentAuthMethod: "password" | "email_code";
+        RecentAuthStatus: {
+            /** @description False for rolling-window legacy JWTs; high-risk mutations fail closed until a new session login. */
+            sessionBound: boolean;
+            isFresh: boolean;
+            authenticatedAt: number | null;
+            expiresAt: number | null;
+            method: components["schemas"]["RecentAuthMethod"] | null;
+            /** @description Password appears only when the authenticated account has one; email_code never accepts a client-supplied email. */
+            availableMethods: components["schemas"]["RecentAuthMethod"][];
+        };
+        /** @description Exactly the credential matching method must be supplied; the server binds success to the current revocable session. */
+        RecentAuthVerifyInput: {
+            method: components["schemas"]["RecentAuthMethod"];
+            /** Format: password */
+            password?: string;
+            code?: string;
+        };
+        AppealAccessToken: {
+            /** @description Short-lived bearer accepted only by /me/appeals and /me/governance-notices. */
+            accessToken: string;
+            expiresAt: number;
+        };
+        AppealEmailVerification: {
+            /** Format: email */
+            email: string;
+            code: string;
+        };
+        /** @enum {string} */
+        AppealStatus: "submitted" | "in_review" | "upheld" | "overturned" | "amended" | "withdrawn";
+        AppealHistory: {
+            id: string;
+            fromStatus?: components["schemas"]["AppealStatus"] | null;
+            toStatus: components["schemas"]["AppealStatus"];
+            reason: string;
+            /** @description Bounded public decision metadata; currently only a shortened sanction endsAt. */
+            metadata?: Record<string, never> | null;
+            createdAt: number;
+        };
+        Appeal: {
+            id: string;
+            governanceEventId: string;
+            originalAction: string;
+            /** @description Safe disposition summary for the owner; authorized staff may receive the internal reason. */
+            originalReason?: string | null;
+            /** @enum {string} */
+            targetKind: "sanction" | "forum_thread" | "forum_comment" | "review";
+            targetId: string;
+            /** @enum {string} */
+            dispositionKind: "silence" | "suspend" | "hide" | "delete";
+            status: components["schemas"]["AppealStatus"];
+            submissionReason: string;
+            submittedAt: number;
+            appealableUntil: number;
+            reviewStartedAt?: number | null;
+            decisionReason?: string | null;
+            amendment?: Record<string, never> | null;
+            decidedAt?: number | null;
+            version: number;
+            history: components["schemas"]["AppealHistory"][];
+        };
+        AdminAppeal: components["schemas"]["Appeal"] & {
+            appellantAccountId: string;
+            reviewerAccountId?: string | null;
+        };
+        SubmitAppealInput: {
+            governanceEventId: string;
+            reason: string;
+        };
+        AppealTransitionInput: {
+            expectedVersion: number;
+            reason: string;
+        };
+        AppealDecisionInput: {
+            expectedVersion: number;
+            /** @enum {string} */
+            outcome: "upheld" | "overturned" | "amended";
+            reason: string;
+            /** @description Only for amended sanctions; must shorten the active sanction. */
+            amendedEndsAt?: number | null;
+        };
+        GovernanceNotice: {
+            id: string;
+            /** @enum {string} */
+            noticeType: "sanction_applied" | "content_restricted" | "appeal_submitted" | "appeal_in_review" | "appeal_upheld" | "appeal_overturned" | "appeal_amended" | "appeal_withdrawn";
+            /** @enum {string} */
+            subjectKind: "sanction" | "forum_thread" | "forum_comment" | "review" | "appeal";
+            subjectId: string;
+            summary: string;
+            appealId?: string | null;
+            targetUrl: string;
+            read: boolean;
+            readAt?: number | null;
+            createdAt: number;
+        };
+        GovernanceNoticeReadInput: {
+            ids?: string[];
+            all?: boolean;
         };
         Department: {
             id?: string;
@@ -6269,7 +10740,7 @@ export interface components {
             seq?: number;
             txId?: string;
             /** @enum {string} */
-            type?: "mint" | "tip" | "escrow_hold" | "escrow_release" | "admin_adjust";
+            type?: "mint" | "tip" | "escrow_hold" | "escrow_release";
             fromAccount?: string | null;
             toAccount?: string | null;
             amount?: number;
@@ -6280,6 +10751,65 @@ export interface components {
             ok?: boolean;
             latestSeq?: number;
             latestHash?: string;
+        };
+        ReconciliationRunInput: {
+            reason: string;
+        };
+        CreditReconciliationRun: {
+            /** Format: uuid */
+            id: string;
+            /** @enum {string} */
+            status: "queued" | "running" | "succeeded" | "failed";
+            requestedBy: string;
+            reason: string;
+            ledgerOk?: boolean | null;
+            /** Format: int64 */
+            ledgerLatestSeq?: number | null;
+            ledgerLatestHash?: string | null;
+            /** Format: int64 */
+            ledgerFailureSeq?: number | null;
+            /** Format: int64 */
+            walletsChecked: number;
+            /** Format: int64 */
+            driftedWallets: number;
+            /** Format: int64 */
+            missingWallets: number;
+            /** Format: int64 */
+            balanceDriftedWallets: number;
+            /** Format: int64 */
+            sequenceDriftedWallets: number;
+            totalAbsoluteDrift: string;
+            errorCode?: string | null;
+            /** Format: int64 */
+            createdAt: number;
+            /** Format: int64 */
+            startedAt?: number | null;
+            /** Format: int64 */
+            completedAt?: number | null;
+        };
+        CreditReconciliationWallet: {
+            accountId: string;
+            expectedBalance: string;
+            actualBalance?: string | null;
+            delta: string;
+            /** Format: int64 */
+            expectedLastSeq: number;
+            /** Format: int64 */
+            actualLastSeq?: number | null;
+            walletExists: boolean;
+            hasBalanceDrift: boolean;
+            hasSequenceDrift: boolean;
+        };
+        CreditReconciliationStats: {
+            /** Format: int64 */
+            totalRuns: number;
+            /** Format: int64 */
+            failedRuns: number;
+            /** Format: int64 */
+            ledgerFailureRuns: number;
+            /** Format: int64 */
+            runsWithDrift: number;
+            latestRun?: components["schemas"]["CreditReconciliationRun"] | null;
         };
         SigningIntentInput: {
             /** @enum {string} */
@@ -6293,6 +10823,7 @@ export interface components {
             /** Format: int64 */
             expiresAt: number;
         };
+        /** @description The recipient must be the active author of the visible target; self-tips are rejected. */
         TipInput: {
             toAccountId: string;
             amount: number;
@@ -6323,6 +10854,7 @@ export interface components {
             /** @enum {string} */
             action: "submit" | "confirm" | "cancel" | "reject" | "delete";
         };
+        /** @description Public listing data. Private delivery instructions are never exposed here. */
         Product: {
             id?: string;
             sellerId?: string;
@@ -6349,15 +10881,103 @@ export interface components {
             amount?: number;
             /** @enum {string} */
             status?: "pending" | "accepted" | "delivered" | "completed" | "cancelled";
+            /** @description Visible only to the purchase buyer and seller */
+            deliveryInfo?: string | null;
             createdAt?: number;
         };
         PurchaseAction: {
             /** @enum {string} */
-            action: "accept" | "deliver" | "confirm";
+            action: "accept" | "deliver" | "confirm" | "cancel";
+        };
+        CourseSearchHit: {
+            id: string;
+            code: string;
+            name: string;
+            credit: number | null;
+            department: string | null;
+            teacherName: string | null;
+            reviewCount: number;
+            reviewAvg: number | null;
+        };
+        ReviewSearchHit: {
+            id: string;
+            courseId: string;
+            courseName: string;
+            rating: number;
+            comment: string | null;
+            approveCount: number;
+            createdAt: number;
+        };
+        ThreadSearchHit: {
+            id: string;
+            title: string;
+            bodyExcerpt: string;
+            board: string;
+            tags: string[];
+            authorHandle: string;
+            replyCount: number;
+            voteCount: number;
+            createdAt: number;
+            /** @enum {string} */
+            status: "visible";
+        };
+        UserSearchHit: {
+            id: string;
+            handle: string;
+            displayName: string | null;
+            avatarUrl: string | null;
+            /** @enum {string} */
+            role: "user" | "mod" | "admin";
+            followerCount: number;
+            following: boolean;
+        };
+        BoardSearchHit: {
+            id: string;
+            slug: string;
+            name: string;
+            description: string | null;
+            threadCount: number;
+        };
+        TagSearchHit: {
+            id: string;
+            slug: string;
+            name: string;
+            description: string | null;
+            threadCount: number;
+        };
+        /** @enum {string} */
+        SearchResultScope: "course" | "review" | "thread" | "user" | "board" | "tag";
+        /** @description Half-open Unicode character offsets into the named canonical field; clients render text nodes and never HTML. */
+        SearchHighlightRange: {
+            start: number;
+            end: number;
+        };
+        /** @description Presentation metadata computed only after the owning domain rehydrates and authorizes the result. */
+        SearchHighlight: {
+            scope: components["schemas"]["SearchResultScope"];
+            id: string;
+            /** @enum {string} */
+            field: "name" | "code" | "teacherName" | "department" | "courseName" | "comment" | "title" | "bodyExcerpt" | "board" | "authorHandle" | "handle" | "displayName" | "slug" | "description";
+            ranges: components["schemas"]["SearchHighlightRange"][];
         };
         SearchResult: {
-            courses?: components["schemas"]["Course"][];
-            reviews?: components["schemas"]["Review"][];
+            courses: components["schemas"]["CourseSearchHit"][];
+            reviews: components["schemas"]["ReviewSearchHit"][];
+            threads: components["schemas"]["ThreadSearchHit"][];
+            users: components["schemas"]["UserSearchHit"][];
+            boards: components["schemas"]["BoardSearchHit"][];
+            tags: components["schemas"]["TagSearchHit"][];
+            /** @description Opaque continuation for a specific non-all type, bound to the normalized query and type. */
+            nextCursor: string | null;
+            hasMore: boolean;
+            /** @description Sections with more privacy-revalidated results; all-scope clients use this for "see more" links. */
+            hasMoreScopes: components["schemas"]["SearchResultScope"][];
+            /** @description Included sections that failed while other sections remained usable. Never contains internal errors. */
+            failedScopes: components["schemas"]["SearchResultScope"][];
+            /** @description Safe ranges over the returned canonical fields; never snippets or markup copied from the search index. */
+            highlights: components["schemas"]["SearchHighlight"][];
+            /** @description Conservative spelling suggestion inferred only from words in the visible, owner-rehydrated result set; null when ambiguous. */
+            suggestedQuery: string | null;
         };
         Calendar: {
             id?: string;
@@ -6406,15 +11026,19 @@ export interface components {
             fetchedAt?: number;
         };
         Board: {
-            id?: string;
-            slug?: string;
-            name?: string;
-            parentId?: string | null;
-            description?: string | null;
-            position?: number;
-            isLocked?: boolean;
-            minTrustToPost?: number;
-            threadCount?: number;
+            id: string;
+            slug: string;
+            name: string;
+            parentId: string | null;
+            description: string | null;
+            position: number;
+            isLocked: boolean;
+            minTrustToPost: number;
+            isQa: boolean;
+            threadCount: number;
+            canPost: boolean;
+            /** @enum {string|null} */
+            postingRestriction: "login_required" | "board_locked" | "trust_level" | null;
         };
         Tag: {
             id?: string;
@@ -6424,20 +11048,54 @@ export interface components {
             threadCount?: number;
             createdAt?: number;
         };
+        /**
+         * @default plain_v1
+         * @enum {string}
+         */
+        ContentFormat: "plain_v1" | "markdown_v1";
+        /** @description Minimal clean Media projection for one server-validated yourtj-asset Markdown reference. The canonical destination is never a fetch URL. */
+        ForumAttachment: {
+            assetId: string;
+            reference: string;
+            position: number;
+            alt: string;
+            /**
+             * Format: uri
+             * @description Authorization-derived clean image URL; never persisted in Forum content.
+             */
+            url: string;
+            width: number | null;
+            height: number | null;
+        };
         Thread: {
-            id?: string;
-            boardId?: string;
-            authorHandle?: string;
-            title?: string;
-            replyCount?: number;
-            voteCount?: number;
-            hotScore?: number;
-            createdAt?: number;
-            lastActivityAt?: number;
-            tags?: string[];
+            id: string;
+            boardId: string;
+            authorHandle: string;
+            title: string;
+            bodyExcerpt: string | null;
+            /** Format: int64 */
+            contentVersion: number;
+            replyCount: number;
+            voteCount: number;
+            hotScore: number | null;
+            /** @enum {string} */
+            status: "visible";
+            createdAt: number;
+            lastActivityAt: number;
+            tags: string[];
+            /** @description At most the first clean image for a bounded feed card. */
+            attachments: components["schemas"]["ForumAttachment"][];
+            /** @enum {string|null} */
+            viewerVote: "up" | "down" | null;
+            isBookmarked: boolean;
+            /** @description Server-authoritative author edit permission for this viewer. */
+            canEdit: boolean;
+            /** @description Server-authoritative author delete permission for this viewer. */
+            canDelete: boolean;
+            /** @description Server-authoritative moderation permission including role hierarchy. */
+            canModerate: boolean;
         };
         ThreadFeed: components["schemas"]["Thread"] & {
-            status?: string;
             unreadCount?: number | null;
         };
         ThreadDetail: {
@@ -6447,10 +11105,14 @@ export interface components {
             authorId: string;
             title: string;
             body: string | null;
+            contentFormat: components["schemas"]["ContentFormat"];
+            /** Format: int64 */
+            contentVersion: number;
             replyCount: number;
             voteCount: number;
             hotScore: number | null;
             tags: string[];
+            attachments: components["schemas"]["ForumAttachment"][];
             status: string;
             pinnedAt: number | null;
             pinnedGlobally: boolean;
@@ -6463,21 +11125,44 @@ export interface components {
             createdAt: number;
             lastActivityAt: number;
             solvedAnswerId: string | null;
+            /** @enum {string|null} */
+            viewerVote: "up" | "down" | null;
+            isBookmarked: boolean;
             myLastReadCommentId: string | null;
-            mySubscriptionLevel: string | null;
+            /** @enum {string|null} */
+            mySubscriptionLevel: "watching" | "tracking" | "muted" | null;
             poll: components["schemas"]["Poll"] | null;
+            /** @description Server-authoritative author edit permission for this viewer. */
+            canEdit: boolean;
+            /** @description Server-authoritative author delete permission for this viewer. */
+            canDelete: boolean;
+            /** @description Server-authoritative moderation permission including role hierarchy. */
+            canModerate: boolean;
         };
         ThreadInput: {
             boardId: string;
             title: string;
             body?: string | null;
+            contentFormat?: components["schemas"]["ContentFormat"];
             tags?: string[];
+            /** @description Ordered asset ids that must exactly equal the markdown_v1 yourtj-asset image destinations. Must be empty for plain_v1. */
+            attachmentAssetIds?: string[];
             poll?: components["schemas"]["PollInput"];
         };
         ThreadUpdateInput: {
+            /**
+             * Format: int64
+             * @description Compare-and-swap version. Legacy omission is treated as version 1 and conflicts once content has changed.
+             * @default 1
+             */
+            expectedVersion: number;
             title?: string;
             body?: string;
+            /** @description Required whenever body is supplied; legacy omission is treated as plain_v1. */
+            contentFormat?: components["schemas"]["ContentFormat"];
             tags?: string[];
+            /** @description When body is supplied, ordered ids must exactly match every yourtj-asset image reference; otherwise omit or send an empty array. */
+            attachmentAssetIds?: string[];
         };
         ThreadPinInput: {
             globally?: boolean;
@@ -6494,12 +11179,16 @@ export interface components {
             reason: string;
         };
         PostRevision: {
-            id?: string;
-            seq?: number;
-            editorId?: string;
-            oldTitle?: string | null;
-            oldBody?: string;
-            createdAt?: number;
+            id: string;
+            seq: number;
+            editorId: string;
+            oldTitle: string | null;
+            oldBody: string;
+            oldContentFormat: components["schemas"]["ContentFormat"];
+            /** Format: int64 */
+            oldContentVersion: number;
+            attachments: components["schemas"]["ForumAttachment"][];
+            createdAt: number;
         };
         Comment: {
             id: string;
@@ -6509,21 +11198,46 @@ export interface components {
             authorHandle: string;
             authorId: string;
             body: string;
+            contentFormat: components["schemas"]["ContentFormat"];
+            /** Format: int64 */
+            contentVersion: number;
+            attachments: components["schemas"]["ForumAttachment"][];
             voteCount: number;
+            /** @enum {string|null} */
+            viewerVote: "up" | "down" | null;
+            isBookmarked: boolean;
             isDeleted: boolean;
             isHidden: boolean;
             editedAt: number | null;
             createdAt: number;
             quotedCommentId: string | null;
             isSolved: boolean;
+            /** @description Server-authoritative author edit permission for this viewer. */
+            canEdit: boolean;
+            /** @description Server-authoritative author delete permission for this viewer. */
+            canDelete: boolean;
+            /** @description Server-authoritative moderation permission including role hierarchy. */
+            canModerate: boolean;
         };
         CommentInput: {
             parentId?: string;
             body: string;
+            contentFormat?: components["schemas"]["ContentFormat"];
+            /** @description Ordered asset ids that must exactly match markdown_v1 yourtj-asset image destinations. */
+            attachmentAssetIds?: string[];
             quotedCommentId?: string;
         };
         CommentUpdateInput: {
+            /**
+             * Format: int64
+             * @description Compare-and-swap version. Legacy omission is treated as version 1 and conflicts once content has changed.
+             * @default 1
+             */
+            expectedVersion: number;
             body: string;
+            contentFormat?: components["schemas"]["ContentFormat"];
+            /** @description Ordered asset ids that must exactly match markdown_v1 yourtj-asset image destinations. */
+            attachmentAssetIds?: string[];
         };
         VoteInput: {
             /** @enum {string} */
@@ -6534,6 +11248,8 @@ export interface components {
         VoteResponse: {
             ok: boolean;
             voteCount: number;
+            /** @enum {string|null} */
+            viewerVote: "up" | "down" | null;
         };
         FlagInput: {
             /** @enum {string} */
@@ -6554,11 +11270,14 @@ export interface components {
         };
         Subscription: {
             /** @enum {string} */
-            targetType?: "board" | "thread";
-            targetId?: string;
+            targetType: "board" | "thread";
+            targetId: string;
             /** @enum {string} */
-            level?: "watching" | "tracking" | "muted";
-            createdAt?: number;
+            level: "watching" | "tracking" | "muted";
+            createdAt: number;
+        };
+        SubscriptionPage: components["schemas"]["Page"] & {
+            items?: components["schemas"]["Subscription"][];
         };
         SubscriptionInput: {
             /** @enum {string} */
@@ -6579,6 +11298,8 @@ export interface components {
             createdAt?: number;
         };
         BookmarkInput: {
+            /** @enum {string} */
+            postType: "thread" | "comment";
             note?: string;
         };
         ModAction: {
@@ -6591,20 +11312,72 @@ export interface components {
             createdAt?: number;
         };
         Notification: {
-            id?: string;
-            type?: string;
-            payload?: Record<string, never>;
-            read?: boolean;
-            readAt?: number | null;
-            createdAt?: number;
+            id: string;
+            type: string;
+            payload: {
+                [key: string]: unknown;
+            };
+            /** @description Safe application-relative destination when this notification has one. */
+            targetUrl: string | null;
+            read: boolean;
+            readAt: number | null;
+            createdAt: number;
+        };
+        NotificationReadInput: {
+            /** @description Mark only these notifications. They must belong to the current account. */
+            ids?: string[];
+            /** @description Mark every notification for the current account. Cannot be combined with ids. */
+            all?: boolean;
+        };
+        InAppNotificationPrefs: {
+            /** @default true */
+            replies: boolean;
+            /** @default true */
+            mentions: boolean;
+            /** @default true */
+            quotes: boolean;
+            /** @default true */
+            votes: boolean;
+            /** @default true */
+            badges: boolean;
+            /** @default true */
+            follows: boolean;
+            /** @default true */
+            subscriptions: boolean;
+            /** @default true */
+            directMessages: boolean;
+        };
+        EmailNotificationPrefs: {
+            /** @default false */
+            weeklyDigest: boolean;
+        };
+        NotificationPreferences: {
+            inApp: components["schemas"]["InAppNotificationPrefs"];
+            email: components["schemas"]["EmailNotificationPrefs"];
+        };
+        InAppNotificationPrefsInput: {
+            replies: boolean;
+            mentions: boolean;
+            quotes: boolean;
+            votes: boolean;
+            badges: boolean;
+            /** @description Optional only during rolling deployment; omission preserves the stored value. */
+            follows?: boolean;
+            subscriptions: boolean;
+            directMessages: boolean;
+        };
+        NotificationPreferencesInput: {
+            inApp: components["schemas"]["InAppNotificationPrefsInput"];
+            email: components["schemas"]["EmailNotificationPrefs"];
         };
         NotificationPrefs: {
-            prefs?: Record<string, never>;
+            prefs: components["schemas"]["NotificationPreferences"];
         };
         NotificationPrefsInput: {
-            prefs: Record<string, never>;
+            prefs: components["schemas"]["NotificationPreferencesInput"];
         };
         ReadTrackingInput: {
+            /** @description When null or omitted, mark through the thread's current last visible comment. */
             lastReadCommentId?: string | null;
         };
         Sanction: {
@@ -6637,11 +11410,25 @@ export interface components {
         AdminBoardCreateInput: {
             slug: string;
             name: string;
+            description?: string;
+            /** @default 0 */
+            position: number;
+            /** @default false */
+            isLocked: boolean;
+            /** @default 0 */
+            minTrustToPost: number;
+            /** @default false */
+            isQa: boolean;
             reason: string;
         };
         AdminBoardUpdateInput: {
             slug?: string;
             name?: string;
+            description?: string;
+            position?: number;
+            isLocked?: boolean;
+            minTrustToPost?: number;
+            isQa?: boolean;
             reason: string;
         };
         AdminTagCreateInput: {
@@ -6670,16 +11457,166 @@ export interface components {
             value: string;
             reason: string;
         };
+        AnnouncementReceipt: {
+            revision: number;
+            firstSeenAt?: number | null;
+            dismissedAt?: number | null;
+            acknowledgedAt?: number | null;
+        };
+        AnnouncementReceiptSummary: {
+            seenCount: number;
+            dismissedCount: number;
+            acknowledgedCount: number;
+        };
         Announcement: {
             id: string;
             title: string;
             body?: string | null;
+            /** @enum {string} */
+            status: "draft" | "scheduled" | "published" | "archived";
+            /** @enum {string} */
+            effectiveState: "draft" | "scheduled" | "active" | "expired" | "archived";
+            /** @enum {string} */
+            presentation: "card" | "banner";
+            /** @enum {string} */
+            severity: "info" | "success" | "warning" | "critical";
+            priority: number;
+            /** @enum {string} */
+            audience: "all" | "authenticated" | "staff";
+            requiresAck: boolean;
+            version: number;
+            revision: number;
+            startsAt?: number | null;
+            endsAt?: number | null;
+            publishedAt?: number | null;
+            archivedAt?: number | null;
             createdAt: number;
+            updatedAt: number;
+            receipt?: components["schemas"]["AnnouncementReceipt"] | null;
+            receiptSummary?: components["schemas"]["AnnouncementReceiptSummary"] | null;
         };
-        AnnouncementInput: {
+        AnnouncementCreateInput: {
             title: string;
             body?: string | null;
+            /** @enum {string} */
+            status: "draft" | "scheduled" | "published";
+            /** @enum {string} */
+            presentation: "card" | "banner";
+            /** @enum {string} */
+            severity: "info" | "success" | "warning" | "critical";
+            priority: number;
+            /** @enum {string} */
+            audience: "all" | "authenticated" | "staff";
+            requiresAck: boolean;
+            startsAt?: number | null;
+            endsAt?: number | null;
             reason: string;
+        };
+        AnnouncementUpdateInput: components["schemas"]["AnnouncementCreateInput"] & {
+            expectedVersion: number;
+            /** @description Re-present this update to users who already saw the current revision. */
+            bumpRevision: boolean;
+        };
+        AdminVersionedArchiveInput: {
+            expectedVersion: number;
+            reason: string;
+        };
+        AnnouncementReceiptInput: {
+            revision: number;
+            /** @enum {string} */
+            action: "seen" | "dismiss" | "acknowledge";
+        };
+        AnnouncementRevision: {
+            announcementId: string;
+            version: number;
+            revision: number;
+            title: string;
+            body?: string | null;
+            /** @enum {string} */
+            status: "draft" | "scheduled" | "published" | "archived";
+            /** @enum {string} */
+            presentation: "card" | "banner";
+            /** @enum {string} */
+            severity: "info" | "success" | "warning" | "critical";
+            priority: number;
+            /** @enum {string} */
+            audience: "all" | "authenticated" | "staff";
+            requiresAck: boolean;
+            startsAt?: number | null;
+            endsAt?: number | null;
+            createdAt: number;
+        };
+        Promotion: {
+            id: string;
+            /** @enum {string} */
+            placement: "home-left-primary" | "home-left-secondary";
+            title: string;
+            body?: string | null;
+            ctaLabel?: string | null;
+            /** @description Same-origin relative application path. */
+            targetUrl: string;
+            assetId?: string | null;
+            /** @enum {string} */
+            status: "draft" | "scheduled" | "published" | "paused" | "archived";
+            /** @enum {string} */
+            effectiveState: "draft" | "scheduled" | "active" | "paused" | "expired" | "archived";
+            priority: number;
+            /** @enum {string} */
+            audience: "all" | "authenticated" | "staff";
+            version: number;
+            startsAt?: number | null;
+            endsAt?: number | null;
+            archivedAt?: number | null;
+            createdAt: number;
+            updatedAt: number;
+            /** @description Short-lived anonymous presentation token returned only by the active public list. */
+            trackingToken: string | null;
+            /** @description Rolling 30-day aggregate returned only by the administration list. */
+            metrics: components["schemas"]["PromotionMetricSummary"] | null;
+        };
+        PromotionMetricSummary: {
+            /** Format: date */
+            from: string;
+            /** Format: date */
+            to: string;
+            impressions: number;
+            clicks: number;
+        };
+        PromotionMetricDay: {
+            /** Format: date */
+            metricDate: string;
+            impressions: number;
+            clicks: number;
+        };
+        PromotionMetrics: {
+            summary: components["schemas"]["PromotionMetricSummary"];
+            days: components["schemas"]["PromotionMetricDay"][];
+        };
+        PromotionEventInput: {
+            /** @enum {string} */
+            eventType: "impression" | "click";
+            trackingToken: string;
+        };
+        PromotionCreateInput: {
+            /** @enum {string} */
+            placement: "home-left-primary" | "home-left-secondary";
+            title: string;
+            body?: string | null;
+            ctaLabel?: string | null;
+            /** @description Same-origin relative application path. */
+            targetUrl: string;
+            assetId?: string | null;
+            /** @enum {string} */
+            status: "draft" | "scheduled" | "published" | "paused";
+            priority: number;
+            /** @enum {string} */
+            audience: "all" | "authenticated" | "staff";
+            startsAt?: number | null;
+            endsAt?: number | null;
+            reason: string;
+        };
+        PromotionUpdateInput: components["schemas"]["PromotionCreateInput"] & {
+            expectedVersion: number;
         };
         AdminCourseCreateInput: {
             code: string;
@@ -6712,6 +11649,15 @@ export interface components {
         NotificationPage: components["schemas"]["Page"] & {
             items?: components["schemas"]["Notification"][];
         };
+        AppealPage: components["schemas"]["Page"] & {
+            items?: components["schemas"]["Appeal"][];
+        };
+        AdminAppealPage: components["schemas"]["Page"] & {
+            items?: components["schemas"]["AdminAppeal"][];
+        };
+        GovernanceNoticePage: components["schemas"]["Page"] & {
+            items?: components["schemas"]["GovernanceNotice"][];
+        };
         TaskPage: components["schemas"]["Page"] & {
             items?: components["schemas"]["Task"][];
         };
@@ -6724,6 +11670,12 @@ export interface components {
         LedgerPage: components["schemas"]["Page"] & {
             items?: components["schemas"]["LedgerEntry"][];
         };
+        CreditReconciliationRunPage: components["schemas"]["Page"] & {
+            items?: components["schemas"]["CreditReconciliationRun"][];
+        };
+        CreditReconciliationWalletPage: components["schemas"]["Page"] & {
+            items?: components["schemas"]["CreditReconciliationWallet"][];
+        };
         ReportPage: components["schemas"]["Page"] & {
             items?: components["schemas"]["Report"][];
         };
@@ -6735,6 +11687,9 @@ export interface components {
         };
         UserCommentPage: components["schemas"]["Page"] & {
             items?: components["schemas"]["UserComment"][];
+        };
+        UserSummaryPage: components["schemas"]["Page"] & {
+            items?: components["schemas"]["UserSummary"][];
         };
         RevisionPage: components["schemas"]["Page"] & {
             items?: components["schemas"]["PostRevision"][];
@@ -6750,10 +11705,27 @@ export interface components {
             lastMessageExcerpt?: string | null;
             lastMessageAt?: number | null;
             unreadCount: number;
+            isArchived: boolean;
+            isMuted: boolean;
+            isDeleted: boolean;
+            /** @enum {string} */
+            requestStatus: "accepted" | "pending";
+            /** @enum {string|null} */
+            requestDirection?: "incoming" | "outgoing" | null;
+            /** @description False while a one-message request awaits acceptance. */
+            canSend: boolean;
             createdAt: number;
         };
         DmConversationInput: {
             recipientHandle: string;
+            /** @description Required when the recipient does not already accept direct delivery from the sender; it is the only message allowed before acceptance. */
+            requestMessage?: string;
+        };
+        DmCounts: {
+            /** @description unreadCount plus requestCount for compatibility badges. */
+            count: number;
+            unreadCount: number;
+            requestCount: number;
         };
         DmMessage: {
             id: string;
@@ -6820,37 +11792,128 @@ export interface components {
         };
         PollVoteResponse: {
             ok: boolean;
+            myVotes: string[];
         };
+        ThreadDraftPayload: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "thread";
+            boardId: string | null;
+            title: string;
+            body: string;
+            contentFormat: components["schemas"]["ContentFormat"];
+            tags: string[];
+            pollQuestion: string;
+            pollOptions: string[];
+            /** @description Owner-only upload ids retained across devices. Pending/blocked state is not public binding authorization. */
+            attachmentAssetIds: string[];
+        };
+        CommentDraftPayload: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "comment";
+            threadId: string;
+            body: string;
+            contentFormat: components["schemas"]["ContentFormat"];
+            parentId: string | null;
+            /** @description Owner-only upload ids retained across devices. Pending/blocked state is not public binding authorization. */
+            attachmentAssetIds: string[];
+        };
+        ForumDraftPayload: components["schemas"]["ThreadDraftPayload"] | components["schemas"]["CommentDraftPayload"];
         DraftOutput: {
-            draftKey?: string;
-            payload?: Record<string, never>;
-            updatedAt?: number;
-        };
-        DraftPayload: {
             draftKey: string;
-            payload: Record<string, never>;
+            payload: components["schemas"]["ForumDraftPayload"];
+            version: number;
+            /** Format: int64 */
+            updatedAt: number;
         };
+        DraftSaveInput: {
+            draftKey: string;
+            /** @description Zero creates a new draft; a positive value compare-and-swaps that version. */
+            expectedVersion: number;
+            payload: components["schemas"]["ForumDraftPayload"];
+        };
+        /** @deprecated */
         IgnoreUser: {
             accountId?: string;
             handle?: string;
             avatarUrl?: string | null;
             createdAt?: number;
         };
+        UserSummary: {
+            id: string;
+            handle: string;
+            displayName: string | null;
+            avatarUrl: string | null;
+            /** @enum {string} */
+            role: "user" | "mod" | "admin";
+            followedAt: number;
+        };
+        UserRelationship: {
+            isSelf: boolean;
+            following: boolean;
+            followedBy: boolean;
+            muted: boolean;
+            blockedByMe: boolean;
+            blockedMe: boolean;
+            canFollow: boolean;
+            /** @description Whether the current account may start a new conversation under block and recipient DM policy. */
+            canStartConversation: boolean;
+            /** @description Whether the current account may create a semantic mention notification under block and recipient mention policy. */
+            canMention: boolean;
+        };
         UserBadge: {
             slug: string;
             name: string;
         };
+        /** @enum {string} */
+        VerificationCategory: "identity" | "special";
+        /**
+         * @description Controlled icon token rendered with the first-party icon library.
+         * @enum {string}
+         */
+        VerificationIcon: "badge-check" | "building-2" | "shield-check" | "sparkles";
+        /**
+         * @description Controlled semantic badge variant; arbitrary CSS and colors are not accepted.
+         * @enum {string}
+         */
+        VerificationBadgeVariant: "default" | "secondary" | "outline";
+        PublicVerification: {
+            slug: string;
+            category: components["schemas"]["VerificationCategory"];
+            label: string;
+            description?: string | null;
+            icon: components["schemas"]["VerificationIcon"];
+            badgeVariant: components["schemas"]["VerificationBadgeVariant"];
+            issuedAt: number;
+            expiresAt?: number | null;
+        };
         UserProfile: {
             id: string;
             handle: string;
-            avatarUrl?: string | null;
+            displayName: string | null;
+            bio: string | null;
+            /** Format: uri */
+            website: string | null;
+            avatarUrl: string | null;
+            bannerUrl: string | null;
             /** @enum {string} */
             role: "user" | "mod" | "admin";
             trustLevel: number;
             badges: components["schemas"]["UserBadge"][];
+            /** @description Active grants explicitly allowed for public profile display; never contains evidence, issuer, or staff reason. */
+            verifications: components["schemas"]["PublicVerification"][];
             threadCount: number;
             commentCount: number;
             votesReceived: number;
+            followerCount: number;
+            followingCount: number;
+            /** @description Viewer-specific permission for authored-content lists and future activity, media, and likes tabs. Aggregate public-content counters remain visible with the profile. */
+            canViewActivity: boolean;
             createdAt: number;
         };
         UserThread: {
@@ -6866,6 +11929,7 @@ export interface components {
             threadId: string;
             threadTitle: string;
             body: string;
+            contentFormat: components["schemas"]["ContentFormat"];
             createdAt: number;
         };
         /** @deprecated */
@@ -6911,16 +11975,29 @@ export interface components {
             reason: string;
         };
         OneboxResult: {
-            url?: string;
-            title?: string | null;
-            description?: string | null;
-            image?: string | null;
-            siteName?: string | null;
+            /**
+             * @description plain means the host is not allowlisted; card means metadata was fetched or read from cache.
+             * @enum {string}
+             */
+            type: "plain" | "card";
+            url: string;
+            title: string | null;
+            description: string | null;
+            /** @description Reserved for a future platform-proxied image; remote preview images are currently returned as null. */
+            imageUrl: string | null;
+            siteName: string | null;
         };
+        /**
+         * @description Optional intended image surface persisted across moderation and page reloads; it is not a business binding.
+         * @enum {string}
+         */
+        MediaUsage: "profile_avatar" | "profile_banner" | "forum_thread" | "forum_comment";
         UploadIntentInput: {
             /** @enum {string} */
             kind: "image" | "file";
             contentType: string;
+            /** @description Controlled usages require kind=image. Omit for unbound generic uploads. */
+            usage?: components["schemas"]["MediaUsage"];
         };
         UploadCredentials: {
             /** Format: uuid */
@@ -6938,25 +12015,69 @@ export interface components {
             /** @description Unix seconds */
             expiration: number;
         };
+        /** @description Moderation-safe metadata. Storage key, object URL, and content hash are deliberately omitted. */
         Upload: {
-            id?: string;
-            accountId?: string;
+            id: string;
+            accountId: string;
             /** @enum {string} */
-            kind?: "image" | "file";
-            ossKey?: string;
-            url?: string;
-            bytes?: number;
-            mime?: string;
-            sha256?: string;
+            kind: "image" | "file";
+            bytes: number;
+            mime: string;
             /** @enum {string} */
-            status?: "pending" | "clean" | "blocked";
-            createdAt?: number;
+            status: "pending" | "clean" | "quarantined" | "blocked";
+            usage: components["schemas"]["MediaUsage"] | null;
+            imageWidth: number | null;
+            imageHeight: number | null;
+            /**
+             * @description Actor-specific evidence gate. Files remain scanner-gated; image approval requires this moderator's trusted preview.
+             * @enum {string}
+             */
+            approvalRequirement: "none" | "image_preview" | "scanner" | "satisfied";
+            /**
+             * @description Durable provider deletion state, present after an upload enters quarantine.
+             * @enum {string|null}
+             */
+            deletionState: "queued" | "leased" | "succeeded" | "dead_letter" | null;
+            /** @description Whether a purpose-bound, unexpired operations hold currently pauses deletion. The reason and kind are never disclosed here. */
+            retentionHeld: boolean;
+            /**
+             * @description Presence state of the unreleased operations record; expired records must be reviewed in the operations inventory before replacement or release.
+             * @enum {string}
+             */
+            retentionState: "none" | "active" | "expired";
+            /** @description Unix seconds for the unreleased operations record; null only when retentionState is none. */
+            retentionExpiresAt: number | null;
+            createdAt: number;
+        };
+        /** @description Owner-safe upload status; storage keys, hashes, and object URLs are intentionally omitted. */
+        MyUpload: {
+            id: string;
+            /** @enum {string} */
+            kind: "image" | "file";
+            usage: components["schemas"]["MediaUsage"] | null;
+            /** @description Zero only after an object was physically deleted and its metadata redacted. */
+            bytes: number;
+            mime: string;
+            /** @enum {string} */
+            status: "pending" | "clean" | "quarantined" | "blocked";
+            imageWidth: number | null;
+            imageHeight: number | null;
+            createdAt: number;
+        };
+        /** @description One-time short-lived credential for a same-origin, audited media preview. Contains no provider URL, key, or content hash. */
+        ModerationPreviewGrant: {
+            token: string;
+            /** @description Unix seconds; grants expire after 60 seconds and are consumed once. */
+            expiresAt: number;
         };
         UploadUrl: {
             url: string;
         };
         UploadPage: components["schemas"]["Page"] & {
             items?: components["schemas"]["Upload"][];
+        };
+        MyUploadPage: components["schemas"]["Page"] & {
+            items?: components["schemas"]["MyUpload"][];
         };
         AdminForumFlagPage: components["schemas"]["Page"] & {
             items?: components["schemas"]["AdminForumFlag"][];
@@ -6968,10 +12089,27 @@ export interface components {
             /** @enum {string} */
             role: "user" | "mod" | "admin";
             /** @enum {string} */
-            status: "active" | "suspended" | "deleted";
+            status: "active" | "suspended" | "deactivated" | "deletion_requested" | "deleted" | "purged";
             trustLevel: number;
             lastActiveAt?: number | null;
             createdAt: number;
+        };
+        AdminLifecycleJob: {
+            id: string;
+            accountId: string;
+            accountHandle: string;
+            accountState: components["schemas"]["AccountLifecycleState"];
+            /** @enum {string} */
+            jobType: "mark_deleted" | "purge";
+            /** @enum {string} */
+            status: "queued" | "running" | "succeeded" | "failed";
+            attempts: number;
+            nextAttemptAt: number;
+            lockedAt?: number | null;
+            lastErrorCode?: string | null;
+            purgeStartedAt?: number | null;
+            createdAt: number;
+            updatedAt: number;
         };
         AdminUserInviteInput: {
             /** Format: email */
@@ -6981,6 +12119,64 @@ export interface components {
         };
         AdminReasonInput: {
             reason: string;
+        };
+        MediaRetentionHoldInput: {
+            /** @enum {string} */
+            holdKind: "moderation" | "security";
+            /** @description Unix seconds, at least five minutes and no more than 365 days in the future. */
+            expiresAt: number;
+            reason: string;
+            /** @description Null creates only when no unreleased hold exists; a hold id renews exactly that reviewed record or returns conflict. */
+            expectedHoldId: string | null;
+        };
+        MediaRetentionHoldReleaseInput: {
+            /** @description The exact reviewed hold to release. */
+            expectedHoldId: string;
+            reason: string;
+        };
+        /** @description Operations-only retention inventory record. Purpose text and staff identifiers are never exposed through the moderation queue. */
+        MediaRetentionHold: {
+            id: string;
+            uploadId: string;
+            accountId: string;
+            /** @enum {string} */
+            uploadStatus: "pending" | "clean" | "quarantined" | "blocked";
+            /** @enum {string} */
+            holdKind: "moderation" | "security";
+            reason: string;
+            placedBy: string;
+            /** @description Unix seconds */
+            expiresAt: number;
+            /** @description Unix seconds */
+            createdAt: number;
+            isExpired: boolean;
+        };
+        MediaRetentionHoldPage: components["schemas"]["Page"] & {
+            items?: components["schemas"]["MediaRetentionHold"][];
+        };
+        /** @description Operations-only durable system deletion job. Provider object identifiers are deliberately omitted. */
+        MediaDeletionJob: {
+            id: string;
+            uploadId: string;
+            accountId: string;
+            /** @enum {string} */
+            uploadStatus: "pending" | "clean" | "quarantined" | "blocked";
+            /** @enum {string} */
+            requestSource: "retention_gc" | "account_purge" | "intent_cleanup";
+            reason: string;
+            /** @enum {string} */
+            status: "queued" | "leased" | "succeeded" | "dead_letter";
+            attemptCount: number;
+            lastErrorCode: string | null;
+            /** @description Unix seconds */
+            availableAt: number;
+            /** @description Unix seconds */
+            createdAt: number;
+            /** @description Unix seconds */
+            updatedAt: number;
+        };
+        MediaDeletionJobPage: components["schemas"]["Page"] & {
+            items?: components["schemas"]["MediaDeletionJob"][];
         };
         AdminForumFlag: {
             id: string;
@@ -7035,22 +12231,150 @@ export interface components {
             metadata?: Record<string, never> | null;
             createdAt: number;
         };
-        Badge: {
-            id?: string;
-            slug?: string;
-            name?: string;
-            description?: string | null;
-            iconUrl?: string | null;
-            mintAmount?: number;
-            createdAt?: number;
+        /** @description Operational metadata for a durable notification side effect. The private payload and source key are never exposed. */
+        NotificationOutboxEvent: {
+            id: string;
+            /** @enum {string} */
+            topic: "notification" | "achievement_award";
+            recipientAccountId: string;
+            eventType: string;
+            /** @enum {string} */
+            state: "queued" | "running" | "succeeded" | "dead" | "cancelled";
+            attempts: number;
+            maxAttempts: number;
+            manualRetryCount: number;
+            availableAt: number;
+            lastErrorCode?: string | null;
+            completedAt?: number | null;
+            deadAt?: number | null;
+            createdAt: number;
+            updatedAt: number;
         };
-        BadgeInput: {
+        NotificationOutboxRetryInput: {
+            reason: string;
+        };
+        /** @enum {string} */
+        AchievementIcon: "award" | "book-open-check" | "message-circle-heart" | "star";
+        /** @enum {string} */
+        AchievementStatus: "active" | "retired";
+        Achievement: {
+            id: string;
             slug: string;
             name: string;
-            description?: string;
-            iconUrl?: string;
-            /** @default 0 */
+            description: string | null;
+            icon: components["schemas"]["AchievementIcon"];
+            status: components["schemas"]["AchievementStatus"];
             mintAmount: number;
+            version: number;
+            createdAt: number;
+            updatedAt: number;
+        };
+        AchievementCreateInput: {
+            slug: string;
+            name: string;
+            description?: string | null;
+            icon: components["schemas"]["AchievementIcon"];
+            mintAmount: number;
+            reason: string;
+        };
+        AchievementUpdateInput: {
+            expectedVersion: number;
+            name: string;
+            description?: string | null;
+            icon: components["schemas"]["AchievementIcon"];
+            status: components["schemas"]["AchievementStatus"];
+            mintAmount: number;
+            reason: string;
+        };
+        AchievementGrant: {
+            accountId: string;
+            achievementId: string;
+            slug: string;
+            name: string;
+            icon: components["schemas"]["AchievementIcon"];
+            definitionStatus: components["schemas"]["AchievementStatus"];
+            /** @enum {string} */
+            status: "active" | "revoked";
+            awardReason: string | null;
+            awardedAt: number;
+            awardedBy: string;
+            revokedAt: number | null;
+            revokedBy: string | null;
+            revokeReason: string | null;
+        };
+        AchievementGrantInput: {
+            achievementId: string;
+            reason: string;
+        };
+        AchievementRevokeInput: {
+            reason: string;
+        };
+        AchievementEvent: {
+            id: string;
+            achievementId: string;
+            slug: string;
+            name: string;
+            /** @enum {string} */
+            action: "awarded" | "revoked";
+            /** @enum {string} */
+            source: "automatic" | "manual";
+            actorId: string | null;
+            reason: string;
+            createdAt: number;
+        };
+        VerificationType: {
+            id: string;
+            slug: string;
+            category: components["schemas"]["VerificationCategory"];
+            label: string;
+            description?: string | null;
+            icon: components["schemas"]["VerificationIcon"];
+            badgeVariant: components["schemas"]["VerificationBadgeVariant"];
+            allowsPublicDisplay: boolean;
+            createdAt: number;
+        };
+        VerificationTypeInput: {
+            slug: string;
+            category: components["schemas"]["VerificationCategory"];
+            label: string;
+            description?: string | null;
+            icon: components["schemas"]["VerificationIcon"];
+            badgeVariant: components["schemas"]["VerificationBadgeVariant"];
+            /** @default false */
+            allowsPublicDisplay: boolean;
+            reason: string;
+        };
+        VerificationGrant: {
+            id: string;
+            accountId: string;
+            verificationTypeId: string;
+            slug: string;
+            category: components["schemas"]["VerificationCategory"];
+            label: string;
+            icon: components["schemas"]["VerificationIcon"];
+            badgeVariant: components["schemas"]["VerificationBadgeVariant"];
+            displayOnProfile: boolean;
+            /** @enum {string} */
+            status: "active" | "expired" | "revoked";
+            issuedBy: string | null;
+            issuedAt: number;
+            expiresAt?: number | null;
+            issueReason: string;
+            hasEvidence: boolean;
+            revokedBy?: string | null;
+            revokedAt?: number | null;
+            revokeReason?: string | null;
+        };
+        VerificationGrantInput: {
+            verificationTypeId: string;
+            /** @default false */
+            displayOnProfile: boolean;
+            expiresAt?: number | null;
+            /** @description Private opaque pointer to separately governed evidence; never returned by public or staff list responses. */
+            evidenceReference?: string | null;
+            reason: string;
+        };
+        VerificationRevokeInput: {
             reason: string;
         };
         FeatureThreadInput: {
@@ -7073,8 +12397,20 @@ export interface components {
         IgnorePage: components["schemas"]["Page"] & {
             items?: components["schemas"]["IgnoreUser"][];
         };
-        BadgePage: components["schemas"]["Page"] & {
-            items?: components["schemas"]["Badge"][];
+        AchievementPage: components["schemas"]["Page"] & {
+            items?: components["schemas"]["Achievement"][];
+        };
+        AchievementEventPage: components["schemas"]["Page"] & {
+            items?: components["schemas"]["AchievementEvent"][];
+        };
+        AchievementGrantPage: components["schemas"]["Page"] & {
+            items?: components["schemas"]["AchievementGrant"][];
+        };
+        VerificationTypePage: components["schemas"]["Page"] & {
+            items?: components["schemas"]["VerificationType"][];
+        };
+        VerificationGrantPage: components["schemas"]["Page"] & {
+            items?: components["schemas"]["VerificationGrant"][];
         };
         ActivityPolicyPage: components["schemas"]["Page"] & {
             items?: components["schemas"]["ActivityPolicy"][];
@@ -7082,14 +12418,26 @@ export interface components {
         AdminUserPage: components["schemas"]["Page"] & {
             items?: components["schemas"]["AdminUser"][];
         };
+        AdminLifecycleJobPage: components["schemas"]["Page"] & {
+            items?: components["schemas"]["AdminLifecycleJob"][];
+        };
         AdminAuditEventPage: components["schemas"]["Page"] & {
             items?: components["schemas"]["AdminAuditEvent"][];
+        };
+        NotificationOutboxEventPage: components["schemas"]["Page"] & {
+            items?: components["schemas"]["NotificationOutboxEvent"][];
         };
         DmReportPage: components["schemas"]["Page"] & {
             items?: components["schemas"]["DmReport"][];
         };
         AnnouncementPage: components["schemas"]["Page"] & {
             items?: components["schemas"]["Announcement"][];
+        };
+        AnnouncementRevisionPage: components["schemas"]["Page"] & {
+            items?: components["schemas"]["AnnouncementRevision"][];
+        };
+        PromotionPage: components["schemas"]["Page"] & {
+            items?: components["schemas"]["Promotion"][];
         };
     };
     responses: {
@@ -7113,6 +12461,15 @@ export interface components {
         };
         /** @description Forbidden */
         Forbidden: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description A fresh session-bound authentication is required */
+        RecentAuthRequired: {
             headers: {
                 [name: string]: unknown;
             };
@@ -7165,8 +12522,15 @@ export interface components {
         WalletIntent: string;
         /** @description Base64 Ed25519 signature over the intent's exact signingBytes */
         WalletSig: string;
+        /** @description Required only for the value-moving actions documented on this operation */
+        OptionalWalletIntent: string;
+        /** @description Required only for the value-moving actions documented on this operation */
+        OptionalWalletSig: string;
         IdempotencyKey: string;
         WalletIdempotencyKey: string;
+        ReconciliationIdempotencyKey: string;
+        /** @description Account-scoped key. Reuse with a different event or reason returns conflict. */
+        AppealIdempotencyKey: string;
     };
     requestBodies: never;
     headers: never;

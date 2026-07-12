@@ -1,9 +1,16 @@
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::HeaderMap;
 use axum::Json;
+use serde::Deserialize;
 use shared::{AppError, AppResult, AppState};
 
 use crate::repo;
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VoteDeleteQuery {
+    post_type: String,
+}
 
 /// POST /api/v2/forum/posts/{post_id}/vote — auth required
 pub async fn vote_post(
@@ -22,7 +29,7 @@ pub async fn vote_post(
     .map_err(|_r| AppError::Unauthorized)?;
     crate::sanctions::require_can_post(state.redis.as_ref(), &state.db, auth.id).await?;
 
-    let tl = crate::trust_levels::get_trust_level(state.redis.as_ref(), &state.db, auth.id).await?;
+    let tl = crate::trust_levels::get_trust_level(&state.db, auth.id).await?;
     if tl == 0 {
         shared::ratelimit::check_token_bucket(
             state.redis.as_ref(),
@@ -52,33 +59,46 @@ pub async fn vote_post(
 
     let outcome = repo::vote_post(&state.db, &post_type, post_id, auth.id, &body.value).await?;
 
-    // Notify post author of upvote (fire-and-forget).
-    if let Some(author_id) = outcome.post_author_id {
-        if outcome.became_upvote {
-            let pool = state.db.clone();
-            let vote_type = post_type.clone();
-            let vote_post_id = post_id;
-            let voter_id = auth.id;
-            tokio::spawn(async move {
-                crate::notification_hooks::create_notification(
-                    &pool,
-                    author_id,
-                    "vote",
-                    serde_json::json!({
-                        "postType": vote_type,
-                        "postId": vote_post_id.to_string(),
-                        "voterHandle": "",
-                    }),
-                    None,
-                    Some(voter_id),
-                )
-                .await;
-            });
-        }
-    }
+    crate::cache::invalidate_thread_surfaces(
+        state.redis.as_ref(),
+        outcome.thread_id,
+        outcome.board_id,
+    )
+    .await;
 
-    // Bump board cache version.
-    shared::cache::bump_version_opt(state.redis.as_ref(), "board", &post_id.to_string()).await.ok();
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "voteCount": outcome.vote_count,
+        "viewerVote": outcome.viewer_vote,
+    })))
+}
 
-    Ok(Json(serde_json::json!({"ok": true, "voteCount": outcome.vote_count})))
+/// DELETE /api/v2/forum/posts/{post_id}/vote — auth required
+pub async fn remove_vote(
+    State(state): State<AppState>,
+    Path(post_id_str): Path<String>,
+    Query(query): Query<VoteDeleteQuery>,
+    headers: HeaderMap,
+) -> AppResult<Json<serde_json::Value>> {
+    let auth = identity::auth_middleware::authenticate(
+        &headers,
+        &state.db,
+        &state.jwt_secret,
+        state.redis.as_ref(),
+    )
+    .await
+    .map_err(|_| AppError::Unauthorized)?;
+    let post_id = post_id_str.parse().map_err(|_| AppError::NotFound)?;
+    let outcome = repo::remove_vote(&state.db, &query.post_type, post_id, auth.id).await?;
+    crate::cache::invalidate_thread_surfaces(
+        state.redis.as_ref(),
+        outcome.thread_id,
+        outcome.board_id,
+    )
+    .await;
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "voteCount": outcome.vote_count,
+        "viewerVote": outcome.viewer_vote,
+    })))
 }

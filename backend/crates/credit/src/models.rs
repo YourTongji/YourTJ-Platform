@@ -70,4 +70,6 @@ pub struct PurchaseRow {
     pub amount: i64,
     pub status: String,
     pub hold_tx_id: Option<String>,
+    pub delivery_info: Option<String>,
+    pub created_at: DateTime<Utc>,
 }

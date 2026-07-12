@@ -5,6 +5,31 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Canonical source format for persisted community content.
+#[derive(Debug, Clone, Copy, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ContentFormat {
+    #[default]
+    PlainV1,
+    MarkdownV1,
+}
+
+impl ContentFormat {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::PlainV1 => "plain_v1",
+            Self::MarkdownV1 => "markdown_v1",
+        }
+    }
+
+    pub(crate) fn from_db(value: &str) -> Self {
+        match value {
+            "markdown_v1" => Self::MarkdownV1,
+            _ => Self::PlainV1,
+        }
+    }
+}
+
 /// Public-facing board DTO.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -19,6 +44,8 @@ pub struct BoardDto {
     pub min_trust_to_post: i16,
     pub is_qa: bool,
     pub thread_count: i32,
+    pub can_post: bool,
+    pub posting_restriction: Option<String>,
 }
 
 /// Summary view of a thread (list responses).
@@ -29,12 +56,25 @@ pub struct ThreadDto {
     pub board_id: String,
     pub author_handle: String,
     pub title: String,
+    pub body_excerpt: Option<String>,
+    #[serde(default = "legacy_content_version")]
+    pub content_version: i64,
     pub reply_count: i32,
     pub vote_count: i32,
     pub hot_score: Option<f64>,
+    pub status: String,
     pub tags: Vec<String>,
+    pub attachments: Vec<media::attachments::ForumAttachment>,
     pub created_at: i64,
     pub last_activity_at: i64,
+    pub viewer_vote: Option<String>,
+    pub is_bookmarked: bool,
+    #[serde(default)]
+    pub can_edit: bool,
+    #[serde(default)]
+    pub can_delete: bool,
+    #[serde(default)]
+    pub can_moderate: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unread_count: Option<i32>,
 }
@@ -49,10 +89,14 @@ pub struct ThreadDetailDto {
     pub author_id: String,
     pub title: String,
     pub body: Option<String>,
+    pub content_format: ContentFormat,
+    #[serde(default = "legacy_content_version")]
+    pub content_version: i64,
     pub reply_count: i32,
     pub vote_count: i32,
     pub hot_score: Option<f64>,
     pub tags: Vec<String>,
+    pub attachments: Vec<media::attachments::ForumAttachment>,
     pub status: String,
     pub pinned_at: Option<i64>,
     pub pinned_globally: bool,
@@ -65,9 +109,17 @@ pub struct ThreadDetailDto {
     pub created_at: i64,
     pub last_activity_at: i64,
     pub solved_answer_id: Option<String>,
+    pub viewer_vote: Option<String>,
+    pub is_bookmarked: bool,
     pub my_last_read_comment_id: Option<String>,
     pub my_subscription_level: Option<String>,
     pub poll: Option<PollDto>,
+    #[serde(default)]
+    pub can_edit: bool,
+    #[serde(default)]
+    pub can_delete: bool,
+    #[serde(default)]
+    pub can_moderate: bool,
 }
 
 /// POST /forum/threads
@@ -78,7 +130,11 @@ pub struct ThreadInput {
     pub title: String,
     pub body: Option<String>,
     #[serde(default)]
+    pub content_format: ContentFormat,
+    #[serde(default)]
     pub tags: Option<Vec<String>>,
+    #[serde(default)]
+    pub attachment_asset_ids: Vec<String>,
     #[serde(default)]
     pub poll: Option<PollInput>,
 }
@@ -94,13 +150,21 @@ pub struct CommentDto {
     pub author_handle: String,
     pub author_id: String,
     pub body: String,
+    pub content_format: ContentFormat,
+    pub content_version: i64,
+    pub attachments: Vec<media::attachments::ForumAttachment>,
     pub vote_count: i32,
+    pub viewer_vote: Option<String>,
+    pub is_bookmarked: bool,
     pub is_deleted: bool,
     pub is_hidden: bool,
     pub edited_at: Option<i64>,
     pub created_at: i64,
     pub quoted_comment_id: Option<String>,
     pub is_solved: bool,
+    pub can_edit: bool,
+    pub can_delete: bool,
+    pub can_moderate: bool,
 }
 
 /// POST /forum/threads/{thread_id}/comments
@@ -109,6 +173,10 @@ pub struct CommentDto {
 pub struct CommentInput {
     pub parent_id: Option<String>,
     pub body: String,
+    #[serde(default)]
+    pub content_format: ContentFormat,
+    #[serde(default)]
+    pub attachment_asset_ids: Vec<String>,
     pub quoted_comment_id: Option<String>,
 }
 
@@ -140,26 +208,11 @@ pub struct ReadTrackingInput {
     pub last_read_comment_id: Option<String>,
 }
 
-/// Feed DTO for unread threads (includes unread count).
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ThreadFeedDto {
-    pub id: String,
-    pub board_id: String,
-    pub author_handle: String,
-    pub title: String,
-    pub reply_count: i32,
-    pub vote_count: i32,
-    pub hot_score: Option<f64>,
-    pub created_at: i64,
-    pub last_activity_at: i64,
-    pub unread_count: i32,
-}
-
 /// Bookmark input — used when (un)setting a bookmark.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BookmarkInput {
+    pub post_type: String,
     pub note: Option<String>,
 }
 
@@ -192,6 +245,14 @@ pub struct SubscriptionInput {
     pub level: String,
 }
 
+/// DELETE /api/v2/forum/subscriptions
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UnsubscribeInput {
+    pub target_type: String,
+    pub target_id: String,
+}
+
 /// Subscription DTO for list responses.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -216,26 +277,137 @@ pub struct ModActionDto {
     pub created_at: i64,
 }
 
+/// User-controlled in-app interaction categories.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct InAppNotificationPreferences {
+    pub replies: bool,
+    pub mentions: bool,
+    pub quotes: bool,
+    pub votes: bool,
+    pub badges: bool,
+    pub subscriptions: bool,
+    #[serde(default = "notification_enabled")]
+    pub follows: bool,
+    pub direct_messages: bool,
+}
+
+const fn notification_enabled() -> bool {
+    true
+}
+
+impl Default for InAppNotificationPreferences {
+    fn default() -> Self {
+        Self {
+            replies: true,
+            mentions: true,
+            quotes: true,
+            votes: true,
+            badges: true,
+            subscriptions: true,
+            follows: true,
+            direct_messages: true,
+        }
+    }
+}
+
+/// User-controlled email notification channels; security mail is not optional here.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EmailNotificationPreferences {
+    pub weekly_digest: bool,
+}
+
+/// Stable event-by-channel notification preference contract.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct NotificationPreferences {
+    pub in_app: InAppNotificationPreferences,
+    pub email: EmailNotificationPreferences,
+}
+
+/// Rolling-compatible input: legacy clients omit `follows`, so the handler preserves its value.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct InAppNotificationPreferencesInput {
+    pub replies: bool,
+    pub mentions: bool,
+    pub quotes: bool,
+    pub votes: bool,
+    pub badges: bool,
+    pub subscriptions: bool,
+    #[serde(default)]
+    pub follows: Option<bool>,
+    pub direct_messages: bool,
+}
+
+/// User-controlled input channels before rolling compatibility is applied.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct NotificationPreferencesInput {
+    pub in_app: InAppNotificationPreferencesInput,
+    pub email: EmailNotificationPreferences,
+}
+
 /// GET/PUT /api/v2/me/notification-prefs — request body.
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct NotificationPrefsInput {
-    pub prefs: serde_json::Value,
+    pub prefs: NotificationPreferencesInput,
 }
 
 /// GET/PUT /api/v2/me/notification-prefs — response body.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NotificationPrefsDto {
-    pub prefs: serde_json::Value,
+    pub prefs: NotificationPreferences,
 }
 
 /// PUT /api/v2/me/drafts — request body.
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DraftInput {
     pub draft_key: String,
-    pub payload: serde_json::Value,
+    #[serde(default)]
+    pub expected_version: i64,
+    pub payload: DraftPayload,
+}
+
+/// A bounded, typed forum draft payload.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum DraftPayload {
+    /// An unpublished forum thread.
+    Thread {
+        board_id: Option<String>,
+        title: String,
+        body: String,
+        #[serde(default)]
+        content_format: ContentFormat,
+        #[serde(default)]
+        tags: Vec<String>,
+        #[serde(default)]
+        poll_question: String,
+        #[serde(default)]
+        poll_options: Vec<String>,
+        #[serde(default)]
+        attachment_asset_ids: Vec<String>,
+    },
+    /// An unpublished reply to one thread.
+    Comment {
+        thread_id: String,
+        body: String,
+        #[serde(default)]
+        content_format: ContentFormat,
+        parent_id: Option<String>,
+        #[serde(default)]
+        attachment_asset_ids: Vec<String>,
+    },
 }
 
 /// Draft DTO for list responses.
@@ -243,23 +415,22 @@ pub struct DraftInput {
 #[serde(rename_all = "camelCase")]
 pub struct DraftDto {
     pub draft_key: String,
-    pub payload: serde_json::Value,
+    pub payload: DraftPayload,
+    pub version: i64,
     pub updated_at: i64,
-}
-
-/// Draft DTO for single-get responses.
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DraftPayloadDto {
-    pub payload: serde_json::Value,
 }
 
 /// PATCH /forum/threads/{id}
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadUpdateInput {
+    #[serde(default = "legacy_content_version")]
+    pub expected_version: i64,
     pub title: Option<String>,
     pub body: Option<String>,
+    pub content_format: Option<ContentFormat>,
+    #[serde(default)]
+    pub attachment_asset_ids: Vec<String>,
     #[allow(dead_code)]
     pub tags: Option<Vec<String>>,
 }
@@ -268,7 +439,30 @@ pub struct ThreadUpdateInput {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CommentUpdateInput {
+    #[serde(default = "legacy_content_version")]
+    pub expected_version: i64,
     pub body: String,
+    #[serde(default)]
+    pub content_format: ContentFormat,
+    #[serde(default)]
+    pub attachment_asset_ids: Vec<String>,
+}
+
+const fn legacy_content_version() -> i64 {
+    1
+}
+
+fn default_revision_limit() -> i64 {
+    20
+}
+
+/// Bounded cursor page requested from a revision history endpoint.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RevisionListQuery {
+    pub cursor: Option<String>,
+    #[serde(default = "default_revision_limit")]
+    pub limit: i64,
 }
 
 /// Revision history entry.
@@ -280,6 +474,9 @@ pub struct RevisionDto {
     pub editor_id: String,
     pub old_title: Option<String>,
     pub old_body: String,
+    pub old_content_format: ContentFormat,
+    pub old_content_version: i64,
+    pub attachments: Vec<media::attachments::ForumAttachment>,
     pub created_at: i64,
 }
 
@@ -336,6 +533,7 @@ pub struct PollInput {
 #[serde(rename_all = "camelCase")]
 pub struct DmConversationInput {
     pub recipient_handle: String,
+    pub request_message: Option<String>,
 }
 
 /// A DM conversation in the list response.
@@ -349,7 +547,22 @@ pub struct DmConversationDto {
     pub last_message_excerpt: Option<String>,
     pub last_message_at: i64,
     pub unread_count: i64,
+    pub is_archived: bool,
+    pub is_muted: bool,
+    pub is_deleted: bool,
+    pub request_status: String,
+    pub request_direction: Option<String>,
+    pub can_send: bool,
     pub created_at: i64,
+}
+
+/// Accepted-message unread and incoming-request counts for global navigation.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DmCountsDto {
+    pub count: i64,
+    pub unread_count: i64,
+    pub request_count: i64,
 }
 
 /// POST /api/v2/forum/dm/conversations/{id}/messages
@@ -420,14 +633,49 @@ pub struct DmMessageReportDto {
 pub struct UserProfileDto {
     pub id: String,
     pub handle: String,
+    pub display_name: Option<String>,
+    pub bio: Option<String>,
+    pub website: Option<String>,
     pub avatar_url: Option<String>,
+    pub banner_url: Option<String>,
     pub role: String,
     pub trust_level: i16,
     pub badges: Vec<UserBadgeDto>,
+    pub verifications: Vec<platform::verifications::PublicVerificationDto>,
     pub thread_count: i32,
     pub comment_count: i32,
     pub votes_received: i32,
+    pub follower_count: i32,
+    pub following_count: i32,
+    pub can_view_activity: bool,
     pub created_at: i64,
+}
+
+/// One active account shown in a followers or following page.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserSummaryDto {
+    pub id: String,
+    pub handle: String,
+    pub display_name: Option<String>,
+    pub avatar_url: Option<String>,
+    pub role: String,
+    pub followed_at: i64,
+}
+
+/// Current account's complete first-phase relationship with one target.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserRelationshipDto {
+    pub is_self: bool,
+    pub following: bool,
+    pub followed_by: bool,
+    pub muted: bool,
+    pub blocked_by_me: bool,
+    pub blocked_me: bool,
+    pub can_follow: bool,
+    pub can_start_conversation: bool,
+    pub can_mention: bool,
 }
 
 /// A badge displayed on a public community profile.
@@ -458,5 +706,6 @@ pub struct UserCommentDto {
     pub thread_id: String,
     pub thread_title: String,
     pub body: String,
+    pub content_format: ContentFormat,
     pub created_at: i64,
 }

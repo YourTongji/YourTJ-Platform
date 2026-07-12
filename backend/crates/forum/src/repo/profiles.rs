@@ -27,6 +27,7 @@ pub struct PublicUserCommentRow {
     pub thread_id: i64,
     pub thread_title: String,
     pub body: String,
+    pub content_format: String,
     pub created_at: DateTime<Utc>,
 }
 
@@ -93,7 +94,8 @@ pub async fn list_public_user_comments(
     let page_size = limit.clamp(1, 100);
     let mut rows = sqlx::query_as::<_, PublicUserCommentRow>(
         "SELECT comment.id, comment.thread_id, COALESCE(thread.title, '') AS thread_title, \
-                COALESCE(LEFT(comment.body, 200), '') AS body, comment.created_at \
+                COALESCE(LEFT(comment.body, 200), '') AS body, comment.content_format, \
+                comment.created_at \
          FROM forum.comments comment \
          JOIN forum.threads thread ON thread.id = comment.thread_id \
          WHERE comment.author_id = $1 \

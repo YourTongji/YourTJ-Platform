@@ -1,6 +1,6 @@
 //! Weekly email digest for forum users.
 //!
-//! Queries opted-in users (`"email_digest": true` in their notification prefs),
+//! Queries opted-in users (`email.weeklyDigest` in their notification preferences),
 //! builds a summary of top threads, unread notifications, and new badges from
 //! the past week, then sends the digest through the configured email provider.
 //!
@@ -123,14 +123,15 @@ pub async fn run_digest(pool: &PgPool, config: &Config) {
 // Queries
 // ---------------------------------------------------------------------------
 
-/// All accounts with `email_digest: true` in their notification prefs.
+/// All accounts that opted into the weekly email digest.
 async fn get_subscribers(pool: &PgPool) -> Result<Vec<DigestSubscriber>, sqlx::Error> {
     sqlx::query_as::<_, DigestSubscriber>(
         r#"
         SELECT np.account_id, a.email, a.handle
         FROM forum.notification_prefs np
         JOIN identity.accounts a ON a.id = np.account_id
-        WHERE np.prefs->>'email_digest' = 'true'
+        WHERE np.prefs #>> '{email,weeklyDigest}' = 'true'
+           OR np.prefs->>'email_digest' = 'true'
         "#,
     )
     .fetch_all(pool)

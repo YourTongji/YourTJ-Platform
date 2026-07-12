@@ -1,10 +1,17 @@
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::HeaderMap;
 use axum::Json;
+use serde::Deserialize;
 use shared::{AppError, AppResult, AppState};
 
 use crate::dto::PollOptionDto;
 use crate::repo;
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PollVoteDeleteQuery {
+    option_id: String,
+}
 
 /// POST /api/v2/forum/polls/{id}/vote — auth required
 pub async fn vote_poll_handler(
@@ -21,26 +28,51 @@ pub async fn vote_poll_handler(
     )
     .await
     .map_err(|_r| AppError::Unauthorized)?;
+    crate::sanctions::require_can_post(state.redis.as_ref(), &state.db, auth.id).await?;
 
     let poll_id: i64 = poll_id_str.parse().map_err(|_| AppError::NotFound)?;
     let option_id: i64 =
         body.option_id.parse().map_err(|_| AppError::BadRequest("invalid optionId".into()))?;
 
-    // Verify the poll exists.
-    let poll = repo::get_poll_by_id(&state.db, poll_id).await?.ok_or(AppError::NotFound)?;
+    shared::ratelimit::check_token_bucket(
+        state.redis.as_ref(),
+        "poll_vote",
+        &auth.id.to_string(),
+        60,
+        60,
+    )
+    .await?;
+    let outcome = repo::vote_option(&state.db, poll_id, option_id, auth.id).await?;
 
-    // Verify the option belongs to this poll.
-    let option = repo::get_poll_option(&state.db, option_id)
-        .await?
-        .ok_or(AppError::BadRequest("option not found".into()))?;
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "myVotes": outcome.my_votes.into_iter().map(|id| id.to_string()).collect::<Vec<_>>(),
+    })))
+}
 
-    if option.poll_id != poll_id {
-        return Err(AppError::BadRequest("option does not belong to this poll".into()));
-    }
-
-    repo::vote_option(&state.db, poll_id, poll.multi_select, option_id, auth.id).await?;
-
-    Ok(Json(serde_json::json!({"ok": true})))
+/// DELETE /api/v2/forum/polls/{id}/vote — auth required
+pub async fn remove_poll_vote_handler(
+    State(state): State<AppState>,
+    Path(poll_id_str): Path<String>,
+    Query(query): Query<PollVoteDeleteQuery>,
+    headers: HeaderMap,
+) -> AppResult<Json<serde_json::Value>> {
+    let auth = identity::auth_middleware::authenticate(
+        &headers,
+        &state.db,
+        &state.jwt_secret,
+        state.redis.as_ref(),
+    )
+    .await
+    .map_err(|_| AppError::Unauthorized)?;
+    let poll_id = poll_id_str.parse().map_err(|_| AppError::NotFound)?;
+    let option_id =
+        query.option_id.parse().map_err(|_| AppError::BadRequest("invalid optionId".into()))?;
+    let outcome = repo::remove_option_vote(&state.db, poll_id, option_id, auth.id).await?;
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "myVotes": outcome.my_votes.into_iter().map(|id| id.to_string()).collect::<Vec<_>>(),
+    })))
 }
 
 /// GET /api/v2/forum/polls/{id}/results — auth optional

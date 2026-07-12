@@ -4,7 +4,7 @@
 mod helpers;
 
 use axum::body::Body;
-use axum::http::{Request, StatusCode};
+use axum::http::{header, Request, StatusCode};
 use axum::Router;
 use helpers::{create_test_account, create_test_app, read_json};
 use serde_json::Value;
@@ -20,14 +20,132 @@ enum ThreadVisibility {
 }
 
 async fn get(app: &Router, uri: &str) -> (StatusCode, Value) {
+    get_as(app, uri, None).await
+}
+
+async fn get_as(app: &Router, uri: &str, token: Option<&str>) -> (StatusCode, Value) {
+    let mut request = Request::builder().uri(uri);
+    if let Some(token) = token {
+        request = request.header(header::AUTHORIZATION, format!("Bearer {token}"));
+    }
     let response = app
         .clone()
-        .oneshot(Request::builder().uri(uri).body(Body::empty()).expect("build request"))
+        .oneshot(request.body(Body::empty()).expect("build request"))
         .await
         .expect("profile response");
     let status = response.status();
     let body = read_json(response).await;
     (status, body)
+}
+
+#[tokio::test]
+async fn activity_visibility_gates_authored_lists_without_hiding_public_content_counts() {
+    let (pool, app) = create_test_app().await;
+    let (owner_id, owner_token) =
+        create_test_account(&pool, "activity-owner@tongji.edu.cn", "activity-owner").await;
+    let (viewer_id, viewer_token) =
+        create_test_account(&pool, "activity-viewer@tongji.edu.cn", "activity-viewer").await;
+    sqlx::query(
+        "INSERT INTO identity.profile_privacy (account_id, profile_visibility) \
+         VALUES ($1, 'public') ON CONFLICT (account_id) DO UPDATE \
+         SET profile_visibility = 'public', activity_visibility = 'only_me'",
+    )
+    .bind(owner_id)
+    .execute(&pool)
+    .await
+    .expect("set initial activity privacy");
+    let thread_id =
+        insert_thread(&pool, owner_id, "Public canonical thread", ThreadVisibility::Visible).await;
+    insert_comment(&pool, owner_id, thread_id, "Public canonical comment", false).await;
+    sqlx::query(
+        "INSERT INTO forum.user_stats \
+         (account_id, threads_created, comments_created, votes_received) \
+         VALUES ($1, 4, 7, 9)",
+    )
+    .bind(owner_id)
+    .execute(&pool)
+    .await
+    .expect("seed public aggregate counts");
+
+    let (anonymous_profile_status, anonymous_profile) =
+        get(&app, "/api/v2/users/activity-owner").await;
+    assert_eq!(anonymous_profile_status, StatusCode::OK);
+    assert_eq!(anonymous_profile["canViewActivity"], false);
+    assert_eq!(anonymous_profile["threadCount"], 4);
+    assert_eq!(anonymous_profile["commentCount"], 7);
+    assert_eq!(get(&app, "/api/v2/users/activity-owner/threads").await.0, StatusCode::NOT_FOUND);
+    assert_eq!(
+        get_as(&app, "/api/v2/users/activity-owner/comments", Some(&viewer_token),).await.0,
+        StatusCode::NOT_FOUND
+    );
+
+    let (self_profile_status, self_profile) =
+        get_as(&app, "/api/v2/users/activity-owner", Some(&owner_token)).await;
+    assert_eq!(self_profile_status, StatusCode::OK);
+    assert_eq!(self_profile["canViewActivity"], true);
+    assert_eq!(
+        get_as(&app, "/api/v2/users/activity-owner/threads", Some(&owner_token),).await.0,
+        StatusCode::OK
+    );
+
+    sqlx::query(
+        "UPDATE identity.profile_privacy SET activity_visibility = 'campus' \
+         WHERE account_id = $1",
+    )
+    .bind(owner_id)
+    .execute(&pool)
+    .await
+    .expect("allow campus activity");
+    assert_eq!(get(&app, "/api/v2/users/activity-owner/threads").await.0, StatusCode::NOT_FOUND);
+    let (campus_profile_status, campus_profile) =
+        get_as(&app, "/api/v2/users/activity-owner", Some(&viewer_token)).await;
+    assert_eq!(campus_profile_status, StatusCode::OK);
+    assert_eq!(campus_profile["canViewActivity"], true);
+    assert_eq!(
+        get_as(&app, "/api/v2/users/activity-owner/comments", Some(&viewer_token),).await.0,
+        StatusCode::OK
+    );
+
+    sqlx::query(
+        "UPDATE identity.profile_privacy SET activity_visibility = 'public' \
+         WHERE account_id = $1",
+    )
+    .bind(owner_id)
+    .execute(&pool)
+    .await
+    .expect("allow public activity");
+    assert_eq!(get(&app, "/api/v2/users/activity-owner/threads").await.0, StatusCode::OK);
+
+    sqlx::query("INSERT INTO forum.user_ignores (account_id, ignored_account_id) VALUES ($1, $2)")
+        .bind(viewer_id)
+        .bind(owner_id)
+        .execute(&pool)
+        .await
+        .expect("block activity owner");
+    let (blocked_profile_status, blocked_profile) =
+        get_as(&app, "/api/v2/users/activity-owner", Some(&viewer_token)).await;
+    assert_eq!(blocked_profile_status, StatusCode::OK);
+    assert_eq!(blocked_profile["canViewActivity"], false);
+    assert_eq!(
+        get_as(&app, "/api/v2/users/activity-owner/threads", Some(&viewer_token),).await.0,
+        StatusCode::NOT_FOUND
+    );
+
+    sqlx::query("DELETE FROM forum.user_ignores WHERE account_id = $1 AND ignored_account_id = $2")
+        .bind(viewer_id)
+        .bind(owner_id)
+        .execute(&pool)
+        .await
+        .expect("remove activity block");
+    sqlx::query(
+        "UPDATE identity.profile_privacy \
+         SET profile_visibility = 'campus', activity_visibility = 'public' WHERE account_id = $1",
+    )
+    .bind(owner_id)
+    .execute(&pool)
+    .await
+    .expect("tighten profile visibility");
+    assert_eq!(get(&app, "/api/v2/users/activity-owner").await.0, StatusCode::NOT_FOUND);
 }
 
 async fn insert_thread(
@@ -93,6 +211,16 @@ async fn profile_routes_preserve_contract_and_exclude_unavailable_content() {
     let (account_id, _) =
         create_test_account(&pool, "profile-boundary@tongji.edu.cn", "profile-boundary").await;
     sqlx::query(
+        "INSERT INTO identity.profile_privacy \
+         (account_id, profile_visibility, activity_visibility) \
+         VALUES ($1, 'public', 'public') ON CONFLICT (account_id) DO UPDATE \
+         SET profile_visibility = 'public', activity_visibility = 'public'",
+    )
+    .bind(account_id)
+    .execute(&pool)
+    .await
+    .expect("make profile public");
+    sqlx::query(
         "INSERT INTO forum.user_stats \
          (account_id, threads_created, comments_created, votes_received) \
          VALUES ($1, 8, 13, 21)",
@@ -118,6 +246,62 @@ async fn profile_routes_preserve_contract_and_exclude_unavailable_content() {
     .execute(&pool)
     .await
     .expect("award profile badge");
+
+    let public_verification_type_id: i64 = sqlx::query_scalar(
+        "INSERT INTO platform.verification_types \
+         (slug, category, label, description, icon, badge_variant, allows_public_display, created_by) \
+         VALUES ('campus-organization', 'identity', '校级组织', '已核实的校级组织账号', \
+                 'building-2', 'default', true, $1) \
+         ON CONFLICT (slug) DO UPDATE SET created_by = EXCLUDED.created_by RETURNING id",
+    )
+    .bind(account_id)
+    .fetch_one(&pool)
+    .await
+    .expect("insert public verification type");
+    sqlx::query(
+        "INSERT INTO platform.verification_grants \
+         (account_id, verification_type_id, display_on_profile, evidence_reference, issue_reason, issued_by) \
+         VALUES ($1, $2, true, 'case:profile-boundary', 'verified organization ownership', $1)",
+    )
+    .bind(account_id)
+    .bind(public_verification_type_id)
+    .execute(&pool)
+    .await
+    .expect("grant public verification");
+
+    let private_verification_type_id: i64 = sqlx::query_scalar(
+        "INSERT INTO platform.verification_types \
+         (slug, category, label, icon, badge_variant, allows_public_display, created_by) \
+         VALUES ('private-check', 'special', '内部核验', 'shield-check', 'outline', false, $1) \
+         ON CONFLICT (slug) DO UPDATE SET created_by = EXCLUDED.created_by RETURNING id",
+    )
+    .bind(account_id)
+    .fetch_one(&pool)
+    .await
+    .expect("insert private verification type");
+    sqlx::query(
+        "INSERT INTO platform.verification_grants \
+         (account_id, verification_type_id, display_on_profile, evidence_reference, issue_reason, issued_by) \
+         VALUES ($1, $2, false, 'case:private-check', 'private verification test', $1)",
+    )
+    .bind(account_id)
+    .bind(private_verification_type_id)
+    .execute(&pool)
+    .await
+    .expect("grant private verification");
+
+    sqlx::query(
+        "INSERT INTO platform.verification_grants \
+         (account_id, verification_type_id, display_on_profile, issue_reason, issued_by, \
+          issued_at, expires_at) \
+         VALUES ($1, $2, true, 'expired verification test', $1, now() - interval '2 hours', \
+                 now() - interval '1 hour')",
+    )
+    .bind(account_id)
+    .bind(public_verification_type_id)
+    .execute(&pool)
+    .await
+    .expect("grant expired verification");
 
     let visible_one =
         insert_thread(&pool, account_id, "Visible one", ThreadVisibility::Visible).await;
@@ -148,6 +332,11 @@ async fn profile_routes_preserve_contract_and_exclude_unavailable_content() {
     assert_eq!(profile["commentCount"], 13);
     assert_eq!(profile["votesReceived"], 21);
     assert_eq!(profile["badges"][0]["slug"], "boundary-reader");
+    assert_eq!(profile["verifications"].as_array().expect("public verifications").len(), 1);
+    assert_eq!(profile["verifications"][0]["slug"], "campus-organization");
+    assert!(profile["verifications"][0].get("issuedBy").is_none());
+    assert!(profile["verifications"][0].get("issueReason").is_none());
+    assert!(profile["verifications"][0].get("evidenceReference").is_none());
     assert!(profile.get("email").is_none());
     assert!(profile.get("status").is_none());
 

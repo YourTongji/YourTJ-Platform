@@ -76,8 +76,7 @@ pub async fn flag_post(
     if matches!(auth.role.as_str(), "mod" | "admin") {
         return Err(AppError::Forbidden);
     }
-    let trust_level =
-        crate::trust_levels::get_trust_level(state.redis.as_ref(), &state.db, auth.id).await?;
+    let trust_level = crate::trust_levels::get_trust_level(&state.db, auth.id).await?;
     let (bucket, capacity) = if trust_level == 0 { ("flag_tl0", 5) } else { ("flag", 15) };
     shared::ratelimit::check_token_bucket(
         state.redis.as_ref(),
@@ -121,33 +120,8 @@ pub async fn flag_post(
         )
         .await;
         crate::meili::reconcile_thread_in_background(&state, outcome.thread_id);
-        if let Some(author_id) = outcome.author_id {
-            crate::notification_hooks::create_notification(
-                &state.db,
-                author_id,
-                "flag_auto_hide",
-                serde_json::json!({ "postType": target_type, "postId": post_id.to_string() }),
-                None,
-                None,
-            )
-            .await;
-            if auto_silenced {
-                identity::sanctions::invalidate_silence_cache(state.redis.as_ref(), author_id)
-                    .await;
-                crate::notification_hooks::create_notification(
-                    &state.db,
-                    author_id,
-                    "mod_action",
-                    serde_json::json!({
-                        "action": "auto_silence",
-                        "reason": AUTO_SILENCE_REASON,
-                        "duration": "24h",
-                    }),
-                    None,
-                    None,
-                )
-                .await;
-            }
+        if let Some(author_id) = outcome.author_id.filter(|_| auto_silenced) {
+            identity::sanctions::invalidate_silence_cache(state.redis.as_ref(), author_id).await;
         }
     }
 

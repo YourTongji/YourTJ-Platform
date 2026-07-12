@@ -59,6 +59,63 @@ pub struct LedgerVerify {
     pub latest_hash: Option<String>,
 }
 
+/// Reason supplied by an administrator requesting a read-only integrity run.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReconciliationRunInput {
+    pub reason: String,
+}
+
+/// Persistent state and summary metrics for one ledger reconciliation run.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReconciliationRunDto {
+    pub id: String,
+    pub status: String,
+    pub requested_by: String,
+    pub reason: String,
+    pub ledger_ok: Option<bool>,
+    pub ledger_latest_seq: Option<i64>,
+    pub ledger_latest_hash: Option<String>,
+    pub ledger_failure_seq: Option<i64>,
+    pub wallets_checked: i64,
+    pub drifted_wallets: i64,
+    pub missing_wallets: i64,
+    pub balance_drifted_wallets: i64,
+    pub sequence_drifted_wallets: i64,
+    pub total_absolute_drift: String,
+    pub error_code: Option<String>,
+    pub created_at: i64,
+    pub started_at: Option<i64>,
+    pub completed_at: Option<i64>,
+}
+
+/// One persisted wallet projection comparison from a reconciliation run.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReconciliationWalletDto {
+    pub account_id: String,
+    pub expected_balance: String,
+    pub actual_balance: Option<String>,
+    pub delta: String,
+    pub expected_last_seq: i64,
+    pub actual_last_seq: Option<i64>,
+    pub wallet_exists: bool,
+    pub has_balance_drift: bool,
+    pub has_sequence_drift: bool,
+}
+
+/// Aggregate health counters and the newest persisted reconciliation run.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReconciliationStatsDto {
+    pub total_runs: i64,
+    pub failed_runs: i64,
+    pub ledger_failure_runs: i64,
+    pub runs_with_drift: i64,
+    pub latest_run: Option<ReconciliationRunDto>,
+}
+
 /// POST /wallet/tip
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -111,7 +168,6 @@ pub struct ProductDto {
     pub description: Option<String>,
     pub price: i64,
     pub stock: i32,
-    pub delivery_info: Option<String>,
     pub status: String,
     pub created_at: i64,
 }
@@ -137,6 +193,8 @@ pub struct PurchaseDto {
     pub seller_id: String,
     pub amount: i64,
     pub status: String,
+    pub delivery_info: Option<String>,
+    pub created_at: i64,
 }
 
 /// POST /credit/purchases/{id}/action

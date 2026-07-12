@@ -12,6 +12,12 @@ use sqlx::PgPool;
 
 use shared::AppResult;
 
+/// Canonical text and the resulting moderation visibility decision.
+pub(crate) struct ModeratedText {
+    pub canonical: String,
+    pub is_queued: bool,
+}
+
 #[allow(dead_code)]
 static WATCHED_WORDS_MATCHER: Lazy<ArcSwap<AhoCorasick>> = Lazy::new(|| {
     ArcSwap::from_pointee(
@@ -52,35 +58,73 @@ pub async fn init_watched_words(pool: &PgPool) {
     }
 }
 
-/// Check text against watched words. Returns the action if a match is found.
-/// Used before writing posts.
-#[allow(dead_code)]
-pub fn check_watched_words(text: &str) -> Option<(String, String)> {
-    let matcher = WATCHED_WORDS_MATCHER.load();
-    let actions = WATCHED_WORDS_ACTIONS.load();
-
-    for m in matcher.find_iter(text) {
-        let matched = &text[m.start()..m.end()];
-        if let Some(action) = actions.get(matched) {
-            return Some((matched.to_lowercase(), action.clone()));
+fn canonicalize_censor_ranges(text: &str, mut ranges: Vec<(usize, usize)>) -> String {
+    ranges.sort_unstable_by_key(|(start, end)| (*start, std::cmp::Reverse(*end)));
+    let mut merged_ranges: Vec<(usize, usize)> = Vec::with_capacity(ranges.len());
+    for (start, end) in ranges {
+        if let Some((_, merged_end)) = merged_ranges.last_mut() {
+            if start <= *merged_end {
+                *merged_end = (*merged_end).max(end);
+                continue;
+            }
         }
+        merged_ranges.push((start, end));
     }
-    None
+
+    let mut canonical = String::with_capacity(text.len());
+    let mut last_end = 0;
+    for (start, end) in merged_ranges {
+        canonical.push_str(&text[last_end..start]);
+        let character_count = text[start..end].chars().count();
+        for _ in 0..character_count {
+            canonical.push('\u{2587}');
+        }
+        last_end = end;
+    }
+    canonical.push_str(&text[last_end..]);
+    canonical
 }
 
-/// Replace censored words with ▇ in text for censor action.
-#[allow(dead_code)]
-pub fn censor_text(text: &str) -> String {
+/// Apply all watched-word actions with `block > queue > censor` precedence.
+///
+/// Only `censor` matches are replaced. A queued value keeps its canonical text
+/// for staff review but must not enter public projections.
+pub(crate) fn moderate_text(text: &str) -> AppResult<ModeratedText> {
     let matcher = WATCHED_WORDS_MATCHER.load();
-    let mut result = String::with_capacity(text.len());
-    let mut last_end = 0;
-    for m in matcher.find_iter(text) {
-        result.push_str(&text[last_end..m.start()]);
-        for _ in 0..(m.end() - m.start()) {
-            result.push('\u{2587}');
-        }
-        last_end = m.end();
+    let actions = WATCHED_WORDS_ACTIONS.load();
+    let matches = matcher
+        .find_overlapping_iter(text)
+        .filter_map(|matched| {
+            actions
+                .get(&text[matched.start()..matched.end()])
+                .map(|action| (matched.start(), matched.end(), action.as_str()))
+        })
+        .collect::<Vec<_>>();
+
+    if matches.iter().any(|(_, _, action)| *action == "block") {
+        return Err(shared::AppError::BadRequest("content contains blocked words".into()));
     }
-    result.push_str(&text[last_end..]);
-    result
+
+    let is_queued = matches.iter().any(|(_, _, action)| *action == "queue");
+    let censor_ranges = matches
+        .iter()
+        .filter_map(|(start, end, action)| (*action == "censor").then_some((*start, *end)))
+        .collect::<Vec<_>>();
+    if censor_ranges.is_empty() {
+        return Ok(ModeratedText { canonical: text.to_owned(), is_queued });
+    }
+
+    Ok(ModeratedText { canonical: canonicalize_censor_ranges(text, censor_ranges), is_queued })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::canonicalize_censor_ranges;
+
+    #[test]
+    fn overlapping_censor_matches_hide_the_full_union() {
+        let canonical = canonicalize_censor_ranges("abcdef", vec![(0, 3), (1, 5)]);
+
+        assert_eq!(canonical, "▇▇▇▇▇f");
+    }
 }

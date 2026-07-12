@@ -59,6 +59,51 @@ async fn run_migrations(pool: &PgPool) {
         MIGRATOR.run(pool).await.expect("review test migrations failed");
     }
 
+    let has_password_hash: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM information_schema.columns \
+         WHERE table_schema = 'identity' AND table_name = 'accounts' \
+           AND column_name = 'password_hash')",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or(false);
+    if !has_password_hash {
+        sqlx::raw_sql(include_str!("../../../../migrations/0011_password_auth.sql"))
+            .execute(pool)
+            .await
+            .expect("migration 0011 failed");
+    }
+
+    let has_email_blind_index: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM information_schema.columns \
+         WHERE table_schema = 'identity' AND table_name = 'email_codes' \
+           AND column_name = 'email_blind_index')",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or(false);
+    if !has_email_blind_index {
+        sqlx::raw_sql(include_str!("../../../../migrations/0016_email_encryption.sql"))
+            .execute(pool)
+            .await
+            .expect("migration 0016 failed");
+    }
+
+    let has_auth_hardening: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM information_schema.columns \
+         WHERE table_schema = 'identity' AND table_name = 'email_codes' \
+           AND column_name = 'purpose')",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or(false);
+    if !has_auth_hardening {
+        sqlx::raw_sql(include_str!("../../../../migrations/0033_identity_auth_hardening.sql"))
+            .execute(pool)
+            .await
+            .expect("migration 0033 failed");
+    }
+
     let has_forum_parity: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM information_schema.columns \
          WHERE table_schema = 'identity' AND table_name = 'accounts' \
@@ -201,8 +246,13 @@ async fn run_migrations(pool: &PgPool) {
             .expect("migration 0030 failed");
     }
 
+    let database_name: String = sqlx::query_scalar("SELECT current_database()")
+        .fetch_one(pool)
+        .await
+        .expect("test db name");
+    assert!(database_name.ends_with("_test"), "refuse destructive cleanup outside a test database");
+
     // Clean test data from previous runs (always run, even if migrations were skipped).
-    sqlx::query("DELETE FROM governance.audit_events").execute(pool).await.ok();
     sqlx::query("DELETE FROM reviews.review_reports").execute(pool).await.ok();
     sqlx::query("DELETE FROM reviews.review_create_idempotency").execute(pool).await.ok();
     sqlx::query("DELETE FROM reviews.review_likes").execute(pool).await.ok();
@@ -211,17 +261,56 @@ async fn run_migrations(pool: &PgPool) {
     sqlx::query("DELETE FROM identity.email_codes").execute(pool).await.ok();
     sqlx::query("DELETE FROM identity.account_keys").execute(pool).await.ok();
     sqlx::query("DELETE FROM credit.wallets").execute(pool).await.ok();
-    sqlx::query("DELETE FROM credit.ledger").execute(pool).await.ok();
-    // TRUNCATE ... CASCADE removes accounts and every row referencing them
-    // (across crates), so leftover FK references never block cleanup and cause
-    // cross-suite email collisions. Plain DELETE silently fails on such refs.
-    sqlx::query("TRUNCATE identity.accounts CASCADE").execute(pool).await.ok();
+    sqlx::query("TRUNCATE credit.ledger RESTART IDENTITY").execute(pool).await.ok();
+    retire_test_accounts(pool).await;
     sqlx::query("DELETE FROM courses.course_aliases").execute(pool).await.ok();
     // Reset course stats.
     sqlx::query("UPDATE courses.courses SET review_count = 0, review_avg = 0")
         .execute(pool)
         .await
         .ok();
+}
+
+async fn retire_test_accounts(pool: &PgPool) {
+    let has_account_lifecycle: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM information_schema.columns \
+         WHERE table_schema = 'identity' AND table_name = 'accounts' \
+           AND column_name = 'lifecycle_version')",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or(false);
+    if has_account_lifecycle {
+        sqlx::query(
+            "UPDATE identity.accounts SET \
+               status = 'purged', \
+               email = ('retired-' || id || '@test.invalid')::citext, \
+               handle = ('retired-' || id)::citext, \
+               email_ciphertext = NULL, email_key_version = NULL, \
+               email_blind_index = NULL, password_hash = NULL, password_email_blind = NULL, \
+               deactivated_at = NULL, deletion_requested_at = now() - interval '31 days', \
+               deletion_recover_until = now() - interval '1 day', \
+               deleted_at = now() - interval '1 day', purge_started_at = now(), \
+               purged_at = now(), tombstone_id = COALESCE(tombstone_id, gen_random_uuid()), \
+               lifecycle_version = lifecycle_version + 1, \
+               credential_version = credential_version + 1, auth_version = auth_version + 1",
+        )
+        .execute(pool)
+        .await
+        .expect("retire lifecycle-aware test accounts");
+        return;
+    }
+    sqlx::query(
+        "UPDATE identity.accounts SET \
+           status = 'deleted', \
+           email = ('retired-' || id || '@test.invalid')::citext, \
+           handle = ('retired-' || id)::citext, \
+           email_ciphertext = NULL, email_key_version = NULL, \
+           email_blind_index = NULL, password_email_blind = NULL",
+    )
+    .execute(pool)
+    .await
+    .expect("retire prior test accounts without truncating append-only governance history");
 }
 
 /// Read the JSON body from a response.

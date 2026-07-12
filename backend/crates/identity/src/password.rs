@@ -26,8 +26,9 @@ const MIN_LENGTH: usize = 8;
 /// Maximum password length in characters.
 const MAX_LENGTH: usize = 128;
 
-/// Hash a password with Argon2id. Returns an AppError on empty input.
-pub fn hash(password: &str) -> Result<String, AppError> {
+const DUMMY_PASSWORD_HASH: &str = "$argon2id$v=19$m=19456,t=2,p=1$lMsuCNrM/Jk4lpdAY/Gk9w$NkmJDYSq0o5US61ZPai1ajtpZWKmn7Rvn4wqQn3DR7Y";
+
+fn hash_blocking(password: &str) -> Result<String, AppError> {
     if password.is_empty() {
         return Err(IdentityError::InvalidPassword.into());
     }
@@ -45,13 +46,37 @@ pub fn hash(password: &str) -> Result<String, AppError> {
     Ok(phc)
 }
 
-/// Verify a password against a PHC string. Constant-time internally.
-pub fn verify(password: &str, phc: &str) -> bool {
+fn verify_blocking(password: &str, phc: &str) -> bool {
     let parsed = match PasswordHash::new(phc) {
         Ok(h) => h,
         Err(_) => return false,
     };
     Argon2::default().verify_password(password.as_bytes(), &parsed).is_ok()
+}
+
+/// Hash a password without blocking a Tokio worker thread.
+pub async fn hash(password: &str) -> Result<String, AppError> {
+    let password = password.to_owned();
+    tokio::task::spawn_blocking(move || hash_blocking(&password))
+        .await
+        .map_err(|error| AppError::Internal(anyhow::Error::new(error)))?
+}
+
+/// Verify a password without blocking a Tokio worker thread.
+pub async fn verify(password: &str, phc: &str) -> Result<bool, AppError> {
+    let password = password.to_owned();
+    let phc = phc.to_owned();
+    tokio::task::spawn_blocking(move || verify_blocking(&password, &phc))
+        .await
+        .map_err(|error| AppError::Internal(anyhow::Error::new(error)))
+}
+
+/// Perform one Argon2 verification even when an account has no stored password.
+pub async fn verify_or_dummy(password: &str, phc: Option<&str>) -> Result<bool, AppError> {
+    let has_valid_hash = phc.is_some_and(|stored| PasswordHash::new(stored).is_ok());
+    let selected_hash =
+        if has_valid_hash { phc.unwrap_or(DUMMY_PASSWORD_HASH) } else { DUMMY_PASSWORD_HASH };
+    Ok(has_valid_hash && verify(password, selected_hash).await?)
 }
 
 /// Validate password strength via zxcvbn and length checks.
@@ -86,39 +111,39 @@ mod tests {
     // hash / verify round-trip
     // -----------------------------------------------------------------------
 
-    #[test]
-    fn hash_roundtrip() {
+    #[tokio::test]
+    async fn hash_roundtrip() {
         let pw = "MyStr0ngP4ssword!";
-        let phc = hash(pw).expect("hash should succeed");
+        let phc = hash(pw).await.expect("hash should succeed");
         assert!(phc.starts_with("$argon2id$"));
-        assert!(verify(pw, &phc));
+        assert!(verify(pw, &phc).await.expect("verify password"));
     }
 
-    #[test]
-    fn wrong_password_rejects() {
-        let phc = hash("correct-horse-battery-staple").unwrap();
-        assert!(!verify("wrong-password", &phc));
+    #[tokio::test]
+    async fn wrong_password_rejects() {
+        let phc = hash("correct-horse-battery-staple").await.expect("hash password");
+        assert!(!verify("wrong-password", &phc).await.expect("verify password"));
     }
 
-    #[test]
-    fn empty_password_rejects() {
-        assert!(hash("").is_err());
+    #[tokio::test]
+    async fn empty_password_rejects() {
+        assert!(hash("").await.is_err());
     }
 
-    #[test]
-    fn empty_password_verify_fails() {
-        let phc = hash("something").unwrap();
-        assert!(!verify("", &phc));
+    #[tokio::test]
+    async fn empty_password_verify_fails() {
+        let phc = hash("something").await.expect("hash password");
+        assert!(!verify("", &phc).await.expect("verify password"));
     }
 
-    #[test]
-    fn each_hash_is_unique() {
+    #[tokio::test]
+    async fn each_hash_is_unique() {
         let pw = "same-password-twice";
-        let h1 = hash(pw).unwrap();
-        let h2 = hash(pw).unwrap();
+        let h1 = hash(pw).await.expect("hash password");
+        let h2 = hash(pw).await.expect("hash password");
         assert_ne!(h1, h2, "different salts should produce different hashes");
-        assert!(verify(pw, &h1));
-        assert!(verify(pw, &h2));
+        assert!(verify(pw, &h1).await.expect("verify password"));
+        assert!(verify(pw, &h2).await.expect("verify password"));
     }
 
     // -----------------------------------------------------------------------
@@ -180,13 +205,23 @@ mod tests {
     // edge cases
     // -----------------------------------------------------------------------
 
-    #[test]
-    fn verify_garbage_phc_returns_false() {
-        assert!(!verify("anything", "not-a-valid-phc-string"));
+    #[tokio::test]
+    async fn verify_garbage_phc_returns_false() {
+        assert!(!verify("anything", "not-a-valid-phc-string").await.expect("verify password"));
     }
 
-    #[test]
-    fn verify_empty_phc_returns_false() {
-        assert!(!verify("anything", ""));
+    #[tokio::test]
+    async fn verify_empty_phc_returns_false() {
+        assert!(!verify("anything", "").await.expect("verify password"));
+    }
+
+    #[tokio::test]
+    async fn dummy_hash_can_never_authenticate() {
+        assert!(!verify_or_dummy("yourtj-constant-dummy-password", None)
+            .await
+            .expect("verify dummy password"));
+        assert!(!verify_or_dummy("yourtj-constant-dummy-password", Some("invalid-phc"))
+            .await
+            .expect("verify invalid stored hash"));
     }
 }

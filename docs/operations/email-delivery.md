@@ -25,8 +25,10 @@ Cloudflare endpoint 与响应 envelope 以官方
 
 ## 业务语义
 
-- 登录和密码重置 code：provider 接受邮件后 API 才返回成功；失败时使新 code 无效并返回可重试
+- 登录/注册 code：provider 接受邮件后 API 才返回成功；失败时使新 code 无效并返回可重试
   `SERVICE_UNAVAILABLE`，不能告诉用户“已发送”。
+- 忘记密码始终返回中性 204，避免用 provider 失败枚举账号；provider 未接受时 reset code 仍失效，
+  运维通过不含收件人/code 的 error rate 告警。客户端使用中性文案提示“若账号可重置将收到邮件”。
 - 邀请与 digest：主业务 mutation 不因外部邮件失败回滚；写 retry/outbox 并发出不含收件人的告警。
 - 治理/安全邮件即使用户关闭互动邮件也不能被错误抑制；仍需保留站内事实通知。
 - Provider accepted 不等于最终 delivered；bounce、complaint 和 retry 状态需要后续 operational model。
@@ -46,7 +48,8 @@ Cloudflare endpoint 与响应 envelope 以官方
 2. 保持官方 HTTPS API base；非 HTTPS override 只允许 loopback integration test。
 3. 用受控测试邮箱验证 accepted envelope；不要在命令历史/日志打印 token 或 code。
 4. 通过平台 API 请求一次 login code 并确认收到。
-5. 注入 provider failure，确认 API 返回 503、新 code 不可使用且日志无 PII。
+5. 注入 provider failure，确认 login/registration API 返回 503、forgot API 保持中性 204，所有新
+   code 均不可使用且日志无 PII。
 6. 确认 preview 仍为 `log` provider，且无法使用生产 token。
 
 ## 故障处理

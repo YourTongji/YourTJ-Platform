@@ -92,7 +92,6 @@ mod compliance_guards {
             description: None,
             price: 100,
             stock: 10,
-            delivery_info: None,
             status: "on_sale".into(),
             created_at: 0,
         };
@@ -110,6 +109,8 @@ mod compliance_guards {
             seller_id: "2".into(),
             amount: 100,
             status: "pending".into(),
+            delivery_info: None,
+            created_at: 0,
         };
         let _ = credit::dto::PurchaseAction { action: "confirm".into() };
     }
@@ -121,6 +122,7 @@ mod compliance_guards {
         let _ = credit::error::CreditError::InsufficientBalance;
         let _ = credit::error::CreditError::TaskNotFound;
         let _ = credit::error::CreditError::ProductNotFound;
+        let _ = credit::error::CreditError::PurchaseNotFound;
         let _ = credit::error::CreditError::InvalidAction("test".into());
         let _ = credit::error::CreditError::InvalidSignature;
         let _ = credit::error::CreditError::WalletNotBound;

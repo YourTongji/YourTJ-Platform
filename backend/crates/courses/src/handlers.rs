@@ -4,7 +4,7 @@
 
 use axum::extract::{Path, Query, State};
 use axum::Json;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use shared::{AppResult, AppState, Page};
 
 use crate::dto::{CourseDetailDto, CourseDto, DepartmentDto, TeacherDto};
@@ -192,94 +192,6 @@ pub async fn list_departments(state: State<AppState>) -> AppResult<Json<Vec<Depa
         })
         .await?;
     Ok(Json(items))
-}
-
-// Global search handler ---------------------------------------------------
-
-#[derive(Debug, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SearchQuery {
-    pub q: String,
-    #[serde(default = "default_search_limit")]
-    pub limit: usize,
-    /// Search type: "course" | "review" | "thread" | "all" (default)
-    #[serde(rename = "type", default = "default_query_type")]
-    pub query_type: String,
-}
-
-fn default_query_type() -> String {
-    "all".into()
-}
-
-fn default_search_limit() -> usize {
-    10
-}
-
-/// Structured search result with separated courses, reviews, and forum threads.
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SearchResultDto {
-    pub courses: Vec<serde_json::Value>,
-    pub reviews: Vec<serde_json::Value>,
-    pub threads: Vec<serde_json::Value>,
-}
-
-/// GET /api/v2/search — global Meilisearch search across courses, reviews, and forum threads.
-pub async fn global_search(
-    State(state): State<AppState>,
-    headers: axum::http::HeaderMap,
-    Query(params): Query<SearchQuery>,
-) -> AppResult<Json<SearchResultDto>> {
-    // Rate-limit search: 30 requests per 10 seconds per client IP.
-    let ip = headers
-        .get("x-forwarded-for")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.split(',').next())
-        .unwrap_or("unknown");
-    shared::ratelimit::check_token_bucket(state.redis.as_ref(), "search", ip, 30, 10).await?;
-
-    use crate::meili;
-
-    let results = meili::search_courses_and_reviews(
-        &state.meili_url,
-        &state.meili_master_key,
-        &params.q,
-        params.limit,
-    )
-    .await;
-
-    let mut courses = Vec::new();
-    let mut reviews = Vec::new();
-
-    for r in results {
-        let item = serde_json::json!({
-            "id": r.id,
-            "name": r.name,
-            "code": r.code,
-            "kind": r.kind,
-        });
-        if r.kind == "review" {
-            reviews.push(item);
-        } else {
-            courses.push(item);
-        }
-    }
-
-    // Search forum threads when type includes "thread" or is "all" (default).
-    let threads = if params.query_type == "thread" || params.query_type == "all" {
-        forum::meili::search_threads(
-            &state.db,
-            &state.meili_url,
-            &state.meili_master_key,
-            &params.q,
-            params.limit,
-        )
-        .await?
-    } else {
-        Vec::new()
-    };
-
-    Ok(Json(SearchResultDto { courses, reviews, threads }))
 }
 
 // Helpers ---------------------------------------------------------------

@@ -28,8 +28,10 @@ interface RequestOptions {
   query?: Record<string, string | number | boolean | null | undefined>;
   body?: unknown;
   headers?: HeadersInit;
-  auth?: boolean;
+  auth?: boolean | "optional";
   signal?: AbortSignal;
+  keepalive?: boolean;
+  authToken?: string;
 }
 
 let refreshPromise: Promise<boolean> | null = null;
@@ -93,7 +95,7 @@ async function refreshTokens() {
 
 async function fetchOnce<T>(path: string, options: RequestOptions) {
   const headers = new Headers(options.headers);
-  const token = options.auth === false ? null : readAccessToken();
+  const token = options.authToken ?? (options.auth === false ? null : readAccessToken());
   if (token) {
     headers.set("Authorization", `Bearer ${token}`);
   }
@@ -106,9 +108,10 @@ async function fetchOnce<T>(path: string, options: RequestOptions) {
     headers,
     body: options.body === undefined ? undefined : JSON.stringify(options.body),
     signal: options.signal,
+    keepalive: options.keepalive,
   });
 
-  if (response.status === 204 || response.status === 202) {
+  if (response.status === 204) {
     return undefined as T;
   }
   if (!response.ok) {
@@ -125,11 +128,49 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}) 
   try {
     return await fetchOnce<T>(path, options);
   } catch (error) {
-    if (error instanceof ApiError && error.status === 401 && options.auth !== false) {
+    if (
+      error instanceof ApiError
+      && error.status === 401
+      && options.auth !== false
+      && !options.authToken
+    ) {
       const refreshed = await refreshTokens();
       if (refreshed) {
         return fetchOnce<T>(path, options);
       }
+      if (options.auth === "optional") {
+        return fetchOnce<T>(path, { ...options, auth: false });
+      }
+    }
+    throw error;
+  }
+}
+
+async function fetchBlobOnce(path: string, headersInput?: HeadersInit) {
+  const headers = new Headers(headersInput);
+  const token = readAccessToken();
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+  const response = await fetch(buildUrl(path), { headers });
+  if (!response.ok) throw await parseError(response);
+  const contentType = response.headers.get("content-type")?.split(";", 1)[0] ?? "";
+  if (!["image/jpeg", "image/png", "image/gif", "image/webp"].includes(contentType)) {
+    throw new ApiError(response.status, "媒体预览类型无效");
+  }
+  const blob = await response.blob();
+  if (blob.size > 20 * 1024 * 1024) {
+    throw new ApiError(response.status, "媒体预览超过大小限制");
+  }
+  return blob;
+}
+
+/** Fetch one same-origin binary response while preserving the normal access-token refresh path. */
+export async function apiBlobRequest(path: string, headers?: HeadersInit) {
+  try {
+    return await fetchBlobOnce(path, headers);
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 401) {
+      const refreshed = await refreshTokens();
+      if (refreshed) return fetchBlobOnce(path, headers);
     }
     throw error;
   }

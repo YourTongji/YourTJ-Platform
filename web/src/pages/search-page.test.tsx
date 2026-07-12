@@ -1,0 +1,162 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { MemoryRouter } from "react-router";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+import { expectNoAccessibilityViolations } from "@/test/accessibility";
+
+import { SearchPage } from "./search-page";
+
+const apiMocks = vi.hoisted(() => ({ search: vi.fn() }));
+
+vi.mock("@/lib/api/endpoints", () => ({ api: apiMocks }));
+
+function renderPage() {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <MemoryRouter initialEntries={["/search?q=算法"]}>
+        <SearchPage />
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+}
+
+describe("SearchPage", () => {
+  beforeEach(() => {
+    apiMocks.search.mockReset().mockImplementation(async (
+      _query: string,
+      scope: string,
+      _limit: number,
+      cursor?: string | null,
+    ) => ({
+      courses: scope === "all" || scope === "course" ? [{
+        id: "1",
+        code: "CS101",
+        name: "算法设计",
+        credit: 3,
+        department: "计算机学院",
+        teacherName: "张老师",
+        reviewCount: 12,
+        reviewAvg: 4.8,
+      }] : [],
+      reviews: scope === "all" || scope === "review" ? [{
+        id: "2",
+        courseId: "1",
+        courseName: "算法设计",
+        rating: 5,
+        comment: "讲解清晰",
+        approveCount: 6,
+        createdAt: 1_700_000_000,
+      }] : [],
+      threads: scope === "all" || scope === "thread" ? [{
+        id: cursor ? "30" : "3",
+        title: cursor ? "算法进阶讨论" : "算法作业讨论",
+        bodyExcerpt: "一起梳理动态规划",
+        board: "study",
+        tags: [],
+        authorHandle: "alice",
+        replyCount: 4,
+        voteCount: 8,
+        createdAt: 1_700_000_000,
+        status: "visible",
+      }] : [],
+      users: scope === "all" || scope === "user" ? [{
+        id: "4",
+        handle: "alice",
+        displayName: "Alice",
+        avatarUrl: null,
+        role: "user",
+        followerCount: 18,
+        following: true,
+      }] : [],
+      boards: scope === "all" || scope === "board" ? [{
+        id: "5",
+        slug: "study",
+        name: "学习交流",
+        description: "课程和作业讨论",
+        threadCount: 24,
+      }] : [],
+      tags: scope === "all" || scope === "tag" ? [{
+        id: "6",
+        slug: "algorithm",
+        name: "算法",
+        description: null,
+        threadCount: 9,
+      }] : [],
+      nextCursor: scope === "thread" && !cursor ? "thread-cursor-1" : null,
+      hasMore: scope === "thread" && !cursor,
+      hasMoreScopes: scope === "all" ? ["thread"] : scope === "thread" && !cursor ? ["thread"] : [],
+      failedScopes: [],
+      highlights: scope === "all" || scope === "thread" ? [{
+        scope: "thread",
+        id: cursor ? "30" : "3",
+        field: "title",
+        ranges: [{ start: 0, end: 2 }],
+      }] : [],
+      suggestedQuery: scope === "all" ? "演算法" : null,
+    }));
+  });
+
+  it("renders typed canonical links and applies a search scope", async () => {
+    const user = userEvent.setup();
+    const view = renderPage();
+
+    expect((await screen.findAllByRole("link", { name: /算法设计/ }))[0]).toHaveAttribute("href", "/courses/1");
+    expect(screen.getByRole("link", { name: /算法作业讨论/ })).toHaveAttribute("href", "/forum/threads/3");
+    expect(screen.getByRole("link", { name: /Alice/ })).toHaveAttribute("href", "/profile/alice");
+    expect(screen.getByRole("link", { name: /学习交流/ })).toHaveAttribute("href", "/forum?board=5");
+    expect(screen.getByRole("link", { name: /#算法/ })).toHaveAttribute("href", "/forum?tag=algorithm");
+    expect(screen.getByText("算法", { selector: "mark" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "“演算法”" })).toBeVisible();
+
+    await user.click(screen.getByRole("button", { name: "社区帖子" }));
+    await waitFor(() => expect(apiMocks.search).toHaveBeenLastCalledWith("算法", "thread", 30, null));
+    expect(screen.queryByText("讲解清晰")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "加载更多社区帖子" }));
+    expect(await screen.findByRole("link", { name: /算法进阶讨论/ })).toBeVisible();
+    await waitFor(() => expect(apiMocks.search).toHaveBeenLastCalledWith(
+      "算法",
+      "thread",
+      30,
+      "thread-cursor-1",
+    ));
+    await expectNoAccessibilityViolations(view.container);
+  });
+
+  it("applies the privacy-safe spelling suggestion as a new search", async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(await screen.findByRole("button", { name: "“演算法”" }));
+
+    await waitFor(() => expect(apiMocks.search).toHaveBeenLastCalledWith("演算法", "all", 6, null));
+    expect(screen.getByRole("textbox", { name: "全站搜索关键词" })).toHaveValue("演算法");
+  });
+
+  it("distinguishes an unavailable section from a genuine empty result", async () => {
+    apiMocks.search.mockReset().mockResolvedValue({
+      courses: [],
+      reviews: [],
+      threads: [],
+      users: [],
+      boards: [],
+      tags: [],
+      nextCursor: null,
+      hasMore: false,
+      hasMoreScopes: [],
+      failedScopes: ["thread"],
+      highlights: [],
+      suggestedQuery: null,
+    });
+    const view = renderPage();
+
+    expect(await screen.findByText("相关搜索分类暂时不可用")).toBeVisible();
+    expect(screen.queryByText(/没有找到/)).not.toBeInTheDocument();
+    await expectNoAccessibilityViolations(view.container);
+  });
+});

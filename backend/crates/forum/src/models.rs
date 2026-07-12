@@ -57,6 +57,7 @@ pub struct ThreadRowJoined {
     pub author_id: i64,
     pub title: String,
     pub body: Option<String>,
+    pub content_version: i64,
     pub reply_count: i32,
     pub vote_count: i32,
     pub hot_score: Option<f64>,
@@ -74,6 +75,8 @@ pub struct ThreadRowJoinedFull {
     pub author_id: i64,
     pub title: String,
     pub body: Option<String>,
+    pub content_format: String,
+    pub content_version: i64,
     pub reply_count: i32,
     pub vote_count: i32,
     pub hot_score: Option<f64>,
@@ -102,6 +105,8 @@ pub struct CommentRowJoined {
     pub path: Option<String>,
     pub author_id: i64,
     pub body: String,
+    pub content_format: String,
+    pub content_version: i64,
     pub vote_count: i32,
     pub deleted_at: Option<DateTime<Utc>>,
     pub hidden_at: Option<DateTime<Utc>>,
@@ -219,6 +224,8 @@ pub struct PostRevisionRow {
     pub editor_id: i64,
     pub old_title: Option<String>,
     pub old_body: String,
+    pub old_content_format: String,
+    pub old_content_version: i64,
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
@@ -265,6 +272,12 @@ pub struct DmConversationListRow {
     pub last_message_excerpt: Option<String>,
     pub last_message_at: chrono::DateTime<chrono::Utc>,
     pub unread_count: i64,
+    pub is_archived: bool,
+    pub is_muted: bool,
+    pub is_deleted: bool,
+    pub request_status: String,
+    pub request_direction: Option<String>,
+    pub can_send: bool,
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 

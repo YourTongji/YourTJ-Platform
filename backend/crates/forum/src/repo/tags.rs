@@ -1,8 +1,10 @@
 //! Tag CRUD and thread-tag association.
 
+use std::collections::HashMap;
+
 use crate::models::TagRow;
 use shared::AppResult;
-use sqlx::PgPool;
+use sqlx::{PgConnection, PgPool};
 
 /// List all tags.
 pub async fn list_tags(pool: &PgPool) -> AppResult<Vec<TagRow>> {
@@ -88,31 +90,60 @@ pub async fn delete_tag(executor: impl sqlx::PgExecutor<'_>, id: i64) -> AppResu
 
 /// Set tags on a thread (replaces existing).
 pub async fn set_thread_tags(pool: &PgPool, thread_id: i64, tag_ids: &[i64]) -> AppResult<()> {
-    // Get existing tag IDs so we can recalculate thread_count for tags being removed too.
+    let mut tx = pool.begin().await?;
+    set_thread_tags_tx(&mut tx, thread_id, tag_ids).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Resolve every requested slug while locking tag rows in a stable order.
+pub(crate) async fn resolve_tag_slugs_tx(
+    connection: &mut PgConnection,
+    slugs: &[String],
+) -> AppResult<Vec<i64>> {
+    let mut sorted_slugs = slugs.to_vec();
+    sorted_slugs.sort();
+    let mut tag_ids = Vec::with_capacity(sorted_slugs.len());
+    for slug in sorted_slugs {
+        let tag_id: Option<i64> =
+            sqlx::query_scalar("SELECT id FROM forum.tags WHERE slug = $1 FOR UPDATE")
+                .bind(&slug)
+                .fetch_optional(&mut *connection)
+                .await?;
+        let tag_id =
+            tag_id.ok_or_else(|| shared::AppError::BadRequest(format!("unknown tag: {slug}")))?;
+        tag_ids.push(tag_id);
+    }
+    Ok(tag_ids)
+}
+
+/// Replace thread tags and refresh public tag counters in the active transaction.
+pub(crate) async fn set_thread_tags_tx(
+    connection: &mut PgConnection,
+    thread_id: i64,
+    tag_ids: &[i64],
+) -> AppResult<()> {
     let old_ids: Vec<i64> =
         sqlx::query_scalar("SELECT tag_id FROM forum.thread_tags WHERE thread_id = $1")
             .bind(thread_id)
-            .fetch_all(pool)
+            .fetch_all(&mut *connection)
             .await?;
 
-    // Remove existing.
     sqlx::query("DELETE FROM forum.thread_tags WHERE thread_id = $1")
         .bind(thread_id)
-        .execute(pool)
+        .execute(&mut *connection)
         .await?;
 
-    // Insert new.
     for &tag_id in tag_ids {
         sqlx::query(
             "INSERT INTO forum.thread_tags (thread_id, tag_id) VALUES ($1, $2) ON CONFLICT DO NOTHING"
         )
         .bind(thread_id)
         .bind(tag_id)
-        .execute(pool)
+        .execute(&mut *connection)
         .await?;
     }
 
-    // Recalculate thread_count for all affected tags (old + new).
     let mut all_affected: Vec<i64> = old_ids;
     all_affected.extend_from_slice(tag_ids);
     all_affected.sort_unstable();
@@ -120,10 +151,16 @@ pub async fn set_thread_tags(pool: &PgPool, thread_id: i64, tag_ids: &[i64]) -> 
 
     for tag_id in all_affected {
         sqlx::query(
-            "UPDATE forum.tags SET thread_count = (SELECT COUNT(*) FROM forum.thread_tags WHERE tag_id = $1) WHERE id = $1"
+            "UPDATE forum.tags SET thread_count = ( \
+               SELECT COUNT(*)::int FROM forum.thread_tags thread_tag \
+               JOIN forum.threads thread ON thread.id = thread_tag.thread_id \
+               WHERE thread_tag.tag_id = $1 AND thread.status = 'visible' \
+                 AND thread.deleted_at IS NULL AND thread.hidden_at IS NULL \
+                 AND thread.archived_at IS NULL \
+             ) WHERE id = $1",
         )
         .bind(tag_id)
-        .execute(pool)
+        .execute(&mut *connection)
         .await?;
     }
 
@@ -142,6 +179,31 @@ pub async fn get_thread_tag_slugs(pool: &PgPool, thread_id: i64) -> AppResult<Ve
     .fetch_all(pool)
     .await?;
     Ok(slugs)
+}
+
+/// Batch tag slugs for thread-list responses.
+pub async fn get_thread_tag_slugs_batch(
+    pool: &PgPool,
+    thread_ids: &[i64],
+) -> AppResult<HashMap<i64, Vec<String>>> {
+    if thread_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let rows: Vec<(i64, String)> = sqlx::query_as(
+        "SELECT thread_tag.thread_id, tag.slug \
+         FROM forum.thread_tags thread_tag \
+         JOIN forum.tags tag ON tag.id = thread_tag.tag_id \
+         WHERE thread_tag.thread_id = ANY($1) \
+         ORDER BY thread_tag.thread_id, tag.name, tag.id",
+    )
+    .bind(thread_ids)
+    .fetch_all(pool)
+    .await?;
+    let mut tags = HashMap::new();
+    for (thread_id, slug) in rows {
+        tags.entry(thread_id).or_insert_with(Vec::new).push(slug);
+    }
+    Ok(tags)
 }
 
 /// Resolve a list of tag slugs to their (id, slug) pairs.

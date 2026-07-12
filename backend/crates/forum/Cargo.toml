@@ -22,15 +22,18 @@ base64.workspace = true
 tracing.workspace = true
 tokio.workspace = true
 identity.workspace = true
+media.workspace = true
 activity.workspace = true
 governance.workspace = true
+platform.workspace = true
 regex.workspace = true
 meilisearch-sdk.workspace = true
 once_cell.workspace = true
+pulldown-cmark.workspace = true
 futures.workspace = true
 tokio-stream.workspace = true
+sha2.workspace = true
+hex.workspace = true
 
 [dev-dependencies]
 tower.workspace = true
-sha2.workspace = true
-hex.workspace = true

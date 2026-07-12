@@ -22,6 +22,15 @@ use crate::models::BoardRow;
 pub struct CreateBoardInput {
     pub slug: String,
     pub name: String,
+    pub description: Option<String>,
+    #[serde(default)]
+    pub position: i32,
+    #[serde(default)]
+    pub is_locked: bool,
+    #[serde(default)]
+    pub min_trust_to_post: i16,
+    #[serde(default)]
+    pub is_qa: bool,
     pub reason: String,
 }
 
@@ -30,6 +39,11 @@ pub struct CreateBoardInput {
 pub struct UpdateBoardInput {
     pub slug: Option<String>,
     pub name: Option<String>,
+    pub description: Option<String>,
+    pub position: Option<i32>,
+    pub is_locked: Option<bool>,
+    pub min_trust_to_post: Option<i16>,
+    pub is_qa: Option<bool>,
     pub reason: String,
 }
 
@@ -70,19 +84,32 @@ pub async fn create_board(
     let reason = validate_reason(&body.reason)?;
     let slug = body.slug.trim();
     let name = body.name.trim();
-    if slug.is_empty() || slug.chars().count() > 64 || name.is_empty() || name.chars().count() > 100
+    let description = body.description.as_deref().map(str::trim).filter(|value| !value.is_empty());
+    if slug.is_empty()
+        || slug.chars().count() > 64
+        || name.is_empty()
+        || name.chars().count() > 100
+        || body.description.as_ref().is_some_and(|value| value.trim().chars().count() > 500)
+        || body.position < 0
+        || !(0..=3).contains(&body.min_trust_to_post)
     {
-        return Err(AppError::BadRequest("invalid board slug or name".into()));
+        return Err(AppError::BadRequest("invalid board settings".into()));
     }
     let mut tx = state.db.begin().await?;
     let row: BoardRow = sqlx::query_as(
-        "INSERT INTO forum.boards (slug, name) \
-         VALUES ($1, $2) \
+        "INSERT INTO forum.boards (slug, name, description, position, is_locked, \
+                                   min_trust_to_post, is_qa) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7) \
          RETURNING id, slug, name, parent_id, description, position, \
                    is_locked, is_qa, min_trust_to_post, thread_count",
     )
     .bind(slug)
     .bind(name)
+    .bind(description)
+    .bind(body.position)
+    .bind(body.is_locked)
+    .bind(body.min_trust_to_post)
+    .bind(body.is_qa)
     .fetch_one(&mut *tx)
     .await?;
     crate::repo::insert_mod_action(
@@ -106,8 +133,22 @@ pub async fn create_board(
     )
     .await?;
     tx.commit().await?;
+    crate::discovery::reconcile_entity_in_background(
+        &state,
+        crate::discovery::DiscoveryEntityKind::Board,
+        row.id,
+    );
 
-    Ok((StatusCode::CREATED, Json(board_to_dto(&row))))
+    Ok((
+        StatusCode::CREATED,
+        Json(board_to_dto(
+            &row,
+            Some(crate::repo::boards::BoardPostingActor {
+                trust_level: 0,
+                can_bypass_board_gates: true,
+            }),
+        )),
+    ))
 }
 
 /// PATCH /api/v2/admin/forum/boards/{id} — update a board
@@ -132,22 +173,42 @@ pub async fn update_board(
     let reason = validate_reason(&body.reason)?;
     let slug = body.slug.as_deref().map(str::trim).filter(|slug| !slug.is_empty());
     let name = body.name.as_deref().map(str::trim).filter(|name| !name.is_empty());
+    let description = body.description.as_deref().map(str::trim);
     if slug.is_some_and(|slug| slug.chars().count() > 64)
         || name.is_some_and(|name| name.chars().count() > 100)
-        || (slug.is_none() && name.is_none())
+        || description.is_some_and(|value| value.chars().count() > 500)
+        || body.position.is_some_and(|position| position < 0)
+        || body.min_trust_to_post.is_some_and(|level| !(0..=3).contains(&level))
+        || (slug.is_none()
+            && name.is_none()
+            && body.description.is_none()
+            && body.position.is_none()
+            && body.is_locked.is_none()
+            && body.min_trust_to_post.is_none()
+            && body.is_qa.is_none())
     {
         return Err(AppError::BadRequest("invalid board update".into()));
     }
     let mut tx = state.db.begin().await?;
     let row: BoardRow = sqlx::query_as(
         "UPDATE forum.boards \
-         SET slug = COALESCE($1, slug), name = COALESCE($2, name) \
-         WHERE id = $3 \
+         SET slug = COALESCE($1, slug), name = COALESCE($2, name), \
+             description = CASE WHEN $3 THEN NULLIF($4, '') ELSE description END, \
+             position = COALESCE($5, position), is_locked = COALESCE($6, is_locked), \
+             min_trust_to_post = COALESCE($7, min_trust_to_post), \
+             is_qa = COALESCE($8, is_qa) \
+         WHERE id = $9 \
          RETURNING id, slug, name, parent_id, description, position, \
                    is_locked, is_qa, min_trust_to_post, thread_count",
     )
     .bind(slug)
     .bind(name)
+    .bind(body.description.is_some())
+    .bind(description)
+    .bind(body.position)
+    .bind(body.is_locked)
+    .bind(body.min_trust_to_post)
+    .bind(body.is_qa)
     .bind(board_id)
     .fetch_optional(&mut *tx)
     .await?
@@ -175,8 +236,19 @@ pub async fn update_board(
     )
     .await?;
     tx.commit().await?;
+    crate::discovery::reconcile_entity_in_background(
+        &state,
+        crate::discovery::DiscoveryEntityKind::Board,
+        board_id,
+    );
 
-    Ok(Json(board_to_dto(&row)))
+    Ok(Json(board_to_dto(
+        &row,
+        Some(crate::repo::boards::BoardPostingActor {
+            trust_level: 0,
+            can_bypass_board_gates: true,
+        }),
+    )))
 }
 
 /// DELETE /api/v2/admin/forum/boards/{id} — delete a board
@@ -245,6 +317,11 @@ pub async fn delete_board(
     )
     .await?;
     tx.commit().await?;
+    crate::discovery::reconcile_entity_in_background(
+        &state,
+        crate::discovery::DiscoveryEntityKind::Board,
+        board_id,
+    );
 
     Ok(Json(json!({"ok": true})))
 }

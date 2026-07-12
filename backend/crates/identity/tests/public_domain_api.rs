@@ -24,11 +24,16 @@ async fn public_lookup_is_privacy_safe_and_system_silence_owns_identity_writes()
     assert_eq!(account.handle, "BoundaryUser");
     assert_eq!(account.role, "user");
 
-    sqlx::query("UPDATE identity.accounts SET status = 'deleted' WHERE id = $1")
-        .bind(account_id)
-        .execute(&pool)
-        .await
-        .expect("mark account deleted");
+    sqlx::query(
+        "UPDATE identity.accounts SET status = 'deleted', \
+             deletion_requested_at = now() - interval '31 days', \
+             deletion_recover_until = now() - interval '1 day', deleted_at = now() \
+         WHERE id = $1",
+    )
+    .bind(account_id)
+    .execute(&pool)
+    .await
+    .expect("mark account deleted");
     let deleted = identity::public_accounts::find_public_account_by_handle(&pool, "BoundaryUser")
         .await
         .expect("deleted lookup");

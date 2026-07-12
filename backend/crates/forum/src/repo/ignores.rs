@@ -1,4 +1,4 @@
-//! CRUD for forum.user_ignores (blocking / ignoring other users).
+//! Legacy `/me/ignores` compatibility over the canonical block relationship.
 //!
 //! All functions take `&PgPool` and return `AppResult` so callers can use `?`.
 
@@ -9,44 +9,25 @@ use sqlx::PgPool;
 #[derive(Debug, sqlx::FromRow)]
 pub struct IgnoredUserRow {
     pub account_id: i64,
-    pub handle: String,
-    pub avatar_url: Option<String>,
     pub created_at: DateTime<Utc>,
 }
 
-/// Insert an ignore relationship. Silently succeeds on duplicate (ON CONFLICT DO NOTHING).
+/// Compatibility alias that creates a canonical block.
 pub async fn insert_ignore(
     pool: &PgPool,
     account_id: i64,
     ignored_account_id: i64,
 ) -> AppResult<()> {
-    sqlx::query(
-        "INSERT INTO forum.user_ignores (account_id, ignored_account_id) \
-         VALUES ($1, $2) \
-         ON CONFLICT DO NOTHING",
-    )
-    .bind(account_id)
-    .bind(ignored_account_id)
-    .execute(pool)
-    .await?;
-    Ok(())
+    super::relationships::block(pool, account_id, ignored_account_id).await
 }
 
-/// Delete an ignore relationship. Succeeds even if the row did not exist.
+/// Compatibility alias that removes a canonical block idempotently.
 pub async fn delete_ignore(
     pool: &PgPool,
     account_id: i64,
     ignored_account_id: i64,
 ) -> AppResult<()> {
-    sqlx::query(
-        "DELETE FROM forum.user_ignores \
-         WHERE account_id = $1 AND ignored_account_id = $2",
-    )
-    .bind(account_id)
-    .bind(ignored_account_id)
-    .execute(pool)
-    .await?;
-    Ok(())
+    super::relationships::unblock(pool, account_id, ignored_account_id).await
 }
 
 /// Return the list of account_ids this account has ignored.
@@ -70,10 +51,8 @@ pub async fn list_ignored_users(
     limit: i64,
 ) -> AppResult<Vec<IgnoredUserRow>> {
     let rows = sqlx::query_as::<_, IgnoredUserRow>(
-        "SELECT ignored.id AS account_id, ignored.handle::text, ignored.avatar_url, \
-                relation.created_at \
+        "SELECT relation.ignored_account_id AS account_id, relation.created_at \
          FROM forum.user_ignores relation \
-         JOIN identity.accounts ignored ON ignored.id = relation.ignored_account_id \
          WHERE relation.account_id = $1 \
            AND ($2::bigint IS NULL OR relation.ignored_account_id < $2) \
          ORDER BY relation.ignored_account_id DESC LIMIT $3",

@@ -13,7 +13,12 @@ export const ADMIN_CAPABILITIES = {
   managePlatform: "platform.settings",
   manageActivity: "activity.policy",
   manageAnnouncements: "announcements.manage",
+  managePromotions: "promotions.manage",
+  manageBadges: "badges.manage",
+  manageVerifications: "verifications.manage",
   runOperations: "operations.jobs",
+  manageCreditIntegrity: "credit.integrity",
+  reviewAppeals: "appeals.review",
 } as const;
 
 export type AdminCapability = (typeof ADMIN_CAPABILITIES)[keyof typeof ADMIN_CAPABILITIES];
@@ -23,6 +28,7 @@ const moderatorFallback: AdminCapability[] = [
   ADMIN_CAPABILITIES.searchUsers,
   ADMIN_CAPABILITIES.silenceUsers,
   ADMIN_CAPABILITIES.readAudit,
+  ADMIN_CAPABILITIES.reviewAppeals,
 ];
 
 const administratorFallback: AdminCapability[] = Object.values(ADMIN_CAPABILITIES);

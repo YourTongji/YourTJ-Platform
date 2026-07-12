@@ -16,14 +16,67 @@ pub struct JwtClaims {
     pub sub: String,
     pub exp: usize,
     pub iat: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sid: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ver: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>,
 }
 
 /// Create a HS256-signed access token valid for `ttl_secs`.
 pub fn create_access_token(account_id: i64, secret: &str, ttl_secs: u64) -> Result<String, String> {
     let now = Utc::now().timestamp() as usize;
-    let claims = JwtClaims { sub: account_id.to_string(), exp: now + ttl_secs as usize, iat: now };
+    let claims = JwtClaims {
+        sub: account_id.to_string(),
+        exp: now + ttl_secs as usize,
+        iat: now,
+        sid: None,
+        ver: None,
+        scope: None,
+    };
     let key = EncodingKey::from_secret(secret.as_bytes());
     encode(&Header::default(), &claims, &key).map_err(|e| format!("JWT encode: {e}"))
+}
+
+/// Create an access token bound to one revocable server-side session.
+pub fn create_session_access_token(
+    account_id: i64,
+    session_id: i64,
+    auth_version: i64,
+    secret: &str,
+    ttl_secs: u64,
+) -> Result<String, String> {
+    let now = Utc::now().timestamp() as usize;
+    let claims = JwtClaims {
+        sub: account_id.to_string(),
+        exp: now + ttl_secs as usize,
+        iat: now,
+        sid: Some(session_id.to_string()),
+        ver: Some(auth_version),
+        scope: None,
+    };
+    let key = EncodingKey::from_secret(secret.as_bytes());
+    encode(&Header::default(), &claims, &key).map_err(|error| format!("JWT encode: {error}"))
+}
+
+/// Create a short-lived bearer token that authorizes only the appeal center.
+pub fn create_appeal_access_token(
+    account_id: i64,
+    secret: &str,
+    ttl_secs: u64,
+) -> Result<String, String> {
+    let now = Utc::now().timestamp() as usize;
+    let claims = JwtClaims {
+        sub: account_id.to_string(),
+        exp: now + ttl_secs as usize,
+        iat: now,
+        sid: None,
+        ver: None,
+        scope: Some("appeal".into()),
+    };
+    encode(&Header::default(), &claims, &EncodingKey::from_secret(secret.as_bytes()))
+        .map_err(|error| format!("JWT encode: {error}"))
 }
 
 /// Verify an access token and return the account id (from `sub`).
@@ -60,6 +113,21 @@ mod tests {
     }
 
     #[test]
+    fn session_access_token_carries_revocation_binding() {
+        let token = create_session_access_token(42, 7, 3, SECRET, 3600)
+            .expect("create session access token");
+        let mut validation = Validation::new(jsonwebtoken::Algorithm::HS256);
+        validation.validate_exp = true;
+        let key = DecodingKey::from_secret(SECRET.as_bytes());
+        let claims = decode::<JwtClaims>(&token, &key, &validation)
+            .expect("decode session access token")
+            .claims;
+        assert_eq!(claims.sub, "42");
+        assert_eq!(claims.sid.as_deref(), Some("7"));
+        assert_eq!(claims.ver, Some(3));
+    }
+
+    #[test]
     fn expired_token_rejected() {
         // Create a token that expired 2 hours ago to defeat the default 60s leeway.
         let past = Utc::now().timestamp() as usize - 7200;
@@ -67,6 +135,9 @@ mod tests {
             sub: 42.to_string(),
             exp: past + 1, // expired 1 second after `past`
             iat: past,
+            sid: None,
+            ver: None,
+            scope: None,
         };
         let key = EncodingKey::from_secret(SECRET.as_bytes());
         let token = jsonwebtoken::encode(&Header::default(), &claims, &key).expect("encode");

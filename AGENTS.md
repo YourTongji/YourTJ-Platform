@@ -37,13 +37,15 @@ iOS and Flutter clients live in **separate repos** and consume types generated f
 backend/crates/
   api/        Axum gateway binary — process startup + router composition only. No business logic.
   identity/   accounts, email auth, sessions, Ed25519 public keys.
-  courses/    catalogue, 选课 mirror tables, search surface.
+  courses/    catalogue, 选课 mirror tables, course search projection.
   reviews/    reviews, likes, reports, moderation queue.
   credit/     Web2.5 points ledger.
   forum/      boards, threads, comments, votes, notifications, direct messages.
   media/      OSS upload intents, callbacks, quarantine, and asset status.
   activity/   contribution events, daily projections, and scoring policy.
   governance/ append-only cross-domain staff/system audit events.
+  platform/   announcements, per-account receipts, first-party promotions, runtime settings.
+  search/     typed federated search orchestration; owns no business tables.
   shared/     config, the AppError type, pagination. Dependency-light; compiled by everyone.
   e2e/        executable cross-domain journey-test harness; never production business logic.
 ```
@@ -54,8 +56,11 @@ backend/crates/
 - `shared` must not depend on any domain crate (no cycles). Domain crates may depend
   on `shared`. `api` depends on everything and wires it together.
 - Put new HTTP routes in the owning domain crate's `routes()`; `api` only `.merge()`s them.
-- Existing platform/admin SQL in `api` is architecture debt, not a pattern to extend. New
-  announcements, promotions, badges, settings, or durable jobs need a clear owning domain/read model.
+- Cross-domain read surfaces such as `search` compose owner-provided public APIs; they do not bypass
+  boundaries with cross-schema SQL or expose raw search-index documents.
+- Existing admin/onebox SQL in `api` is architecture debt, not a pattern to extend. Announcements,
+  promotions, and settings are owned by `platform`; new badges or durable jobs need the same clear
+  owning domain/read model.
 
 ---
 

@@ -4,20 +4,26 @@
 //! At current scale, timelines are read-aggregated and cached — do NOT build
 //! fan-out-on-write. Hot ranking is a periodic job writing a Redis ZSET.
 mod admin;
-pub mod badges;
-mod cache;
+pub mod appeals;
+pub mod cache;
+mod content_permissions;
+mod content_policy;
+pub mod data_export;
 pub mod digest;
+pub mod discovery;
 mod dto;
 mod error;
 mod handlers;
 pub mod meili;
 mod models;
-pub mod notification_hooks;
+pub mod notification_delivery;
 mod notifications;
 pub mod repo;
 mod sanctions;
 pub mod sse;
+pub mod tip_targets;
 pub mod trust_levels;
+mod user_discovery;
 pub mod watched_words;
 
 use axum::routing::{delete, get, patch, post, put};
@@ -30,6 +36,22 @@ pub fn routes(state: AppState) -> Router {
         .route("/api/v2/users/{handle}", get(handlers::get_user_profile))
         .route("/api/v2/users/{handle}/threads", get(handlers::list_user_threads))
         .route("/api/v2/users/{handle}/comments", get(handlers::list_user_comments))
+        .route("/api/v2/users/{handle}/relationship", get(handlers::get_relationship_handler))
+        .route(
+            "/api/v2/users/{handle}/follow",
+            put(handlers::follow_user_handler).delete(handlers::unfollow_user_handler),
+        )
+        .route("/api/v2/me/followers/{handle}", delete(handlers::remove_follower_handler))
+        .route("/api/v2/users/{handle}/followers", get(handlers::list_followers_handler))
+        .route("/api/v2/users/{handle}/following", get(handlers::list_following_handler))
+        .route(
+            "/api/v2/users/{handle}/mute",
+            put(handlers::mute_user_handler).delete(handlers::unmute_user_handler),
+        )
+        .route(
+            "/api/v2/users/{handle}/block",
+            put(handlers::block_user_handler).delete(handlers::unblock_user_handler),
+        )
         .route("/api/v2/forum/tags", get(handlers::list_tags_handler))
         .route("/api/v2/forum/boards", get(handlers::list_boards))
         .route("/api/v2/forum/boards/{board_id}/threads", get(handlers::list_threads))
@@ -57,7 +79,10 @@ pub fn routes(state: AppState) -> Router {
         )
         .route("/api/v2/forum/threads/unread", get(handlers::list_unread_threads))
         .route("/api/v2/forum/threads/{id}/read", post(handlers::report_read))
-        .route("/api/v2/forum/posts/{post_id}/vote", post(handlers::vote_post))
+        .route(
+            "/api/v2/forum/posts/{post_id}/vote",
+            post(handlers::vote_post).delete(handlers::remove_vote),
+        )
         .route("/api/v2/forum/posts/{id}/flag", post(handlers::flag_post))
         .route(
             "/api/v2/forum/posts/{id}/bookmark",
@@ -97,13 +122,40 @@ pub fn routes(state: AppState) -> Router {
         )
         .route("/api/v2/me/ignores", get(handlers::list_ignores_handler))
         // Polls
-        .route("/api/v2/forum/polls/{id}/vote", post(handlers::vote_poll_handler))
+        .route(
+            "/api/v2/forum/polls/{id}/vote",
+            post(handlers::vote_poll_handler).delete(handlers::remove_poll_vote_handler),
+        )
         .route("/api/v2/forum/polls/{id}/results", get(handlers::poll_results_handler))
         // DMs (1:1 private messages)
         .route(
             "/api/v2/forum/dm/conversations",
             get(handlers::list_conversations_handler)
                 .post(handlers::create_or_get_conversation_handler),
+        )
+        .route("/api/v2/forum/dm/unread-count", get(handlers::unread_dm_count_handler))
+        .route(
+            "/api/v2/forum/dm/requests/{id}/accept",
+            post(handlers::accept_message_request_handler),
+        )
+        .route("/api/v2/forum/dm/requests/{id}", delete(handlers::decline_message_request_handler))
+        .route(
+            "/api/v2/forum/dm/requests/{id}/report",
+            post(handlers::report_message_request_handler),
+        )
+        .route("/api/v2/forum/dm/conversations/{id}", delete(handlers::delete_conversation_handler))
+        .route(
+            "/api/v2/forum/dm/conversations/{id}/recover",
+            post(handlers::recover_conversation_handler),
+        )
+        .route(
+            "/api/v2/forum/dm/conversations/{id}/archive",
+            put(handlers::archive_conversation_handler)
+                .delete(handlers::unarchive_conversation_handler),
+        )
+        .route(
+            "/api/v2/forum/dm/conversations/{id}/mute",
+            put(handlers::mute_conversation_handler).delete(handlers::unmute_conversation_handler),
         )
         .route(
             "/api/v2/forum/dm/conversations/{id}/messages",

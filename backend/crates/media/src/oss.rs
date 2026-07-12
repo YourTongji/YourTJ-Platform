@@ -2,9 +2,11 @@
 
 use std::collections::BTreeMap;
 
+use axum::body::Body;
 use axum::http::{HeaderMap, Uri};
 use base64::Engine;
 use chrono::{DateTime, Duration, Utc};
+use futures::StreamExt;
 use hmac::{Hmac, Mac};
 use openssl::hash::MessageDigest;
 use openssl::pkey::PKey;
@@ -12,10 +14,12 @@ use openssl::sign::Verifier;
 use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
 use serde::Deserialize;
 use sha1::Sha1;
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::dto::UploadCredentialsDto;
 use crate::error::MediaError;
+use crate::image_header;
 
 const OSS_INTENT_TTL_SECONDS: i64 = 900;
 const OSS_POLICY_MAX_BYTES: i64 = OSS_UPLOAD_MAX_BYTES;
@@ -69,6 +73,23 @@ pub struct AliyunStsProvider {
 #[async_trait::async_trait]
 pub trait ObjectStore: Send + Sync {
     async fn delete_object(&self, config: &OssConfig, oss_key: &str) -> Result<(), MediaError>;
+
+    async fn read_object(
+        &self,
+        config: &OssConfig,
+        oss_key: &str,
+        expected_content_type: &str,
+        expected_bytes: u64,
+        max_bytes: u64,
+    ) -> Result<OssObjectResponse, MediaError>;
+}
+
+pub(crate) struct OssObjectResponse {
+    pub content_type: String,
+    pub content_length: u64,
+    pub image_width: u32,
+    pub image_height: u32,
+    pub body: Body,
 }
 
 /// Authenticated Alibaba Cloud OSS client for moderation operations.
@@ -99,7 +120,12 @@ impl ObjectStore for AliyunOssClient {
             .send()
             .await
             .map_err(|error| {
-                MediaError::Unavailable(format!("oss delete request failed: {error}"))
+                tracing::warn!(
+                    is_timeout = error.is_timeout(),
+                    is_connect = error.is_connect(),
+                    "oss delete request failed"
+                );
+                MediaError::Unavailable("oss delete request failed".into())
             })?;
         if response.status().is_success() || response.status() == reqwest::StatusCode::NOT_FOUND {
             Ok(())
@@ -108,10 +134,128 @@ impl ObjectStore for AliyunOssClient {
             Err(MediaError::Unavailable("oss object quarantine failed".into()))
         }
     }
+
+    async fn read_object(
+        &self,
+        config: &OssConfig,
+        oss_key: &str,
+        expected_content_type: &str,
+        expected_bytes: u64,
+        max_bytes: u64,
+    ) -> Result<OssObjectResponse, MediaError> {
+        let signed = build_get_object_request(config, oss_key, Utc::now())?;
+        let response = self
+            .client
+            .get(signed.url)
+            .header("Date", signed.date)
+            .header("Authorization", signed.authorization)
+            .send()
+            .await
+            .map_err(|error| {
+                tracing::warn!(
+                    is_timeout = error.is_timeout(),
+                    is_connect = error.is_connect(),
+                    "oss read request failed"
+                );
+                MediaError::Unavailable("oss preview request failed".into())
+            })?;
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Err(MediaError::NotFound);
+        }
+        if !response.status().is_success() {
+            tracing::warn!(status = %response.status(), "oss read object failed");
+            return Err(MediaError::Unavailable("oss preview unavailable".into()));
+        }
+        let content_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .ok_or_else(|| MediaError::Unavailable("oss preview metadata missing".into()))?
+            .to_owned();
+        let content_length = response
+            .content_length()
+            .ok_or_else(|| MediaError::Unavailable("oss preview length missing".into()))?;
+        if content_type != expected_content_type
+            || content_length != expected_bytes
+            || content_length > max_bytes
+        {
+            tracing::warn!(
+                content_length,
+                expected_bytes,
+                "oss preview metadata does not match callback evidence"
+            );
+            return Err(MediaError::Unavailable("oss preview metadata mismatch".into()));
+        }
+        let mut provider_stream = Box::pin(response.bytes_stream());
+        let mut prefix_chunks = Vec::new();
+        let mut prefix_bytes = Vec::new();
+        let mut streamed_bytes = 0u64;
+        let (image_width, image_height) = loop {
+            let chunk = provider_stream
+                .next()
+                .await
+                .ok_or_else(|| MediaError::BadRequest("invalid image preview header".into()))?
+                .map_err(|error| {
+                    tracing::warn!(
+                        is_timeout = error.is_timeout(),
+                        is_connect = error.is_connect(),
+                        "oss preview header read failed"
+                    );
+                    MediaError::Unavailable("oss preview stream failed".into())
+                })?;
+            streamed_bytes = streamed_bytes.saturating_add(chunk.len() as u64);
+            if streamed_bytes > max_bytes || streamed_bytes > expected_bytes {
+                return Err(MediaError::BadRequest("oss preview exceeded byte limit".into()));
+            }
+            let remaining_prefix =
+                image_header::MAX_HEADER_BYTES.saturating_sub(prefix_bytes.len());
+            prefix_bytes.extend_from_slice(&chunk[..chunk.len().min(remaining_prefix)]);
+            prefix_chunks.push(chunk);
+            if let Some(dimensions) =
+                image_header::parse_bounded_dimensions(expected_content_type, &prefix_bytes)?
+            {
+                break dimensions;
+            }
+            if prefix_bytes.len() >= image_header::MAX_HEADER_BYTES {
+                return Err(MediaError::BadRequest("image dimensions are not discoverable".into()));
+            }
+        };
+        let prefix_stream =
+            futures::stream::iter(prefix_chunks.into_iter().map(Ok::<_, std::io::Error>));
+        let remaining_stream = provider_stream.map(move |chunk| {
+            let chunk = chunk.map_err(|error| {
+                tracing::warn!(
+                    is_timeout = error.is_timeout(),
+                    is_connect = error.is_connect(),
+                    "oss preview stream failed"
+                );
+                std::io::Error::other("oss preview stream failed")
+            })?;
+            streamed_bytes = streamed_bytes.saturating_add(chunk.len() as u64);
+            if streamed_bytes > max_bytes || streamed_bytes > expected_bytes {
+                return Err(std::io::Error::other("oss preview exceeded byte limit"));
+            }
+            Ok(chunk)
+        });
+        Ok(OssObjectResponse {
+            content_type,
+            content_length,
+            image_width,
+            image_height,
+            body: Body::from_stream(prefix_stream.chain(remaining_stream)),
+        })
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
 struct DeleteObjectRequest {
+    url: String,
+    date: String,
+    authorization: String,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct GetObjectRequest {
     url: String,
     date: String,
     authorization: String,
@@ -272,6 +416,24 @@ pub fn new_callback_token() -> String {
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
 }
 
+/// Hash an opaque callback bearer before persistence.
+pub fn callback_token_hash(token: &str) -> [u8; 32] {
+    Sha256::digest(token.as_bytes()).into()
+}
+
+/// Compare one presented callback token with its persisted digest in constant time.
+pub fn verify_callback_token_hash(expected_hash: &[u8], presented_token: &str) -> bool {
+    let presented_hash = callback_token_hash(presented_token);
+    if expected_hash.len() != presented_hash.len() {
+        return false;
+    }
+    expected_hash
+        .iter()
+        .zip(presented_hash)
+        .fold(0_u8, |difference, (expected, presented)| difference | (expected ^ presented))
+        == 0
+}
+
 /// Generate real STS credentials constrained to the exact upload key prefix.
 pub async fn generate_sts_credentials(
     provider: &dyn StsProvider,
@@ -357,6 +519,28 @@ fn build_delete_object_request(
     mac.update(string_to_sign.as_bytes());
     let signature = base64::engine::general_purpose::STANDARD.encode(mac.finalize().into_bytes());
     Ok(DeleteObjectRequest {
+        url: generate_url(config, oss_key),
+        date,
+        authorization: format!("OSS {}:{signature}", config.access_key_id),
+    })
+}
+
+fn build_get_object_request(
+    config: &OssConfig,
+    oss_key: &str,
+    request_time: DateTime<Utc>,
+) -> Result<GetObjectRequest, MediaError> {
+    if oss_key.is_empty() || oss_key.starts_with('/') || oss_key.contains("..") {
+        return Err(MediaError::BadRequest("invalid oss object key".into()));
+    }
+    let date = request_time.format("%a, %d %b %Y %H:%M:%S GMT").to_string();
+    let canonical_resource = format!("/{}/{}", config.bucket, oss_key);
+    let string_to_sign = format!("GET\n\n\n{date}\n{canonical_resource}");
+    let mut mac = HmacSha1::new_from_slice(config.access_key_secret.as_bytes())
+        .map_err(|error| MediaError::Internal(anyhow::Error::new(error)))?;
+    mac.update(string_to_sign.as_bytes());
+    let signature = base64::engine::general_purpose::STANDARD.encode(mac.finalize().into_bytes());
+    Ok(GetObjectRequest {
         url: generate_url(config, oss_key),
         date,
         authorization: format!("OSS {}:{signature}", config.access_key_id),
@@ -511,6 +695,15 @@ mod tests {
     use super::*;
 
     #[test]
+    fn callback_token_is_verified_only_against_its_digest() {
+        let token = new_callback_token();
+        let digest = callback_token_hash(&token);
+        assert!(verify_callback_token_hash(&digest, &token));
+        assert!(!verify_callback_token_hash(&digest, "different-token"));
+        assert!(!verify_callback_token_hash(&digest[..31], &token));
+    }
+
+    #[test]
     fn upload_policy_scopes_to_single_object() {
         let config = OssConfig {
             region: "cn-shanghai".into(),
@@ -557,6 +750,33 @@ mod tests {
         );
         assert_eq!(request.date, "Sat, 11 Jul 2026 08:09:10 GMT");
         assert_eq!(request.authorization, "OSS test-ak:9fVdWj+aDQKmkJOAI5uUIrVEPwY=");
+    }
+
+    #[test]
+    fn preview_get_request_uses_oss_v1_authorization() {
+        let config = OssConfig {
+            region: "cn-shanghai".into(),
+            bucket: "yourtj".into(),
+            access_key_id: "test-ak".into(),
+            access_key_secret: "test-secret".into(),
+            role_arn: "acs:ram::1:role/upload".into(),
+            callback_base_url: "https://api.example.test".into(),
+        };
+        let request_time = DateTime::parse_from_rfc3339("2026-07-11T08:09:10Z")
+            .expect("request timestamp")
+            .with_timezone(&Utc);
+        let request = build_get_object_request(
+            &config,
+            "uploads/42/image/00000000-0000-0000-0000-000000000000.png",
+            request_time,
+        )
+        .expect("signed preview request");
+        assert_eq!(
+            request.url,
+            "https://yourtj.oss-cn-shanghai.aliyuncs.com/uploads/42/image/00000000-0000-0000-0000-000000000000.png"
+        );
+        assert_eq!(request.date, "Sat, 11 Jul 2026 08:09:10 GMT");
+        assert_eq!(request.authorization, "OSS test-ak:qVQaVwWZavFKpSl/+jgXUC5us+w=");
     }
 
     #[test]

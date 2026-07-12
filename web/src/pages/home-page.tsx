@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import * as React from "react";
 
 import { ActivityHeatmap } from "@/components/activity/activity-heatmap";
@@ -12,13 +12,20 @@ import { api } from "@/lib/api/endpoints";
 export function HomePage() {
   const [feedMode, setFeedMode] = React.useState<CommunityFeedMode>("hot");
   const { account } = useAuth();
+  React.useEffect(() => {
+    if (!account && (feedMode === "following" || feedMode === "subscriptions")) {
+      setFeedMode("hot");
+    }
+  }, [account, feedMode]);
   const activityRange = React.useMemo(() => getTwentyWeekActivityRange(), []);
-  const threads = useQuery({
+  const threads = useInfiniteQuery({
     queryKey: ["home", "threads", feedMode],
-    queryFn: () => api.threads({ feed: feedMode }),
+    queryFn: ({ pageParam }) => api.threads({ feed: feedMode, cursor: pageParam }),
+    initialPageParam: null as string | null,
+    getNextPageParam: (page) => page.hasMore ? page.nextCursor ?? undefined : undefined,
   });
   const announcements = useQuery({
-    queryKey: ["home", "announcements"],
+    queryKey: ["announcements", "active"],
     queryFn: api.announcements,
   });
   const activity = useQuery({
@@ -27,7 +34,7 @@ export function HomePage() {
     enabled: Boolean(account),
   });
 
-  const threadItems = threads.data?.items ?? [];
+  const threadItems = threads.data?.pages.flatMap((page) => page.items ?? []) ?? [];
 
   return (
     <div className="min-[1240px]:grid min-[1240px]:grid-cols-[minmax(0,640px)_320px]">
@@ -50,6 +57,10 @@ export function HomePage() {
           isLoading={threads.isLoading}
           error={threads.error}
           onRetry={() => void threads.refetch()}
+          hasMore={threads.hasNextPage}
+          isLoadingMore={threads.isFetchingNextPage}
+          onLoadMore={() => void threads.fetchNextPage()}
+          isAuthenticated={Boolean(account)}
         />
       </div>
 

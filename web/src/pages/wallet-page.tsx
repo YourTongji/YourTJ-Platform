@@ -19,15 +19,30 @@ import type { Product, Purchase, Task } from "@/lib/api/types";
 import { formatDate, formatNumber, shortHash } from "@/lib/format";
 import { randomUuid } from "@/lib/random";
 import {
-  buildClientSignedPayload,
   clearLocalWallet,
   createLocalWallet,
   getLocalWallet,
-  signPayload,
+  signExactBytes,
 } from "@/lib/wallet";
 
-function signIntent(action: string, payload: unknown) {
-  return signPayload(buildClientSignedPayload({ action, payload }));
+type CreditSigningAction =
+  | "credit.tip"
+  | "credit.task.create"
+  | "credit.task.action"
+  | "credit.product.purchase"
+  | "credit.purchase.action";
+
+async function authorizeWallet(action: CreditSigningAction, request: Record<string, unknown>) {
+  const idempotencyKey = `credit:${randomUuid()}`;
+  const intent = await api.creditSigningIntent(action, request, idempotencyKey);
+  if (!intent.intentId || !intent.signingBytes) {
+    throw new Error("后端没有返回完整的钱包签名 intent");
+  }
+  return {
+    idempotencyKey,
+    intentId: intent.intentId,
+    signature: signExactBytes(intent.signingBytes),
+  };
 }
 
 function WalletSetup() {
@@ -173,9 +188,10 @@ function CreateTaskDialog() {
   const [rewardAmount, setRewardAmount] = React.useState(10);
   const [contactInfo, setContactInfo] = React.useState("");
   const mutation = useMutation({
-    mutationFn: () => {
+    mutationFn: async () => {
       const body = { title, description: description || undefined, rewardAmount, contactInfo: contactInfo || undefined };
-      return api.createTask(body, signIntent("create_task", body));
+      const authorization = await authorizeWallet("credit.task.create", body);
+      return api.createTask(body, authorization);
     },
     onSuccess: async () => {
       toast.success("悬赏已发布");
@@ -288,7 +304,7 @@ function CreateProductDialog() {
           </div>
         </div>
         <DialogFooter>
-          <Button onClick={() => mutation.mutate()} disabled={!title || price <= 0 || mutation.isPending}>
+          <Button onClick={() => mutation.mutate()} disabled={!title || price <= 0 || stock < 0 || mutation.isPending}>
             上架
           </Button>
         </DialogFooter>
@@ -304,19 +320,17 @@ function TipPanel() {
   const [targetType, setTargetType] = React.useState<"review" | "thread" | "comment">("thread");
   const [targetId, setTargetId] = React.useState("");
   const mutation = useMutation({
-    mutationFn: () => {
+    mutationFn: async () => {
       const body = { toAccountId, amount, targetType, targetId };
-      return api.tip(body, signIntent("tip", body), `tip:${randomUuid()}`);
+      const authorization = await authorizeWallet("credit.tip", body);
+      return api.tip(body, authorization);
     },
     onSuccess: async () => {
       toast.success("打赏成功");
       await queryClient.invalidateQueries({ queryKey: ["wallet"] });
       await queryClient.invalidateQueries({ queryKey: ["ledger"] });
     },
-    onError: (error) => {
-      const message = error instanceof Error ? error.message : "打赏失败";
-      toast.error(`${message}。如果返回签名无效，需要后端先补签名前置 intent。`);
-    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : "打赏失败"),
   });
 
   return (
@@ -368,6 +382,9 @@ function TipPanel() {
 
 function TaskCard({ task }: { task: Task }) {
   const queryClient = useQueryClient();
+  const { account } = useAuth();
+  const isCreator = account?.id === task.creatorId;
+  const isAcceptor = account?.id === task.acceptorId;
   const accept = useMutation({
     mutationFn: () => api.acceptTask(task.id ?? ""),
     onSuccess: async () => {
@@ -377,8 +394,14 @@ function TaskCard({ task }: { task: Task }) {
     onError: (error) => toast.error(error instanceof Error ? error.message : "接单失败"),
   });
   const action = useMutation({
-    mutationFn: (nextAction: "submit" | "confirm" | "cancel" | "reject" | "delete") =>
-      api.taskAction(task.id ?? "", nextAction, signIntent("task_action", { id: task.id, action: nextAction })),
+    mutationFn: async (nextAction: "submit" | "confirm" | "cancel" | "reject" | "delete") => {
+      if (nextAction === "submit" || (nextAction === "delete" && task.status === "cancelled")) {
+        return api.taskAction(task.id ?? "", nextAction);
+      }
+      const request = { id: task.id ?? "", action: nextAction };
+      const authorization = await authorizeWallet("credit.task.action", request);
+      return api.taskAction(task.id ?? "", nextAction, authorization);
+    },
     onSuccess: async () => {
       toast.success("任务状态已更新");
       await queryClient.invalidateQueries({ queryKey: ["tasks"] });
@@ -402,11 +425,17 @@ function TaskCard({ task }: { task: Task }) {
           {task.contactInfo ? <span>联系方式：{task.contactInfo}</span> : null}
         </div>
         <div className="mt-3 flex flex-wrap gap-2">
-          {task.status === "open" ? <Button size="sm" variant="secondary" onClick={() => accept.mutate()}>接单</Button> : null}
-          {task.status === "in_progress" ? <Button size="sm" variant="secondary" onClick={() => action.mutate("submit")}>提交完成</Button> : null}
-          {task.status === "submitted" ? <Button size="sm" onClick={() => action.mutate("confirm")}>确认放款</Button> : null}
-          {task.status !== "completed" && task.status !== "cancelled" ? (
-            <Button size="sm" variant="outline" onClick={() => action.mutate("cancel")}>取消/拒绝</Button>
+          {task.status === "open" && !isCreator ? <Button size="sm" variant="secondary" disabled={accept.isPending} onClick={() => accept.mutate()}>接单</Button> : null}
+          {task.status === "in_progress" && isAcceptor ? <Button size="sm" variant="secondary" disabled={action.isPending} onClick={() => action.mutate("submit")}>提交完成</Button> : null}
+          {task.status === "submitted" && isCreator ? <Button size="sm" disabled={action.isPending} onClick={() => action.mutate("confirm")}>确认放款</Button> : null}
+          {isCreator && task.status !== "completed" && task.status !== "cancelled" ? (
+            <Button size="sm" variant="outline" disabled={action.isPending} onClick={() => action.mutate("cancel")}>取消并退款</Button>
+          ) : null}
+          {isAcceptor && (task.status === "in_progress" || task.status === "submitted") ? (
+            <Button size="sm" variant="outline" disabled={action.isPending} onClick={() => action.mutate("reject")}>拒绝并退款</Button>
+          ) : null}
+          {isCreator && (task.status === "open" || task.status === "cancelled") ? (
+            <Button size="sm" variant="ghost" disabled={action.isPending} onClick={() => action.mutate("delete")}>删除任务</Button>
           ) : null}
         </div>
       </CardContent>
@@ -416,8 +445,13 @@ function TaskCard({ task }: { task: Task }) {
 
 function ProductCard({ product }: { product: Product }) {
   const queryClient = useQueryClient();
+  const { account } = useAuth();
   const buy = useMutation({
-    mutationFn: () => api.purchaseProduct(product.id ?? "", signIntent("purchase_product", { id: product.id })),
+    mutationFn: async () => {
+      const request = { productId: product.id ?? "" };
+      const authorization = await authorizeWallet("credit.product.purchase", request);
+      return api.purchaseProduct(product.id ?? "", authorization);
+    },
     onSuccess: async () => {
       toast.success("已创建托管订单");
       await queryClient.invalidateQueries({ queryKey: ["products"] });
@@ -441,7 +475,7 @@ function ProductCard({ product }: { product: Product }) {
           <span>库存 {product.stock ?? 0}</span>
           <span>{formatDate(product.createdAt)}</span>
         </div>
-        <Button size="sm" className="mt-3" onClick={() => buy.mutate()} disabled={buy.isPending || product.status !== "on_sale"}>
+        <Button size="sm" className="mt-3" onClick={() => buy.mutate()} disabled={buy.isPending || product.status !== "on_sale" || account?.id === product.sellerId}>
           购买并托管
         </Button>
       </CardContent>
@@ -451,9 +485,18 @@ function ProductCard({ product }: { product: Product }) {
 
 function PurchaseCard({ purchase }: { purchase: Purchase }) {
   const queryClient = useQueryClient();
+  const { account } = useAuth();
+  const isBuyer = account?.id === purchase.buyerId;
+  const isSeller = account?.id === purchase.sellerId;
   const action = useMutation({
-    mutationFn: (nextAction: "accept" | "deliver" | "confirm") =>
-      api.purchaseAction(purchase.id ?? "", nextAction, signIntent("purchase_action", { id: purchase.id, action: nextAction })),
+    mutationFn: async (nextAction: "accept" | "deliver" | "confirm" | "cancel") => {
+      if (nextAction === "accept" || nextAction === "deliver") {
+        return api.purchaseAction(purchase.id ?? "", nextAction);
+      }
+      const request = { id: purchase.id ?? "", action: nextAction };
+      const authorization = await authorizeWallet("credit.purchase.action", request);
+      return api.purchaseAction(purchase.id ?? "", nextAction, authorization);
+    },
     onSuccess: async () => {
       toast.success("订单状态已更新");
       await queryClient.invalidateQueries({ queryKey: ["purchases"] });
@@ -468,14 +511,19 @@ function PurchaseCard({ purchase }: { purchase: Purchase }) {
           <div>
             <h3 className="font-semibold">订单 {purchase.id}</h3>
             <p className="mt-1 text-sm text-muted-foreground">商品 {purchase.productId}</p>
+            {purchase.deliveryInfo ? <p className="mt-1 text-sm">交付说明：{purchase.deliveryInfo}</p> : null}
           </div>
           <Badge>{formatNumber(purchase.amount)} 积分</Badge>
         </div>
         <div className="mt-3 flex flex-wrap items-center gap-2">
           <Badge variant="secondary">{purchase.status}</Badge>
-          {purchase.status === "pending" ? <Button size="sm" onClick={() => action.mutate("accept")}>卖家接单</Button> : null}
-          {purchase.status === "accepted" ? <Button size="sm" onClick={() => action.mutate("deliver")}>标记交付</Button> : null}
-          {purchase.status === "delivered" ? <Button size="sm" onClick={() => action.mutate("confirm")}>确认完成</Button> : null}
+          <span className="text-xs text-muted-foreground">{formatDate(purchase.createdAt)}</span>
+          {isSeller && purchase.status === "pending" ? <Button size="sm" disabled={action.isPending} onClick={() => action.mutate("accept")}>卖家接单</Button> : null}
+          {isSeller && purchase.status === "accepted" ? <Button size="sm" disabled={action.isPending} onClick={() => action.mutate("deliver")}>标记交付</Button> : null}
+          {isBuyer && purchase.status === "delivered" ? <Button size="sm" disabled={action.isPending} onClick={() => action.mutate("confirm")}>确认完成</Button> : null}
+          {isBuyer && (purchase.status === "pending" || purchase.status === "accepted") ? (
+            <Button size="sm" variant="outline" disabled={action.isPending} onClick={() => action.mutate("cancel")}>取消并退款</Button>
+          ) : null}
         </div>
       </CardContent>
     </Card>

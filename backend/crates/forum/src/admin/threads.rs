@@ -14,11 +14,12 @@ use crate::dto::ThreadDetailDto;
 struct AdminThreadRow {
     author_id: Option<i64>,
     board_id: i64,
-    status: String,
-    created_at: chrono::DateTime<chrono::Utc>,
     deleted_at: Option<chrono::DateTime<chrono::Utc>>,
     hidden_at: Option<chrono::DateTime<chrono::Utc>>,
     archived_at: Option<chrono::DateTime<chrono::Utc>>,
+    body: Option<String>,
+    content_format: String,
+    content_version: i64,
 }
 
 /// GET /api/v2/admin/forum/threads/{id} — staff recovery detail.
@@ -42,8 +43,7 @@ pub async fn get_thread_for_moderation(
     let row =
         crate::repo::find_thread_for_moderation(&state.db, id).await?.ok_or(AppError::NotFound)?;
     let mut dto = crate::handlers::thread_to_detail_dto(&row);
-    dto.tags = crate::repo::get_thread_tag_slugs(&state.db, id).await?;
-    crate::handlers::attach_poll_to_detail(&state.db, id, &mut dto).await;
+    crate::handlers::hydrate_thread_detail(&state.db, id, Some(&auth), &mut dto).await?;
     Ok(Json(dto))
 }
 
@@ -80,7 +80,8 @@ pub async fn admin_thread_action(
         .ok_or_else(|| AppError::BadRequest("reason must be 3–500 characters".into()))?;
     let mut tx = state.db.begin().await?;
     let thread = sqlx::query_as::<_, AdminThreadRow>(
-        "SELECT author_id, board_id, status, created_at, deleted_at, hidden_at, archived_at \
+        "SELECT author_id, board_id, deleted_at, hidden_at, archived_at, \
+                body, content_format, content_version \
          FROM forum.threads WHERE id = $1 FOR UPDATE",
     )
     .bind(id)
@@ -102,10 +103,6 @@ pub async fn admin_thread_action(
     affected_board_ids.extend(requested_board_id);
     let affected_board_ids =
         crate::repo::boards::lock_boards_for_thread_count(&mut tx, &affected_board_ids).await?;
-    let was_visible = thread.status == "visible"
-        && thread.deleted_at.is_none()
-        && thread.hidden_at.is_none()
-        && thread.archived_at.is_none();
     let mut metadata = None;
     let mut moved_to_board_id = None;
 
@@ -126,32 +123,12 @@ pub async fn admin_thread_action(
         }
         "archive" => {
             crate::repo::archive_thread(&mut *tx, id).await?;
-            if was_visible {
-                activity::contributions::deactivate_contribution(
-                    &mut tx,
-                    &format!("forum_thread:{id}"),
-                    chrono::Utc::now(),
-                )
-                .await?;
-            }
         }
         "unarchive" => {
             if thread.archived_at.is_none() {
                 return Err(AppError::Conflict("thread is not archived".into()));
             }
             crate::repo::unarchive_thread(&mut *tx, id).await?;
-            if let (true, true, Some(author_id)) =
-                (thread.deleted_at.is_none(), thread.hidden_at.is_none(), thread.author_id)
-            {
-                activity::contributions::activate_contribution(
-                    &mut tx,
-                    author_id,
-                    activity::contributions::ActivityKind::Thread,
-                    &format!("forum_thread:{id}"),
-                    thread.created_at,
-                )
-                .await?;
-            }
         }
         "delete" => {
             if thread.deleted_at.is_some() {
@@ -164,60 +141,48 @@ pub async fn admin_thread_action(
             .bind(id)
             .execute(&mut *tx)
             .await?;
-            if was_visible {
-                activity::contributions::deactivate_contribution(
-                    &mut tx,
-                    &format!("forum_thread:{id}"),
-                    chrono::Utc::now(),
-                )
-                .await?;
-            }
+            media::attachments::detach_forum_asset_bindings(
+                &mut tx,
+                media::attachments::ForumTargetType::Thread,
+                id,
+            )
+            .await?;
         }
         "restore" => {
             if thread.deleted_at.is_none() {
                 return Err(AppError::Conflict("thread is not deleted".into()));
             }
             crate::repo::restore_thread(&mut *tx, id).await?;
-            if let (true, true, Some(author_id)) =
-                (thread.hidden_at.is_none(), thread.archived_at.is_none(), thread.author_id)
-            {
-                activity::contributions::activate_contribution(
+            let image_references = crate::content_policy::image_references_for_stored_content(
+                thread.body.as_deref(),
+                crate::dto::ContentFormat::from_db(&thread.content_format),
+                media::attachments::ForumTargetType::Thread,
+            )?;
+            if !image_references.is_empty() {
+                let author_id = thread.author_id.ok_or_else(|| {
+                    AppError::Conflict("thread without an author cannot restore attachments".into())
+                })?;
+                media::attachments::sync_forum_asset_bindings(
                     &mut tx,
                     author_id,
-                    activity::contributions::ActivityKind::Thread,
-                    &format!("forum_thread:{id}"),
-                    thread.created_at,
+                    media::attachments::ForumTargetType::Thread,
+                    id,
+                    thread.content_version,
+                    &image_references,
                 )
                 .await?;
             }
         }
         "hide" => {
-            crate::repo::hide_thread(&mut *tx, id).await?;
-            if was_visible {
-                activity::contributions::deactivate_contribution(
-                    &mut tx,
-                    &format!("forum_thread:{id}"),
-                    chrono::Utc::now(),
-                )
-                .await?;
+            if thread.hidden_at.is_some() || thread.deleted_at.is_some() {
+                return Err(AppError::Conflict(
+                    "thread cannot be hidden from its current state".into(),
+                ));
             }
+            crate::repo::hide_thread(&mut *tx, id).await?;
         }
         "unhide" => {
             crate::repo::unhide_thread(&mut *tx, id).await?;
-            if let (true, true, Some(author_id)) = (
-                thread.deleted_at.is_none() && thread.archived_at.is_none(),
-                thread.hidden_at.is_some(),
-                thread.author_id,
-            ) {
-                activity::contributions::activate_contribution(
-                    &mut tx,
-                    author_id,
-                    activity::contributions::ActivityKind::Thread,
-                    &format!("forum_thread:{id}"),
-                    thread.created_at,
-                )
-                .await?;
-            }
         }
         "move" => {
             let board_id = requested_board_id.ok_or_else(|| {
@@ -232,16 +197,14 @@ pub async fn admin_thread_action(
 
     crate::repo::boards::refresh_board_thread_counts(&mut tx, &affected_board_ids).await?;
 
-    if matches!(action.as_str(), "archive" | "delete" | "hide") {
-        crate::repo::deactivate_target_vote_contributions(
+    if matches!(action.as_str(), "archive" | "unarchive" | "delete" | "restore" | "hide" | "unhide")
+    {
+        crate::repo::activity_projection::synchronize_thread_activity_subtree(
             &mut tx,
-            "thread",
             id,
             chrono::Utc::now(),
         )
         .await?;
-    } else if matches!(action.as_str(), "unarchive" | "restore" | "unhide") {
-        crate::repo::reactivate_target_vote_contributions(&mut tx, "thread", id).await?;
     }
 
     crate::repo::insert_mod_action(
@@ -254,7 +217,7 @@ pub async fn admin_thread_action(
         metadata.as_ref(),
     )
     .await?;
-    governance::record_account_event_tx(
+    let governance_event_id = governance::record_account_event_with_id_tx(
         &mut tx,
         governance::AccountActor { account_id: auth.id, role: &auth.role },
         &format!("forum.thread.{action}"),
@@ -264,6 +227,25 @@ pub async fn admin_thread_action(
         metadata.as_ref(),
     )
     .await?;
+    if matches!(action.as_str(), "hide" | "delete") {
+        if let Some(author_id) = thread.author_id {
+            governance::notices::create_notice_tx(
+                &mut tx,
+                author_id,
+                "content_restricted",
+                &format!("audit:{governance_event_id}:forum-thread"),
+                Some(governance_event_id),
+                None,
+                "forum_thread",
+                &id.to_string(),
+                &format!(
+                    "你的主题已被{}，可在申诉中心查看并申请复核。",
+                    if action == "hide" { "隐藏" } else { "软移除" }
+                ),
+            )
+            .await?;
+        }
+    }
     tx.commit().await?;
 
     crate::cache::invalidate_thread_surfaces(state.redis.as_ref(), id, thread.board_id).await;
