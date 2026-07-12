@@ -14,6 +14,10 @@ const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
 const IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"]);
 const FILE_TYPES = new Set(["application/pdf"]);
 
+function normalizeOssSdkRegion(region: string) {
+  return region.startsWith("oss-") ? region : `oss-${region}`;
+}
+
 export function validateMediaFile(file: File, kind: MediaKind) {
   if (file.size <= 0 || file.size > MAX_UPLOAD_BYTES) {
     throw new Error("文件大小必须在 1 B 到 20 MB 之间");
@@ -65,7 +69,7 @@ export async function uploadMedia(
 
   const OSS = (await import("ali-oss")).default;
   const client = new OSS({
-    region: credentials.region,
+    region: normalizeOssSdkRegion(credentials.region),
     authorizationV4: true,
     accessKeyId: credentials.accessKeyId,
     accessKeySecret: credentials.accessKeySecret,
