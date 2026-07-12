@@ -6,7 +6,7 @@
 >
 > 负责人：Community operations、Security owner、Identity/Forum/Reviews/Media/Web maintainers
 >
-> 最近核验：2026-07-12，migrations `0047`、`0048`、`0054`、`0055` 与 governance/identity/achievement/outbox integration tests
+> 最近核验：2026-07-12，`origin/main@0492746`、governance/identity/media 实现与 ADMIN/委派管理员产品决策
 
 管理后台是社区政策的执行界面，不是数据库编辑器。所有操作必须先有产品语义、capability、
 目标层级、理由、审计、恢复和通知，再决定按钮放在哪里。
@@ -50,6 +50,9 @@
 ### Partial
 
 - “手动注册”只有安全的邀请流程，没有管理员设置明文密码或跳过邮箱验证；这是有意边界。
+- 目标权限模型已确定为单一 ADMIN 超级管理角色与逐账号 capability 委派的普通管理员。
+  当前代码仍为静态 `user < mod < admin` 映射，没有 administrator assignment、grant/revoke/
+  expiry/history API、管理 UI 或 ADMIN 媒体自审例外，不能将本文的目标规则宣称为已上线。
 - 缺账号停用/删除/恢复/purge；申诉仍缺自动 assignment/reassignment、SLA escalation、证据访问工作台
   和最终 retention worker。
 - generic settings 只有 string key/value；多数 job trigger 无 durable 状态、进度、失败日志或重试。
@@ -99,20 +102,40 @@ exception：只绕过 board lock/min-trust 两个 gate，仍必须通过 active 
 1. Staff 不静默改写用户表达；常规动作是隐藏、软移除、恢复、关闭或归档。
 2. 可逆动作优先于物理清除；retention purge 不是 moderator 日常按钮。
 3. 风险操作要求明确理由、作用范围、时长、目标和预期结果。
-4. 同级/更高角色、自身对象和利益冲突案件受到额外限制。
+4. 同级/更高角色、自身对象和利益冲突案件默认禁止；唯一例外是 ADMIN 对本人媒体上传的受控自审。
 5. 被处置者应获得类别、时长、政策依据、影响与申诉入口，安全例外需记录。
 6. 公共身份是 handle；后台默认也不显示校园邮箱或任意私信。
 7. 积分账本不可重写，管理后台不提供余额编辑或任意 ledger append。
 
 ## 角色、能力与目标层级
 
-`user < mod < admin` 只描述默认角色层级；具体授权使用 capability。核心能力见
+当前实现仍是 `user < mod < admin` 静态层级。目标产品模型把“超级权限”和“日常审核工作”
+分开：
+
+| 类型 | 产品语义 | 权限来源 | 目标与转授权边界 |
+|---|---|---|---|
+| user | 校园成员 | 用户权限 | 无 staff capability |
+| moderator | 版主/内容审核员 | 固定的最小审核能力 | 只处理允许的 lower-role 目标，不能授权 |
+| delegated administrator | 普通管理员 | ADMIN 对单个账号显式授予的 capability set | 只能使用未过期 grant，不能处置 ADMIN、修改自身 grant 或继续转授权 |
+| ADMIN | 唯一超级管理角色 | 所有平台定义的 staff capability | 可任免普通管理员与配置 grant；另一 ADMIN 的 bootstrap/recovery 仍走 out-of-band 流程 |
+| system/service | 自动化 actor | 服务端固定 purpose | 不伪装人类账号，不绕过 domain invariant |
+
+ADMIN 的“最高权限”指最高的平台管理权限，不等于数据库 table owner/superuser，也不产生下列系统中
+本来不存在的能力：任意查看私信/校园邮箱、写入 wallet balance/任意 ledger、删改 append-only audit、
+绕过账号与媒体保留、伪装用户改写正文。核心 capability 与技术约束见
 [授权与审计](../security/authorization-and-audit.md)。
 
-- moderator 处理 lower-role 内容和有限时长 silence，不能授予角色或永久 suspend。
-- admin 可管理 lower-role 角色、suspend、社区结构和平台策略，但不能处置同级 admin。
-- system/service 是审计 actor kind，不是绕过权限的人类账号。
-- 最终管理员 bootstrap、恢复和撤销需要独立 out-of-band 流程，不能通过普通 Web endpoint 完成。
+### 普通管理员委派
+
+- 仅 ADMIN 拥有独立的 `administrators.manage` capability。
+- 任命一个普通管理员必须显式选择 capability、目标角色上限、可选到期时间和强制理由；默认不继承
+  ADMIN 或其他普通管理员的权限。
+- 审核 capability 至少按论坛、课评、媒体、reported-DM 和内容恢复拆分；当前过宽的
+  `moderation.content` 不得直接作为可委派最小单元。
+- 可委派对象上限必须低于 ADMIN；普通管理员对自身、其他 staff 或超出 grant ceiling 的目标均 fail closed。
+- grant/revoke/expire 使用 optimistic version、ADMIN recent-auth 和与状态同事务的 append-only audit；
+  撤销/到期必须递增 authorization version，使旧 session/token 中的 capability snapshot 立即失效。
+- 后台不提供“全选即 ADMIN”；只有 out-of-band 流程可创建/恢复 ADMIN。普通管理员始终是可撤销委派。
 
 ## 用户管理
 
@@ -138,8 +161,10 @@ exception：只绕过 board lock/min-trust 两个 gate，仍必须通过 active 
 1. forum reports：uphold/reject/ignore，查看必要上下文和自动隐藏 provenance。
 2. review reports/status：决定举报、隐藏、恢复或软移除，不改写作者评分/正文。
 3. reported DM：仅具体举报消息和有限上下文，无通用私信浏览器。
-4. media review：pending/clean/quarantined/dead-letter asset；mod 只可审核 user，admin 只可审核 user/mod，
-   reviewer 不能自审或审核同级。Image approve 必须由同一 reviewer 先完成可信预览，file/PDF 在 scanner
+4. media review：pending/clean/quarantined/dead-letter asset；mod 和普通管理员只能在有效 grant 与目标上限内
+   审核，不能自审。ADMIN 可审核任意非 blocked 上传，并可使用本人媒体自审例外；自审必须完成
+   recent-auth、强制 reason、显式确认，且 audit 记录 `selfReview=true`。Image approve 仍必须由同一
+   reviewer 先完成可信预览，file/PDF 在 scanner
    证据接入前不可批准；block 先停止公开派生，再由 durable job 删除 provider object。普通 queue 只
    显示通用 hold state，不披露 operations reason/actor。
 5. media operations：限时 `moderation/security` operational hold 与 system dead-letter 独立于 moderator
@@ -208,10 +233,11 @@ sanction、trust-level rate limit 和 watched words，尚未接入同一 captcha
 | 区域 | 核心工作 | 主要 capability |
 |---|---|---|
 | Overview | 队列、任务失败、安全/可靠性指标 | 按卡片能力组合 |
+| Administrators | 普通管理员任免、capability/target ceiling/到期配置、历史与撤销 | `administrators.manage`（仅 ADMIN） |
 | Users | 邀请、搜索、角色、制裁、会话、生命周期 | `users.*` |
-| Moderation | forum/review/DM reports、内容恢复 | `moderation.content` |
+| Moderation | forum/review/DM reports、内容恢复 | 当前 `moderation.content`；目标按域拆分 |
 | Appeals | 独立领取、维持/撤销/缩短、状态历史 | `appeals.review` |
-| Media | scan/flag queue、approve/block、asset lookup | `moderation.content` |
+| Media | scan/flag queue、approve/block、asset lookup | 当前 `moderation.content`；目标 media moderation grant |
 | Community | boards、tags、watched words | `community.manage` |
 | Promotions | placement、clean asset、站内目标、排期、受众、状态 | `promotions.manage` |
 | Achievements | 受控定义、自动规则、人工授予/撤销与事件历史 | `badges.manage`；不可复用认证权限 |
@@ -277,7 +303,10 @@ draft/review/published/retired、effective time、owner/approver、diff、适用
 ## 验收基线
 
 - Web capabilities 与后端授权独立生效，直接构造请求仍被拒绝。
-- 自操作、同级/更高角色、缺理由、过期 recent-auth 和利益冲突案件有负向测试。
+- 普通管理员任免只能由 ADMIN 执行；grant/revoke/expiry、转授权、自改权限、越 target ceiling 和 stale version
+  有 handler→PostgreSQL 负向测试。
+- 自操作、同级/更高角色、缺理由、过期 recent-auth 和利益冲突案件默认有负向测试；ADMIN 媒体自审只在
+  专用正向用例中成立，并覆盖 recent-auth、reason、预览证据、明确告警和 `selfReview` audit。
 - 内容处置、恢复、处罚、申诉和策略变更在业务事务中追加审计。
 - audit/appeal history 的 row mutation 与 table truncate 均被真实 PostgreSQL 负向测试拒绝，拒绝后
   正常 append 和申诉状态流仍可继续。

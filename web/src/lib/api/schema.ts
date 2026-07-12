@@ -11304,6 +11304,7 @@ export interface components {
             id: string;
             boardId: string;
             authorHandle: string;
+            authorDisplayName?: string | null;
             title: string;
             bodyExcerpt: string | null;
             /** Format: int64 */
@@ -11335,6 +11336,7 @@ export interface components {
             id: string;
             boardId: string;
             authorHandle: string;
+            authorDisplayName?: string | null;
             authorId: string;
             title: string;
             body: string | null;
@@ -11429,6 +11431,7 @@ export interface components {
             parentId: string | null;
             path: string;
             authorHandle: string;
+            authorDisplayName?: string | null;
             authorId: string;
             body: string;
             contentFormat: components["schemas"]["ContentFormat"];
@@ -11934,6 +11937,7 @@ export interface components {
             id: string;
             participantId: string;
             participantHandle: string;
+            participantDisplayName?: string | null;
             participantAvatarUrl?: string | null;
             lastMessageExcerpt?: string | null;
             lastMessageAt?: number | null;
@@ -11965,6 +11969,7 @@ export interface components {
             conversationId: string;
             senderId: string;
             senderHandle: string;
+            senderDisplayName?: string | null;
             body: string;
             createdAt: number;
         };
@@ -11985,8 +11990,10 @@ export interface components {
             conversationId: string;
             reporterId: string;
             reporterHandle?: string;
+            reporterDisplayName?: string | null;
             senderId: string;
             senderHandle?: string;
+            senderDisplayName?: string | null;
             messageExcerpt?: string;
             /** @enum {string} */
             reason: "spam" | "abuse" | "harassment" | "fraud" | "illegal" | "other";

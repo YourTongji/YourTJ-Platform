@@ -946,6 +946,7 @@ components:
         id: { type: string }
         boardId: { type: string }
         authorHandle: { type: string }
+        authorDisplayName: { type: string, nullable: true }
         title: { type: string }
         bodyExcerpt: { type: string, nullable: true }
         contentVersion: { type: integer, format: int64, minimum: 1 }
@@ -971,6 +972,7 @@ components:
         id: { type: string }
         boardId: { type: string }
         authorHandle: { type: string }
+        authorDisplayName: { type: string, nullable: true }
         authorId: { type: string }
         title: { type: string }
         body: { type: string, nullable: true }
@@ -1076,6 +1078,7 @@ components:
         parentId: { type: string, nullable: true }
         path: { type: string }
         authorHandle: { type: string }
+        authorDisplayName: { type: string, nullable: true }
         authorId: { type: string }
         body: { type: string }
         contentFormat: { $ref: "#/components/schemas/ContentFormat" }
@@ -1633,6 +1636,7 @@ components:
         id: { type: string }
         participantId: { type: string }
         participantHandle: { type: string }
+        participantDisplayName: { type: string, nullable: true }
         participantAvatarUrl: { type: string, nullable: true }
         lastMessageExcerpt: { type: string, nullable: true }
         lastMessageAt: { type: integer, nullable: true }
@@ -1669,6 +1673,7 @@ components:
         conversationId: { type: string }
         senderId: { type: string }
         senderHandle: { type: string }
+        senderDisplayName: { type: string, nullable: true }
         body: { type: string }
         createdAt: { type: integer }
     DmMessageInput:
@@ -1695,8 +1700,10 @@ components:
         conversationId: { type: string }
         reporterId: { type: string }
         reporterHandle: { type: string }
+        reporterDisplayName: { type: string, nullable: true }
         senderId: { type: string }
         senderHandle: { type: string }
+        senderDisplayName: { type: string, nullable: true }
         messageExcerpt: { type: string }
         reason: { type: string, enum: [spam, abuse, harassment, fraud, illegal, other] }
         note: { type: string, nullable: true }

@@ -26,6 +26,7 @@ const firstThread = {
   id: "11",
   boardId: "1",
   authorHandle: "alice",
+  authorDisplayName: "Alice Chen",
   title: "第一页帖子",
   bodyExcerpt: "第一页摘要",
   contentVersion: 1,
@@ -85,6 +86,8 @@ describe("ForumPage", () => {
     const view = renderPage();
 
     expect(await screen.findByText("第一页帖子")).toBeVisible();
+    expect(screen.getAllByText("Alice Chen")[0]).toBeVisible();
+    expect(screen.getAllByText("@alice")[0]).toBeVisible();
     await user.click(screen.getByRole("button", { name: "加载更多帖子" }));
 
     expect(await screen.findByText("第二页帖子")).toBeVisible();

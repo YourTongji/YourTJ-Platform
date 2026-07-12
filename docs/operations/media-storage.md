@@ -6,7 +6,7 @@
 >
 > 负责人：Media maintainers、Platform maintainers、Security owner
 >
-> 最近核验：2026-07-12，migration `0057`、Media/Forum/Platform tests 与部署配置
+> 最近核验：2026-07-12，`origin/main@0492746`、migration `0057` 与 ADMIN 媒体自审产品决策
 
 本 runbook 描述当前 Alibaba Cloud STS/OSS 代码边界和上线前配置要求。代码支持不代表 main/production
 已经配置；当前部署的 bucket、RAM、CORS、CDN 与 scanner 状态必须由 operator 独立核验。
@@ -18,7 +18,12 @@
 ## 当前实现
 
 - Authenticated client 请求一次 upload intent，服务端生成 account/kind/UUID-scoped exact object key。
-- STS credential 约 15 分钟过期，policy 只允许该 key 的 `oss:PutObject`，最大 20 MiB。
+- STS credential 约 15 分钟过期，RAM policy 只允许该 exact key 的 `oss:PutObject`。当前 20 MiB
+  由 Web 预检、intent/数据库 reservation 和 callback metadata 校验共同执行；OSS PutObject 的 RAM
+  condition keys 不支持 Content-Length，因此 provider 在接收 object 前强制限制大小仍为 `Partial`。
+  绕过 Web 的恶意客户端仍只能写该 exact key，超限 callback 会拒绝，未消费 intent 的 exact-key
+  housekeeping 负责后续删除。要获得 provider-side hard cap，需改为支持 `content-length-range` 的
+  PostObject policy；该协议迁移是 `Planned`，不能把当前链路描述成已由 STS 强制 20 MiB。
 - Upload credential issuance 在 account row lock 下由 PostgreSQL fail closed：每账号最多 10 个 active
   intent、rolling 24 小时 100 次 issuance attempt、stored + reserved 512 MiB、live object + active intent
   500 条、全部 retained upload record + active intent 2,000 条。Redis 不可用不会放宽这些界限；每次
@@ -27,6 +32,13 @@
   upload RAM role 配置 server-side prevent-overwrite rule。客户端 header 只是纵深防御，不能替代 bucket
   规则；否则恶意客户端可在 callback/preview 后、STS 到期前覆盖同一 key，审核 evidence 不可信。
 - 当前允许 JPEG、PNG、GIF、WebP 和 PDF；SVG、视频和其他文件拒绝。
+- Web 为 HTTPS callback 显式设置 `callbackSNI=true`。按照 Alibaba
+  [OSS callback 文档](https://www.alibabacloud.com/help/en/oss/developer-reference/callback)，provider 默认不为
+  callback 启用 SNI；域名由 Cloudflare 等按 SNI 选择证书或源站时，省略该字段可能在请求到达 gateway
+  前产生 `CallbackFailed 502`。
+- `application/json` callback body 把 OSS system/custom variable 写成未加引号的 JSON-value placeholder，
+  例如 `"ossKey":${object}`，由 provider 在回调前完成 JSON escaping。不能写成
+  `"ossKey":"${object}"`，否则字符串变量会被重复加引号并让 callback body 变成非法 JSON。
 - OSS callback public-key URL 只允许官方 host、禁 redirect、有 5 秒 timeout 和 16 KiB key document limit。
 - Callback 锁定 intent，核对 key/MIME/bytes/SHA-256 shape，原子创建 `pending` upload 并消费 intent。
   Callback bearer token 只在签发响应/OSS callback 中以明文短暂流转；数据库仅保存 SHA-256 digest，
@@ -77,6 +89,10 @@
   每次都重新读取 uploader 当前 role，避免 grant 发放后晋升造成越权。
 - 当前同源 evidence proxy 只开放 allowlisted raster image；PDF/file 不回退到 vendor URL，管理 UI 明确
   显示“文件预览未开放”。PDF 要等独立的 scanner/sandbox renderer 后再开放人工内容预览。
+- 目标管理模型中，普通管理员只能在 ADMIN 授予的 media moderation grant/target ceiling 内预览与审核，
+  仍禁止自审。ADMIN 可对本人上传使用专用自审例外，但必须有 recent-auth、reason、明确确认、
+  相同的可信 raster preview 证据与 `selfReview=true` audit。该目标仍为 `Planned`；当前代码仍对所有人
+  执行 no-self，文档合并不等于环境已开放自审。
 - 通用 GC scheduler 只选择 `status=clean` 且 `cleaned_at` 已满 30 天、没有 live binding/usage/draft
   reference、没有未结束 grace、没有 active operational hold 的 asset；候选锁定后再次校验再隔离。
   `pending` upload 永不因年龄进入通用 GC。未 callback 的 exact object key 由 upload-intent housekeeping
@@ -89,7 +105,7 @@
 
 | Variable | 用途 |
 |---|---|
-| `OSS_REGION` | Bucket region |
+| `OSS_REGION` | Bucket 通用 Region ID，例如 `cn-shanghai`；不含 `oss-` 前缀 |
 | `OSS_BUCKET` | Object bucket name |
 | `OSS_ACCESS_KEY_ID` / `OSS_ACCESS_KEY_SECRET` | Backend AssumeRole/delete credential |
 | `OSS_ROLE_ARN` | Upload-only RAM role |
@@ -98,8 +114,29 @@
 | `MEDIA_OPERATIONS_HISTORY_PURGE_ENABLED` | 365 天 media operations metadata purge；默认 `false`，需批准后启用 |
 
 任一必要值缺失时 media route fail closed。Credential 只在 main/production secret store 中注入，不进入
-`.env.example`、PR preview、workflow、日志或截图。优先使用可轮换的 workload/RAM identity，减少长期
-AccessKey；当前环境变量模型迁移前需限制权限和 host access。
+`.env.example`、PR preview、workflow source、日志或截图。Main staging 的 GitHub Actions 把六项
+Repository Secrets 写入本次 run 专用的 `0600` 临时 env 文件，仓库内 `ops/deploy/deploy-main.sh` 通过
+Docker `--env-file` 注入并在发布后只验证变量存在，不回显值；PR preview workflow 有测试约束，禁止引用
+这些 production/main secrets。优先使用可轮换的 workload/RAM identity，减少长期 AccessKey；当前环境
+变量模型迁移前需限制权限和 host access。
+
+Backend 与 deployment preflight 使用通用 Region ID 拼出 `oss-<region>.aliyuncs.com` endpoint；因此
+`OSS_REGION` 不能改成 Browser SDK 使用的 `oss-cn-shanghai` 形式，否则会产生重复 `oss-` 前缀。Web
+在初始化 Alibaba Browser SDK 时负责增加且仅增加一次 `oss-` 前缀。生产 smoke 必须确认浏览器请求的
+bucket host 为 `<bucket>.oss-<region>.aliyuncs.com`，不能只凭 CORS rule 或 STS preflight 判断可直传。
+
+Main 部署 preflight 会在停止旧容器前验证 bucket endpoint、HTTPS callback reachability 和一次受 exact-key
+`PutObject` policy 限制的 STS `AssumeRole`。该检查不实际上传 object，因此不能证明 CORS、bucket
+server-side prevent-overwrite、callback body/hash 或 scanner 链路正确；发布后仍需完成真实合成图片的
+upload intent → PutObject → callback → pending smoke，并清理测试 object/row。
+
+Preflight 与后端必须生成同一种、符合阿里云 RAM grammar 的 policy：`Version=1`、单个 Allow statement、
+仅 `oss:PutObject` 和单个 exact object ARN。不得加入 OSS 未声明支持的 `oss:ContentLength` condition；
+否则 STS 会以 `InvalidParameter.PolicyGrammar` 拒绝 AssumeRole。对象大小的现行边界和 PostObject 迁移
+状态以上述当前实现说明为准。Provider 规则以阿里云的
+[OSS RAM action/condition reference](https://www.alibabacloud.com/help/en/ram/api-object-storage-service)
+和 [PostObject policy reference](https://www.alibabacloud.com/help/en/oss/policies-for-setting-post-requests-in-oss)
+为准。
 
 新 binary 的 moderation deletion worker 和 upload-intent housekeeping 独立于
 `MEDIA_RETENTION_GC_ENABLED`：前者继续处理已隔离 object，后者清理未 callback 的过期 exact key，并
@@ -262,8 +299,8 @@ binary，也不得通过伪造管理员 actor 换取兼容。Trigger、backfill 
   cross-account、pending/blocked、stale edit、revision、作者/staff/举报 delete、archive、restore、申诉
   overturn、parent hide/delete 并发锁序与并发 restore；不调用真实 OSS。Revision page 需要验证多版本
   attachment 在一次 batch projection 后仍各自匹配正确 asset。
-- Admin preview integration test 使用 fake object store，覆盖 capability、严格 role hierarchy/independent
-  reviewer、分页前过滤、一次性 token、
+- Admin preview integration test 使用 fake object store，覆盖 capability、grant/target ceiling、普通管理员 no-self、
+  ADMIN 媒体自审的 recent-auth/reason/confirmation/audit、分页前过滤、一次性 token、
   MIME/byte/dimension-bound same-origin response、replay rejection、`no-store`/`nosniff`、dimension persistence
   和不含 key/URL 的 audit；协议 unit test 覆盖四种允许图片 header 与 pixel limit；Web test 覆盖 reason、
   one-time proxy 调用、browser blob 展示和 DOM 不出现 provider metadata。
@@ -292,6 +329,11 @@ Reconciliation 分成三个独立硬门槛，不能用一个检查替代：
 
 - **STS unavailable**：新上传 fail closed，已有 clean media 读取继续；检查 RAM scope/expiry/network。
 - **Callback failure**：object 可能已存在但 row 未创建；不要重复签发相同 key，靠 intent/object reconcile。
+  若 OSS 返回 502 且 gateway/backend 没有对应访问记录，先解码请求的 `x-oss-callback` 并确认 HTTPS URL
+  配有 `callbackSNI=true`，再检查 DNS/TLS/edge；修复后由客户端申请新的 intent/key 重试，不能复用失败 key。
+  若 gateway 已记录 callback 但返回 400，按响应类别检查验签、intent 和 metadata；JSON body 解析错误还要
+  确认 system/custom variable 没有被字符串引号包裹。测试必须模拟 provider JSON-value substitution 后再
+  反序列化 callback DTO，不能只断言 SDK 收到原始模板。
 - **Scanner backlog**：file/PDF 保持 pending，不人工批量 approve 未扫描对象；已完成可信图片预览的 raster
   image 才能由同一审核员批准。
 - **Delete failure**：保持 quarantined、停止公开派生，durable job 自动重试；moderation job 由审核面、
@@ -303,7 +345,8 @@ Reconciliation 分成三个独立硬门槛，不能用一个检查替代：
 ## 上线清单
 
 - Bucket visibility、RAM least privilege、uploads prefix server-side prevent-overwrite、CORS、callback HTTPS
-  和 CDN origin protection 已审查并做过绕过 header 的覆写回归。
+  + SNI 和 CDN origin protection 已审查，并确认编码后的 `x-oss-callback` 包含 `callbackSNI=true`，做过
+  绕过 header 的覆写回归。
 - Production/preview secret 完全隔离，credential rotation 已演练。
 - DB fail-closed credential/storage limits（10 active、rolling 24h 100、512 MiB、500 live、2,000 retained）
   已有实现与测试；上线仍要观察拒绝率和 housekeeping。当前可信 preview 只有 bounded raster header/pixel

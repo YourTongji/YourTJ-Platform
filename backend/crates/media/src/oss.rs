@@ -22,7 +22,6 @@ use crate::error::MediaError;
 use crate::image_header;
 
 const OSS_INTENT_TTL_SECONDS: i64 = 900;
-const OSS_POLICY_MAX_BYTES: i64 = OSS_UPLOAD_MAX_BYTES;
 pub const OSS_UPLOAD_MAX_BYTES: i64 = 20 * 1024 * 1024;
 const OSS_PUBLIC_KEY_MAX_BYTES: usize = 16 * 1024;
 const OSS_HTTP_TIMEOUT_SECONDS: u64 = 5;
@@ -554,10 +553,7 @@ pub fn build_upload_policy(config: &OssConfig, oss_key: &str) -> String {
         "Statement": [{
             "Effect": "Allow",
             "Action": ["oss:PutObject"],
-            "Resource": [format!("acs:oss:*:*:{}/{}", config.bucket, oss_key)],
-            "Condition": {
-                "NumericLessThanEquals": { "oss:ContentLength": OSS_POLICY_MAX_BYTES }
-            }
+            "Resource": [format!("acs:oss:*:*:{}/{}", config.bucket, oss_key)]
         }]
     })
     .to_string()
@@ -611,7 +607,7 @@ fn account_prefix(account_id: i64) -> String {
 
 fn build_callback_body(intent_id: Uuid, callback_token: &str) -> String {
     format!(
-        r#"{{"uploadIntentId":"{}","callbackToken":"{}","ossKey":"${{object}}","url":"${{bucket}}.${{host}}/${{object}}","bytes":${{size}},"mime":"${{mimeType}}","sha256":"${{x:sha256}}"}}"#,
+        r#"{{"uploadIntentId":"{}","callbackToken":"{}","ossKey":${{object}},"bytes":${{size}},"mime":${{mimeType}},"sha256":${{x:sha256}}}}"#,
         intent_id, callback_token
     )
 }
@@ -704,7 +700,7 @@ mod tests {
     }
 
     #[test]
-    fn upload_policy_scopes_to_single_object() {
+    fn upload_policy_grants_only_exact_object_put() {
         let config = OssConfig {
             region: "cn-shanghai".into(),
             bucket: "yourtj".into(),
@@ -713,10 +709,20 @@ mod tests {
             role_arn: "acs:ram::1:role/upload".into(),
             callback_base_url: "https://api.example.test".into(),
         };
-        let policy = build_upload_policy(&config, "uploads/42/image/file.png");
-        assert!(policy.contains("acs:oss:*:*:yourtj/uploads/42/image/file.png"));
-        assert!(!policy.contains("uploads/43"));
-        assert!(policy.contains("oss:ContentLength"));
+        let policy: serde_json::Value =
+            serde_json::from_str(&build_upload_policy(&config, "uploads/42/image/file.png"))
+                .expect("valid RAM policy JSON");
+        assert_eq!(
+            policy,
+            serde_json::json!({
+                "Version": "1",
+                "Statement": [{
+                    "Effect": "Allow",
+                    "Action": ["oss:PutObject"],
+                    "Resource": ["acs:oss:*:*:yourtj/uploads/42/image/file.png"]
+                }]
+            })
+        );
     }
 
     #[test]
@@ -857,6 +863,31 @@ mod tests {
         let canonical =
             build_callback_canonical_string(&uri, br#"{"ok":true}"#).expect("canonical string");
         assert_eq!(canonical, "/api/v2/media/callback/test?x=1\n{\"ok\":true}");
+    }
+
+    #[test]
+    fn callback_body_parses_after_oss_json_value_substitution() {
+        let intent_id = Uuid::parse_str("00000000-0000-0000-0000-000000000042")
+            .expect("valid upload intent id");
+        let object_key = "uploads/42/image/photo with spaces.png";
+        let digest = "a".repeat(64);
+        let expanded_body = build_callback_body(intent_id, "callback-token")
+            .replace(
+                "${object}",
+                &serde_json::to_string(object_key).expect("object key JSON value"),
+            )
+            .replace("${size}", "12")
+            .replace("${mimeType}", &serde_json::to_string("image/png").expect("MIME JSON value"))
+            .replace("${x:sha256}", &serde_json::to_string(&digest).expect("digest JSON value"));
+
+        let input: crate::dto::UploadCallbackInput =
+            serde_json::from_str(&expanded_body).expect("valid expanded callback JSON");
+        assert_eq!(input.upload_intent_id, intent_id.to_string());
+        assert_eq!(input.callback_token, "callback-token");
+        assert_eq!(input.oss_key, object_key);
+        assert_eq!(input.bytes, 12);
+        assert_eq!(input.mime, "image/png");
+        assert_eq!(input.sha256, digest);
     }
 
     #[test]

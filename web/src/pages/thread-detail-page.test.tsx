@@ -50,6 +50,7 @@ describe("ThreadDetailPage Markdown content", () => {
       id: "42",
       boardId: "1",
       authorHandle: "alice",
+      authorDisplayName: "Alice Chen",
       authorId: "1",
       title: "格式化讨论",
       body: "欢迎阅读 **重要内容**。",
@@ -83,6 +84,7 @@ describe("ThreadDetailPage Markdown content", () => {
         parentId: null,
         path: "0001",
         authorHandle: "bob",
+        authorDisplayName: "Bob Li",
         authorId: "2",
         body: "回复也支持 `code`。",
         contentFormat: "markdown_v1",
@@ -105,6 +107,9 @@ describe("ThreadDetailPage Markdown content", () => {
     const view = renderPage();
 
     expect(await screen.findByRole("strong")).toHaveTextContent("重要内容");
+    expect(screen.getByText(/Alice Chen · @alice/)).toBeVisible();
+    expect(screen.getByText("Bob Li")).toBeVisible();
+    expect(screen.getByText("@bob")).toBeVisible();
     expect(screen.getByText("code").tagName).toBe("CODE");
     expect(screen.queryByText(/\*\*重要内容\*\*/)).not.toBeInTheDocument();
     await expectNoAccessibilityViolations(view.container);

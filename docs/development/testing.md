@@ -23,6 +23,17 @@ git diff --check
 Pull request CI 还会用 `scripts/check_pr_docs.py` 对比 base/head 与 PR 的“文档影响”段；它由 workflow
 提供 SHA 和 body，普通 local check 不需要伪造这些环境变量。
 
+部署脚本或 workflow 变化还要运行：
+
+```bash
+shellcheck ops/deploy/deploy-main.sh
+python3 -m unittest discover -s ops/deploy/tests
+```
+
+这些测试验证 OSS 配置解析/STS signing 基本行为，以及 main workflow 必须使用仓库脚本并受 main ref gate
+保护、PR preview 不引用 main OSS secrets。测试不访问真实 Alibaba Cloud，也不读取 Repository Secrets；
+provider connectivity 只在 main deployment preflight 中验证。
+
 ## Backend quick gates
 
 在 `backend/`：

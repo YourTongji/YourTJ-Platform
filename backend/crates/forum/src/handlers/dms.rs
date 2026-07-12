@@ -57,6 +57,7 @@ fn conversation_to_dto(row: DmConversationListRow) -> DmConversationDto {
         id: row.id.to_string(),
         participant_id: row.other_account_id.to_string(),
         participant_handle: row.other_handle,
+        participant_display_name: row.other_display_name,
         participant_avatar_url: row.other_avatar_url,
         last_message_excerpt: row.last_message_excerpt,
         last_message_at: row.last_message_at.timestamp(),
@@ -113,8 +114,10 @@ fn report_to_dto(row: DmMessageReportRow) -> DmMessageReportDto {
         conversation_id: row.conversation_id.to_string(),
         reporter_id: row.reported_by.to_string(),
         reporter_handle: row.reporter_handle,
+        reporter_display_name: row.reporter_display_name,
         sender_id: row.sender_id.to_string(),
         sender_handle: row.sender_handle,
+        sender_display_name: row.sender_display_name,
         message_excerpt: row.message_excerpt,
         reason: row.reason,
         note: row.note,
@@ -511,7 +514,12 @@ pub async fn send_message_handler(
             .bind(auth.id)
             .fetch_one(&state.db)
             .await?;
-
+    let sender_display_name: Option<String> =
+        sqlx::query_scalar("SELECT display_name FROM identity.profiles WHERE account_id = $1")
+            .bind(auth.id)
+            .fetch_optional(&state.db)
+            .await?
+            .flatten();
     Ok((
         StatusCode::CREATED,
         Json(DmMessageDto {
@@ -519,6 +527,7 @@ pub async fn send_message_handler(
             conversation_id: conversation_id.to_string(),
             sender_id: auth.id.to_string(),
             sender_handle,
+            sender_display_name,
             body: body.body,
             created_at: created_at.timestamp(),
         }),
@@ -559,6 +568,7 @@ pub async fn list_messages_handler(
             conversation_id: row.conversation_id.to_string(),
             sender_id: row.sender_id.to_string(),
             sender_handle: row.sender_handle,
+            sender_display_name: row.sender_display_name,
             body: row.body,
             created_at: row.created_at.timestamp(),
         })

@@ -41,7 +41,10 @@ function ThreadCard({ thread, boards }: { thread: ThreadFeed; boards: Board[] })
           <div className="flex items-start justify-between gap-4">
             <div className="min-w-0">
               <div className="mb-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                <span className="font-medium text-foreground">{thread.authorHandle}</span>
+                <span className="font-medium text-foreground">
+                  {thread.authorDisplayName ?? `@${thread.authorHandle}`}
+                </span>
+                {thread.authorDisplayName ? <span>@{thread.authorHandle}</span> : null}
                 <span>{formatUnixTime(thread.lastActivityAt ?? thread.createdAt)}</span>
                 {board ? <Badge variant="outline">{board.name}</Badge> : null}
                 {thread.unreadCount ? <Badge>{thread.unreadCount} 未读</Badge> : null}

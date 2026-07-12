@@ -96,9 +96,10 @@ pub async fn list_comments(
             "SELECT c.id, c.thread_id, c.parent_id, c.path, c.author_id, \
                     c.body, c.content_format, c.content_version, c.vote_count, c.deleted_at, c.hidden_at, c.edited_at, c.created_at, \
                     c.quoted_comment_id, \
-                    a.handle AS author_handle \
+                    a.handle AS author_handle, p.display_name AS author_display_name \
              FROM forum.comments c \
              JOIN identity.accounts a ON a.id = c.author_id \
+             LEFT JOIN identity.profiles p ON p.account_id = a.id \
              WHERE c.thread_id = $1 AND c.deleted_at IS NULL AND c.hidden_at IS NULL \
                AND c.path > $3 \
                AND ($4::bigint IS NULL OR NOT forum.user_pair_blocked($4, c.author_id)) \
@@ -116,9 +117,10 @@ pub async fn list_comments(
             "SELECT c.id, c.thread_id, c.parent_id, c.path, c.author_id, \
                     c.body, c.content_format, c.content_version, c.vote_count, c.deleted_at, c.hidden_at, c.edited_at, c.created_at, \
                     c.quoted_comment_id, \
-                    a.handle AS author_handle \
+                    a.handle AS author_handle, p.display_name AS author_display_name \
              FROM forum.comments c \
              JOIN identity.accounts a ON a.id = c.author_id \
+             LEFT JOIN identity.profiles p ON p.account_id = a.id \
              WHERE c.thread_id = $1 AND c.deleted_at IS NULL AND c.hidden_at IS NULL \
                AND ($3::bigint IS NULL OR NOT forum.user_pair_blocked($3, c.author_id)) \
              ORDER BY c.path ASC \
@@ -466,9 +468,10 @@ async fn insert_comment_tx(
          SELECT c.id, c.thread_id, c.parent_id, c.path, c.author_id, \
                 c.body, c.content_format, c.content_version, c.vote_count, c.deleted_at, c.hidden_at, c.edited_at, c.created_at, \
                 c.quoted_comment_id, \
-                a.handle AS author_handle \
+                a.handle AS author_handle, p.display_name AS author_display_name \
          FROM inserted c \
-         JOIN identity.accounts a ON a.id = c.author_id",
+         JOIN identity.accounts a ON a.id = c.author_id \
+         LEFT JOIN identity.profiles p ON p.account_id = a.id",
     )
     .bind(comment.thread_id)
     .bind(comment.parent_id)
@@ -545,9 +548,10 @@ pub async fn find_comment(pool: &PgPool, id: i64) -> AppResult<Option<CommentRow
         "SELECT c.id, c.thread_id, c.parent_id, c.path, c.author_id, \
                 c.body, c.content_format, c.content_version, c.vote_count, c.deleted_at, c.hidden_at, c.edited_at, c.created_at, \
                 c.quoted_comment_id, \
-                a.handle AS author_handle \
+                a.handle AS author_handle, p.display_name AS author_display_name \
          FROM forum.comments c \
          JOIN identity.accounts a ON a.id = c.author_id \
+         LEFT JOIN identity.profiles p ON p.account_id = a.id \
          WHERE c.id = $1 AND c.deleted_at IS NULL AND c.hidden_at IS NULL",
     )
     .bind(id)
@@ -564,9 +568,10 @@ pub async fn find_comment_for_moderation(
     let row = sqlx::query_as::<_, CommentRowJoined>(
         "SELECT c.id, c.thread_id, c.parent_id, c.path, c.author_id, \
                 c.body, c.content_format, c.content_version, c.vote_count, c.deleted_at, c.hidden_at, c.edited_at, c.created_at, \
-                c.quoted_comment_id, a.handle AS author_handle \
+                c.quoted_comment_id, a.handle AS author_handle, p.display_name AS author_display_name \
          FROM forum.comments c \
          JOIN identity.accounts a ON a.id = c.author_id \
+         LEFT JOIN identity.profiles p ON p.account_id = a.id \
          WHERE c.id = $1",
     )
     .bind(id)
@@ -606,9 +611,10 @@ pub async fn update_comment(
     let existing = sqlx::query_as::<_, CommentRowJoined>(
         "SELECT c.id, c.thread_id, c.parent_id, c.path, c.author_id, \
                 c.body, c.content_format, c.content_version, c.vote_count, c.deleted_at, c.hidden_at, c.edited_at, c.created_at, \
-                c.quoted_comment_id, a.handle AS author_handle \
+                c.quoted_comment_id, a.handle AS author_handle, p.display_name AS author_display_name \
          FROM forum.comments c \
          JOIN identity.accounts a ON a.id = c.author_id \
+         LEFT JOIN identity.profiles p ON p.account_id = a.id \
          WHERE c.id = $1 AND c.thread_id = $2 FOR UPDATE OF c",
     )
     .bind(id)
@@ -662,9 +668,10 @@ pub async fn update_comment(
          SELECT u.id, u.thread_id, u.parent_id, u.path, u.author_id, \
                 u.body, u.content_format, u.content_version, u.vote_count, u.deleted_at, u.hidden_at, u.edited_at, u.created_at, \
                 u.quoted_comment_id, \
-                a.handle AS author_handle \
+                a.handle AS author_handle, p.display_name AS author_display_name \
          FROM updated u \
-         JOIN identity.accounts a ON a.id = u.author_id",
+         JOIN identity.accounts a ON a.id = u.author_id \
+         LEFT JOIN identity.profiles p ON p.account_id = a.id",
     )
     .bind(source.body)
     .bind(source.content_format)
