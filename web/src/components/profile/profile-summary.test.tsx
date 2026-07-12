@@ -7,7 +7,7 @@ import { expectNoAccessibilityViolations } from "@/test/accessibility";
 import { ProfileSummary } from "./profile-summary";
 
 describe("ProfileSummary verification semantics", () => {
-  it("renders role, achievements, and public verification as separate signals", async () => {
+  it("renders role and public verification as separate signals", async () => {
     const view = render(
       <MemoryRouter>
         <ProfileSummary
@@ -60,12 +60,12 @@ describe("ProfileSummary verification semantics", () => {
       </MemoryRouter>,
     );
 
-    expect(screen.getByText("社区成员")).toBeInTheDocument();
-    expect(screen.getByText("首次发帖")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "校园组织" })).toBeInTheDocument();
+    // Ordinary members do not show a redundant role pill (Figma profile card).
+    expect(screen.queryByText("社区成员")).not.toBeInTheDocument();
     expect(screen.getByLabelText("官方学生组织，身份认证")).toBeInTheDocument();
-    expect(screen.getByLabelText("用户徽章")).not.toContainElement(
-      screen.getByLabelText("官方学生组织，身份认证"),
-    );
+    // Achievement badges live in the profile sidebar, not the summary identity row.
+    expect(screen.queryByText("首次发帖")).not.toBeInTheDocument();
     await expectNoAccessibilityViolations(view.container);
   });
 });

@@ -78,7 +78,7 @@ export function AdminPage() {
   const items = React.useMemo<Array<AdminNavigationItem & { id: AdminSection }>>(() => {
     const next: Array<AdminNavigationItem & { id: AdminSection }> = [];
     if (canSearchUsers) next.push({ id: "overview", label: "概览", description: "队列与社区状态", icon: LayoutDashboard });
-    if (canManageUsers) next.push({ id: "users", label: "用户", description: "邀请、角色与制裁", icon: Users });
+    if (canManageUsers) next.push({ id: "users", label: "用户", description: "邀请、角色与限制", icon: Users });
     if (canModerate) next.push({ id: "moderation", label: "审核", description: "论坛、点评与私信举报", icon: ShieldAlert });
     if (canReviewAppeals) next.push({ id: "appeals", label: "申诉", description: "独立复核与恢复", icon: Gavel });
     if (canManageResources) next.push({ id: "resources", label: "内容资源", description: "媒体、课程与社区结构", icon: Tags });
@@ -88,8 +88,8 @@ export function AdminPage() {
     if (canManageBadges) next.push({ id: "achievements", label: "成就", description: "贡献定义与授予", icon: Award });
     if (canManageVerifications) next.push({ id: "verifications", label: "认证", description: "身份与特殊标识", icon: BadgeCheck });
     if (canManageCreditIntegrity) next.push({ id: "credit-integrity", label: "积分完整性", description: "只读账本与钱包对账", icon: Scale });
-    if (canReadAudit) next.push({ id: "audit", label: "审计", description: "不可变治理事件", icon: FileClock });
-    if (canManageSettings || canRunJobs) next.push({ id: "system", label: "平台", description: "设置与运维任务", icon: Settings2 });
+    if (canReadAudit) next.push({ id: "audit", label: "审计", description: "操作记录", icon: FileClock });
+    if (canManageSettings || canRunJobs) next.push({ id: "system", label: "平台", description: "系统设置与维护", icon: Settings2 });
     return next;
   }, [canManageActivity, canManageAnnouncements, canManageBadges, canManageCreditIntegrity, canManagePromotions, canManageResources, canManageSettings, canManageUsers, canManageVerifications, canModerate, canReadAudit, canReviewAppeals, canRunJobs, canSearchUsers]);
 
@@ -118,7 +118,7 @@ export function AdminPage() {
     return <LoadingState label="确认管理权限" />;
   }
   if (!isAuthenticated || items.length === 0) {
-    return <EmptyState title="没有管理权限" description="此入口按服务端签发的能力开放，而不是只检查页面上的角色文本。" />;
+    return <EmptyState title="没有管理权限" description="当前账号没有可访问的管理功能。" />;
   }
 
   let panel: React.ReactNode;
@@ -166,9 +166,8 @@ export function AdminPage() {
   return (
     <div>
       <PageHeader
-        eyebrow="Community Operations"
-        title="社区治理后台"
-        description="能力驱动的审核、账号与平台操作台。前端只显示已授权入口，服务端仍会逐项校验权限和目标层级。"
+        title="管理后台"
+        description="审核内容、管理账号与处理平台事务。不同权限会显示不同功能入口。"
         actions={
           <>
             <Badge variant="secondary">{account?.role === "admin" ? "管理员" : "版主"}</Badge>

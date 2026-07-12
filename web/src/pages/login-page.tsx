@@ -191,7 +191,6 @@ export function LoginPage() {
   return (
     <div className="mx-auto max-w-2xl">
       <PageHeader
-        eyebrow="Account"
         title="登录 YourTJ"
         description="邮箱只用于校园身份与账号安全，不会出现在公开资料中。"
       />

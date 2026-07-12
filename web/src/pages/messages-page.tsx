@@ -303,7 +303,6 @@ export function MessagesPage() {
   return (
     <div>
       <PageHeader
-        eyebrow="Private Messages"
         title="私信"
         description="一对一站内沟通。陌生联系先进入消息请求，未举报的对话不会向管理员开放。"
       />

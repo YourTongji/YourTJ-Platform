@@ -88,9 +88,8 @@ export function CoursesPage() {
   return (
     <div>
       <PageHeader
-        eyebrow="Courses"
         title="课程点评"
-        description="浏览课程、查看点评统计和 AI 摘要；实时搜索由后端 Meilisearch 支撑。"
+        description="浏览课程、查看点评统计与摘要。"
       />
 
       <div className="mb-5 grid gap-3 lg:grid-cols-[1fr_14rem_18rem]">

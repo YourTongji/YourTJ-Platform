@@ -22,6 +22,8 @@ const apiMocks = vi.hoisted(() => ({
   followers: vi.fn(),
   following: vi.fn(),
   dm: vi.fn(),
+  myActivity: vi.fn(),
+  wallet: vi.fn(),
 }));
 
 vi.mock("@/context/auth-provider", () => ({
@@ -52,6 +54,8 @@ vi.mock("@/lib/api/endpoints", () => ({
     userFollowers: apiMocks.followers,
     userFollowing: apiMocks.following,
     createDmConversation: apiMocks.dm,
+    myActivity: apiMocks.myActivity,
+    wallet: apiMocks.wallet,
   },
 }));
 
@@ -124,13 +128,14 @@ describe("ProfilePage social relationships", () => {
     });
     apiMocks.following.mockReset().mockResolvedValue({ items: [], hasMore: false, nextCursor: null });
     apiMocks.dm.mockReset().mockResolvedValue({ id: "10" });
+    apiMocks.myActivity.mockReset().mockResolvedValue({ from: "2026-01-01", to: "2026-07-01", weights: { thread: 3, comment: 2, like: 1 }, days: [] });
   });
 
   it("uses relationship and list APIs for follow, mute, block, and counts", async () => {
     const user = userEvent.setup();
     const view = renderPage();
 
-    expect(await screen.findByRole("heading", { name: "Bob Builder", level: 1 })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "Bob Builder" })).toBeVisible();
     expect(screen.getByText("Campus maker")).toBeVisible();
     expect(await screen.findByText("关注了你")).toBeVisible();
 

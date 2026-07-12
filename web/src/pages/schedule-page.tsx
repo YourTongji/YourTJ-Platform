@@ -201,9 +201,8 @@ export function SchedulePage() {
   return (
     <div>
       <PageHeader
-        eyebrow="Selection"
         title="选课排课"
-        description="按最新 Rust v2 选课接口读取一系统镜像数据，在本地完成待选、冲突检查和课表模拟。"
+        description="浏览培养方案课程，完成本地待选、冲突检查和课表模拟。"
         actions={
           <>
             <Button variant="outline" onClick={() => exportCsv(staged)} disabled={staged.length === 0}>
@@ -344,7 +343,7 @@ export function SchedulePage() {
                 />
               </div>
               {searchText.trim().length < 2 ? (
-                <EmptyState title="输入关键词搜索" description="支持课程名、课号、教师名、拼音等后端索引能力。" />
+                <EmptyState title="输入关键词搜索" description="支持课程名、课号、教师名、拼音等关键词。" />
               ) : searchCourses.isLoading ? (
                 <LoadingState />
               ) : searchCourses.isError ? (

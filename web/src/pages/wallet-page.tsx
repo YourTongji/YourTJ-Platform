@@ -65,7 +65,7 @@ function WalletSetup() {
           本地签名钱包
         </CardTitle>
         <CardDescription>
-          私钥只保存在当前浏览器 localStorage；服务端只保存 Ed25519 公钥。
+          密钥只保存在你当前使用的浏览器里；平台只保存用于验证的公钥。
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
@@ -147,7 +147,7 @@ function LegacyClaimPanel() {
       <CardHeader>
         <CardTitle>旧钱包认领</CardTitle>
         <CardDescription>
-          后端验证旧钱包对 challenge 的 Ed25519 签名；前端不接触旧钱包私钥或 PIN。
+          通过旧钱包签名验证身份后合并余额；平台不会接触你的旧钱包私钥或 PIN。
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
@@ -546,9 +546,8 @@ export function WalletPage() {
   return (
     <div className="space-y-5">
       <PageHeader
-        eyebrow="Credit"
         title="积分钱包"
-        description="闭环 Web2.5 积分：贡献获得，平台内打赏、悬赏和商品托管使用。无充值、无提现、无自由转账。"
+        description="通过贡献获得积分，可在平台内打赏、悬赏和兑换使用。不支持充值、提现或自由转账。"
         actions={<><CreateTaskDialog /><CreateProductDialog /></>}
       />
 

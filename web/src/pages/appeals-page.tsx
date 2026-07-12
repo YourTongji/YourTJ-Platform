@@ -29,9 +29,9 @@ import { formatUnixTime, idempotencyKey } from "@/lib/format";
 const STATUS_LABELS: Record<AppealStatus, string> = {
   submitted: "已提交",
   in_review: "复核中",
-  upheld: "维持原处置",
+  upheld: "维持原处理",
   overturned: "已撤销原处置",
-  amended: "已调整原处置",
+  amended: "已调整原处理",
   withdrawn: "已撤回",
 };
 
@@ -188,7 +188,7 @@ function AppealCard({ appeal, onWithdraw }: { appeal: Appeal; onWithdraw: (appea
               <Badge variant="outline">{TARGET_LABELS[appeal.targetKind] ?? appeal.targetKind}</Badge>
               <span className="text-xs text-muted-foreground">事件 #{appeal.governanceEventId}</span>
             </div>
-            <p className="mt-2 text-sm font-medium">{appeal.originalReason ?? "处置原因未提供公开摘要"}</p>
+            <p className="mt-2 text-sm font-medium">{appeal.originalReason ?? "处理原因未提供公开摘要"}</p>
             <p className="mt-1 text-sm text-muted-foreground">你的申诉：{appeal.submissionReason}</p>
           </div>
           {appeal.status === "submitted" ? (
@@ -280,9 +280,8 @@ export function AppealsPage() {
   return (
     <div>
       <PageHeader
-        eyebrow="Governance"
         title="申诉中心"
-        description="申诉关联原处置事件，原记录不会被覆盖；复核人与原处置人必须分离。"
+        description="提交申诉后，原处理记录会保留，由其他工作人员独立复核。"
         actions={canAccess && !isAuthenticated ? (
           <Button
             variant="outline"
@@ -316,14 +315,14 @@ export function AppealsPage() {
             </CardHeader>
             <CardContent className="space-y-3">
               {governanceNotices.isLoading ? (
-                <LoadingState label="加载治理通知" />
+                <LoadingState label="加载平台通知" />
               ) : governanceNotices.isError ? (
                 <ErrorState
                   error={governanceNotices.error}
                   onRetry={() => void governanceNotices.refetch()}
                 />
               ) : noticeItems.length === 0 ? (
-                <p className="text-sm text-muted-foreground">暂无治理通知。</p>
+                <p className="text-sm text-muted-foreground">暂无平台通知。</p>
               ) : (
                 <>
                   {noticeItems.map((notice) => {
@@ -369,7 +368,7 @@ export function AppealsPage() {
                               type="button"
                               size="icon"
                               variant="ghost"
-                              aria-label="标记治理通知为已读"
+                              aria-label="标记平台通知为已读"
                               disabled={markNoticeRead.isPending}
                               onClick={() => markNoticeRead.mutate(notice.id)}
                             >
@@ -441,7 +440,7 @@ export function AppealsPage() {
           ) : appeals.isError ? (
             <ErrorState error={appeals.error} onRetry={() => void appeals.refetch()} />
           ) : items.length === 0 ? (
-            <EmptyState title="还没有申诉记录" description="如收到可申诉的治理通知，可使用通知中的事件编号提交。" />
+            <EmptyState title="还没有申诉记录" description="如收到可申诉的平台通知，可使用通知中的事件编号提交。" />
           ) : (
             <div className="space-y-3">
               <div className="flex items-center gap-2 text-sm text-muted-foreground">

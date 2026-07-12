@@ -343,7 +343,7 @@ export function ThreadDetailPage() {
   return (
     <div className="space-y-5">
       <PageHeader
-        eyebrow={board?.name ?? "Forum"}
+        eyebrow={board?.name}
         title={item.title ?? "帖子详情"}
         description={`${item.authorDisplayName ? `${item.authorDisplayName} · @${item.authorHandle}` : `@${item.authorHandle}`} · ${formatUnixTime(item.createdAt)}`}
         actions={

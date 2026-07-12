@@ -24,7 +24,7 @@ export function BookmarksPage() {
 
   return (
     <div>
-      <PageHeader eyebrow="Forum" title="我的收藏" description="论坛主题和评论收藏。" />
+      <PageHeader title="我的收藏" description="收藏的主题和评论。" />
       {bookmarks.isLoading ? (
         <LoadingState />
       ) : bookmarks.isError ? (

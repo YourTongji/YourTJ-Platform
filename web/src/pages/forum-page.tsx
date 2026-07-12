@@ -329,9 +329,8 @@ export function ForumPage() {
   return (
     <div>
       <PageHeader
-        eyebrow="Forum"
         title="你济论坛"
-        description="校园公共讨论区。信息流、板块、发帖、评论、投票和通知都接入 Rust v2 forum 域。"
+        description="校园公共讨论区，可以浏览、发帖、评论和投票。"
         actions={<CreateThreadDialog boards={boardItems} />}
       />
 

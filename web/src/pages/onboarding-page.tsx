@@ -89,7 +89,7 @@ export function OnboardingPage() {
   return (
     <div className="mx-auto max-w-3xl py-4 sm:py-10">
       <div className="mb-7 max-w-2xl">
-        <p className="text-xs font-semibold uppercase tracking-[0.2em] text-primary">First run</p>
+        <p className="text-xs font-semibold uppercase tracking-[0.2em] text-primary">开始使用</p>
         <h1 className="mt-2 text-3xl font-bold tracking-tight sm:text-4xl">先把你的社区身份设置好</h1>
         <p className="mt-3 leading-7 text-muted-foreground">
           邮箱只用于校园身份和账号安全。你可以单独决定资料与活动的可见范围，之后也能在设置中修改。
