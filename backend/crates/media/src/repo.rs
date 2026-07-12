@@ -6,7 +6,7 @@ use sqlx::{PgConnection, PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
 use crate::error::MediaError;
-use crate::models::{ModerationUploadRow, UploadRow};
+use crate::models::{AssetVariantRow, ModerationUploadRow, UploadRow};
 
 const MAX_ACTIVE_UPLOAD_INTENTS: i64 = 10;
 const MAX_UPLOAD_CREDENTIALS_PER_DAY: i64 = 100;
@@ -138,6 +138,130 @@ pub async fn insert_upload_intent(
     .fetch_one(connection)
     .await?;
     Ok(row)
+}
+
+/// Insert or re-resolve one derived asset variant for a source upload.
+#[allow(dead_code)] // reason: phase 2 exposes the repository API before any caller is wired up.
+pub async fn insert_variant(
+    connection: &mut PgConnection,
+    asset_id: i64,
+    variant: &str,
+    object_key: &str,
+    content_hash: &str,
+    mime: &str,
+    bytes: i64,
+    width: Option<i32>,
+    height: Option<i32>,
+    status: &str,
+    processing_attempts: i32,
+) -> AppResult<AssetVariantRow> {
+    if !matches!(
+        variant,
+        "original" | "thumbnail" | "small" | "medium" | "large" | "avif" | "webp"
+    ) {
+        return Err(AppError::BadRequest("invalid media variant".into()));
+    }
+    if !matches!(status, "processing" | "published" | "quarantined" | "deleted") {
+        return Err(AppError::BadRequest("invalid media variant status".into()));
+    }
+    if bytes <= 0 {
+        return Err(AppError::BadRequest("invalid media variant size".into()));
+    }
+    if processing_attempts < 0 {
+        return Err(AppError::BadRequest("invalid media variant attempts".into()));
+    }
+
+    let inserted = sqlx::query_as::<_, AssetVariantRow>(
+        "INSERT INTO media.asset_variants \
+         (asset_id, variant, object_key, content_hash, mime, bytes, width, height, status, \
+          processing_attempts) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) \
+         ON CONFLICT (asset_id, variant, content_hash) DO NOTHING \
+         RETURNING id, asset_id, variant, object_key, content_hash, mime, bytes, width, height, \
+                   status, processing_attempts, created_at, published_at, quarantined_at, deleted_at",
+    )
+    .bind(asset_id)
+    .bind(variant)
+    .bind(object_key)
+    .bind(content_hash)
+    .bind(mime)
+    .bind(bytes)
+    .bind(width)
+    .bind(height)
+    .bind(status)
+    .bind(processing_attempts)
+    .fetch_optional(&mut *connection)
+    .await?;
+    if let Some(row) = inserted {
+        return Ok(row);
+    }
+
+    let row = sqlx::query_as::<_, AssetVariantRow>(
+        "SELECT id, asset_id, variant, object_key, content_hash, mime, bytes, width, height, \
+                status, processing_attempts, created_at, published_at, quarantined_at, deleted_at \
+         FROM media.asset_variants \
+         WHERE asset_id = $1 AND variant = $2 AND content_hash = $3",
+    )
+    .bind(asset_id)
+    .bind(variant)
+    .bind(content_hash)
+    .fetch_one(&mut *connection)
+    .await?;
+    Ok(row)
+}
+
+/// List all derived variants for one source upload.
+#[allow(dead_code)] // reason: phase 2 exposes the repository API before any caller is wired up.
+pub async fn find_variants_by_asset(
+    pool: &PgPool,
+    asset_id: i64,
+) -> AppResult<Vec<AssetVariantRow>> {
+    let rows = sqlx::query_as::<_, AssetVariantRow>(
+        "SELECT id, asset_id, variant, object_key, content_hash, mime, bytes, width, height, \
+                status, processing_attempts, created_at, published_at, quarantined_at, deleted_at \
+         FROM media.asset_variants \
+         WHERE asset_id = $1 \
+         ORDER BY variant, id",
+    )
+    .bind(asset_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+/// Update the lifecycle status for one derived asset variant.
+#[allow(dead_code)] // reason: phase 2 exposes the repository API before any caller is wired up.
+pub async fn update_variant_status(
+    connection: &mut PgConnection,
+    id: i64,
+    status: &str,
+) -> AppResult<()> {
+    if !matches!(status, "processing" | "published" | "quarantined" | "deleted") {
+        return Err(AppError::BadRequest("invalid media variant status".into()));
+    }
+
+    let updated = sqlx::query(
+        "UPDATE media.asset_variants \
+         SET status = $2, \
+             processing_attempts = CASE WHEN $2 = 'processing' \
+                                         THEN processing_attempts + 1 \
+                                         ELSE processing_attempts END, \
+             published_at = CASE WHEN $2 = 'published' AND published_at IS NULL \
+                                 THEN now() ELSE published_at END, \
+             quarantined_at = CASE WHEN $2 = 'quarantined' AND quarantined_at IS NULL \
+                                   THEN now() ELSE quarantined_at END, \
+             deleted_at = CASE WHEN $2 = 'deleted' AND deleted_at IS NULL \
+                               THEN now() ELSE deleted_at END \
+         WHERE id = $1",
+    )
+    .bind(id)
+    .bind(status)
+    .execute(&mut *connection)
+    .await?;
+    if updated.rows_affected() != 1 {
+        return Err(MediaError::NotFound.into());
+    }
+    Ok(())
 }
 
 /// Lock an upload intent for callback processing.

@@ -38,3 +38,24 @@ pub struct ModerationUploadRow {
     pub retention_state: String,
     pub retention_expires_at: Option<DateTime<Utc>>,
 }
+
+/// A derived asset variant row from `media.asset_variants`.
+#[allow(dead_code)] // reason: phase 2 adds the model before any caller wires it into the public API.
+#[derive(Debug, Clone, FromRow)]
+pub struct AssetVariantRow {
+    pub id: i64,
+    pub asset_id: i64,
+    pub variant: String,
+    pub object_key: String,
+    pub content_hash: String,
+    pub mime: String,
+    pub bytes: i64,
+    pub width: Option<i32>,
+    pub height: Option<i32>,
+    pub status: String,
+    pub processing_attempts: i32,
+    pub created_at: DateTime<Utc>,
+    pub published_at: Option<DateTime<Utc>>,
+    pub quarantined_at: Option<DateTime<Utc>>,
+    pub deleted_at: Option<DateTime<Utc>>,
+}
