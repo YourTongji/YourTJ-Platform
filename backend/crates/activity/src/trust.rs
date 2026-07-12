@@ -33,7 +33,10 @@ pub async fn ensure_registered_progress(
 
     let policy = current_policy_row_tx(connection).await?;
     let score = compute_qualifying_score_tx(connection, account_id, &policy).await?;
-    let level = level_for_score(score, &policy).max(1);
+    // New progress always starts at the registered-account baseline. Existing
+    // accounts are initialized from history only by the explicit migration;
+    // lazy creation must not bypass the one-level-per-evaluation invariant.
+    let level = 1_i16;
     sqlx::query(
         "INSERT INTO activity.account_trust_progress \
          (account_id, trust_level, qualifying_score, policy_version) \
