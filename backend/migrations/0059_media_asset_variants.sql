@@ -2,7 +2,7 @@
 
 CREATE TABLE media.asset_variants (
   id                  BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  asset_id            BIGINT NOT NULL REFERENCES media.uploads(id),
+  asset_id            BIGINT NOT NULL REFERENCES media.uploads(id) ON DELETE CASCADE,
   variant             TEXT NOT NULL CHECK (
     variant IN ('original', 'thumbnail', 'small', 'medium', 'large', 'avif', 'webp')
   ),

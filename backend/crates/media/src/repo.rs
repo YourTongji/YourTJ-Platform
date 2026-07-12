@@ -172,8 +172,11 @@ pub async fn insert_variant(
     let inserted = sqlx::query_as::<_, AssetVariantRow>(
         "INSERT INTO media.asset_variants \
          (asset_id, variant, object_key, content_hash, mime, bytes, width, height, status, \
-          processing_attempts) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) \
+          processing_attempts, published_at, quarantined_at, deleted_at) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, \
+                 CASE WHEN $9 = 'published' THEN now() ELSE NULL END, \
+                 CASE WHEN $9 = 'quarantined' THEN now() ELSE NULL END, \
+                 CASE WHEN $9 = 'deleted' THEN now() ELSE NULL END) \
          ON CONFLICT (asset_id, variant, content_hash) DO NOTHING \
          RETURNING id, asset_id, variant, object_key, content_hash, mime, bytes, width, height, \
                    status, processing_attempts, created_at, published_at, quarantined_at, deleted_at",
@@ -250,7 +253,8 @@ pub async fn update_variant_status(
                                    THEN now() ELSE quarantined_at END, \
              deleted_at = CASE WHEN $2 = 'deleted' AND deleted_at IS NULL \
                                THEN now() ELSE deleted_at END \
-         WHERE id = $1",
+         WHERE id = $1 \
+           AND NOT (status IN ('quarantined', 'deleted') AND $2 IN ('published', 'processing'))",
     )
     .bind(id)
     .bind(status)
