@@ -39,7 +39,8 @@
   `pending/clean/quarantined/blocked` 审核状态。Admin queue 在 cursor/limit 前按 strict role hierarchy
   过滤；同一审核员完成可信 raster preview 后才能 approve，file/PDF 在 scanner 前 fail closed。
 - Web 已使用 Alibaba 官方 Browser SDK 实现 direct-to-OSS 基础链路：先取 exact-key STS intent，
-  本地计算 SHA-256，再由 OSS signed callback 取得 canonical upload id；SDK 动态加载，不进入首屏包。
+  本地计算 SHA-256，将服务端通用 Region ID 规范化为 SDK region，再由 OSS signed callback 取得
+  canonical upload id；SDK 动态加载，不进入首屏包。
 - 头像/封面设置已挂接上述链路，并按持久化 usage 查询 owner-safe 上传状态；Web 只在 `clean` 后允许
   绑定，`pending/blocked` 分别展示待审核/未通过，解除绑定不删除原始资产。
 - 主题、评论和 revision 已显式持久化 `plain_v1/markdown_v1`；历史记录通过 migration 保持

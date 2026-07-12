@@ -5,6 +5,22 @@ import { parseUploadCallbackData, uploadMedia, validateMediaFile } from "./media
 const apiMocks = vi.hoisted(() => ({ mediaUploadCredentials: vi.fn() }));
 const ossMocks = vi.hoisted(() => ({ constructor: vi.fn(), put: vi.fn() }));
 
+function uploadCredentials(region: string) {
+  return {
+    uploadIntentId: "intent",
+    accessKeyId: "temporary-id",
+    accessKeySecret: "temporary-secret",
+    securityToken: "temporary-token",
+    region,
+    bucket: "yourtj-test",
+    prefix: "uploads/1/image/",
+    ossKey: "uploads/1/image/intent.png",
+    callbackUrl: "https://api.example.test/api/v2/media/callback",
+    callbackBody: '{"uploadIntentId":"intent","sha256":"${x:sha256}"}',
+    expiration: Math.floor(Date.now() / 1_000) + 300,
+  };
+}
+
 vi.mock("@/lib/api/endpoints", () => ({ api: apiMocks }));
 
 vi.mock("ali-oss", () => ({
@@ -21,19 +37,7 @@ vi.mock("ali-oss", () => ({
 
 describe("media upload boundary", () => {
   beforeEach(() => {
-    apiMocks.mediaUploadCredentials.mockReset().mockResolvedValue({
-      uploadIntentId: "intent",
-      accessKeyId: "temporary-id",
-      accessKeySecret: "temporary-secret",
-      securityToken: "temporary-token",
-      region: "oss-cn-shanghai",
-      bucket: "yourtj-test",
-      prefix: "uploads/1/image/",
-      ossKey: "uploads/1/image/intent.png",
-      callbackUrl: "https://api.example.test/api/v2/media/callback",
-      callbackBody: '{"uploadIntentId":"intent","sha256":"${x:sha256}"}',
-      expiration: Math.floor(Date.now() / 1_000) + 300,
-    });
+    apiMocks.mediaUploadCredentials.mockReset().mockResolvedValue(uploadCredentials("cn-shanghai"));
     ossMocks.constructor.mockReset();
     ossMocks.put.mockReset().mockResolvedValue({ data: { uploadId: "42" } });
     vi.stubGlobal("crypto", {
@@ -74,6 +78,7 @@ describe("media upload boundary", () => {
     expect(ossMocks.constructor).toHaveBeenCalledWith(expect.objectContaining({
       accessKeyId: "temporary-id",
       stsToken: "temporary-token",
+      region: "oss-cn-shanghai",
       bucket: "yourtj-test",
       secure: true,
     }));
@@ -91,5 +96,15 @@ describe("media upload boundary", () => {
         }),
       }),
     );
+  });
+
+  it("keeps an already normalized OSS SDK region unchanged", async () => {
+    apiMocks.mediaUploadCredentials.mockResolvedValueOnce(uploadCredentials("oss-cn-shanghai"));
+
+    await uploadMedia(new File(["image"], "photo.png", { type: "image/png" }), "image");
+
+    expect(ossMocks.constructor).toHaveBeenCalledWith(expect.objectContaining({
+      region: "oss-cn-shanghai",
+    }));
   });
 });
