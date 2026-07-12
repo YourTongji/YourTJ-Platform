@@ -82,11 +82,6 @@ pub fn sign_url(config: &CdnConfig, path: &str, expires_in_seconds: i64) -> Opti
     None
 }
 
-/// Check whether CDN delivery is configured and can issue signed URLs.
-pub fn is_configured(config: &Config) -> bool {
-    CdnConfig::from_config(config).is_some()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
