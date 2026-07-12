@@ -36,6 +36,9 @@
   [OSS callback 文档](https://www.alibabacloud.com/help/en/oss/developer-reference/callback)，provider 默认不为
   callback 启用 SNI；域名由 Cloudflare 等按 SNI 选择证书或源站时，省略该字段可能在请求到达 gateway
   前产生 `CallbackFailed 502`。
+- `application/json` callback body 把 OSS system/custom variable 写成未加引号的 JSON-value placeholder，
+  例如 `"ossKey":${object}`，由 provider 在回调前完成 JSON escaping。不能写成
+  `"ossKey":"${object}"`，否则字符串变量会被重复加引号并让 callback body 变成非法 JSON。
 - OSS callback public-key URL 只允许官方 host、禁 redirect、有 5 秒 timeout 和 16 KiB key document limit。
 - Callback 锁定 intent，核对 key/MIME/bytes/SHA-256 shape，原子创建 `pending` upload 并消费 intent。
   Callback bearer token 只在签发响应/OSS callback 中以明文短暂流转；数据库仅保存 SHA-256 digest，
@@ -324,6 +327,9 @@ Reconciliation 分成三个独立硬门槛，不能用一个检查替代：
 - **Callback failure**：object 可能已存在但 row 未创建；不要重复签发相同 key，靠 intent/object reconcile。
   若 OSS 返回 502 且 gateway/backend 没有对应访问记录，先解码请求的 `x-oss-callback` 并确认 HTTPS URL
   配有 `callbackSNI=true`，再检查 DNS/TLS/edge；修复后由客户端申请新的 intent/key 重试，不能复用失败 key。
+  若 gateway 已记录 callback 但返回 400，按响应类别检查验签、intent 和 metadata；JSON body 解析错误还要
+  确认 system/custom variable 没有被字符串引号包裹。测试必须模拟 provider JSON-value substitution 后再
+  反序列化 callback DTO，不能只断言 SDK 收到原始模板。
 - **Scanner backlog**：file/PDF 保持 pending，不人工批量 approve 未扫描对象；已完成可信图片预览的 raster
   image 才能由同一审核员批准。
 - **Delete failure**：保持 quarantined、停止公开派生，durable job 自动重试；moderation job 由审核面、

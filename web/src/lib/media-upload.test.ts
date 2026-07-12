@@ -4,6 +4,8 @@ import { parseUploadCallbackData, uploadMedia, validateMediaFile } from "./media
 
 const apiMocks = vi.hoisted(() => ({ mediaUploadCredentials: vi.fn() }));
 const ossMocks = vi.hoisted(() => ({ constructor: vi.fn(), put: vi.fn() }));
+const CALLBACK_BODY =
+  '{"uploadIntentId":"intent","ossKey":${object},"bytes":${size},"mime":${mimeType},"sha256":${x:sha256}}';
 
 function uploadCredentials(region: string) {
   return {
@@ -16,7 +18,7 @@ function uploadCredentials(region: string) {
     prefix: "uploads/1/image/",
     ossKey: "uploads/1/image/intent.png",
     callbackUrl: "https://api.example.test/api/v2/media/callback",
-    callbackBody: '{"uploadIntentId":"intent","sha256":"${x:sha256}"}',
+    callbackBody: CALLBACK_BODY,
     expiration: Math.floor(Date.now() / 1_000) + 300,
   };
 }
@@ -91,6 +93,7 @@ describe("media upload boundary", () => {
         }),
         callback: expect.objectContaining({
           url: "https://api.example.test/api/v2/media/callback",
+          body: CALLBACK_BODY,
           contentType: "application/json",
           customValue: { sha256: "0".repeat(64) },
           callbackSNI: true,
