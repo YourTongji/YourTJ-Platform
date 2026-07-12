@@ -23,9 +23,9 @@ export function AdminShell({
   children: ReactNode;
 }) {
   return (
-    <div className="grid gap-5 lg:grid-cols-[13rem_minmax(0,1fr)]">
-      <Card className="h-fit rounded-xl lg:sticky lg:top-20">
-        <CardContent className="scrollbar-none flex gap-1 overflow-x-auto p-2 lg:flex-col" role="navigation" aria-label="管理后台功能">
+    <div className="grid min-w-0 gap-5 lg:grid-cols-[13rem_minmax(0,1fr)]">
+      <Card className="h-fit min-w-0 max-w-full overflow-hidden rounded-xl lg:sticky lg:top-20">
+        <CardContent className="scrollbar-none flex w-full min-w-0 gap-1 overflow-x-auto p-2 lg:flex-col" role="navigation" aria-label="管理后台功能">
           {items.map((item) => (
             <button
               key={item.id}
