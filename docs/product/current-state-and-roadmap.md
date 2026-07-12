@@ -6,7 +6,7 @@
 >
 > 负责人：Product owner、Platform maintainers
 >
-> 最近核验：2026-07-12，migrations `0053`–`0057`、owner-domain/media integration tests、Onebox TLS fixture 与 Web tests
+> 最近核验：2026-07-12，migrations `0053`–`0058`、owner-domain/media lease-fencing integration tests、Onebox TLS fixture 与 Web tests
 
 本盘点以当前源码、OpenAPI、migration 和 Web 为基线。它说明已经存在什么、哪里只有骨架、
 哪些界面承诺与实际行为不一致。后续 PR 改变这些结论时，必须在同一 PR 同步更新本文件的
@@ -47,7 +47,7 @@
 | 私信 | `Partial` | canonical 1:1、DM policy、单条陌生请求、incoming/sent 请求箱、accept/decline/withdraw/report、独立 unread/request 角标、幂等/限流/冷却、archive/delete/recover、搜索、mute、durable 多实例刷新提示和最小举报证据已接通；仍缺附件、request expiry、typing/presence 及 retention/legal-hold worker |
 | 推广位 | `Partial` | 左侧已由 API 返回明确标识的自营站内推广，具备 clean owned asset id、原子 asset binding/解绑 grace、状态、排期、受众、位置、优先级、独立 capability、审计和后台 UI；两小时无身份展示票据、50%/500ms 曝光门槛、点击补曝光、幂等日聚合、48 小时 receipt 清理及后台汇总/趋势已完成，仍缺匿名素材图交付 |
 | 徽章与认证 | `Partial` | 成就徽章、人工身份/特殊认证和实时角色标识已经拆分；成就具备独立 capability、versioned 受控定义、durable 自动幂等授予/mint、人工非 mint 授予、撤销/重新授予、append-only history、同事务审计、通知、后台 UI 与公开投影。人工认证具备 typed definition、可到期/撤销 grant、排期到期/撤销取消通知、私有 evidence reference、后台 UI 与安全公开投影；仍缺认证证据对象存储/复核政策 |
-| 治理 | `Partial` | 账号/论坛/课评处置已有当事人通知、30 天一次申诉、受限账号 purpose-bound access、拒绝 update/delete/truncate 的 append-only history、SQL 分页前 hierarchy/recusal、独立复核 capability 与 owner-domain 原子撤销/缩短；comment overturn 使用 thread→comment lock 并保留 media rebind；角色/suspend/强制注销和账号自助关闭已有 session-bound recent-auth，lifecycle worker 在 owner cleanup 前持久化不可逆 purge marker、等待 rollout-gated OSS 删除任务终态并可审计 requeue；仍缺 assignment/SLA、证据工作台、通用 legal hold/保留控制、Staff WebAuthn/MFA 和双人审批 |
+| 治理 | `Partial` | 账号/论坛/课评处置已有当事人通知、30 天一次申诉、受限账号 purpose-bound access、拒绝 update/delete/truncate 的 append-only history、SQL 分页前 hierarchy/recusal、独立复核 capability 与 owner-domain 原子撤销/缩短；comment overturn 使用 thread→comment lock 并保留 media rebind；角色/suspend/强制注销和账号自助关闭已有 session-bound recent-auth，lifecycle worker 在 owner cleanup 前持久化不可逆 purge marker，以 UUID lease fence 等待 rollout-gated OSS 删除任务终态并可审计 requeue；仍缺 assignment/SLA、证据工作台、通用 legal hold/保留控制、Staff WebAuthn/MFA 和双人审批 |
 | 积分运营 | `Partial` | 用户侧 verify、内容打赏和 escrow 完整性已加固；持久化只读 reconcile、单并发/幂等执行、逐钱包漂移指标、独立 capability、审计和管理视图已接通；仍缺告警/SLO 与受审批 projection 重建，历史 constraint anomaly 需单独兼容策略 |
 | 运维 | `Partial` | 通知 outbox、account lifecycle/export 和 Media system deletion 都有持久状态、lease/退避、dead-letter inventory 及 capability + recent-auth + audit 的人工重试；Media general GC/history purge 仍受默认关闭的 rollout/policy flag 保护。其他设置仍为 string key/value，平台缺统一 operator UI/job center、告警、SLO 与恢复演练 |
 | 测试 | `Partial` | 后端 CI 有 lint/集成，Web 有 lint/type/build 与最小 Vitest/Testing Library/axe harness；仍无浏览器 E2E、完整前端覆盖，许多契约与 UI 行为差异无法被 CI 捕获 |

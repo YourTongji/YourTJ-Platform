@@ -459,6 +459,12 @@ async fn run_migrations(pool: &PgPool) {
     sqlx::query("DELETE FROM forum.notification_delivery_receipts").execute(pool).await.ok();
     sqlx::query("DELETE FROM forum.notifications").execute(pool).await.ok();
     sqlx::query("DELETE FROM platform.outbox_events").execute(pool).await.ok();
+    sqlx::query("DELETE FROM forum.dm_message_reports").execute(pool).await.ok();
+    sqlx::query("DELETE FROM forum.dm_messages").execute(pool).await.ok();
+    sqlx::query("DELETE FROM forum.dm_participants").execute(pool).await.ok();
+    sqlx::query("DELETE FROM forum.dm_conversations").execute(pool).await.ok();
+    sqlx::query("DELETE FROM activity.events").execute(pool).await.ok();
+    sqlx::query("DELETE FROM activity.daily_counts").execute(pool).await.ok();
     sqlx::query("DELETE FROM forum.post_revisions").execute(pool).await.ok();
     sqlx::query("DELETE FROM forum.comments").execute(pool).await.ok();
     sqlx::query("DELETE FROM forum.threads").execute(pool).await.ok();

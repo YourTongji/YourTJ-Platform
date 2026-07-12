@@ -128,12 +128,14 @@ async fn insert_account(pool: &PgPool, suffix: &str, role: &str) -> i64 {
 
 async fn session_token(pool: &PgPool, account_id: i64, is_recent: bool) -> String {
     let session_id: i64 = sqlx::query_scalar(
-        "INSERT INTO identity.sessions \
+         "INSERT INTO identity.sessions \
          (account_id, refresh_hash, family_id, user_agent, expires_at, \
-          recent_authenticated_at, recent_auth_method) \
+          recent_authenticated_at, recent_auth_method, recent_auth_credential_version) \
          VALUES ($1, $2, $3, 'media-retention-test', now() + interval '1 day', \
                  CASE WHEN $4 THEN now() ELSE NULL END, \
-                 CASE WHEN $4 THEN 'password' ELSE NULL END) RETURNING id",
+                 CASE WHEN $4 THEN 'password' ELSE NULL END, \
+                 CASE WHEN $4 THEN (SELECT credential_version FROM identity.accounts WHERE id = $1) \
+                      ELSE NULL END) RETURNING id",
     )
     .bind(account_id)
     .bind(uuid::Uuid::new_v4().simple().to_string())
@@ -1037,18 +1039,24 @@ async fn privacy_housekeeping_purges_only_expired_ephemeral_media_facts() {
     let admin_id = insert_account(&pool, &suffix, "admin").await;
     let old_upload_id = insert_upload(&pool, owner_id, &suffix, "old-facts", "clean").await;
     let current_upload_id = insert_upload(&pool, owner_id, &suffix, "current-facts", "clean").await;
+    let expired_preview_hash =
+        format!("{}{}", uuid::Uuid::new_v4().simple(), uuid::Uuid::new_v4().simple());
+    let current_preview_hash =
+        format!("{}{}", uuid::Uuid::new_v4().simple(), uuid::Uuid::new_v4().simple());
 
     sqlx::query(
         "INSERT INTO media.moderation_preview_grants \
          (token_hash, upload_id, moderator_account_id, reason, created_at, expires_at) VALUES \
-         (repeat('a', 64), $1, $3, 'expired preview credential', \
+         ($4, $1, $3, 'expired preview credential', \
           now() - interval '3 days', now() - interval '2 days'), \
-         (repeat('b', 64), $2, $3, 'current preview credential', \
+         ($5, $2, $3, 'current preview credential', \
           now() - interval '1 hour', now() + interval '1 hour')",
     )
     .bind(old_upload_id)
     .bind(current_upload_id)
     .bind(admin_id)
+    .bind(expired_preview_hash)
+    .bind(current_preview_hash)
     .execute(&pool)
     .await
     .expect("insert preview grant retention fixtures");
@@ -1124,7 +1132,7 @@ async fn account_purge_detaches_profile_media_but_preserves_shared_references_an
         "INSERT INTO media.asset_bindings \
          (asset_id, owner_account_id, target_type, target_id) \
          VALUES ($1, $2, 'profile_avatar', $2), \
-                ($3, $2, 'platform_promotion', 900001)",
+                ($3, $2, 'platform_promotion', $3)",
     )
     .bind(avatar_id)
     .bind(owner_id)
@@ -1147,7 +1155,7 @@ async fn account_purge_detaches_profile_media_but_preserves_shared_references_an
         "INSERT INTO media.asset_usages \
          (asset_id, owner_account_id, target_type, target_id, position, alt_text, \
           bound_content_version) \
-         VALUES ($1, $2, 'forum_thread', 900002, 0, 'retained forum image', 1)",
+         VALUES ($1, $2, 'forum_thread', $1, 0, 'retained forum image', 1)",
     )
     .bind(forum_id)
     .bind(owner_id)
@@ -1362,7 +1370,7 @@ async fn account_purge_progress_accounts_for_existing_jobs_retained_assets_and_a
         "INSERT INTO media.asset_usages \
          (asset_id, owner_account_id, target_type, target_id, position, alt_text, \
           bound_content_version) \
-         VALUES ($1, $2, 'forum_thread', 910001, 0, 'shared content', 1)",
+         VALUES ($1, $2, 'forum_thread', $1, 0, 'shared content', 1)",
     )
     .bind(shared_id)
     .bind(owner_id)
@@ -1373,7 +1381,7 @@ async fn account_purge_progress_accounts_for_existing_jobs_retained_assets_and_a
         "INSERT INTO media.asset_bindings \
          (asset_id, owner_account_id, target_type, target_id, detached_at, detached_reason, \
           gc_eligible_at) \
-         VALUES ($1, $2, 'platform_promotion', 910002, now(), 'archived', \
+         VALUES ($1, $2, 'platform_promotion', $1, now(), 'archived', \
                  now() + interval '30 days')",
     )
     .bind(grace_id)

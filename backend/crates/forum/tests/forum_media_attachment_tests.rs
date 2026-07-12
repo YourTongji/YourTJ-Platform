@@ -1004,11 +1004,17 @@ async fn draft_save_waiting_behind_account_deletion_rechecks_owner_state() {
     .await;
     let asset_id = seed_upload(&pool, owner_id, "forum_thread", "pending").await;
     let mut deletion_transaction = pool.begin().await.expect("begin account deletion fixture");
-    sqlx::query("UPDATE identity.accounts SET status = 'deleted' WHERE id = $1")
-        .bind(owner_id)
-        .execute(&mut *deletion_transaction)
-        .await
-        .expect("stage account deletion");
+    sqlx::query(
+        "UPDATE identity.accounts \
+         SET status = 'deleted', deletion_requested_at = now() - interval '31 days', \
+             deletion_recover_until = now() - interval '1 day', deleted_at = now(), \
+             lifecycle_version = lifecycle_version + 1 \
+         WHERE id = $1",
+    )
+    .bind(owner_id)
+    .execute(&mut *deletion_transaction)
+    .await
+    .expect("stage account deletion");
 
     let save_app = app.clone();
     let save_task = tokio::spawn(async move {

@@ -191,7 +191,7 @@ async fn password_step_up_is_session_bound_and_required_for_role_changes() {
 
 #[tokio::test]
 async fn recent_auth_email_code_is_purpose_bound_atomic_and_single_use() {
-    let (pool, app) = helpers::create_test_app().await;
+    let (pool, app) = helpers::create_test_app_without_redis().await;
     let (account_id, email) = insert_account(&pool, "admin", None).await;
     let (session_id, token) = create_session_token(&pool, account_id, false).await;
     helpers::insert_valid_code_for_purpose(&pool, &email, "246810", "recent_auth").await;

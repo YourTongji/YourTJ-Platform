@@ -44,11 +44,18 @@ pub struct LifecycleJob {
     pub id: i64,
     pub account_id: i64,
     pub job_type: String,
+    pub lease_token: uuid::Uuid,
+}
+
+#[derive(Debug, FromRow)]
+struct LifecycleJobCandidate {
+    id: i64,
+    account_id: i64,
+    job_type: String,
 }
 
 #[derive(Debug, FromRow)]
 struct RecoveryCredentialRow {
-    account_id: i64,
     lifecycle_version: i64,
     consumed_at: Option<DateTime<Utc>>,
     expires_at: DateTime<Utc>,
@@ -350,15 +357,27 @@ pub async fn request_deletion(
     .bind(&request_hash)
     .execute(&mut *tx)
     .await?;
-    sqlx::query(
+    let scheduled_job_types: Vec<String> = sqlx::query_scalar(
         "INSERT INTO identity.account_lifecycle_jobs (account_id, job_type, next_attempt_at) \
          VALUES ($1, 'mark_deleted', now()), ($1, 'purge', $2) \
-         ON CONFLICT (account_id, job_type) DO NOTHING",
+         ON CONFLICT (account_id, job_type) DO UPDATE \
+         SET status = 'queued', attempts = 0, next_attempt_at = EXCLUDED.next_attempt_at, \
+             locked_at = NULL, lease_token = NULL, last_error_code = NULL, updated_at = now() \
+         WHERE account_lifecycle_jobs.status = 'succeeded' \
+         RETURNING job_type",
     )
     .bind(context.account.id)
     .bind(recover_until)
-    .execute(&mut *tx)
+    .fetch_all(&mut *tx)
     .await?;
+    if scheduled_job_types.len() != 2
+        || !scheduled_job_types.iter().any(|job_type| job_type == "mark_deleted")
+        || !scheduled_job_types.iter().any(|job_type| job_type == "purge")
+    {
+        return Err(AppError::Conflict(
+            "account lifecycle jobs are not ready for a new deletion request".into(),
+        ));
+    }
     revoke_all_sessions_tx(&mut tx, context.account.id).await?;
     let lifecycle = read_lifecycle_tx(&mut tx, context.account.id).await?;
     let credential =
@@ -400,37 +419,50 @@ pub async fn reactivate(pool: &PgPool, token: &str) -> AppResult<LifecycleRecord
     if token.len() != 43 {
         return Err(AppError::Unauthorized);
     }
+    let hashed_token = token_hash(token);
+    let account_id: i64 = sqlx::query_scalar(
+        "SELECT account_id FROM identity.account_recovery_credentials WHERE token_hash = $1",
+    )
+    .bind(&hashed_token)
+    .fetch_optional(pool)
+    .await?
+    .ok_or(AppError::Unauthorized)?;
     let mut tx = pool.begin().await?;
-    let credential = sqlx::query_as::<_, RecoveryCredentialRow>(
-        "SELECT account_id, lifecycle_version, consumed_at, expires_at \
-         FROM identity.account_recovery_credentials WHERE token_hash = $1 FOR UPDATE",
+    let lifecycle_jobs: Vec<(String, String)> = sqlx::query_as(
+        "SELECT job_type, status FROM identity.account_lifecycle_jobs \
+         WHERE account_id = $1 ORDER BY id FOR UPDATE",
     )
-    .bind(token_hash(token))
-    .fetch_optional(&mut *tx)
+    .bind(account_id)
+    .fetch_all(&mut *tx)
     .await?;
-    let credential = credential.ok_or(AppError::Unauthorized)?;
-    if credential.expires_at <= Utc::now() {
-        return Err(AppError::Unauthorized);
-    }
-    let purge_status: Option<String> = sqlx::query_scalar(
-        "SELECT status FROM identity.account_lifecycle_jobs \
-         WHERE account_id = $1 AND job_type = 'purge' FOR UPDATE",
-    )
-    .bind(credential.account_id)
-    .fetch_optional(&mut *tx)
-    .await?;
-    if matches!(purge_status.as_deref(), Some("running" | "failed")) {
-        return Err(AppError::Forbidden);
-    }
     let lifecycle = sqlx::query_as::<_, LifecycleRecord>(
         "SELECT status::text AS state, deactivated_at, deletion_requested_at, \
                 deletion_recover_until AS recover_until, deleted_at, purge_started_at, purged_at, \
                 lifecycle_version \
          FROM identity.accounts WHERE id = $1 FOR UPDATE",
     )
-    .bind(credential.account_id)
+    .bind(account_id)
     .fetch_one(&mut *tx)
     .await?;
+    let credential = sqlx::query_as::<_, RecoveryCredentialRow>(
+        "SELECT lifecycle_version, consumed_at, expires_at \
+         FROM identity.account_recovery_credentials \
+         WHERE token_hash = $1 AND account_id = $2 FOR UPDATE",
+    )
+    .bind(&hashed_token)
+    .bind(account_id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or(AppError::Unauthorized)?;
+    if credential.expires_at <= Utc::now() {
+        return Err(AppError::Unauthorized);
+    }
+    let purge_status = lifecycle_jobs
+        .iter()
+        .find_map(|(job_type, status)| (job_type == "purge").then_some(status.as_str()));
+    if matches!(purge_status, Some("running" | "failed")) {
+        return Err(AppError::Forbidden);
+    }
     if credential.consumed_at.is_some() && lifecycle.state == "active" {
         tx.commit().await?;
         return Ok(lifecycle);
@@ -447,61 +479,63 @@ pub async fn reactivate(pool: &PgPool, token: &str) -> AppResult<LifecycleRecord
              purge_started_at = NULL, \
              lifecycle_version = lifecycle_version + 1, updated_at = now() WHERE id = $1",
     )
-    .bind(credential.account_id)
+    .bind(account_id)
     .execute(&mut *tx)
     .await?;
     sqlx::query(
         "UPDATE identity.account_recovery_credentials SET consumed_at = now() WHERE token_hash = $1",
     )
-    .bind(token_hash(token))
+    .bind(&hashed_token)
     .execute(&mut *tx)
     .await?;
     sqlx::query(
-        "UPDATE identity.account_lifecycle_jobs SET status = 'succeeded', locked_at = NULL, \
-             updated_at = now(), last_error_code = NULL WHERE account_id = $1 \
-             AND status <> 'succeeded'",
+        "UPDATE identity.account_lifecycle_jobs \
+         SET status = 'succeeded', locked_at = NULL, lease_token = NULL, \
+             updated_at = now(), last_error_code = NULL \
+         WHERE account_id = $1 AND status <> 'succeeded'",
     )
-    .bind(credential.account_id)
+    .bind(account_id)
     .execute(&mut *tx)
     .await?;
     sqlx::query(
         "INSERT INTO identity.account_lifecycle_events \
          (account_id, actor_kind, from_state, to_state) VALUES ($1, 'account', $2, 'active')",
     )
-    .bind(credential.account_id)
+    .bind(account_id)
     .bind(&lifecycle.state)
     .execute(&mut *tx)
     .await?;
-    revoke_all_sessions_tx(&mut tx, credential.account_id).await?;
-    let active = read_lifecycle_tx(&mut tx, credential.account_id).await?;
+    revoke_all_sessions_tx(&mut tx, account_id).await?;
+    let active = read_lifecycle_tx(&mut tx, account_id).await?;
     tx.commit().await?;
     Ok(active)
 }
 
 pub async fn claim_due_job(pool: &PgPool) -> AppResult<Option<LifecycleJob>> {
-    let mut tx = pool.begin().await?;
     sqlx::query("DELETE FROM identity.account_recovery_credentials WHERE expires_at <= now()")
-        .execute(&mut *tx)
+        .execute(pool)
         .await?;
+    let mut tx = pool.begin().await?;
     sqlx::query(
-        "UPDATE identity.account_lifecycle_jobs SET status = 'failed', locked_at = NULL, \
-             next_attempt_at = now(), last_error_code = 'worker_lease_expired', updated_at = now() \
+        "UPDATE identity.account_lifecycle_jobs \
+         SET status = 'failed', locked_at = NULL, lease_token = NULL, next_attempt_at = now(), \
+             last_error_code = 'worker_lease_expired', updated_at = now() \
          WHERE status = 'running' AND locked_at < now() - interval '10 minutes'",
     )
     .execute(&mut *tx)
     .await?;
-    let job = sqlx::query_as::<_, LifecycleJob>(
+    let candidate = sqlx::query_as::<_, LifecycleJobCandidate>(
         "SELECT id, account_id, job_type FROM identity.account_lifecycle_jobs \
          WHERE status IN ('queued', 'failed') AND next_attempt_at <= now() AND attempts < 20 \
          ORDER BY next_attempt_at, id LIMIT 1 FOR UPDATE SKIP LOCKED",
     )
     .fetch_optional(&mut *tx)
     .await?;
-    let Some(job) = job else {
+    let Some(candidate) = candidate else {
         tx.commit().await?;
         return Ok(None);
     };
-    if job.job_type == "purge" {
+    if candidate.job_type == "purge" {
         let account = sqlx::query_as::<_, PurgeCandidateRow>(
             "SELECT status::text AS state, deletion_recover_until AS recover_until, \
                         purge_started_at, \
@@ -509,7 +543,7 @@ pub async fn claim_due_job(pool: &PgPool) -> AppResult<Option<LifecycleJob>> {
                             AND deletion_recover_until <= now() AS recovery_expired \
                  FROM identity.accounts WHERE id = $1 FOR UPDATE",
         )
-        .bind(job.account_id)
+        .bind(candidate.account_id)
         .fetch_optional(&mut *tx)
         .await?;
         let Some(account) = account else {
@@ -518,7 +552,7 @@ pub async fn claim_due_job(pool: &PgPool) -> AppResult<Option<LifecycleJob>> {
         if account.state == "purged"
             || !matches!(account.state.as_str(), "deletion_requested" | "deleted")
         {
-            finish_job_tx(&mut tx, job.id).await?;
+            finish_unleased_job_tx(&mut tx, candidate.id).await?;
             tx.commit().await?;
             return Ok(None);
         }
@@ -527,11 +561,12 @@ pub async fn claim_due_job(pool: &PgPool) -> AppResult<Option<LifecycleJob>> {
                 AppError::Internal(anyhow::anyhow!("purge candidate is missing recovery deadline"))
             })?;
             sqlx::query(
-                "UPDATE identity.account_lifecycle_jobs SET status = 'queued', locked_at = NULL, \
+                "UPDATE identity.account_lifecycle_jobs \
+                 SET status = 'queued', locked_at = NULL, lease_token = NULL, \
                      next_attempt_at = $2, updated_at = now(), last_error_code = NULL \
-                 WHERE id = $1",
+                 WHERE id = $1 AND status IN ('queued', 'failed') AND lease_token IS NULL",
             )
-            .bind(job.id)
+            .bind(candidate.id)
             .bind(recover_until)
             .execute(&mut *tx)
             .await?;
@@ -545,7 +580,7 @@ pub async fn claim_due_job(pool: &PgPool) -> AppResult<Option<LifecycleJob>> {
                          purge_started_at = now(), lifecycle_version = lifecycle_version + 1, \
                          updated_at = now() WHERE id = $1",
                 )
-                .bind(job.account_id)
+                .bind(candidate.account_id)
                 .execute(&mut *tx)
                 .await?;
                 sqlx::query(
@@ -553,7 +588,7 @@ pub async fn claim_due_job(pool: &PgPool) -> AppResult<Option<LifecycleJob>> {
                      (account_id, actor_kind, from_state, to_state) \
                      VALUES ($1, 'system', 'deletion_requested', 'deleted')",
                 )
-                .bind(job.account_id)
+                .bind(candidate.account_id)
                 .execute(&mut *tx)
                 .await?;
             } else {
@@ -561,25 +596,32 @@ pub async fn claim_due_job(pool: &PgPool) -> AppResult<Option<LifecycleJob>> {
                     "UPDATE identity.accounts SET purge_started_at = now(), updated_at = now() \
                      WHERE id = $1",
                 )
-                .bind(job.account_id)
+                .bind(candidate.account_id)
                 .execute(&mut *tx)
                 .await?;
             }
         }
     }
-    sqlx::query(
-        "UPDATE identity.account_lifecycle_jobs SET status = 'running', locked_at = now(), \
-             attempts = attempts + 1, updated_at = now(), last_error_code = NULL WHERE id = $1",
+    let lease_token = uuid::Uuid::new_v4();
+    let job = sqlx::query_as::<_, LifecycleJob>(
+        "UPDATE identity.account_lifecycle_jobs \
+         SET status = 'running', locked_at = now(), lease_token = $2, attempts = attempts + 1, \
+             updated_at = now(), last_error_code = NULL \
+         WHERE id = $1 AND status IN ('queued', 'failed') AND lease_token IS NULL \
+         RETURNING id, account_id, job_type, lease_token",
     )
-    .bind(job.id)
-    .execute(&mut *tx)
-    .await?;
+    .bind(candidate.id)
+    .bind(lease_token)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or_else(|| AppError::Conflict("lifecycle job is no longer claimable".into()))?;
     tx.commit().await?;
     Ok(Some(job))
 }
 
 pub async fn complete_mark_deleted(pool: &PgPool, job: &LifecycleJob) -> AppResult<Option<i64>> {
     let mut tx = pool.begin().await?;
+    lock_leased_job_tx(&mut tx, job).await?;
     let state: Option<String> =
         sqlx::query_scalar("SELECT status::text FROM identity.accounts WHERE id = $1 FOR UPDATE")
             .bind(job.account_id)
@@ -608,13 +650,14 @@ pub async fn complete_mark_deleted(pool: &PgPool, job: &LifecycleJob) -> AppResu
     } else {
         None
     };
-    finish_job_tx(&mut tx, job.id).await?;
+    finish_leased_job_tx(&mut tx, job).await?;
     tx.commit().await?;
     Ok(changed)
 }
 
 pub async fn complete_purge(pool: &PgPool, job: &LifecycleJob) -> AppResult<Option<i64>> {
     let mut tx = pool.begin().await?;
+    lock_leased_job_tx(&mut tx, job).await?;
     let row = sqlx::query_as::<_, PurgeFinalizationRow>(
         "SELECT status::text AS state, deletion_recover_until AS recover_until, \
                     email::text, email_blind_index, purge_started_at \
@@ -625,7 +668,7 @@ pub async fn complete_purge(pool: &PgPool, job: &LifecycleJob) -> AppResult<Opti
     .await?;
     let row = row.ok_or(AppError::NotFound)?;
     if row.state == "purged" {
-        finish_job_tx(&mut tx, job.id).await?;
+        finish_leased_job_tx(&mut tx, job).await?;
         tx.commit().await?;
         return Ok(None);
     }
@@ -707,31 +750,140 @@ pub async fn complete_purge(pool: &PgPool, job: &LifecycleJob) -> AppResult<Opti
     .bind(job.account_id)
     .execute(&mut *tx)
     .await?;
-    finish_job_tx(&mut tx, job.id).await?;
+    finish_leased_job_tx(&mut tx, job).await?;
     tx.commit().await?;
     Ok(Some(job.account_id))
 }
 
-async fn finish_job_tx(connection: &mut PgConnection, job_id: i64) -> AppResult<()> {
-    sqlx::query(
-        "UPDATE identity.account_lifecycle_jobs SET status = 'succeeded', locked_at = NULL, \
-             updated_at = now(), last_error_code = NULL WHERE id = $1",
+async fn lock_leased_job_tx(connection: &mut PgConnection, job: &LifecycleJob) -> AppResult<()> {
+    let leased_job_id: Option<i64> = sqlx::query_scalar(
+        "SELECT id FROM identity.account_lifecycle_jobs \
+         WHERE id = $1 AND account_id = $2 AND job_type = $3 \
+           AND status = 'running' AND lease_token = $4 \
+         FOR UPDATE",
     )
-    .bind(job_id)
-    .execute(connection)
+    .bind(job.id)
+    .bind(job.account_id)
+    .bind(&job.job_type)
+    .bind(job.lease_token)
+    .fetch_optional(connection)
     .await?;
+    if leased_job_id.is_none() {
+        return Err(AppError::Conflict("lifecycle job lease was lost".into()));
+    }
     Ok(())
 }
 
-pub async fn fail_job(pool: &PgPool, job_id: i64, error_code: &str) -> AppResult<()> {
-    sqlx::query(
-        "UPDATE identity.account_lifecycle_jobs SET status = 'failed', locked_at = NULL, \
-             next_attempt_at = now() + LEAST(attempts, 10) * interval '1 minute', \
-             last_error_code = left($2, 80), updated_at = now() WHERE id = $1",
+async fn finish_unleased_job_tx(connection: &mut PgConnection, job_id: i64) -> AppResult<()> {
+    let affected = sqlx::query(
+        "UPDATE identity.account_lifecycle_jobs \
+         SET status = 'succeeded', locked_at = NULL, lease_token = NULL, \
+             updated_at = now(), last_error_code = NULL \
+         WHERE id = $1 AND status IN ('queued', 'failed') AND lease_token IS NULL",
     )
     .bind(job_id)
+    .execute(connection)
+    .await?
+    .rows_affected();
+    if affected != 1 {
+        return Err(AppError::Conflict("lifecycle job is no longer claimable".into()));
+    }
+    Ok(())
+}
+
+async fn finish_leased_job_tx(connection: &mut PgConnection, job: &LifecycleJob) -> AppResult<()> {
+    let affected = sqlx::query(
+        "UPDATE identity.account_lifecycle_jobs \
+         SET status = 'succeeded', locked_at = NULL, lease_token = NULL, \
+             updated_at = now(), last_error_code = NULL \
+         WHERE id = $1 AND status = 'running' AND lease_token = $2",
+    )
+    .bind(job.id)
+    .bind(job.lease_token)
+    .execute(connection)
+    .await?
+    .rows_affected();
+    if affected != 1 {
+        return Err(AppError::Conflict("lifecycle job lease was lost".into()));
+    }
+    Ok(())
+}
+
+pub async fn fail_job(pool: &PgPool, job: &LifecycleJob, error_code: &str) -> AppResult<()> {
+    let affected = sqlx::query(
+        "UPDATE identity.account_lifecycle_jobs \
+         SET status = 'failed', locked_at = NULL, lease_token = NULL, \
+             next_attempt_at = now() + LEAST(attempts, 10) * interval '1 minute', \
+             last_error_code = left($3, 80), updated_at = now() \
+         WHERE id = $1 AND status = 'running' AND lease_token = $2",
+    )
+    .bind(job.id)
+    .bind(job.lease_token)
     .bind(error_code)
     .execute(pool)
-    .await?;
+    .await?
+    .rows_affected();
+    if affected != 1 {
+        return Err(AppError::Conflict("lifecycle job lease was lost".into()));
+    }
+    Ok(())
+}
+
+/// Return a running job to the queue without consuming a retry attempt.
+pub async fn defer_running_job(
+    pool: &PgPool,
+    job: &LifecycleJob,
+    retry_delay: Duration,
+    error_code: &str,
+) -> AppResult<()> {
+    if retry_delay < Duration::seconds(1) {
+        return Err(AppError::Internal(anyhow::anyhow!(
+            "lifecycle job retry delay must be at least one second"
+        )));
+    }
+    let next_attempt_at = Utc::now().checked_add_signed(retry_delay).ok_or_else(|| {
+        AppError::Internal(anyhow::anyhow!("lifecycle job retry delay is out of range"))
+    })?;
+    let affected = sqlx::query(
+        "UPDATE identity.account_lifecycle_jobs \
+         SET status = 'queued', locked_at = NULL, lease_token = NULL, \
+             attempts = GREATEST(attempts - 1, 0), next_attempt_at = $3, \
+             last_error_code = left($4, 80), updated_at = now() \
+         WHERE id = $1 AND status = 'running' AND lease_token = $2",
+    )
+    .bind(job.id)
+    .bind(job.lease_token)
+    .bind(next_attempt_at)
+    .bind(error_code)
+    .execute(pool)
+    .await?
+    .rows_affected();
+    if affected != 1 {
+        return Err(AppError::Conflict("lifecycle job lease was lost".into()));
+    }
+    Ok(())
+}
+
+/// Stop automatic retries for a running job until an administrator explicitly requeues it.
+pub async fn block_running_job(
+    pool: &PgPool,
+    job: &LifecycleJob,
+    error_code: &str,
+) -> AppResult<()> {
+    let affected = sqlx::query(
+        "UPDATE identity.account_lifecycle_jobs \
+         SET status = 'failed', attempts = 20, locked_at = NULL, lease_token = NULL, \
+             next_attempt_at = now(), last_error_code = left($3, 80), updated_at = now() \
+         WHERE id = $1 AND status = 'running' AND lease_token = $2",
+    )
+    .bind(job.id)
+    .bind(job.lease_token)
+    .bind(error_code)
+    .execute(pool)
+    .await?
+    .rows_affected();
+    if affected != 1 {
+        return Err(AppError::Conflict("lifecycle job lease was lost".into()));
+    }
     Ok(())
 }

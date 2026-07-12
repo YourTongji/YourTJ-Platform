@@ -275,6 +275,7 @@ pub async fn requeue_lifecycle_job(
     sqlx::query(
         "UPDATE identity.account_lifecycle_jobs \
          SET status = 'queued', attempts = 0, next_attempt_at = now(), locked_at = NULL, \
+             lease_token = NULL, \
              last_error_code = NULL, updated_at = now() WHERE id = $1",
     )
     .bind(job_id)

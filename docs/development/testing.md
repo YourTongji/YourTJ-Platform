@@ -6,7 +6,7 @@
 >
 > 负责人：Platform maintainers、Domain maintainers
 >
-> 最近核验：2026-07-12，durable notification、account lifecycle/export focused suites 与 Onebox TLS fixture
+> 最近核验：2026-07-12，durable notification、account lifecycle/export lease-fencing suites 与 Onebox TLS fixture
 
 先跑最小 focused test 获得快速反馈，再按 changed scope 跑与 CI 一致的完整 gate。没有运行的检查
 不能在 PR 或交付中写成通过。
@@ -137,7 +137,14 @@ lease fence、provider-success redaction、system inventory every-read audit/dea
 Migration `0057` 还要覆盖从前一版 schema 升级：source trigger 必须在 backfill 前保护引用 snapshot，
 callback digest backfill 后 plaintext column 不存在，旧 API 不得与新 schema 混跑；malformed legacy draft
 payload 不能中断 migration，历史 clean row 的 `cleaned_at` 从 rollout 时刻开始，且 DB preflight 在
-drift/anomaly 非零时 fail closed。启用 GC 前从仓库根目录运行：
+drift/anomaly 非零时 fail closed。
+
+Migration `0058` 必须在 fresh/upgrade database 覆盖 tokenless running row 回收、running 状态与
+`locked_at + lease_token` 的约束、每次 reclaim 的唯一 token，以及 W1 过期/W2 接管后 W1 的
+complete/fail/defer/block 全部失效。还要验证 W2 的 dead-letter/missing-job block 不被旧 complete 覆盖，
+W2 succeeded 不被旧 fail 改回 failed，并以 job→account 锁序完成并发回归。
+
+启用 GC 前从仓库根目录运行：
 
 ```bash
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f backend/ops/check_media_retention_references.sql

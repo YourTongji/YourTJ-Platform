@@ -6,7 +6,7 @@
 >
 > 负责人：Privacy owner、Security owner、Domain maintainers
 >
-> 最近核验：2026-07-12，migrations `0034`–`0057` 中与隐私/生命周期相关的 schema、tests 与 Onebox TLS fixture
+> 最近核验：2026-07-12，migrations `0034`–`0058` 中与隐私/生命周期相关的 schema、tests 与 Onebox TLS fixture
 
 本规范将数据最小化、可见性、导出、删除和保留作为产品前置条件。它不是法律意见；涉及 PIPL、
 未成年人、广告或跨境处理的最终政策需要合格法律与隐私负责人确认。
@@ -193,13 +193,17 @@ Profile 字段与社交关系不进入普通请求日志、metrics label 或 gov
 
 当前 worker 覆盖 identity、forum/DM private projection、reviews reactions/idempotency、media unfinished
 authority、activity、platform receipt/verification evidence 与 user search reconciliation；credit ledger、公共
-content、governance/audit 按保留政策不改写。Lifecycle job 有 queued/running/succeeded/failed、lease expiry、
-attempt/backoff 与 bounded error code。HTTP 返回 lifecycle state、deadline 与 recovery credential，不声称
+content、governance/audit 按保留政策不改写。Lifecycle job 有 queued/running/succeeded/failed、claim-unique
+UUID lease token、lease expiry、attempt/backoff 与 bounded error code；所有终态/等待写入都按 token CAS，
+并在账号 mutation 前按 job→account 顺序锁定。HTTP 返回 lifecycle state、deadline 与 recovery credential，不声称
 同步完成 purge；`/admin/account-lifecycle/jobs` 提供 capability-gated dead-letter 观察面，requeue 还要求
 recent-auth、理由和 append-only audit。该修复只恢复 worker 执行，不恢复账号或被清理的数据。
+恢复后再次请求删除会在账号事务内把上一轮 succeeded job 重置为全新的 queued 周期；若旧 job 不是可复用
+终态，整次请求冲突回滚，不能先关闭账号却没有后续 worker。
 
-尚未完成的是 OSS object GC、CDN/cache、日志、backup expiry、通用 legal hold 和逐域 reconciliation。
-这些缺口必须在 UI/政策中如实披露，不能把 tombstone 解释为所有副本即时物理删除。
+OSS object GC/账号 purge coordination 的代码已存在但默认关闭，只有完成 DB、published Markdown 与 OSS
+三项 reconciliation 后才可逐环境启用；CDN/cache、日志、backup expiry、通用 legal hold 和逐域报告仍未
+闭环。这些缺口必须在 UI/政策中如实披露，不能把 tombstone 解释为所有副本即时物理删除。
 普通通知 outbox 以 recipient account 外键级联删除，actor 删除只置空 actor id；不含账号 id/payload 的
 delivery receipt 最长继续保留到 90 天幂等窗口后清理。已投递通知按账号通知导出/删除政策处理。
 
@@ -209,6 +213,8 @@ hold。Hold 只暂停 provider worker，不保留公开状态；共享引用/fut
 更多 eligible work、没有 queued/leased/dead-letter、没有缺失 job 时才 terminal。Held object 有 durable
 job 可作为 `retainedAssets` 随账号 tombstone 暂留；held quarantined object 缺 job 必须阻断 terminal。
 System enqueue 与通用 GC 使用同一默认关闭 flag，关闭时仍有 eligible work 必须保持 job 非终态。
+正常 pending/分批工作返回 queued 且不消耗 20 次失败预算；dead-letter 或 quarantined object 缺 job 会把
+lifecycle job 置为 exhausted failed，只有修复 Media 队列后再经 recent-auth、理由化审计 requeue 才能继续。
 
 ## 数据导出
 

@@ -1042,11 +1042,17 @@ async fn profile_images_require_an_owned_clean_oss_asset() {
     assert_eq!(detached_binding, ("cleared".into(), true));
 
     let mut deletion_transaction = pool.begin().await.expect("begin profile deletion race");
-    sqlx::query("UPDATE identity.accounts SET status = 'deleted' WHERE id = $1")
-        .bind(owner_id)
-        .execute(&mut *deletion_transaction)
-        .await
-        .expect("stage profile owner deletion");
+    sqlx::query(
+        "UPDATE identity.accounts \
+         SET status = 'deleted', deletion_requested_at = now() - interval '31 days', \
+             deletion_recover_until = now() - interval '1 day', deleted_at = now(), \
+             lifecycle_version = lifecycle_version + 1 \
+         WHERE id = $1",
+    )
+    .bind(owner_id)
+    .execute(&mut *deletion_transaction)
+    .await
+    .expect("stage profile owner deletion");
     let race_app = app.clone();
     let race_token = token.clone();
     let race_task = tokio::spawn(async move {

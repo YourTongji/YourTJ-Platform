@@ -18,14 +18,25 @@ pub async fn create_test_app() -> (PgPool, axum::Router) {
 }
 
 pub async fn create_test_app_with_config(test_config: shared::Config) -> (PgPool, axum::Router) {
+    create_test_app_with_config_and_redis(test_config, test_redis_pool()).await
+}
+
+#[allow(dead_code)] // reason: concurrency tests that do not exercise CAPTCHA or limits avoid shared Redis state
+pub async fn create_test_app_without_redis() -> (PgPool, axum::Router) {
+    let test_config = shared::Config::from_env().expect("test Config::from_env");
+    create_test_app_with_config_and_redis(test_config, None).await
+}
+
+async fn create_test_app_with_config_and_redis(
+    test_config: shared::Config,
+    redis: Option<deadpool_redis::Pool>,
+) -> (PgPool, axum::Router) {
     let url = std::env::var("DATABASE_URL")
         .unwrap_or_else(|_| "postgres://postgres:postgres@localhost:5432/yourtj_test".to_string());
 
     let pool = PgPool::connect(&url).await.expect("failed to connect to test database");
 
     run_migrations(&pool).await;
-
-    let redis = test_redis_pool();
 
     let state = AppState {
         db: pool.clone(),
@@ -279,6 +290,21 @@ async fn run_migrations(pool: &PgPool) {
         .execute(pool)
         .await
         .expect("migration 0053 failed");
+    }
+
+    let has_lifecycle_job_lease: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM information_schema.columns \
+         WHERE table_schema = 'identity' AND table_name = 'account_lifecycle_jobs' \
+           AND column_name = 'lease_token')",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or(false);
+    if !has_lifecycle_job_lease {
+        sqlx::raw_sql(include_str!("../../../../migrations/0058_account_lifecycle_job_leases.sql"))
+            .execute(pool)
+            .await
+            .expect("migration 0058 failed");
     }
 
     let database_name: String = sqlx::query_scalar("SELECT current_database()")

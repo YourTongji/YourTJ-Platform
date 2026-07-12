@@ -5,7 +5,7 @@ use axum::http::header::{CONTENT_DISPOSITION, CONTENT_TYPE};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use chrono::Utc;
+use chrono::{Duration, Utc};
 use serde::Serialize;
 use shared::{AppError, AppResult, AppState};
 
@@ -41,6 +41,71 @@ struct AccountDataExportBundle {
     activity: Vec<activity::data_export::ExportActivityDay>,
     platform: platform::data_export::PlatformExport,
     media: Vec<media::data_export::ExportUpload>,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+enum MediaPurgeDecision {
+    Complete,
+    Defer(&'static str),
+    Block(&'static str),
+}
+
+fn decide_media_purge(progress: media::AccountMediaPurgeProgress) -> MediaPurgeDecision {
+    if progress.dead_letter_deletions > 0 {
+        MediaPurgeDecision::Block("media_deletion_dead_letter")
+    } else if progress.missing_deletion_jobs > 0 {
+        MediaPurgeDecision::Block("media_deletion_job_missing")
+    } else if progress.has_more || progress.pending_deletions > 0 {
+        MediaPurgeDecision::Defer("media_deletion_pending")
+    } else {
+        MediaPurgeDecision::Complete
+    }
+}
+
+async fn apply_media_purge_decision(
+    pool: &sqlx::PgPool,
+    job: &identity::lifecycle::LifecycleJob,
+    progress: media::AccountMediaPurgeProgress,
+) -> AppResult<Option<i64>> {
+    let decision = decide_media_purge(progress);
+    match decision {
+        MediaPurgeDecision::Block(_) => tracing::warn!(
+            job_id = job.id,
+            account_id = job.account_id,
+            scheduled = progress.scheduled,
+            has_more = progress.has_more,
+            pending_deletions = progress.pending_deletions,
+            dead_letter_deletions = progress.dead_letter_deletions,
+            retained_assets = progress.retained_assets,
+            missing_deletion_jobs = progress.missing_deletion_jobs,
+            ?decision,
+            "account media purge reached a terminal blocker"
+        ),
+        MediaPurgeDecision::Complete | MediaPurgeDecision::Defer(_) => tracing::info!(
+            job_id = job.id,
+            account_id = job.account_id,
+            scheduled = progress.scheduled,
+            has_more = progress.has_more,
+            pending_deletions = progress.pending_deletions,
+            dead_letter_deletions = progress.dead_letter_deletions,
+            retained_assets = progress.retained_assets,
+            missing_deletion_jobs = progress.missing_deletion_jobs,
+            ?decision,
+            "account media purge progress evaluated"
+        ),
+    }
+    match decision {
+        MediaPurgeDecision::Complete => identity::lifecycle::complete_purge(pool, job).await,
+        MediaPurgeDecision::Defer(error_code) => {
+            identity::lifecycle::defer_running_job(pool, job, Duration::seconds(60), error_code)
+                .await?;
+            Ok(None)
+        }
+        MediaPurgeDecision::Block(error_code) => {
+            identity::lifecycle::block_running_job(pool, job, error_code).await?;
+            Ok(None)
+        }
+    }
 }
 
 fn job_dto(job: identity::data_export::ExportJobRecord) -> DataExportJobDto {
@@ -234,10 +299,16 @@ async fn process_lifecycle_job(state: &AppState) -> AppResult<bool> {
                 credit::data_export::purge_account_private_data(&state.db, job.account_id),
                 activity::data_export::purge_account_data(&state.db, job.account_id),
                 platform::data_export::purge_account_private_data(&state.db, job.account_id),
-                media::data_export::prepare_account_purge(&state.db, job.account_id),
+                media::prepare_account_media_purge(
+                    &state.db,
+                    job.account_id,
+                    state.config.media_retention_gc_enabled,
+                ),
             );
             match cleanup {
-                Ok(_) => identity::lifecycle::complete_purge(&state.db, &job).await,
+                Ok((_, _, _, _, _, progress)) => {
+                    apply_media_purge_decision(&state.db, &job, progress).await
+                }
                 Err(error) => Err(error),
             }
         }
@@ -259,7 +330,14 @@ async fn process_lifecycle_job(state: &AppState) -> AppResult<bool> {
         Ok(None) => {}
         Err(error) => {
             tracing::warn!(?error, job_id = job.id, "account lifecycle job failed");
-            identity::lifecycle::fail_job(&state.db, job.id, "owner_cleanup_failed").await?;
+            match identity::lifecycle::fail_job(&state.db, &job, "owner_cleanup_failed").await {
+                Ok(()) => {}
+                Err(AppError::Conflict(_)) => tracing::info!(
+                    job_id = job.id,
+                    "account lifecycle job lease was superseded before failure persistence"
+                ),
+                Err(failure_error) => return Err(failure_error),
+            }
         }
     }
     Ok(true)
@@ -284,7 +362,60 @@ pub fn spawn_workers(state: AppState) {
 
 #[cfg(test)]
 mod tests {
-    use super::assemble_export;
+    use super::{assemble_export, decide_media_purge, MediaPurgeDecision};
+
+    fn media_progress(
+        has_more: bool,
+        pending_deletions: i64,
+        dead_letter_deletions: i64,
+        retained_assets: i64,
+        missing_deletion_jobs: i64,
+    ) -> media::AccountMediaPurgeProgress {
+        media::AccountMediaPurgeProgress {
+            scheduled: 0,
+            has_more,
+            pending_deletions,
+            dead_letter_deletions,
+            retained_assets,
+            missing_deletion_jobs,
+        }
+    }
+
+    #[test]
+    fn media_purge_decision_blocks_terminal_anomalies_before_waiting() {
+        assert_eq!(
+            decide_media_purge(media_progress(true, 1, 1, 0, 1)),
+            MediaPurgeDecision::Block("media_deletion_dead_letter")
+        );
+        assert_eq!(
+            decide_media_purge(media_progress(true, 1, 0, 0, 1)),
+            MediaPurgeDecision::Block("media_deletion_job_missing")
+        );
+    }
+
+    #[test]
+    fn media_purge_decision_defers_bounded_or_provider_work() {
+        assert_eq!(
+            decide_media_purge(media_progress(true, 0, 0, 0, 0)),
+            MediaPurgeDecision::Defer("media_deletion_pending")
+        );
+        assert_eq!(
+            decide_media_purge(media_progress(false, 1, 0, 0, 0)),
+            MediaPurgeDecision::Defer("media_deletion_pending")
+        );
+    }
+
+    #[test]
+    fn media_purge_decision_allows_policy_retained_assets() {
+        assert_eq!(
+            decide_media_purge(media_progress(false, 0, 0, 3, 0)),
+            MediaPurgeDecision::Complete
+        );
+        assert_eq!(
+            decide_media_purge(media_progress(false, 0, 0, 0, 0)),
+            MediaPurgeDecision::Complete
+        );
+    }
 
     #[tokio::test]
     async fn export_composition_uses_every_owner_projection_on_a_fresh_schema() {
@@ -356,12 +487,14 @@ mod tests {
         .execute(&state.db)
         .await
         .expect("make account purgeable");
+        let lease_token = uuid::Uuid::new_v4();
         let purge_job_id: i64 = sqlx::query_scalar(
             "INSERT INTO identity.account_lifecycle_jobs \
-             (account_id, job_type, status, attempts, next_attempt_at, locked_at) \
-             VALUES ($1, 'purge', 'running', 1, now(), now()) RETURNING id",
+             (account_id, job_type, status, attempts, next_attempt_at, locked_at, lease_token) \
+             VALUES ($1, 'purge', 'running', 1, now(), now(), $2) RETURNING id",
         )
         .bind(account_id)
+        .bind(lease_token)
         .fetch_one(&state.db)
         .await
         .expect("insert purge job");
@@ -371,7 +504,7 @@ mod tests {
             credit::data_export::purge_account_private_data(&state.db, account_id),
             activity::data_export::purge_account_data(&state.db, account_id),
             platform::data_export::purge_account_private_data(&state.db, account_id),
-            media::data_export::prepare_account_purge(&state.db, account_id),
+            media::prepare_account_media_purge(&state.db, account_id, true),
         )
         .expect("run every owner purge projection");
         identity::lifecycle::complete_purge(
@@ -380,6 +513,7 @@ mod tests {
                 id: purge_job_id,
                 account_id,
                 job_type: "purge".into(),
+                lease_token,
             },
         )
         .await
@@ -514,7 +648,7 @@ mod tests {
         activity::data_export::purge_account_data(&pool, account_id)
             .await
             .expect("commit first owner cleanup");
-        identity::lifecycle::fail_job(&pool, purge_job.id, "simulated_owner_cleanup_failure")
+        identity::lifecycle::fail_job(&pool, &purge_job, "simulated_owner_cleanup_failure")
             .await
             .expect("persist later owner cleanup failure");
         let owner_rows: i64 =
@@ -569,7 +703,7 @@ mod tests {
             credit::data_export::purge_account_private_data(&pool, account_id),
             activity::data_export::purge_account_data(&pool, account_id),
             platform::data_export::purge_account_private_data(&pool, account_id),
-            media::data_export::prepare_account_purge(&pool, account_id),
+            media::prepare_account_media_purge(&pool, account_id, true),
         )
         .expect("retry every idempotent owner cleanup");
         identity::lifecycle::complete_purge(&pool, &retry)

@@ -204,6 +204,9 @@ Credit、Activity、Platform 与 Media 各自公开 owner export/purge API；gat
   或创建 session，purge 后 password/email/recovery 都不能恢复。
 - Purge claim 必须在账号行锁内重验 recovery deadline 并原子写不可逆 marker 后才可调用 owner cleanup；
   partial cleanup + failed/dead-letter 状态不能恢复账号，exhausted job 对 operator 可见且 requeue 有
-  capability、recent-auth、append-only audit 和重试到 tombstone 的数据库回归。
+  capability、recent-auth、append-only audit 和重试到 tombstone 的数据库回归。每次 claim 使用唯一 UUID
+  lease token；过期 worker 的 complete/fail/defer/block 全部 CAS 失败，不能覆盖接管者的 Media 阻断或终态。
+- 删除恢复会把当轮 lifecycle job 收口为 succeeded；账号以后再次请求删除时，服务端必须原子重置同一组
+  unique job 的状态、attempt、lease、error 和新 deadline，不能因 `ON CONFLICT` 把第二轮 worker 静默丢失。
 - Owner export 跨域 projection 不泄露 inbound DM、举报人、reviewer、staff/evidence 或 provider secret；
   job 可从过期 worker lease 恢复，download grant account-bound、短期且只消费一次。

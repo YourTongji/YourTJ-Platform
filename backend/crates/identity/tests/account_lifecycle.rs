@@ -78,6 +78,97 @@ fn request(method: Method, uri: &str, token: Option<&str>, body: Value) -> Reque
     builder.body(Body::from(body.to_string())).expect("build request")
 }
 
+async fn claim_replacement_mark_deleted_job(
+    pool: &sqlx::PgPool,
+) -> (i64, identity::lifecycle::LifecycleJob, identity::lifecycle::LifecycleJob) {
+    let (account_id, _) = insert_account(pool, "A-secure-lease-fencing-password!42").await;
+    sqlx::query(
+        "UPDATE identity.accounts \
+         SET status = 'deletion_requested', deletion_requested_at = now(), \
+             deletion_recover_until = now() + interval '30 days' \
+         WHERE id = $1",
+    )
+    .bind(account_id)
+    .execute(pool)
+    .await
+    .expect("make account eligible for mark-deleted job");
+    let job_id: i64 = sqlx::query_scalar(
+        "INSERT INTO identity.account_lifecycle_jobs \
+         (account_id, job_type, next_attempt_at) \
+         VALUES ($1, 'mark_deleted', now()) RETURNING id",
+    )
+    .bind(account_id)
+    .fetch_one(pool)
+    .await
+    .expect("insert mark-deleted job");
+    let first_worker = identity::lifecycle::claim_due_job(pool)
+        .await
+        .expect("claim first lifecycle lease")
+        .expect("first lifecycle lease exists");
+    assert_eq!(first_worker.id, job_id);
+    sqlx::query(
+        "UPDATE identity.account_lifecycle_jobs \
+         SET locked_at = now() - interval '11 minutes' WHERE id = $1",
+    )
+    .bind(job_id)
+    .execute(pool)
+    .await
+    .expect("expire first lifecycle lease");
+    let replacement_worker = identity::lifecycle::claim_due_job(pool)
+        .await
+        .expect("claim replacement lifecycle lease")
+        .expect("replacement lifecycle lease exists");
+    assert_eq!(replacement_worker.id, job_id);
+    assert_ne!(replacement_worker.lease_token, first_worker.lease_token);
+    (account_id, first_worker, replacement_worker)
+}
+
+async fn claim_replacement_purge_job(
+    pool: &sqlx::PgPool,
+) -> (i64, identity::lifecycle::LifecycleJob, identity::lifecycle::LifecycleJob) {
+    let (account_id, _) = insert_account(pool, "A-secure-purge-lease-password!42").await;
+    sqlx::query(
+        "UPDATE identity.accounts \
+         SET status = 'deleted', deletion_requested_at = now() - interval '31 days', \
+             deletion_recover_until = now() - interval '1 day', deleted_at = now(), \
+             purge_started_at = now() \
+         WHERE id = $1",
+    )
+    .bind(account_id)
+    .execute(pool)
+    .await
+    .expect("make account eligible for purge job");
+    let job_id: i64 = sqlx::query_scalar(
+        "INSERT INTO identity.account_lifecycle_jobs \
+         (account_id, job_type, next_attempt_at) \
+         VALUES ($1, 'purge', now()) RETURNING id",
+    )
+    .bind(account_id)
+    .fetch_one(pool)
+    .await
+    .expect("insert purge job");
+    let first_worker = identity::lifecycle::claim_due_job(pool)
+        .await
+        .expect("claim first purge lease")
+        .expect("first purge lease exists");
+    assert_eq!(first_worker.id, job_id);
+    sqlx::query(
+        "UPDATE identity.account_lifecycle_jobs \
+         SET locked_at = now() - interval '11 minutes' WHERE id = $1",
+    )
+    .bind(job_id)
+    .execute(pool)
+    .await
+    .expect("expire first purge lease");
+    let replacement_worker = identity::lifecycle::claim_due_job(pool)
+        .await
+        .expect("claim replacement purge lease")
+        .expect("replacement purge lease exists");
+    assert_eq!(replacement_worker.id, job_id);
+    assert_ne!(replacement_worker.lease_token, first_worker.lease_token);
+    (account_id, first_worker, replacement_worker)
+}
+
 #[tokio::test]
 async fn onboarding_is_resumable_and_blocks_ordinary_domain_access_until_terms_are_accepted() {
     let (pool, app) = helpers::create_test_app().await;
@@ -346,6 +437,111 @@ async fn deletion_moves_through_durable_deleted_stage_and_rejects_recovery_after
 }
 
 #[tokio::test]
+async fn recovered_account_can_request_deletion_again_with_fresh_durable_jobs() {
+    let (pool, app) = helpers::create_test_app().await;
+    let (account_id, _) = insert_account(&pool, "A-secure-repeat-delete-password!42").await;
+    sqlx::query(
+        "UPDATE identity.account_onboarding SET accepted_terms_version = 'legacy-v1', \
+             accepted_at = now(), completed_at = now() WHERE account_id = $1",
+    )
+    .bind(account_id)
+    .execute(&pool)
+    .await
+    .expect("complete onboarding");
+    let first_session = create_session(&pool, account_id, true).await;
+    let first_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/v2/me/lifecycle/delete")
+                .header(header::AUTHORIZATION, format!("Bearer {first_session}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .header("Idempotency-Key", "delete-lifecycle-first")
+                .body(Body::from(json!({ "confirmation": "DELETE" }).to_string()))
+                .expect("first deletion request"),
+        )
+        .await
+        .expect("first deletion response");
+    assert_eq!(first_response.status(), StatusCode::ACCEPTED);
+    let first_body = helpers::read_json(first_response).await;
+    let recovery_token =
+        first_body["recovery"]["recoveryToken"].as_str().expect("first recovery token");
+    identity::lifecycle::reactivate(&pool, recovery_token)
+        .await
+        .expect("recover account before purge starts");
+
+    let retired_jobs: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM identity.account_lifecycle_jobs \
+         WHERE account_id = $1 AND status = 'succeeded'",
+    )
+    .bind(account_id)
+    .fetch_one(&pool)
+    .await
+    .expect("read retired first-cycle jobs");
+    assert_eq!(retired_jobs, 2);
+
+    let second_session = create_session(&pool, account_id, true).await;
+    let second_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/v2/me/lifecycle/delete")
+                .header(header::AUTHORIZATION, format!("Bearer {second_session}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .header("Idempotency-Key", "delete-lifecycle-again")
+                .body(Body::from(json!({ "confirmation": "DELETE" }).to_string()))
+                .expect("second deletion request"),
+        )
+        .await
+        .expect("second deletion response");
+    assert_eq!(second_response.status(), StatusCode::ACCEPTED);
+
+    let reset_jobs: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM identity.account_lifecycle_jobs \
+         WHERE account_id = $1 AND status = 'queued' AND attempts = 0 \
+           AND locked_at IS NULL AND lease_token IS NULL AND last_error_code IS NULL",
+    )
+    .bind(account_id)
+    .fetch_one(&pool)
+    .await
+    .expect("read second-cycle durable jobs");
+    assert_eq!(reset_jobs, 2);
+    let mark_job = identity::lifecycle::claim_due_job(&pool)
+        .await
+        .expect("claim second-cycle mark job")
+        .expect("second-cycle mark job exists");
+    assert_eq!(mark_job.job_type, "mark_deleted");
+    identity::lifecycle::complete_mark_deleted(&pool, &mark_job)
+        .await
+        .expect("complete second-cycle deleted stage");
+    sqlx::query(
+        "UPDATE identity.accounts \
+         SET deletion_requested_at = now() - interval '31 days', \
+             deletion_recover_until = now() - interval '1 minute' \
+         WHERE id = $1",
+    )
+    .bind(account_id)
+    .execute(&pool)
+    .await
+    .expect("expire second recovery window");
+    sqlx::query(
+        "UPDATE identity.account_lifecycle_jobs SET next_attempt_at = now() \
+         WHERE account_id = $1 AND job_type = 'purge'",
+    )
+    .bind(account_id)
+    .execute(&pool)
+    .await
+    .expect("make second-cycle purge due");
+    let purge_job = identity::lifecycle::claim_due_job(&pool)
+        .await
+        .expect("claim second-cycle purge")
+        .expect("second-cycle purge job exists");
+    assert_eq!(purge_job.job_type, "purge");
+}
+
+#[tokio::test]
 async fn owner_export_is_idempotent_scoped_one_time_and_recovers_an_expired_worker_lease() {
     let (pool, _) = helpers::create_test_app().await;
     let (account_id, _) = insert_account(&pool, "A-secure-export-password!42").await;
@@ -467,4 +663,301 @@ async fn lifecycle_history_rejects_update_delete_and_truncate() {
     .await
     .expect("read lifecycle history after rejected mutations");
     assert!(still_present);
+}
+
+#[tokio::test]
+async fn lifecycle_waits_preserve_retry_budget_and_terminal_blockers_require_requeue() {
+    let (pool, _) = helpers::create_test_app().await;
+    let (account_id, _) = insert_account(&pool, "A-secure-worker-wait-password!42").await;
+    let initial_lease_token = uuid::Uuid::new_v4();
+    let job_id: i64 = sqlx::query_scalar(
+        "INSERT INTO identity.account_lifecycle_jobs \
+         (account_id, job_type, status, attempts, next_attempt_at, locked_at, lease_token) \
+         VALUES ($1, 'purge', 'running', 1, now(), now(), $2) RETURNING id",
+    )
+    .bind(account_id)
+    .bind(initial_lease_token)
+    .fetch_one(&pool)
+    .await
+    .expect("insert running lifecycle job");
+    let mut job = identity::lifecycle::LifecycleJob {
+        id: job_id,
+        account_id,
+        job_type: "purge".into(),
+        lease_token: initial_lease_token,
+    };
+
+    for _ in 0..25 {
+        identity::lifecycle::defer_running_job(
+            &pool,
+            &job,
+            chrono::Duration::seconds(1),
+            "media_deletion_pending",
+        )
+        .await
+        .expect("defer normal media wait");
+        let queued: (String, i16, String) = sqlx::query_as(
+            "SELECT status, attempts, last_error_code \
+             FROM identity.account_lifecycle_jobs WHERE id = $1",
+        )
+        .bind(job_id)
+        .fetch_one(&pool)
+        .await
+        .expect("read deferred lifecycle job");
+        assert_eq!(queued, ("queued".into(), 0, "media_deletion_pending".into()));
+
+        let next_lease_token = uuid::Uuid::new_v4();
+        sqlx::query(
+            "UPDATE identity.account_lifecycle_jobs \
+             SET status = 'running', locked_at = now(), lease_token = $2, \
+                 attempts = attempts + 1 \
+             WHERE id = $1 AND status = 'queued'",
+        )
+        .bind(job_id)
+        .bind(next_lease_token)
+        .execute(&pool)
+        .await
+        .expect("simulate the next lifecycle claim");
+        job.lease_token = next_lease_token;
+    }
+
+    identity::lifecycle::block_running_job(&pool, &job, "media_deletion_dead_letter")
+        .await
+        .expect("block lifecycle finalization on media dead letter");
+    let blocked: (String, i16, Option<chrono::DateTime<chrono::Utc>>, String, bool) =
+        sqlx::query_as(
+            "SELECT status, attempts, locked_at, last_error_code, next_attempt_at <= now() \
+             FROM identity.account_lifecycle_jobs WHERE id = $1",
+        )
+        .bind(job_id)
+        .fetch_one(&pool)
+        .await
+        .expect("read blocked lifecycle job");
+    assert_eq!(blocked.0, "failed");
+    assert_eq!(blocked.1, 20);
+    assert!(blocked.2.is_none());
+    assert_eq!(blocked.3, "media_deletion_dead_letter");
+    assert!(blocked.4);
+    assert!(matches!(
+        identity::lifecycle::defer_running_job(
+            &pool,
+            &job,
+            chrono::Duration::seconds(1),
+            "media_deletion_pending",
+        )
+        .await,
+        Err(shared::AppError::Conflict(_))
+    ));
+}
+
+#[tokio::test]
+async fn expired_worker_cannot_overwrite_replacement_terminal_block() {
+    let (pool, _) = helpers::create_test_app().await;
+    let (account_id, first_worker, replacement_worker) =
+        claim_replacement_mark_deleted_job(&pool).await;
+
+    assert!(matches!(
+        identity::lifecycle::complete_mark_deleted(&pool, &first_worker).await,
+        Err(shared::AppError::Conflict(_))
+    ));
+    assert!(matches!(
+        identity::lifecycle::fail_job(&pool, &first_worker, "stale_failure").await,
+        Err(shared::AppError::Conflict(_))
+    ));
+    assert!(matches!(
+        identity::lifecycle::defer_running_job(
+            &pool,
+            &first_worker,
+            chrono::Duration::seconds(1),
+            "stale_wait",
+        )
+        .await,
+        Err(shared::AppError::Conflict(_))
+    ));
+    identity::lifecycle::block_running_job(
+        &pool,
+        &replacement_worker,
+        "replacement_terminal_block",
+    )
+    .await
+    .expect("replacement worker blocks finalization");
+    assert!(matches!(
+        identity::lifecycle::block_running_job(&pool, &first_worker, "stale_terminal_block").await,
+        Err(shared::AppError::Conflict(_))
+    ));
+
+    let job_state: (String, i16, Option<uuid::Uuid>, String) = sqlx::query_as(
+        "SELECT status, attempts, lease_token, last_error_code \
+         FROM identity.account_lifecycle_jobs WHERE id = $1",
+    )
+    .bind(replacement_worker.id)
+    .fetch_one(&pool)
+    .await
+    .expect("read replacement terminal block");
+    assert_eq!(job_state, ("failed".into(), 20, None, "replacement_terminal_block".into()));
+    let account_state: String =
+        sqlx::query_scalar("SELECT status::text FROM identity.accounts WHERE id = $1")
+            .bind(account_id)
+            .fetch_one(&pool)
+            .await
+            .expect("read account after stale worker attempts");
+    assert_eq!(account_state, "deletion_requested");
+}
+
+#[tokio::test]
+async fn replacement_completion_fences_expired_worker_without_deadlock() {
+    let (pool, _) = helpers::create_test_app().await;
+    let (account_id, first_worker, replacement_worker) =
+        claim_replacement_mark_deleted_job(&pool).await;
+
+    let (stale_result, replacement_result) =
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            tokio::join!(
+                identity::lifecycle::complete_mark_deleted(&pool, &first_worker),
+                identity::lifecycle::complete_mark_deleted(&pool, &replacement_worker),
+            )
+        })
+        .await
+        .expect("job-to-account lock order must not deadlock");
+    assert!(matches!(stale_result, Err(shared::AppError::Conflict(_))));
+    assert_eq!(
+        replacement_result.expect("replacement completes account transition"),
+        Some(account_id)
+    );
+
+    assert!(matches!(
+        identity::lifecycle::fail_job(&pool, &first_worker, "stale_failure").await,
+        Err(shared::AppError::Conflict(_))
+    ));
+    assert!(matches!(
+        identity::lifecycle::defer_running_job(
+            &pool,
+            &first_worker,
+            chrono::Duration::seconds(1),
+            "stale_wait",
+        )
+        .await,
+        Err(shared::AppError::Conflict(_))
+    ));
+    assert!(matches!(
+        identity::lifecycle::block_running_job(&pool, &first_worker, "stale_block").await,
+        Err(shared::AppError::Conflict(_))
+    ));
+    assert!(matches!(
+        identity::lifecycle::complete_mark_deleted(&pool, &first_worker).await,
+        Err(shared::AppError::Conflict(_))
+    ));
+
+    let final_state: (String, Option<uuid::Uuid>, String) = sqlx::query_as(
+        "SELECT job.status, job.lease_token, account.status::text \
+         FROM identity.account_lifecycle_jobs job \
+         JOIN identity.accounts account ON account.id = job.account_id \
+         WHERE job.id = $1",
+    )
+    .bind(replacement_worker.id)
+    .fetch_one(&pool)
+    .await
+    .expect("read replacement completion");
+    assert_eq!(final_state, ("succeeded".into(), None, "deleted".into()));
+}
+
+#[tokio::test]
+async fn replacement_media_block_fences_expired_purge_completion() {
+    let (pool, _) = helpers::create_test_app().await;
+    let (account_id, first_worker, replacement_worker) = claim_replacement_purge_job(&pool).await;
+
+    identity::lifecycle::block_running_job(
+        &pool,
+        &replacement_worker,
+        "media_deletion_dead_letter",
+    )
+    .await
+    .expect("replacement worker records media terminal block");
+    assert!(matches!(
+        identity::lifecycle::complete_purge(&pool, &first_worker).await,
+        Err(shared::AppError::Conflict(_))
+    ));
+
+    let state: (String, Option<chrono::DateTime<chrono::Utc>>, String, i16, Option<uuid::Uuid>) =
+        sqlx::query_as(
+            "SELECT account.status::text, account.purged_at, job.last_error_code, job.attempts, \
+                    job.lease_token \
+             FROM identity.accounts account \
+             JOIN identity.account_lifecycle_jobs job ON job.account_id = account.id \
+             WHERE account.id = $1 AND job.id = $2",
+        )
+        .bind(account_id)
+        .bind(replacement_worker.id)
+        .fetch_one(&pool)
+        .await
+        .expect("read media-blocked purge state");
+    assert_eq!(state.0, "deleted");
+    assert!(state.1.is_none());
+    assert_eq!(state.2, "media_deletion_dead_letter");
+    assert_eq!(state.3, 20);
+    assert!(state.4.is_none());
+}
+
+#[tokio::test]
+async fn recovery_and_purge_completion_share_a_deadlock_free_lock_order() {
+    let (pool, _) = helpers::create_test_app().await;
+    let (account_id, _) = insert_account(&pool, "A-secure-recovery-purge-race-password!42").await;
+    sqlx::query(
+        "UPDATE identity.accounts \
+         SET status = 'deletion_requested', deletion_requested_at = now(), \
+             deletion_recover_until = now() + interval '1 day' \
+         WHERE id = $1",
+    )
+    .bind(account_id)
+    .execute(&pool)
+    .await
+    .expect("make account recoverable");
+    sqlx::query(
+        "INSERT INTO identity.account_lifecycle_jobs (account_id, job_type, next_attempt_at) \
+         VALUES ($1, 'purge', now() + interval '1 day')",
+    )
+    .bind(account_id)
+    .execute(&pool)
+    .await
+    .expect("insert delayed purge job");
+    let recovery = identity::lifecycle::issue_recovery_credential(&pool, account_id, "session")
+        .await
+        .expect("issue recovery credential before irreversible purge");
+    sqlx::query(
+        "UPDATE identity.accounts \
+         SET deletion_requested_at = now() - interval '31 days', \
+             deletion_recover_until = now() - interval '1 minute' \
+         WHERE id = $1",
+    )
+    .bind(account_id)
+    .execute(&pool)
+    .await
+    .expect("expire recovery deadline");
+    sqlx::query(
+        "UPDATE identity.account_lifecycle_jobs SET next_attempt_at = now() \
+         WHERE account_id = $1 AND job_type = 'purge'",
+    )
+    .bind(account_id)
+    .execute(&pool)
+    .await
+    .expect("make purge job due");
+    let purge_job = identity::lifecycle::claim_due_job(&pool)
+        .await
+        .expect("claim purge job")
+        .expect("purge job exists");
+
+    let (purge_result, recovery_result) =
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            tokio::join!(
+                identity::lifecycle::complete_purge(&pool, &purge_job),
+                identity::lifecycle::reactivate(&pool, &recovery.token),
+            )
+        })
+        .await
+        .expect("job-account-credential lock order must not deadlock");
+    assert_eq!(purge_result.expect("purge completion wins irreversible race"), Some(account_id));
+    assert!(matches!(
+        recovery_result,
+        Err(shared::AppError::Unauthorized | shared::AppError::Forbidden)
+    ));
 }

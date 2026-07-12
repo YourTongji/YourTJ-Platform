@@ -220,8 +220,10 @@ moderator actor；因此这是 application-level breaking cutover。Trigger-befo
    intent、gateway in-flight callback 和 provider callback 指标权威确认 outstanding intents/callbacks 为零。
 2. 再 drain/停止全部旧 callback/API/writer image、旧 deletion worker 与旧 account-lifecycle worker；确认
    没有旧进程仍会访问 callback plaintext column、写业务引用或处理队列。
-3. 以 migration owner 执行 `0057`，再部署 binding-aware 的全部 profile/promotion/Forum draft/
-   published-content writer 与新版 deletion/lifecycle worker。新 moderation deletion worker 和
+3. 以 migration owner 顺序执行 `0057`、`0058`，再部署 binding-aware 的全部 profile/promotion/Forum
+   draft/published-content writer 与 lease-fenced 新版 deletion/lifecycle worker。`0058` 回收的旧 running
+   lifecycle row 只有在确认旧进程已经停止后才能由新版重新 claim；新 worker 的 UUID token 防止旧 lease
+   覆盖等待、dead-letter/missing-job 阻断或最终完成。新 moderation deletion worker 和
    upload-intent housekeeping 此时独立运行，但通用 GC/account-purge system enqueue 仍关闭。
 4. 从仓库根目录用获批的数据库连接运行 DB preflight，并要求其所有 drift/anomaly 为零：
 
