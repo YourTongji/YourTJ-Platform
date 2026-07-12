@@ -6,7 +6,7 @@
 >
 > 负责人：Media maintainers、Platform maintainers、Security owner
 >
-> 最近核验：2026-07-12，migration `0057`、Media/Forum/Platform tests 与部署配置
+> 最近核验：2026-07-12，`origin/main@0492746`、migration `0057` 与 ADMIN 媒体自审产品决策
 
 本 runbook 描述当前 Alibaba Cloud STS/OSS 代码边界和上线前配置要求。代码支持不代表 main/production
 已经配置；当前部署的 bucket、RAM、CORS、CDN 与 scanner 状态必须由 operator 独立核验。
@@ -89,6 +89,10 @@
   每次都重新读取 uploader 当前 role，避免 grant 发放后晋升造成越权。
 - 当前同源 evidence proxy 只开放 allowlisted raster image；PDF/file 不回退到 vendor URL，管理 UI 明确
   显示“文件预览未开放”。PDF 要等独立的 scanner/sandbox renderer 后再开放人工内容预览。
+- 目标管理模型中，普通管理员只能在 ADMIN 授予的 media moderation grant/target ceiling 内预览与审核，
+  仍禁止自审。ADMIN 可对本人上传使用专用自审例外，但必须有 recent-auth、reason、明确确认、
+  相同的可信 raster preview 证据与 `selfReview=true` audit。该目标仍为 `Planned`；当前代码仍对所有人
+  执行 no-self，文档合并不等于环境已开放自审。
 - 通用 GC scheduler 只选择 `status=clean` 且 `cleaned_at` 已满 30 天、没有 live binding/usage/draft
   reference、没有未结束 grace、没有 active operational hold 的 asset；候选锁定后再次校验再隔离。
   `pending` upload 永不因年龄进入通用 GC。未 callback 的 exact object key 由 upload-intent housekeeping
@@ -295,8 +299,8 @@ binary，也不得通过伪造管理员 actor 换取兼容。Trigger、backfill 
   cross-account、pending/blocked、stale edit、revision、作者/staff/举报 delete、archive、restore、申诉
   overturn、parent hide/delete 并发锁序与并发 restore；不调用真实 OSS。Revision page 需要验证多版本
   attachment 在一次 batch projection 后仍各自匹配正确 asset。
-- Admin preview integration test 使用 fake object store，覆盖 capability、严格 role hierarchy/independent
-  reviewer、分页前过滤、一次性 token、
+- Admin preview integration test 使用 fake object store，覆盖 capability、grant/target ceiling、普通管理员 no-self、
+  ADMIN 媒体自审的 recent-auth/reason/confirmation/audit、分页前过滤、一次性 token、
   MIME/byte/dimension-bound same-origin response、replay rejection、`no-store`/`nosniff`、dimension persistence
   和不含 key/URL 的 audit；协议 unit test 覆盖四种允许图片 header 与 pixel limit；Web test 覆盖 reason、
   one-time proxy 调用、browser blob 展示和 DOM 不出现 provider metadata。

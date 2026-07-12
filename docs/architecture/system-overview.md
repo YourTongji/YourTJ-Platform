@@ -6,7 +6,7 @@
 >
 > 负责人：Platform maintainers
 >
-> 最近核验：2026-07-12，migration `0054` 与 API bootstrap/worker wiring
+> 最近核验：2026-07-12，`origin/main@0492746` 与 ADMIN/委派授权边界
 
 YourTJ 是 Rust/Axum 后端与 React Web 的 monorepo。论坛、课程、评课、选课、积分共享身份和
 PostgreSQL，但每个 domain 仍拥有自己的表、业务规则和 HTTP routes。
@@ -125,7 +125,11 @@ iOS 与 Flutter 在独立仓库，只消费 OpenAPI 生成的类型和平台 HTT
   append-only 且可验证，task/purchase 转换使用 row lock + CAS。
 - 积分无充值、提现、法币兑换或自由 transfer。
 - Media 业务只引用已授权 asset；第三方 URL 不是可信业务事实。
-- Staff 操作按 capability、target hierarchy、reason 和 audit 授权。
+- Staff 操作按服务端 effective capability、target hierarchy/ceiling、reason 和 audit 授权。目标模型中 ADMIN
+  拥有所有平台定义的 staff capability，普通管理员只使用 ADMIN 给予的 account-scoped grant；当前静态
+  role mapping 迁移前不能宣称已实现委派。
+- 利益冲突默认 no-self；目标中仅 ADMIN 的本人媒体审核有 recent-auth + reason + 专用 audit
+  例外，不改变申诉 recusal、append-only 审计、DM/PII 最小化和 credit 合规边界。
 - Revision history 只向作者本人或严格高于另一作者角色的内容审核 staff 返回，并使用有界 cursor page。
 - 公共 API 使用 `/api/v2`、camelCase DTO、稳定错误 envelope 和有界分页。
 

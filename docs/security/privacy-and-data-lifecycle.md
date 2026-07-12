@@ -6,7 +6,7 @@
 >
 > 负责人：Privacy owner、Security owner、Domain maintainers
 >
-> 最近核验：2026-07-12，migrations `0034`–`0058` 中与隐私/生命周期相关的 schema、tests 与 Onebox TLS fixture
+> 最近核验：2026-07-12，`origin/main@0492746`、隐私/生命周期实现与 ADMIN 媒体自审边界
 
 本规范将数据最小化、可见性、导出、删除和保留作为产品前置条件。它不是法律意见；涉及 PIPL、
 未成年人、广告或跨境处理的最终政策需要合格法律与隐私负责人确认。
@@ -108,6 +108,7 @@
 | 运营数据 | job log、metrics、aggregated promo events | operators | 聚合、去标识、有限保留 |
 | Owner export artifact | 八域本人数据 JSON、job/下载时间 | 仅 owner + worker | recent-auth 创建、24 小时清除、5 分钟一次性下载 grant，不写日志 |
 | 媒体操作元数据 | operational hold/release、system deletion/retry、redacted-object evidence | `operations.jobs` 或限定的 moderation purpose | no-store inventory、理由化访问、有限保留；不包含 provider key/URL/hash |
+| Staff 授权元数据 | 普通管理员 assignment、capability、target ceiling、expiry、grant/revoke event | ADMIN/security owner；被授权人只见本人有效范围 | 不公开；变更即时失效；理由/历史随安全审计保留，不进入普通 owner export |
 | 外链预览缓存 | 无 query 的规范化 allowlisted HTTPS URL、公开 metadata、失败类别 | 服务端与页面请求者 | ready 最长 7 天、error 2 分钟；query URL/远程图片不持久化，日志只记 hash |
 | 公告 receipt | announcement/revision、seen/dismiss/ack time | 本人、汇总后的公告管理员 | 账号删除级联清除，不记录设备/IP；后台只返回聚合计数 |
 | 积分记录 | ledger、wallet projection | owner/verification policy | ledger 不改写，删除后 tombstone |
@@ -223,6 +224,9 @@ lifecycle job 置为 exhausted failed，只有修复 Media 队列后再经 recen
 - 内部 outbox source key、lease/error 和 receipt 不作为用户内容导出；用户导出的是已投递通知事实。
 - 治理通知与本人申诉的提交/状态/公开理由可进入本人导出；reviewer identity、举报人、内部 metadata 和
   evidence 不默认导出，额外披露需目的限定政策与访问审计。
+- 普通管理员可在安全设置中查看本人当前 effective capability、target ceiling 和 expiry，但不把 grantor、内部 reason、
+  其他 staff assignment 或 append-only 授权历史加入普通 owner export。账号删除会立即撤销有效 assignment；
+  历史以伪名 account id 与 audit 目的保留，具体期限随 governance audit retention 决策。
 - 账号导出应包含本人认证的类型、当前状态、签发/到期/撤销时间；staff reason、issuer 与 evidence
   reference 属于治理记录，不默认进入用户导出，具体申诉披露按政策处理。
 - 导出生成与 ready artifact 的 download-grant 签发都需要 recent-auth；创建还要求 8–128 位 printable
@@ -289,8 +293,10 @@ release 和 audit retention；其他 domain（包括 DM）的 Planned legal-hold
   仅在 test build 存在。Migration 清除历史 query URL/remote-image cache；访问日志不记录 URL。
 - Web renderer 只把 `yourtj-asset` 映射到同一响应中匹配的服务端派生 URL；remote/data destination 与
   DTO 中多余/损坏 binding 都 fail closed。管理审核 DTO 同样不披露 object key、hash 或持久 URL；待审
-  证据只通过 capability-gated、独立审核员、60 秒一次性 token 的同源 bounded proxy 读取，读取 purpose/
-  reason 以 upload id 审计，token 仅存 hash 且不进入 URL、日志或 audit。
+  证据只通过 capability-gated、60 秒一次性 token 的同源 bounded proxy 读取，读取 purpose/reason 以 upload id
+  审计，token 仅存 hash 且不进入 URL、日志或 audit。普通管理员/moderator 仍要求独立审核且禁止自审；
+  ADMIN 的本人媒体自审是唯一例外，仍要求 recent-auth、强制 reason、可信预览边界和显式
+  `selfReview` audit，不扩展到 DM/申诉/角色/认证/积分证据。该例外尚未实现。
 - 推广保存平台 clean asset id 和站内目标路径，不保存远程图片 URL。曝光/点击只使用两小时有效的
   随机签名展示票据去重，票据不含账号、IP、设备或 audience 身份；原始 receipt 48 小时后由 worker
   删除；worker 启动时立即执行并按小时复查，点击归因到同一票据 impression 的 UTC day。长期只保留
