@@ -194,6 +194,55 @@ async fn insert_upload(
 }
 
 #[tokio::test]
+async fn owner_export_excludes_internal_cleanup_tombstones() {
+    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL for media retention");
+    let pool = PgPool::connect(&database_url).await.expect("media retention database");
+    MIGRATOR.run(&pool).await.expect("media retention migrations");
+    let _test_guard = serialize_retention_tests(&pool).await;
+    let suffix = uuid::Uuid::new_v4().simple().to_string();
+    let account_id = insert_account(&pool, &suffix, "user").await;
+    let owner_upload_id: i64 = sqlx::query_scalar(
+        "INSERT INTO media.uploads \
+         (account_id, kind, oss_key, url, bytes, mime, sha256, status) \
+         VALUES ($1, 'image', $2, '', 17, 'image/png', repeat('a', 64), 'pending') \
+         RETURNING id",
+    )
+    .bind(account_id)
+    .bind(format!("uploads/{account_id}/image/{suffix}-owner.png"))
+    .fetch_one(&pool)
+    .await
+    .expect("insert owner-visible upload");
+    let cleanup_upload_id: i64 = sqlx::query_scalar(
+        "INSERT INTO media.uploads \
+         (account_id, kind, oss_key, url, bytes, mime, sha256, status, is_cleanup_tombstone) \
+         VALUES ($1, 'image', $2, '', 0, 'image/png', '', 'quarantined', TRUE) \
+         RETURNING id",
+    )
+    .bind(account_id)
+    .bind(format!("uploads/{account_id}/image/{suffix}-cleanup.png"))
+    .fetch_one(&pool)
+    .await
+    .expect("insert internal cleanup tombstone");
+
+    let uploads =
+        media::data_export::snapshot(&pool, account_id).await.expect("export owner media");
+    assert_eq!(uploads.len(), 1);
+    let exported_upload = serde_json::to_value(&uploads[0]).expect("serialize owner upload");
+    assert_eq!(exported_upload["id"], owner_upload_id);
+
+    sqlx::query("DELETE FROM media.uploads WHERE id = ANY($1)")
+        .bind(vec![owner_upload_id, cleanup_upload_id])
+        .execute(&pool)
+        .await
+        .expect("delete media export uploads");
+    sqlx::query("DELETE FROM identity.accounts WHERE id = $1")
+        .bind(account_id)
+        .execute(&pool)
+        .await
+        .expect("delete media export account");
+}
+
+#[tokio::test]
 async fn retention_hold_requires_recent_operations_auth_and_fences_provider_deletion() {
     let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL for media retention");
     let pool = PgPool::connect(&database_url).await.expect("media retention database");
