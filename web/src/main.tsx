@@ -52,9 +52,6 @@ const OnboardingPage = React.lazy(async () => ({
 const ProfilePage = React.lazy(async () => ({
   default: (await import("@/pages/profile-page")).ProfilePage,
 }));
-const ProfilePreviewPage = React.lazy(async () => ({
-  default: (await import("@/pages/profile-preview-page")).ProfilePreviewPage,
-}));
 const SchedulePage = React.lazy(async () => ({
   default: (await import("@/pages/schedule-page")).SchedulePage,
 }));
@@ -99,7 +96,6 @@ const router = createBrowserRouter(
         { path: "notifications", element: <NotificationsPage /> },
         { path: "messages", element: <MessagesPage /> },
         { path: "bookmarks", element: <BookmarksPage /> },
-        { path: "dev/profile-preview", element: <ProfilePreviewPage /> },
         { path: "profile/:handle", element: <ProfilePage /> },
         { path: "settings", element: <SettingsPage /> },
         { path: "admin", element: <AdminPage /> },
