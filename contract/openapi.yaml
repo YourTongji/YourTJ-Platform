@@ -130,7 +130,7 @@ components:
         capabilities:
           type: array
           items: { type: string }
-        trustLevel: { type: integer }
+        trustLevel: { type: integer, minimum: 0, maximum: 6, description: "Unified tea trust level. 0 is visitor UI only; registered accounts are 1–6." }
         onboardingRequired:
           type: boolean
           description: True until the current terms version and required profile/privacy choices are accepted.
@@ -914,7 +914,7 @@ components:
         description: { type: string, nullable: true }
         position: { type: integer }
         isLocked: { type: boolean }
-        minTrustToPost: { type: integer, minimum: 0, maximum: 3 }
+        minTrustToPost: { type: integer, minimum: 1, maximum: 6 }
         isQa: { type: boolean }
         threadCount: { type: integer, minimum: 0 }
         canPost: { type: boolean }
@@ -1289,7 +1289,7 @@ components:
         description: { type: string, maxLength: 500 }
         position: { type: integer, minimum: 0, default: 0 }
         isLocked: { type: boolean, default: false }
-        minTrustToPost: { type: integer, minimum: 0, maximum: 3, default: 0 }
+        minTrustToPost: { type: integer, minimum: 1, maximum: 6, default: 1 }
         isQa: { type: boolean, default: false }
         reason: { type: string, minLength: 3, maxLength: 500 }
     AdminBoardUpdateInput:
@@ -1301,7 +1301,7 @@ components:
         description: { type: string, maxLength: 500 }
         position: { type: integer, minimum: 0 }
         isLocked: { type: boolean }
-        minTrustToPost: { type: integer, minimum: 0, maximum: 3 }
+        minTrustToPost: { type: integer, minimum: 1, maximum: 6 }
         isQa: { type: boolean }
         reason: { type: string, minLength: 3, maxLength: 500 }
     AdminTagCreateInput:
@@ -1898,7 +1898,7 @@ components:
         avatarUrl: { type: string, nullable: true }
         bannerUrl: { type: string, nullable: true }
         role: { type: string, enum: [user, mod, admin] }
-        trustLevel: { type: integer, minimum: 0 }
+        trustLevel: { type: integer, minimum: 0, maximum: 6 }
         badges: { type: array, items: { $ref: "#/components/schemas/UserBadge" } }
         verifications:
           type: array
@@ -1981,6 +1981,79 @@ components:
         expectedVersion: { type: integer, minimum: 1 }
         weights: { $ref: "#/components/schemas/ActivityWeights" }
         reason: { type: string, minLength: 3, maxLength: 500 }
+    TrustProgress:
+      type: object
+      required: [trustLevel, teaName, qualifyingScore, nextLevel, nextThreshold, remainingScore, progressPercent, policyVersion, isMaxLevel, overrideActive, overrideReason]
+      properties:
+        trustLevel: { type: integer, minimum: 1, maximum: 6 }
+        teaName: { type: string }
+        qualifyingScore: { type: integer, minimum: 0 }
+        nextLevel: { type: integer, minimum: 2, maximum: 6, nullable: true }
+        nextThreshold: { type: integer, minimum: 1, nullable: true }
+        remainingScore: { type: integer, minimum: 0, nullable: true }
+        progressPercent: { type: integer, minimum: 0, maximum: 100 }
+        policyVersion: { type: integer, minimum: 1 }
+        isMaxLevel: { type: boolean }
+        overrideActive: { type: boolean }
+        overrideReason: { type: string, nullable: true }
+    TrustLevelPolicy:
+      type: object
+      required: [version, scorePolicyVersion, thresholdLevel2, thresholdLevel3, thresholdLevel4, thresholdLevel5, thresholdLevel6, likeDailyCap, reason, changedBy, createdAt]
+      properties:
+        version: { type: integer, minimum: 1 }
+        scorePolicyVersion: { type: integer, minimum: 1 }
+        thresholdLevel2: { type: integer, minimum: 1 }
+        thresholdLevel3: { type: integer, minimum: 1 }
+        thresholdLevel4: { type: integer, minimum: 1 }
+        thresholdLevel5: { type: integer, minimum: 1 }
+        thresholdLevel6: { type: integer, minimum: 1 }
+        likeDailyCap: { type: integer, minimum: 0, maximum: 100000 }
+        reason: { type: string }
+        changedBy: { type: string }
+        createdAt: { type: integer }
+    TrustLevelPolicyUpdateInput:
+      type: object
+      required: [expectedVersion, thresholdLevel2, thresholdLevel3, thresholdLevel4, thresholdLevel5, thresholdLevel6, likeDailyCap, reason]
+      properties:
+        expectedVersion: { type: integer, minimum: 1 }
+        thresholdLevel2: { type: integer, minimum: 1 }
+        thresholdLevel3: { type: integer, minimum: 1 }
+        thresholdLevel4: { type: integer, minimum: 1 }
+        thresholdLevel5: { type: integer, minimum: 1 }
+        thresholdLevel6: { type: integer, minimum: 1 }
+        likeDailyCap: { type: integer, minimum: 0, maximum: 100000 }
+        reason: { type: string, minLength: 3, maxLength: 500 }
+    TrustLevelAdjustInput:
+      type: object
+      required: [reason]
+      properties:
+        trustLevel: { type: integer, minimum: 1, maximum: 6, nullable: true }
+        clearOverride: { type: boolean, default: false }
+        reason: { type: string, minLength: 3, maxLength: 500 }
+    TrustLevelEvent:
+      type: object
+      required: [id, accountId, eventKind, fromLevel, toLevel, qualifyingScore, policyVersion, actorKind, actorAccountId, reason, governanceEventId, createdAt]
+      properties:
+        id: { type: string }
+        accountId: { type: string }
+        eventKind: { type: string, enum: [upgrade, demotion, manual_set, override_clear, backfill_initialized, registration] }
+        fromLevel: { type: integer, minimum: 0, maximum: 6 }
+        toLevel: { type: integer, minimum: 1, maximum: 6 }
+        qualifyingScore: { type: integer, minimum: 0 }
+        policyVersion: { type: integer, minimum: 1 }
+        actorKind: { type: string, enum: [system, account] }
+        actorAccountId: { type: string, nullable: true }
+        reason: { type: string, nullable: true }
+        governanceEventId: { type: string, nullable: true }
+        createdAt: { type: integer }
+    TrustLevelPolicyPage:
+      allOf:
+        - { $ref: "#/components/schemas/Page" }
+        - { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/TrustLevelPolicy" } } } }
+    TrustLevelEventPage:
+      allOf:
+        - { $ref: "#/components/schemas/Page" }
+        - { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/TrustLevelEvent" } } } }
     # ---- platform ----
     OneboxResult:
       type: object
@@ -2115,7 +2188,7 @@ components:
         avatarUrl: { type: string, nullable: true }
         role: { type: string, enum: [user, mod, admin] }
         status: { type: string, enum: [active, suspended, deactivated, deletion_requested, deleted, purged] }
-        trustLevel: { type: integer, minimum: 0 }
+        trustLevel: { type: integer, minimum: 0, maximum: 6 }
         lastActiveAt: { type: integer, nullable: true }
         createdAt: { type: integer }
     AdminLifecycleJob:
@@ -2893,6 +2966,14 @@ paths:
       responses:
         "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/ActivityCalendar" } } } }
         "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /me/trust-progress:
+    get:
+      tags: [activity]
+      summary: Current user's unified trust level progress
+      description: Returns the authoritative tea trust level, live qualifying score, next threshold, and override state.
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/TrustProgress" } } } }
         "401": { $ref: "#/components/responses/Unauthorized" }
   /me/drafts:
     get:
@@ -4084,6 +4165,35 @@ paths:
       summary: Activity scoring policy revision history
       parameters: [{ $ref: "#/components/parameters/Cursor" }, { $ref: "#/components/parameters/Limit" }]
       responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/ActivityPolicyPage" } } } }, "403": { $ref: "#/components/responses/Forbidden" } }
+  /admin/trust-policy:
+    get:
+      tags: [admin, activity]
+      summary: Current trust threshold policy
+      responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/TrustLevelPolicy" } } } }, "403": { $ref: "#/components/responses/Forbidden" } }
+    put:
+      tags: [admin, activity]
+      summary: Publish a new trust threshold policy revision
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/TrustLevelPolicyUpdateInput" } } } }
+      responses: { "200": { description: updated, content: { application/json: { schema: { $ref: "#/components/schemas/TrustLevelPolicy" } } } }, "403": { $ref: "#/components/responses/Forbidden" }, "409": { $ref: "#/components/responses/Conflict" } }
+  /admin/trust-policy/history:
+    get:
+      tags: [admin, activity]
+      summary: Trust threshold policy revision history
+      parameters: [{ $ref: "#/components/parameters/Cursor" }, { $ref: "#/components/parameters/Limit" }]
+      responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/TrustLevelPolicyPage" } } } }, "403": { $ref: "#/components/responses/Forbidden" } }
+  /admin/users/{id}/trust-level:
+    patch:
+      tags: [admin, activity]
+      summary: Manually set or clear a registered account trust override
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/TrustLevelAdjustInput" } } } }
+      responses: { "200": { description: updated, content: { application/json: { schema: { $ref: "#/components/schemas/TrustProgress" } } } }, "403": { $ref: "#/components/responses/Forbidden" }, "404": { $ref: "#/components/responses/NotFound" } }
+  /admin/users/{id}/trust-events:
+    get:
+      tags: [admin, activity]
+      summary: Append-only trust transition history for one account
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }, { $ref: "#/components/parameters/Cursor" }, { $ref: "#/components/parameters/Limit" }]
+      responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/TrustLevelEventPage" } } } }, "403": { $ref: "#/components/responses/Forbidden" }, "404": { $ref: "#/components/responses/NotFound" } }
   /admin/users:
     get:
       tags: [admin]

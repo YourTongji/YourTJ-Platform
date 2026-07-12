@@ -94,6 +94,11 @@ import type {
   SettingUpdateInput,
   Tag,
   Task,
+  TrustProgress,
+  TrustLevelPolicy,
+  TrustLevelPolicyUpdateInput,
+  TrustLevelAdjustInput,
+  TrustLevelEvent,
   ThreadDetailWithPoll,
   ThreadFeed,
   TimeSlot,
@@ -1269,6 +1274,37 @@ export const api = {
 
   adminActivityPolicyHistory(cursor?: string | null) {
     return apiRequest<Page<ActivityPolicy>>("/admin/activity-policy/history", {
+      query: { cursor, limit: 30 },
+    });
+  },
+
+  myTrustProgress() {
+    return apiRequest<TrustProgress>("/me/trust-progress");
+  },
+
+  adminTrustPolicy() {
+    return apiRequest<TrustLevelPolicy>("/admin/trust-policy");
+  },
+
+  updateAdminTrustPolicy(body: TrustLevelPolicyUpdateInput) {
+    return apiRequest<TrustLevelPolicy>("/admin/trust-policy", { method: "PUT", body });
+  },
+
+  adminTrustPolicyHistory(cursor?: string | null) {
+    return apiRequest<Page<TrustLevelPolicy>>("/admin/trust-policy/history", {
+      query: { cursor, limit: 30 },
+    });
+  },
+
+  adjustAdminUserTrustLevel(id: string, body: TrustLevelAdjustInput) {
+    return apiRequest<TrustProgress>(`/admin/users/${encodeURIComponent(id)}/trust-level`, {
+      method: "PATCH",
+      body,
+    });
+  },
+
+  adminUserTrustEvents(id: string, cursor?: string | null) {
+    return apiRequest<Page<TrustLevelEvent>>(`/admin/users/${encodeURIComponent(id)}/trust-events`, {
       query: { cursor, limit: 30 },
     });
   },

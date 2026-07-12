@@ -1,12 +1,15 @@
-use axum::extract::{Query, State};
+use axum::extract::{Path, Query, State};
 use axum::http::HeaderMap;
 use axum::Json;
 use chrono::{Duration, NaiveDate};
 use serde::Deserialize;
 use shared::{AppError, AppResult, AppState, Page};
 
-use crate::dto::{ActivityCalendarDto, ActivityPolicyDto, ActivityPolicyUpdateInput};
-use crate::repo;
+use crate::dto::{
+    ActivityCalendarDto, ActivityPolicyDto, ActivityPolicyUpdateInput, TrustLevelAdjustInput,
+    TrustLevelEventDto, TrustLevelPolicyDto, TrustLevelPolicyUpdateInput, TrustProgressDto,
+};
+use crate::{repo, trust};
 
 const DEFAULT_ACTIVITY_DAYS: i64 = 365;
 const MAX_ACTIVITY_DAYS: i64 = 371;
@@ -88,6 +91,88 @@ pub(crate) async fn get_activity_policy_history(
         })
         .transpose()?;
     Ok(Json(repo::policy_history(&state.db, cursor, query.limit).await?))
+}
+
+pub(crate) async fn get_my_trust_progress(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> AppResult<Json<TrustProgressDto>> {
+    let auth = authenticate(&state, &headers).await?;
+    Ok(Json(trust::trust_progress(&state.db, auth.id).await?))
+}
+
+pub(crate) async fn get_trust_policy(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> AppResult<Json<TrustLevelPolicyDto>> {
+    let auth = authenticate(&state, &headers).await?;
+    auth.require_capability(shared::auth::Capability::ManageActivity)
+        .map_err(|_| AppError::Forbidden)?;
+    Ok(Json(trust::current_policy(&state.db).await?))
+}
+
+pub(crate) async fn update_trust_policy(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(input): Json<TrustLevelPolicyUpdateInput>,
+) -> AppResult<Json<TrustLevelPolicyDto>> {
+    let auth = authenticate(&state, &headers).await?;
+    auth.require_capability(shared::auth::Capability::ManageActivity)
+        .map_err(|_| AppError::Forbidden)?;
+    Ok(Json(trust::append_policy(&state.db, &input, auth.id, &auth.role).await?))
+}
+
+pub(crate) async fn get_trust_policy_history(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<PolicyHistoryQuery>,
+) -> AppResult<Json<Page<TrustLevelPolicyDto>>> {
+    let auth = authenticate(&state, &headers).await?;
+    auth.require_capability(shared::auth::Capability::ManageActivity)
+        .map_err(|_| AppError::Forbidden)?;
+    let cursor = query
+        .cursor
+        .as_deref()
+        .map(|value| {
+            value.parse::<i64>().map_err(|_| AppError::BadRequest("invalid cursor".into()))
+        })
+        .transpose()?;
+    Ok(Json(trust::policy_history(&state.db, cursor, query.limit).await?))
+}
+
+pub(crate) async fn adjust_user_trust_level(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(input): Json<TrustLevelAdjustInput>,
+) -> AppResult<Json<TrustProgressDto>> {
+    let auth = authenticate(&state, &headers).await?;
+    auth.require_capability(shared::auth::Capability::ManageActivity)
+        .map_err(|_| AppError::Forbidden)?;
+    let account_id: i64 = id.parse().map_err(|_| AppError::NotFound)?;
+    Ok(Json(
+        trust::adjust_trust_level(&state.db, account_id, &input, auth.id, &auth.role).await?,
+    ))
+}
+
+pub(crate) async fn get_user_trust_events(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Query(query): Query<PolicyHistoryQuery>,
+) -> AppResult<Json<Page<TrustLevelEventDto>>> {
+    let auth = authenticate(&state, &headers).await?;
+    auth.require_capability(shared::auth::Capability::ManageActivity)
+        .map_err(|_| AppError::Forbidden)?;
+    let account_id: i64 = id.parse().map_err(|_| AppError::NotFound)?;
+    let cursor = query
+        .cursor
+        .as_deref()
+        .map(|value| {
+            value.parse::<i64>().map_err(|_| AppError::BadRequest("invalid cursor".into()))
+        })
+        .transpose()?;
+    Ok(Json(trust::event_history(&state.db, account_id, cursor, query.limit).await?))
 }
 
 async fn authenticate(state: &AppState, headers: &HeaderMap) -> AppResult<shared::AuthAccount> {

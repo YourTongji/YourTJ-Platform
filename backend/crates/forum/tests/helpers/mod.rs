@@ -449,6 +449,21 @@ async fn run_migrations(pool: &PgPool) {
             .expect("migration 0057 failed");
     }
 
+
+    let has_trust_levels: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM information_schema.tables \
+         WHERE table_schema = 'activity' AND table_name = 'trust_level_policies')",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or(false);
+    if !has_trust_levels {
+        sqlx::raw_sql(include_str!("../../../../migrations/0059_activity_trust_levels.sql"))
+            .execute(pool)
+            .await
+            .expect("migration 0059 failed");
+    }
+
     let database_name: String = sqlx::query_scalar("SELECT current_database()")
         .fetch_one(pool)
         .await
@@ -475,6 +490,9 @@ async fn run_migrations(pool: &PgPool) {
     sqlx::query("DELETE FROM identity.sessions").execute(pool).await.ok();
     sqlx::query("DELETE FROM identity.email_codes").execute(pool).await.ok();
     sqlx::query("DELETE FROM identity.account_keys").execute(pool).await.ok();
+    sqlx::query("DELETE FROM activity.trust_level_events").execute(pool).await.ok();
+    sqlx::query("DELETE FROM activity.account_trust_progress").execute(pool).await.ok();
+    sqlx::query("DELETE FROM activity.account_totals").execute(pool).await.ok();
     retire_test_accounts(pool).await;
 
     // Seed a default board with a deterministic id. `forum.boards.id` is

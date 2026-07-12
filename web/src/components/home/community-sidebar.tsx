@@ -6,7 +6,7 @@ import { TeaBadge } from "@/components/common/tea-badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
-import type { Account, ActivityCalendar, Announcement, ThreadFeed } from "@/lib/api/types";
+import type { Account, ActivityCalendar, Announcement, ThreadFeed, TrustProgress } from "@/lib/api/types";
 import { formatDate, formatNumber } from "@/lib/format";
 
 interface ActivityState {
@@ -16,9 +16,21 @@ interface ActivityState {
   onRetry: () => void;
 }
 
-function MissionCard({ account, activity }: { account: Account | null; activity: ActivityState }) {
-  const level = Math.max(0, Math.min(account?.trustLevel ?? 0, 6));
-  const progress = (level / 6) * 100;
+function MissionCard({
+  account,
+  activity,
+  trustProgress,
+}: {
+  account: Account | null;
+  activity: ActivityState;
+  trustProgress: TrustProgress | null;
+}) {
+  const level = trustProgress?.trustLevel ?? account?.trustLevel ?? 0;
+  const progressPercent = trustProgress?.progressPercent ?? 0;
+  const isMaxLevel = trustProgress?.isMaxLevel ?? false;
+  const remainingScore = trustProgress?.remainingScore;
+  const nextLevel = trustProgress?.nextLevel;
+  const overrideActive = trustProgress?.overrideActive ?? false;
 
   return (
     <Card className="min-h-[452px] rounded-xl">
@@ -31,7 +43,7 @@ function MissionCard({ account, activity }: { account: Account | null; activity:
         </Button>
 
         <div className="mt-4 flex items-center justify-between">
-          <p className="text-sm font-semibold">等级任务</p>
+          <p className="text-sm font-semibold">信任等级</p>
           <TeaBadge level={level} />
         </div>
 
@@ -42,16 +54,30 @@ function MissionCard({ account, activity }: { account: Account | null; activity:
         </div>
 
         <div className="mt-3 flex items-center justify-between gap-2 text-[10px] text-muted-foreground">
-          <span>距离 Lv.{Math.min(level + 1, 6)} 进度</span>
-          <span className="font-medium text-primary">{level} / 6</span>
+          {isMaxLevel ? (
+            <span>已达满级 · {trustProgress?.teaName ?? ""}</span>
+          ) : remainingScore != null && nextLevel != null ? (
+            <span>距离 Lv.{nextLevel} 还需 {remainingScore} 分</span>
+          ) : (
+            <span>加载等级进度中</span>
+          )}
+          <span className="font-medium text-primary">
+            {trustProgress ? `${trustProgress.qualifyingScore} 分` : `${level} / 6`}
+          </span>
         </div>
-        <Progress className="mt-2 h-1.5" value={progress} />
+        <Progress className="mt-2 h-1.5" value={progressPercent} />
 
         <Button asChild variant="outline" size="sm" className="mt-4 w-full bg-transparent">
           <Link to={account?.handle ? `/profile/${account.handle}` : "/login"}>
             {account ? "查看个人成长" : "了解社区等级"}
           </Link>
         </Button>
+
+        {overrideActive && trustProgress?.overrideReason ? (
+          <p className="mt-2 text-[10px] text-amber-600 dark:text-amber-400">
+            等级已锁定：{trustProgress.overrideReason}
+          </p>
+        ) : null}
 
         <div className="my-5 border-t border-border/70" />
 
@@ -125,15 +151,17 @@ export function CommunitySidebar({
   activity,
   threads,
   announcements,
+  trustProgress,
 }: {
   account: Account | null;
   activity: ActivityState;
   threads: ThreadFeed[];
   announcements: Announcement[];
+  trustProgress: TrustProgress | null;
 }) {
   return (
     <aside className="space-y-6">
-      <MissionCard account={account} activity={activity} />
+      <MissionCard account={account} activity={activity} trustProgress={trustProgress} />
       <HotTopicsCard threads={threads} />
       <NoticeCard announcements={announcements} />
     </aside>

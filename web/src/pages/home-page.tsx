@@ -33,6 +33,12 @@ export function HomePage() {
     queryFn: () => api.myActivity(activityRange.from, activityRange.to),
     enabled: Boolean(account),
   });
+  const trustProgress = useQuery({
+    queryKey: ["home", "trust-progress", account?.id],
+    queryFn: api.myTrustProgress,
+    enabled: Boolean(account),
+    staleTime: 5 * 60 * 1000,
+  });
 
   const threadItems = threads.data?.pages.flatMap((page) => page.items ?? []) ?? [];
 
@@ -75,6 +81,7 @@ export function HomePage() {
           }}
           threads={threadItems}
           announcements={announcements.data ?? []}
+          trustProgress={trustProgress.data ?? null}
         />
       </div>
     </div>

@@ -62,36 +62,37 @@
   只读视图，但告警/SLO 和受审批 projection 重建仍缺。
 - Staff WebAuthn/MFA、高风险双人确认和尚未交付的 PII 操作仍缺完整安全流程。
 
-## Trust level 与当前自动规则
+## Trust level — 统一信任等级 1–6
 
-Trust level 是反滥用/权限信号，不是每日活跃度或积分。当前写入限制为：
+信任等级现在是 Lv.1–6 的统一尺度，由 `activity` domain 基于 lifetime 有效活动分数自动评定。
+Lv.0 仅供未注册访客 UI，注册账号最低 Lv.1。详细阈值、策略版本化、自动升/降级逻辑
+与审计见 `activity-scoring.md` 的「统一信任等级与活动分数」一节。
 
-| 行为 | TL0 | TL1+ |
-|---|---:|---:|
-| 发主题 | 2/day | 5/minute |
-| 发评论 | 5/day | 20/minute |
-| 投票 | 30/minute | 60/minute |
-| 举报 | 5/day | 15/day |
+### 发帖与举报权重
 
-举报权重当前为 TL0 `0.5`、TL1 `1.0`、TL2 `1.5`、TL3 `2.0`；同一内容 open report 权重达到
-`3.0` 自动隐藏。作者在 24 小时内出现两次内容自动隐藏时，系统尝试追加 24 小时 silence；
-identity 会跳过 mod/admin silence，但普通用户举报仍能达到阈值并自动隐藏 staff 作者内容。
-Staff 不能作为普通 reporter，而应走理由化管理动作。自动措施保留 provenance 和通知。
+| 等级 | 举报权重 |
+|---|---:|
+| Lv.1（绿茶）| 0.5 |
+| Lv.2（白茶）| 1.0 |
+| Lv.3（黄茶）| 1.5 |
+| Lv.4–6（青/红/黑茶）| 2.0 |
 
-当前自动迁移每次扫描对每个 active account 最多改变一级，降级优先于升级：
+同一内容 open report 总权重达到 `3.0` 自动隐藏。作者在 24 小时内两次内容
+自动隐藏时，系统尝试追加 24 小时 silence。identity 跳过 mod/admin silence，
+但普通用户举报仍可达到阈值并自动隐藏 staff 作者内容。Staff 不作为普通 reporter，
+而应走理由化管理动作。自动措施保留 provenance 和通知。
 
-- TL0→TL1：注册至少 2 天，主题+评论至少 3，读过至少 10 个主题。
-- TL1→TL2：注册至少 15 天，累计论坛 active day 至少 8，获赞至少 10，且没有被裁定成立的举报。
-- TL2→TL3：注册至少 60 天，最近 60 天 active day 至少 20，获赞至少 50，成功举报至少 3。
-- TL2/TL3 有被裁定成立的举报时，本次扫描只降一级。
+### Board 权限
 
-Active day 由主题、评论、vote 或 thread read 的 UTC 日期事实计算。Board create-thread 在限流消费前
-检查 `is_locked/min_trust_to_post`，并在写事务锁定 board 后再次检查，避免策略并发修改时穿透。
-`moderation.content` 是唯一 staff exception：只绕过 board lock/min-trust 两个 gate，仍必须通过 active
-account、sanction、内容 policy 和 rate limit。该例外不是通用发帖免检，也不授予 `community.manage`。
+Board create-thread 在限流消费前检查 `is_locked/min_trust_to_post`，并在写事务锁定
+board 后再次检查，避免策略并发修改时穿透。`moderation.content` 是唯一 staff
+exception：只绕过 board lock/min-trust 两个 gate，仍必须通过 active account、sanction、
+内容 policy 和 rate limit。该例外不是通用发帖免检，也不授予 `community.manage`。
 
-剩余 `Partial/P0` 是 staff 内容达到普通举报阈值时自动隐藏还是升级独立复核队列。Trust 阈值目前
-仍是代码 policy；若开放后台配置，必须先版本化、预览影响并审计，不能复用 generic string setting。
+迁移 0059 将旧 `min_trust_to_post` 值 +1 以适配统一量表（旧 TL1 → 新 Lv.2）。
+信任阈值现在由 `activity.trust_level_policies` 版本化管理，不在代码中硬编码；
+管理员可通过后台 `PUT /api/v2/admin/trust-policy` 修改阈值、like 日上限和 reason，
+并查看版本历史。
 
 ## 治理原则
 

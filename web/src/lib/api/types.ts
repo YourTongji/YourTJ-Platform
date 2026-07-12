@@ -3,6 +3,11 @@ import type { components } from "./schema";
 export type Schema = components["schemas"];
 
 export type Account = Schema["Account"] & { trustLevel?: number };
+export type TrustProgress = Schema["TrustProgress"];
+export type TrustLevelPolicy = Schema["TrustLevelPolicy"];
+export type TrustLevelPolicyUpdateInput = Schema["TrustLevelPolicyUpdateInput"];
+export type TrustLevelAdjustInput = Schema["TrustLevelAdjustInput"];
+export type TrustLevelEvent = Schema["TrustLevelEvent"];
 export type AccountLifecycleState = Schema["AccountLifecycleState"];
 export type AccountLifecycle = Schema["AccountLifecycle"];
 export type AccountLifecycleMutation = Schema["AccountLifecycleMutation"];

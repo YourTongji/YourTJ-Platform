@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Ban, Clock3, KeyRound, Search, UserPlus, VolumeX } from "lucide-react";
+import { Ban, Clock3, KeyRound, Search, ShieldCheck, UserPlus, VolumeX } from "lucide-react";
 import * as React from "react";
 import { toast } from "sonner";
 
@@ -11,6 +11,7 @@ import {
 } from "@/components/admin/admin-primitives";
 import { ADMIN_CAPABILITIES, hasCapability } from "@/components/admin/capabilities";
 import { RecentAuthDialog } from "@/components/auth/recent-auth-dialog";
+import { TeaBadge } from "@/components/common/tea-badge";
 import { EmptyState, ErrorState, LoadingState } from "@/components/common/states";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -221,6 +222,111 @@ function SanctionsDialog({
   );
 }
 
+function TrustLevelDialog({
+  user,
+  canAdjust,
+  onClose,
+}: {
+  user: AdminUser | null;
+  canAdjust: boolean;
+  onClose: () => void;
+}) {
+  const queryClient = useQueryClient();
+  const [newLevel, setNewLevel] = React.useState(user?.trustLevel?.toString() ?? "1");
+  const [clear, setClear] = React.useState(false);
+  const [reason, setReason] = React.useState("");
+
+  React.useEffect(() => {
+    setNewLevel(user?.trustLevel?.toString() ?? "1");
+    setClear(false);
+    setReason("");
+  }, [user?.id, user?.trustLevel]);
+
+  const adjust = useMutation({
+    mutationFn: () =>
+      api.adjustAdminUserTrustLevel(user?.id ?? "", {
+        trustLevel: clear ? null : Number(newLevel),
+        clearOverride: clear,
+        reason: reason.trim(),
+      }),
+    onSuccess: async () => {
+      toast.success("信任等级已调整");
+      onClose();
+      await queryClient.invalidateQueries({ queryKey: ["admin", "users"] });
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : "调整失败"),
+  });
+
+  if (!user) return null;
+
+  return (
+    <Dialog open={Boolean(user)} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>{user.handle} 的信任等级</DialogTitle>
+          <DialogDescription>
+            当前：
+            <TeaBadge level={user.trustLevel} />
+            {canAdjust ? "——手动设置将覆盖等级自动化计算，直到手动清除。" : "——你没有权限手动调整信任等级。"}
+          </DialogDescription>
+        </DialogHeader>
+        {canAdjust ? (
+          <div className="space-y-4">
+            <div className="flex items-center gap-4">
+              <div className="flex-1 space-y-2">
+                <Label htmlFor="trust-level-select">目标等级</Label>
+                <Select value={newLevel} onValueChange={setNewLevel} disabled={clear}>
+                  <SelectTrigger id="trust-level-select"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {[1, 2, 3, 4, 5, 6].map((lvl) => (
+                      <SelectItem key={lvl} value={lvl.toString()}>
+                        Lv.{lvl}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <Label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={clear}
+                onChange={(event) => setClear(event.target.checked)}
+                className="rounded"
+              />
+              清除手动覆盖，恢复自动化等级
+            </Label>
+            <div className="space-y-2">
+              <Label htmlFor="trust-adjust-reason">原因</Label>
+              <Textarea
+                id="trust-adjust-reason"
+                value={reason}
+                onChange={(event) => setReason(event.target.value)}
+                maxLength={500}
+                placeholder="说明调整原因，该内容将进入审计记录"
+              />
+            </div>
+          </div>
+        ) : null}
+        <DialogFooter>
+          <Button type="button" variant="outline" onClick={onClose} disabled={adjust.isPending}>
+            关闭
+          </Button>
+          {canAdjust ? (
+            <Button
+              type="button"
+              onClick={() => adjust.mutate()}
+              disabled={reason.trim().length < 3 || adjust.isPending}
+            >
+              {adjust.isPending ? "正在调整…" : "确认调整"}
+            </Button>
+          ) : null}
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export function UsersPanel({ capabilities, initialQuery = "" }: { capabilities: Set<string>; initialQuery?: string }) {
   const { account } = useAuth();
   const queryClient = useQueryClient();
@@ -233,6 +339,7 @@ export function UsersPanel({ capabilities, initialQuery = "" }: { capabilities: 
   const [action, setAction] = React.useState<UserAction | null>(null);
   const [endsAt, setEndsAt] = React.useState("");
   const [sanctionsUser, setSanctionsUser] = React.useState<AdminUser | null>(null);
+  const [trustUser, setTrustUser] = React.useState<AdminUser | null>(null);
   const [recentAuthRetry, setRecentAuthRetry] = React.useState<(() => void) | null>(null);
   const cursor = cursorStack.at(-1);
   const canSearchUsers = hasCapability(capabilities, ADMIN_CAPABILITIES.searchUsers);
@@ -240,6 +347,7 @@ export function UsersPanel({ capabilities, initialQuery = "" }: { capabilities: 
   const canChangeRoles = hasCapability(capabilities, ADMIN_CAPABILITIES.changeRoles);
   const canSilence = hasCapability(capabilities, ADMIN_CAPABILITIES.silenceUsers);
   const canSuspend = hasCapability(capabilities, ADMIN_CAPABILITIES.suspendUsers);
+  const canManageActivity = hasCapability(capabilities, ADMIN_CAPABILITIES.manageActivity);
   const sanctionTimeBounds = React.useMemo(() => {
     const now = Date.now();
     return {
@@ -392,6 +500,7 @@ export function UsersPanel({ capabilities, initialQuery = "" }: { capabilities: 
           {users.data?.items?.map((user) => {
             const isSelf = user.id === account?.id;
             const canActOnUser = canManageTarget(account, user);
+            const canAdjustTrust = canActOnUser && canManageActivity;
             return (
               <Card key={user.id} className="rounded-xl">
                 <CardContent className="flex flex-col gap-4 p-4 xl:flex-row xl:items-center">
@@ -410,7 +519,7 @@ export function UsersPanel({ capabilities, initialQuery = "" }: { capabilities: 
                         ) : null}
                       </div>
                       <p className="mt-1 text-xs text-muted-foreground">
-                        ID {user.id} · TL {user.trustLevel} · 最近活跃 {user.lastActiveAt ? formatUnixTime(user.lastActiveAt) : "暂无"}
+                        ID {user.id} · <TeaBadge level={user.trustLevel} /> · 最近活跃 {user.lastActiveAt ? formatUnixTime(user.lastActiveAt) : "暂无"}
                       </p>
                     </div>
                   </div>
@@ -418,6 +527,11 @@ export function UsersPanel({ capabilities, initialQuery = "" }: { capabilities: 
                     <Button type="button" variant="outline" size="sm" onClick={() => setSanctionsUser(user)}>
                       <Clock3 className="size-4" />制裁记录
                     </Button>
+                    {canAdjustTrust ? (
+                      <Button type="button" variant="outline" size="sm" onClick={() => setTrustUser(user)}>
+                        <ShieldCheck className="size-4" />调整等级
+                      </Button>
+                    ) : null}
                     {canActOnUser && canChangeRoles ? (
                       <Select value={user.role} onValueChange={(value) => setAction({ kind: "role", user, role: value as "user" | "mod" })}>
                         <SelectTrigger className="h-8 w-28 text-xs" aria-label={`修改 ${user.handle} 的角色`}><SelectValue /></SelectTrigger>
@@ -463,6 +577,11 @@ export function UsersPanel({ capabilities, initialQuery = "" }: { capabilities: 
         canMutateUser={canManageTarget(account, sanctionsUser)}
         onClose={() => setSanctionsUser(null)}
         onRecentAuthRequired={(retry) => setRecentAuthRetry(() => retry)}
+      />
+      <TrustLevelDialog
+        user={trustUser}
+        canAdjust={canManageTarget(account, trustUser) && canManageActivity}
+        onClose={() => setTrustUser(null)}
       />
       <ReasonDialog
         open={Boolean(action)}

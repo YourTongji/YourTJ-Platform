@@ -1322,6 +1322,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/me/trust-progress": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Current user's unified trust level progress
+         * @description Returns the authoritative tea trust level, live qualifying score, next threshold, and override state.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["TrustProgress"];
+                    };
+                };
+                401: components["responses"]["Unauthorized"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/me/drafts": {
         parameters: {
             query?: never;
@@ -7246,6 +7286,198 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/trust-policy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Current trust threshold policy */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["TrustLevelPolicy"];
+                    };
+                };
+                403: components["responses"]["Forbidden"];
+            };
+        };
+        /** Publish a new trust threshold policy revision */
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["TrustLevelPolicyUpdateInput"];
+                };
+            };
+            responses: {
+                /** @description updated */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["TrustLevelPolicy"];
+                    };
+                };
+                403: components["responses"]["Forbidden"];
+                409: components["responses"]["Conflict"];
+            };
+        };
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/trust-policy/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Trust threshold policy revision history */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description Opaque pagination cursor */
+                    cursor?: components["parameters"]["Cursor"];
+                    limit?: components["parameters"]["Limit"];
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["TrustLevelPolicyPage"];
+                    };
+                };
+                403: components["responses"]["Forbidden"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/users/{id}/trust-level": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Manually set or clear a registered account trust override */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["TrustLevelAdjustInput"];
+                };
+            };
+            responses: {
+                /** @description updated */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["TrustProgress"];
+                    };
+                };
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+            };
+        };
+        trace?: never;
+    };
+    "/admin/users/{id}/trust-events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Append-only trust transition history for one account */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description Opaque pagination cursor */
+                    cursor?: components["parameters"]["Cursor"];
+                    limit?: components["parameters"]["Limit"];
+                };
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["TrustLevelEventPage"];
+                    };
+                };
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/users": {
         parameters: {
             query?: never;
@@ -10375,6 +10607,7 @@ export interface components {
             /** @enum {string} */
             role: "user" | "mod" | "admin";
             capabilities: string[];
+            /** @description Unified tea trust level. 0 is visitor UI only; registered accounts are 1–6. */
             trustLevel: number;
             /** @description True until the current terms version and required profile/privacy choices are accepted. */
             onboardingRequired: boolean;
@@ -11415,7 +11648,7 @@ export interface components {
             position: number;
             /** @default false */
             isLocked: boolean;
-            /** @default 0 */
+            /** @default 1 */
             minTrustToPost: number;
             /** @default false */
             isQa: boolean;
@@ -11973,6 +12206,70 @@ export interface components {
             expectedVersion: number;
             weights: components["schemas"]["ActivityWeights"];
             reason: string;
+        };
+        TrustProgress: {
+            trustLevel: number;
+            teaName: string;
+            qualifyingScore: number;
+            nextLevel: number | null;
+            nextThreshold: number | null;
+            remainingScore: number | null;
+            progressPercent: number;
+            policyVersion: number;
+            isMaxLevel: boolean;
+            overrideActive: boolean;
+            overrideReason: string | null;
+        };
+        TrustLevelPolicy: {
+            version: number;
+            scorePolicyVersion: number;
+            thresholdLevel2: number;
+            thresholdLevel3: number;
+            thresholdLevel4: number;
+            thresholdLevel5: number;
+            thresholdLevel6: number;
+            likeDailyCap: number;
+            reason: string;
+            changedBy: string;
+            createdAt: number;
+        };
+        TrustLevelPolicyUpdateInput: {
+            expectedVersion: number;
+            thresholdLevel2: number;
+            thresholdLevel3: number;
+            thresholdLevel4: number;
+            thresholdLevel5: number;
+            thresholdLevel6: number;
+            likeDailyCap: number;
+            reason: string;
+        };
+        TrustLevelAdjustInput: {
+            trustLevel?: number | null;
+            /** @default false */
+            clearOverride: boolean;
+            reason: string;
+        };
+        TrustLevelEvent: {
+            id: string;
+            accountId: string;
+            /** @enum {string} */
+            eventKind: "upgrade" | "demotion" | "manual_set" | "override_clear" | "backfill_initialized" | "registration";
+            fromLevel: number;
+            toLevel: number;
+            qualifyingScore: number;
+            policyVersion: number;
+            /** @enum {string} */
+            actorKind: "system" | "account";
+            actorAccountId: string | null;
+            reason: string | null;
+            governanceEventId: string | null;
+            createdAt: number;
+        };
+        TrustLevelPolicyPage: components["schemas"]["Page"] & {
+            items?: components["schemas"]["TrustLevelPolicy"][];
+        };
+        TrustLevelEventPage: components["schemas"]["Page"] & {
+            items?: components["schemas"]["TrustLevelEvent"][];
         };
         OneboxResult: {
             /**

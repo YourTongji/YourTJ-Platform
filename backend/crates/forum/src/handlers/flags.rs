@@ -77,25 +77,18 @@ pub async fn flag_post(
         return Err(AppError::Forbidden);
     }
     let trust_level = crate::trust_levels::get_trust_level(&state.db, auth.id).await?;
-    let (bucket, capacity) = if trust_level == 0 { ("flag_tl0", 5) } else { ("flag", 15) };
     shared::ratelimit::check_token_bucket(
         state.redis.as_ref(),
-        bucket,
+        "flag",
         &auth.id.to_string(),
-        capacity,
+        15,
         86_400,
     )
     .await?;
 
     let post_id: i64 = id.parse().map_err(|_| AppError::NotFound)?;
     let (reason, note, target_type) = validate_input(&body)?;
-    let weight = match trust_level {
-        0 => 0.5,
-        1 => 1.0,
-        2 => 1.5,
-        3 => 2.0,
-        _ => 1.0,
-    };
+    let weight = crate::trust_levels::flag_weight(trust_level);
 
     let mut tx = state.db.begin().await?;
     let outcome =

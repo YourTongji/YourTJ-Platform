@@ -190,6 +190,13 @@ pub async fn resolve_flag(
                 "你的社区内容在举报复核后被软移除，可在申诉中心查看并申请复核。",
             )
             .await?;
+            activity::trust::apply_governance_demotion_tx(
+                &mut tx,
+                author_id,
+                governance_event_id,
+                "forum flag upheld",
+            )
+            .await?;
         }
     }
     tx.commit().await?;

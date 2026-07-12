@@ -71,6 +71,7 @@ pub async fn activate_contribution(
     .await?;
 
     increment_daily_count(connection, account_id, activity_date, kind).await?;
+    crate::trust::increment_totals_tx(connection, account_id, kind).await?;
     Ok(true)
 }
 
@@ -110,6 +111,7 @@ pub async fn deactivate_contribution(
 
     decrement_daily_count(connection, active_event.account_id, active_event.activity_date, kind)
         .await?;
+    crate::trust::decrement_totals_tx(connection, active_event.account_id, kind).await?;
     Ok(true)
 }
 
