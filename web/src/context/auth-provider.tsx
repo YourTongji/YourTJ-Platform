@@ -25,8 +25,11 @@ interface AuthContextValue {
   verifyEmail: (input: {
     email: string;
     code: string;
-    purpose: EmailCodePurpose;
-    handle?: string;
+  }) => Promise<void>;
+  register: (input: {
+    email: string;
+    code: string;
+    handle: string;
     password?: string;
   }) => Promise<void>;
   loginWithPassword: (input: { email: string; password: string }) => Promise<void>;
@@ -120,6 +123,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         activeAccountId.current = tokens.account.id;
         setAccount(tokens.account);
         toast.success("已登录 YourTJ");
+      },
+      register: async (input) => {
+        const tokens = await api.register(input);
+        await clearPrincipalQueries();
+        writeAuth(tokens);
+        activeAccountId.current = tokens.account.id;
+        setAccount(tokens.account);
+        toast.success("注册成功");
       },
       loginWithPassword: async (input) => {
         const tokens = await api.passwordLogin(input);

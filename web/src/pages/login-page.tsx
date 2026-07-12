@@ -128,17 +128,14 @@ export function LoginPage() {
     mutationFn: () => verifyEmail({
       email: campusEmail(codeEmail),
       code: code.trim(),
-      purpose: "login",
-      password: setPasswordWithCode ? codePassword : undefined,
     }),
     onSuccess: () => navigate(destination),
     onError: (error) => toast.error(error instanceof Error ? error.message : "登录失败"),
   });
   const register = useMutation({
-    mutationFn: () => verifyEmail({
+    mutationFn: () => api.register({
       email: campusEmail(registrationEmail),
       code: registrationCode.trim(),
-      purpose: "registration",
       handle: handle.trim(),
       password: registrationPassword || undefined,
     }),

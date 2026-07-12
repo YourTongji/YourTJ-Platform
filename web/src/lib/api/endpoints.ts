@@ -151,11 +151,21 @@ export const api = {
   verifyEmail(input: {
     email: string;
     code: string;
-    purpose?: EmailCodePurpose;
-    handle?: string;
-    password?: string;
   }) {
     return apiRequest<AuthTokens>("/auth/email/verify", {
+      method: "POST",
+      body: input,
+      auth: false,
+    });
+  },
+
+  register(input: {
+    email: string;
+    code: string;
+    handle: string;
+    password?: string;
+  }) {
+    return apiRequest<AuthTokens>("/auth/register", {
       method: "POST",
       body: input,
       auth: false,
