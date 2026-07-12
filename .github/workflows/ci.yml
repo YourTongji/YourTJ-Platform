@@ -22,6 +22,10 @@ jobs:
           fetch-depth: 0
       - name: validate documentation
         run: python3 scripts/check_docs.py
+      - name: validate deployment tooling
+        run: |
+          shellcheck ops/deploy/deploy-main.sh
+          python3 -m unittest discover -s ops/deploy/tests
       - name: validate PR documentation impact
         if: github.event_name == 'pull_request'
         env:

@@ -7,16 +7,20 @@ on:
       - "web/**"
       - "backend/**"
       - "contract/openapi.yaml"
+      - "ops/deploy/**"
       - ".github/workflows/deploy-main.yml"
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 concurrency:
   group: deploy-main
   cancel-in-progress: true
 
 jobs:
-  # ── Build backend Docker image ──
   backend:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -31,15 +35,16 @@ jobs:
           tags: yourtj-api:main
           cache-from: type=gha,scope=backend-main
           cache-to: type=gha,scope=backend-main,mode=max
-      - run: docker save yourtj-api:main -o /tmp/api-image.tar
+      - name: export backend image
+        run: docker save yourtj-api:main -o /tmp/api-image.tar
       - uses: actions/upload-artifact@v4
         with:
           name: api-image-main
           path: /tmp/api-image.tar
           retention-days: 1
 
-  # ── Build frontend ──
   frontend:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     defaults:
@@ -66,12 +71,14 @@ jobs:
           path: web/dist
           retention-days: 1
 
-  # ── Deploy to test server ──
   deploy:
+    if: github.ref == 'refs/heads/main'
     needs: [backend, frontend]
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
+    environment: main-staging
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           name: api-image-main
@@ -92,31 +99,89 @@ jobs:
             Port ${{ secrets.PREVIEW_PORT }}
             User ${{ secrets.PREVIEW_USER }}
             IdentityFile ~/.ssh/preview_key
-            StrictHostKeyChecking no
-            UserKnownHostsFile /dev/null
+            StrictHostKeyChecking accept-new
+            UserKnownHostsFile ~/.ssh/preview_known_hosts
           EOF
+
+      - name: validate and stage OSS secrets
+        env:
+          OSS_REGION: ${{ secrets.OSS_REGION }}
+          OSS_BUCKET: ${{ secrets.OSS_BUCKET }}
+          OSS_ACCESS_KEY_ID: ${{ secrets.OSS_ACCESS_KEY_ID }}
+          OSS_ACCESS_KEY_SECRET: ${{ secrets.OSS_ACCESS_KEY_SECRET }}
+          OSS_ROLE_ARN: ${{ secrets.OSS_ROLE_ARN }}
+          OSS_CALLBACK_BASE_URL: ${{ secrets.OSS_CALLBACK_BASE_URL }}
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          env_file="${RUNNER_TEMP}/yourtj-main-oss.env"
+          : > "$env_file"
+          for name in \
+            OSS_REGION \
+            OSS_BUCKET \
+            OSS_ACCESS_KEY_ID \
+            OSS_ACCESS_KEY_SECRET \
+            OSS_ROLE_ARN \
+            OSS_CALLBACK_BASE_URL; do
+            value="${!name:-}"
+            if [[ -z "$value" || "$value" == *$'\n'* || "$value" == *$'\r'* ]]; then
+              echo "${name} is missing or contains a newline" >&2
+              exit 64
+            fi
+            printf '%s=%s\n' "$name" "$value" >> "$env_file"
+          done
+          if [[ "$OSS_CALLBACK_BASE_URL" != https://* ]]; then
+            echo "OSS_CALLBACK_BASE_URL must use HTTPS" >&2
+            exit 64
+          fi
+          chmod 600 "$env_file"
 
       - name: transfer backend image
         run: |
-          scp api-image-main/api-image.tar preview:/tmp/api-image-main.tar
+          set -Eeuo pipefail
+          test -f api-image-main/api-image.tar
+          scp api-image-main/api-image.tar "preview:/tmp/api-image-main-${GITHUB_RUN_ID}.tar"
 
-      - name: transfer frontend dist
+      - name: transfer versioned frontend release
         run: |
-          FE_DIR="/opt/yourtj-preview/pr/main/frontend"
-          ssh preview "mkdir -p ${FE_DIR} && rm -rf ${FE_DIR}/*"
-          scp -r frontend-dist-main/* preview:${FE_DIR}/
+          set -Eeuo pipefail
+          test -f frontend-dist-main/index.html
+          release_dir="/opt/yourtj-preview/releases/main/${GITHUB_SHA}/frontend"
+          ssh preview "rm -rf '${release_dir}' && install -d -m 755 '${release_dir}'"
+          scp -r frontend-dist-main/* "preview:${release_dir}/"
 
-      - name: run deploy script
+      - name: deploy and verify main staging
         run: |
-          ssh preview "/opt/yourtj-preview/deploy-main.sh /opt/yourtj-preview/pr/main/frontend /tmp/api-image-main.tar"
+          set -Eeuo pipefail
+          remote_script="/tmp/deploy-main-${GITHUB_RUN_ID}.sh"
+          remote_verifier="/tmp/verify-oss-${GITHUB_RUN_ID}.py"
+          remote_oss_env="/tmp/yourtj-main-oss-${GITHUB_RUN_ID}.env"
+          remote_image="/tmp/api-image-main-${GITHUB_RUN_ID}.tar"
+          release_dir="/opt/yourtj-preview/releases/main/${GITHUB_SHA}/frontend"
+
+          cleanup() {
+            rm -f "${RUNNER_TEMP}/yourtj-main-oss.env"
+            ssh preview "rm -f '${remote_script}' '${remote_verifier}' '${remote_oss_env}' '${remote_image}'" || true
+          }
+          trap cleanup EXIT
+
+          scp ops/deploy/deploy-main.sh "preview:${remote_script}"
+          scp ops/deploy/verify_oss.py "preview:${remote_verifier}"
+          ssh preview "chmod 700 '${remote_script}' && chmod 600 '${remote_verifier}' && umask 077 && : > '${remote_oss_env}'"
+          ssh preview "cat > '${remote_oss_env}'" < "${RUNNER_TEMP}/yourtj-main-oss.env"
+          ssh preview bash "${remote_script}" \
+            "${release_dir}" \
+            "${remote_image}" \
+            "${remote_oss_env}" \
+            "${GITHUB_SHA}" \
+            "${remote_verifier}"
 
       - name: summary
-        if: always()
         run: |
-          echo "### :rocket: Main Deployed" >> $GITHUB_STEP_SUMMARY
-          echo "| | URL |" >> $GITHUB_STEP_SUMMARY
-          echo "|---|---|" >> $GITHUB_STEP_SUMMARY
-          echo "| Frontend | http://${{ secrets.PREVIEW_HOST }}:8080/ |" >> $GITHUB_STEP_SUMMARY
-          echo "| Backend  | http://${{ secrets.PREVIEW_HOST }}:8080/api/v2/health |" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo ":infinity: Main deployment has no TTL — persists until next deploy." >> $GITHUB_STEP_SUMMARY
+          echo "### :rocket: Main Deployed" >> "$GITHUB_STEP_SUMMARY"
+          echo "| | URL |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---|---|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Revision | \`${GITHUB_SHA}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Frontend | http://${{ secrets.PREVIEW_HOST }}:8080/ |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Backend | http://${{ secrets.PREVIEW_HOST }}:8080/api/v2/health |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| OSS | Bucket, HTTPS callback, STS AssumeRole and runtime injection verified |" >> "$GITHUB_STEP_SUMMARY"

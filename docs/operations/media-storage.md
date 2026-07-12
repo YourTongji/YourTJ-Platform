@@ -98,8 +98,16 @@
 | `MEDIA_OPERATIONS_HISTORY_PURGE_ENABLED` | 365 天 media operations metadata purge；默认 `false`，需批准后启用 |
 
 任一必要值缺失时 media route fail closed。Credential 只在 main/production secret store 中注入，不进入
-`.env.example`、PR preview、workflow、日志或截图。优先使用可轮换的 workload/RAM identity，减少长期
-AccessKey；当前环境变量模型迁移前需限制权限和 host access。
+`.env.example`、PR preview、workflow source、日志或截图。Main staging 的 GitHub Actions 把六项
+Repository Secrets 写入本次 run 专用的 `0600` 临时 env 文件，仓库内 `ops/deploy/deploy-main.sh` 通过
+Docker `--env-file` 注入并在发布后只验证变量存在，不回显值；PR preview workflow 有测试约束，禁止引用
+这些 production/main secrets。优先使用可轮换的 workload/RAM identity，减少长期 AccessKey；当前环境
+变量模型迁移前需限制权限和 host access。
+
+Main 部署 preflight 会在停止旧容器前验证 bucket endpoint、HTTPS callback reachability 和一次受 exact-key
+`PutObject` policy 限制的 STS `AssumeRole`。该检查不实际上传 object，因此不能证明 CORS、bucket
+server-side prevent-overwrite、callback body/hash 或 scanner 链路正确；发布后仍需完成真实合成图片的
+upload intent → PutObject → callback → pending smoke，并清理测试 object/row。
 
 新 binary 的 moderation deletion worker 和 upload-intent housekeeping 独立于
 `MEDIA_RETENTION_GC_ENABLED`：前者继续处理已隔离 object，后者清理未 callback 的过期 exact key，并
