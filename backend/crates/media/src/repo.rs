@@ -141,7 +141,7 @@ pub async fn insert_upload_intent(
 }
 
 /// Insert or re-resolve one derived asset variant for a source upload.
-#[allow(dead_code)] // reason: phase 2 exposes the repository API before any caller is wired up.
+#[allow(dead_code, clippy::too_many_arguments)]
 pub async fn insert_variant(
     connection: &mut PgConnection,
     asset_id: i64,
@@ -155,10 +155,8 @@ pub async fn insert_variant(
     status: &str,
     processing_attempts: i32,
 ) -> AppResult<AssetVariantRow> {
-    if !matches!(
-        variant,
-        "original" | "thumbnail" | "small" | "medium" | "large" | "avif" | "webp"
-    ) {
+    if !matches!(variant, "original" | "thumbnail" | "small" | "medium" | "large" | "avif" | "webp")
+    {
         return Err(AppError::BadRequest("invalid media variant".into()));
     }
     if !matches!(status, "processing" | "published" | "quarantined" | "deleted") {
@@ -211,7 +209,7 @@ pub async fn insert_variant(
 }
 
 /// List all derived variants for one source upload.
-#[allow(dead_code)] // reason: phase 2 exposes the repository API before any caller is wired up.
+#[allow(dead_code, clippy::too_many_arguments)]
 pub async fn find_variants_by_asset(
     pool: &PgPool,
     asset_id: i64,
@@ -230,7 +228,7 @@ pub async fn find_variants_by_asset(
 }
 
 /// Update the lifecycle status for one derived asset variant.
-#[allow(dead_code)] // reason: phase 2 exposes the repository API before any caller is wired up.
+#[allow(dead_code, clippy::too_many_arguments)]
 pub async fn update_variant_status(
     connection: &mut PgConnection,
     id: i64,
