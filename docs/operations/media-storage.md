@@ -117,7 +117,10 @@ upload intent → PutObject → callback → pending smoke，并清理测试 obj
 Preflight 与后端必须生成同一种、符合阿里云 RAM grammar 的 policy：`Version=1`、单个 Allow statement、
 仅 `oss:PutObject` 和单个 exact object ARN。不得加入 OSS 未声明支持的 `oss:ContentLength` condition；
 否则 STS 会以 `InvalidParameter.PolicyGrammar` 拒绝 AssumeRole。对象大小的现行边界和 PostObject 迁移
-状态以上述当前实现说明为准。
+状态以上述当前实现说明为准。Provider 规则以阿里云的
+[OSS RAM action/condition reference](https://www.alibabacloud.com/help/en/ram/api-object-storage-service)
+和 [PostObject policy reference](https://www.alibabacloud.com/help/en/oss/policies-for-setting-post-requests-in-oss)
+为准。
 
 新 binary 的 moderation deletion worker 和 upload-intent housekeeping 独立于
 `MEDIA_RETENTION_GC_ENABLED`：前者继续处理已隔离 object，后者清理未 callback 的过期 exact key，并
