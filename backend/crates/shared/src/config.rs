@@ -42,6 +42,11 @@ pub struct Config {
     pub oss_access_key_secret: String,
     pub oss_role_arn: String,
     pub oss_callback_base_url: String,
+    pub media_cdn_base_url: String,
+    pub media_cdn_auth_type: String,
+    pub media_cdn_primary_key: String,
+    pub media_cdn_secondary_key: String,
+    pub media_cdn_url_ttl_seconds: i64,
     pub media_retention_gc_enabled: bool,
     pub media_operations_history_purge_enabled: bool,
     pub email_encryption_active_version: u8,
@@ -100,6 +105,13 @@ impl Config {
             oss_access_key_secret: env_or_default("OSS_ACCESS_KEY_SECRET", ""),
             oss_role_arn: env_or_default("OSS_ROLE_ARN", ""),
             oss_callback_base_url: env_or_default("OSS_CALLBACK_BASE_URL", ""),
+            media_cdn_base_url: env_or_default("MEDIA_CDN_BASE_URL", ""),
+            media_cdn_auth_type: env_or_default("MEDIA_CDN_AUTH_TYPE", ""),
+            media_cdn_primary_key: env_or_default("MEDIA_CDN_PRIMARY_KEY", ""),
+            media_cdn_secondary_key: env_or_default("MEDIA_CDN_SECONDARY_KEY", ""),
+            media_cdn_url_ttl_seconds: env_or_default("MEDIA_CDN_URL_TTL_SECONDS", "300")
+                .parse()
+                .unwrap_or(300),
             media_retention_gc_enabled: env_or_default_bool("MEDIA_RETENTION_GC_ENABLED", false)?,
             media_operations_history_purge_enabled: env_or_default_bool(
                 "MEDIA_OPERATIONS_HISTORY_PURGE_ENABLED",

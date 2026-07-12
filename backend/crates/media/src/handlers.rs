@@ -411,6 +411,8 @@ fn verify_callback_signature_for_uri(
 /// GET /api/v2/media/{id}/url — get media URL
 ///
 /// Returns the CDN / signed URL for a media upload. Requires authentication.
+/// When CDN is configured, returns a signed CDN URL; otherwise falls back
+/// to the direct OSS URL (which requires a public bucket or CDN origin).
 pub async fn get_url(
     State(state): State<AppState>,
     Path(id_str): Path<String>,
@@ -432,8 +434,19 @@ pub async fn get_url(
     }
 
     let oss_config = require_oss_config(&state)?;
-    let url = oss::generate_url(&oss_config, &row.oss_key);
 
+    // Try CDN signed URL first.
+    if let Some(cdn_config) = crate::cdn::CdnConfig::from_config(&state.config) {
+        let path = format!("/uploads/{}", row.oss_key);
+        if let Some(signed_url) =
+            crate::cdn::sign_url(&cdn_config, &path, cdn_config.url_ttl_seconds)
+        {
+            return Ok(Json(UploadUrlDto { url: signed_url }));
+        }
+    }
+
+    // Fallback: direct OSS URL (private bucket will return 403 without CDN).
+    let url = oss::generate_url(&oss_config, &row.oss_key);
     Ok(Json(UploadUrlDto { url }))
 }
 

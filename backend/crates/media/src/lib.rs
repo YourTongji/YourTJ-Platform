@@ -9,6 +9,7 @@
 use std::sync::Arc;
 
 mod bindings;
+pub mod cdn;
 pub mod data_export;
 mod deletion;
 mod dto;
