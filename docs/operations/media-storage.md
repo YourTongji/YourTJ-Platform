@@ -18,7 +18,12 @@
 ## 当前实现
 
 - Authenticated client 请求一次 upload intent，服务端生成 account/kind/UUID-scoped exact object key。
-- STS credential 约 15 分钟过期，policy 只允许该 key 的 `oss:PutObject`，最大 20 MiB。
+- STS credential 约 15 分钟过期，RAM policy 只允许该 exact key 的 `oss:PutObject`。当前 20 MiB
+  由 Web 预检、intent/数据库 reservation 和 callback metadata 校验共同执行；OSS PutObject 的 RAM
+  condition keys 不支持 Content-Length，因此 provider 在接收 object 前强制限制大小仍为 `Partial`。
+  绕过 Web 的恶意客户端仍只能写该 exact key，超限 callback 会拒绝，未消费 intent 的 exact-key
+  housekeeping 负责后续删除。要获得 provider-side hard cap，需改为支持 `content-length-range` 的
+  PostObject policy；该协议迁移是 `Planned`，不能把当前链路描述成已由 STS 强制 20 MiB。
 - Upload credential issuance 在 account row lock 下由 PostgreSQL fail closed：每账号最多 10 个 active
   intent、rolling 24 小时 100 次 issuance attempt、stored + reserved 512 MiB、live object + active intent
   500 条、全部 retained upload record + active intent 2,000 条。Redis 不可用不会放宽这些界限；每次
@@ -108,6 +113,11 @@ Main 部署 preflight 会在停止旧容器前验证 bucket endpoint、HTTPS cal
 `PutObject` policy 限制的 STS `AssumeRole`。该检查不实际上传 object，因此不能证明 CORS、bucket
 server-side prevent-overwrite、callback body/hash 或 scanner 链路正确；发布后仍需完成真实合成图片的
 upload intent → PutObject → callback → pending smoke，并清理测试 object/row。
+
+Preflight 与后端必须生成同一种、符合阿里云 RAM grammar 的 policy：`Version=1`、单个 Allow statement、
+仅 `oss:PutObject` 和单个 exact object ARN。不得加入 OSS 未声明支持的 `oss:ContentLength` condition；
+否则 STS 会以 `InvalidParameter.PolicyGrammar` 拒绝 AssumeRole。对象大小的现行边界和 PostObject 迁移
+状态以上述当前实现说明为准。
 
 新 binary 的 moderation deletion worker 和 upload-intent housekeeping 独立于
 `MEDIA_RETENTION_GC_ENABLED`：前者继续处理已隔离 object，后者清理未 callback 的过期 exact key，并

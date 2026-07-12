@@ -70,8 +70,25 @@ class VerifyOssTests(unittest.TestCase):
         self.assertIn("Signature=", url)
         self.assertIn("RoleSessionName=yourtj-deploy-smoke", url)
         self.assertNotIn(VALID_CONFIG["OSS_ACCESS_KEY_SECRET"], url)
-        signature = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query)["Signature"][0]
-        self.assertEqual(signature, "d6qQrFm/2qdDzLh8hKl99bGNH5E=")
+        parameters = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query)
+        policy = json.loads(parameters["Policy"][0])
+        self.assertEqual(
+            policy,
+            {
+                "Version": "1",
+                "Statement": [
+                    {
+                        "Effect": "Allow",
+                        "Action": ["oss:PutObject"],
+                        "Resource": [
+                            "acs:oss:*:*:yourtj-media/uploads/deploy-smoke/"
+                            "00000000-0000-0000-0000-000000000000"
+                        ],
+                    }
+                ],
+            },
+        )
+        self.assertEqual(parameters["Signature"][0], "U71frEARsHUYZ5X/WxuRw029+7c=")
 
     def test_bucket_check_accepts_private_bucket_response(self):
         def forbidden(_request, timeout):
