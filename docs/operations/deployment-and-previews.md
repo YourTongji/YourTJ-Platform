@@ -97,7 +97,8 @@ main runtime secret，后者保存邮件 provider secret。OSS 六项 Repository
 前端按 commit SHA 上传到不可变 release directory，避免传输中清空正在服务的目录。部署时旧 frontend/
 backend container 先保留为 rollback container；新容器的 direct/public health、revision label 与六项 OSS
 runtime env presence 全部通过后才删除旧容器，任一步失败自动恢复旧容器。Migration 仍可能 forward-only，
-所以 container rollback 不代表 schema rollback。
+所以 container rollback 不代表 schema rollback。Revision label inspection 本身也必须成功；Docker
+template 解析失败、label 缺失或与部署 revision 不一致都视为发布失败并触发相同回滚。
 
 部署后应验证：
 

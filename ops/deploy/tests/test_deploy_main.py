@@ -15,6 +15,7 @@ REVISION = "a" * 40
 FAKE_DOCKER = r"""#!/usr/bin/env bash
 set -eu
 state="${FAKE_DOCKER_STATE:?}"
+revision_template='{{index .Config.Labels "org.opencontainers.image.revision"}}'
 
 if [[ "$1" == "container" && "$2" == "inspect" ]]; then
   test -f "${state}/container-$3"
@@ -64,6 +65,8 @@ if [[ "$1" == "inspect" && "$2" == "--format" ]]; then
       echo "${key}=set"
     done
   else
+    test "$3" = "$revision_template"
+    [[ "$4" == "main-be" || "$4" == "main-fe" ]]
     echo "${FAKE_REVISION:?}"
   fi
   exit
@@ -145,7 +148,12 @@ class DeployMainTests(unittest.TestCase):
         path.write_text(content)
         os.chmod(path, 0o700)
 
-    def run_deploy(self, *, fail_after: int | None = None) -> subprocess.CompletedProcess[str]:
+    def run_deploy(
+        self,
+        *,
+        fail_after: int | None = None,
+        fake_revision: str = REVISION,
+    ) -> subprocess.CompletedProcess[str]:
         environment = os.environ.copy()
         environment.update(
             {
@@ -156,7 +164,7 @@ class DeployMainTests(unittest.TestCase):
                 "DEPLOY_HEALTH_ATTEMPTS": "2",
                 "DEPLOY_HEALTH_DELAY_SECONDS": "0",
                 "FAKE_DOCKER_STATE": str(self.state),
-                "FAKE_REVISION": REVISION,
+                "FAKE_REVISION": fake_revision,
             }
         )
         if fail_after is not None:
@@ -196,6 +204,16 @@ class DeployMainTests(unittest.TestCase):
         self.assertTrue((self.state / "container-main-be").exists())
         self.assertTrue((self.state / "container-main-fe").exists())
         self.assertFalse(list(self.state.glob("container-*-rollback-*")))
+        self.assertIn("restoring previous containers", result.stderr)
+
+    def test_mismatched_revision_label_restores_previous_containers(self):
+        self.seed_current_containers()
+        result = self.run_deploy(fake_revision="b" * 40)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertTrue((self.state / "container-main-be").exists())
+        self.assertTrue((self.state / "container-main-fe").exists())
+        self.assertFalse(list(self.state.glob("container-*-rollback-*")))
+        self.assertIn("revision label does not match the deployment revision", result.stderr)
         self.assertIn("restoring previous containers", result.stderr)
 
 

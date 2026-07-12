@@ -11,6 +11,7 @@ readonly BACKEND_PORT="16000"
 readonly FRONTEND_PORT="15000"
 readonly HEALTH_ATTEMPTS="${DEPLOY_HEALTH_ATTEMPTS:-60}"
 readonly HEALTH_DELAY_SECONDS="${DEPLOY_HEALTH_DELAY_SECONDS:-1}"
+readonly REVISION_LABEL_TEMPLATE='{{index .Config.Labels "org.opencontainers.image.revision"}}'
 
 DEPLOYMENT_STARTED=0
 DEPLOYMENT_SUCCEEDED=0
@@ -82,6 +83,14 @@ verify_container_environment() {
     grep -Eq "^${key}=.+$" <<<"$environment" || fail "${key} was not injected into main-be"
   done
   echo "  OSS runtime environment: present"
+}
+
+verify_container_revision() {
+  local container="$1"
+  local revision
+  revision=$(docker inspect --format "$REVISION_LABEL_TEMPLATE" "$container")
+  [[ "$revision" == "$GIT_REVISION" ]] ||
+    fail "${container} revision label does not match the deployment revision"
 }
 
 rollback_deployment() {
@@ -209,8 +218,8 @@ wait_for_url "frontend direct health" "http://127.0.0.1:${FRONTEND_PORT}/"
 wait_for_url "frontend public route" "http://127.0.0.1:8080/"
 wait_for_url "backend public route" "http://127.0.0.1:8080/api/v2/health"
 
-[[ "$(docker inspect --format '{{index .Config.Labels \"org.opencontainers.image.revision\"}}' "$BACKEND_CONTAINER")" == "$GIT_REVISION" ]]
-[[ "$(docker inspect --format '{{index .Config.Labels \"org.opencontainers.image.revision\"}}' "$FRONTEND_CONTAINER")" == "$GIT_REVISION" ]]
+verify_container_revision "$BACKEND_CONTAINER"
+verify_container_revision "$FRONTEND_CONTAINER"
 
 docker rm "$BACKEND_BACKUP" >/dev/null 2>&1 || true
 docker rm "$FRONTEND_BACKUP" >/dev/null 2>&1 || true
