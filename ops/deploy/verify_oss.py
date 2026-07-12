@@ -112,9 +112,6 @@ def build_assume_role_url(
                     "Resource": [
                         f"acs:oss:*:*:{config['OSS_BUCKET']}/{object_key}"
                     ],
-                    "Condition": {
-                        "NumericLessThanEquals": {"oss:ContentLength": 20 * 1024 * 1024}
-                    },
                 }
             ],
         },

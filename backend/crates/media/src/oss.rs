@@ -22,7 +22,6 @@ use crate::error::MediaError;
 use crate::image_header;
 
 const OSS_INTENT_TTL_SECONDS: i64 = 900;
-const OSS_POLICY_MAX_BYTES: i64 = OSS_UPLOAD_MAX_BYTES;
 pub const OSS_UPLOAD_MAX_BYTES: i64 = 20 * 1024 * 1024;
 const OSS_PUBLIC_KEY_MAX_BYTES: usize = 16 * 1024;
 const OSS_HTTP_TIMEOUT_SECONDS: u64 = 5;
@@ -554,10 +553,7 @@ pub fn build_upload_policy(config: &OssConfig, oss_key: &str) -> String {
         "Statement": [{
             "Effect": "Allow",
             "Action": ["oss:PutObject"],
-            "Resource": [format!("acs:oss:*:*:{}/{}", config.bucket, oss_key)],
-            "Condition": {
-                "NumericLessThanEquals": { "oss:ContentLength": OSS_POLICY_MAX_BYTES }
-            }
+            "Resource": [format!("acs:oss:*:*:{}/{}", config.bucket, oss_key)]
         }]
     })
     .to_string()
@@ -704,7 +700,7 @@ mod tests {
     }
 
     #[test]
-    fn upload_policy_scopes_to_single_object() {
+    fn upload_policy_grants_only_exact_object_put() {
         let config = OssConfig {
             region: "cn-shanghai".into(),
             bucket: "yourtj".into(),
@@ -713,10 +709,20 @@ mod tests {
             role_arn: "acs:ram::1:role/upload".into(),
             callback_base_url: "https://api.example.test".into(),
         };
-        let policy = build_upload_policy(&config, "uploads/42/image/file.png");
-        assert!(policy.contains("acs:oss:*:*:yourtj/uploads/42/image/file.png"));
-        assert!(!policy.contains("uploads/43"));
-        assert!(policy.contains("oss:ContentLength"));
+        let policy: serde_json::Value =
+            serde_json::from_str(&build_upload_policy(&config, "uploads/42/image/file.png"))
+                .expect("valid RAM policy JSON");
+        assert_eq!(
+            policy,
+            serde_json::json!({
+                "Version": "1",
+                "Statement": [{
+                    "Effect": "Allow",
+                    "Action": ["oss:PutObject"],
+                    "Resource": ["acs:oss:*:*:yourtj/uploads/42/image/file.png"]
+                }]
+            })
+        );
     }
 
     #[test]
