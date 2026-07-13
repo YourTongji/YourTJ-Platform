@@ -52,6 +52,7 @@ describe("ProfileMediaSettings", () => {
     apiMocks.profile.mockReset().mockResolvedValue({
       accountId: "1",
       displayName: "Alice",
+      school: "同济大学",
       bio: null,
       website: null,
       avatarAssetId: "10",

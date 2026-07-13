@@ -12,6 +12,11 @@ const apiMocks = vi.hoisted(() => ({
   profile: vi.fn(),
   threads: vi.fn(),
   comments: vi.fn(),
+  media: vi.fn(),
+  likes: vi.fn(),
+  bookmarks: vi.fn(),
+  bookmark: vi.fn(),
+  removeBookmark: vi.fn(),
   relationship: vi.fn(),
   follow: vi.fn(),
   unfollow: vi.fn(),
@@ -44,6 +49,11 @@ vi.mock("@/lib/api/endpoints", () => ({
     publicUser: apiMocks.profile,
     userThreads: apiMocks.threads,
     userComments: apiMocks.comments,
+    userMedia: apiMocks.media,
+    userLikes: apiMocks.likes,
+    bookmarks: apiMocks.bookmarks,
+    bookmarkPost: apiMocks.bookmark,
+    removeBookmark: apiMocks.removeBookmark,
     userRelationship: apiMocks.relationship,
     followUser: apiMocks.follow,
     unfollowUser: apiMocks.unfollow,
@@ -80,6 +90,7 @@ describe("ProfilePage social relationships", () => {
       id: "2",
       handle: "bob",
       displayName: "Bob Builder",
+      school: "同济大学",
       bio: "Campus maker",
       website: "https://bob.example.test",
       avatarUrl: null,
@@ -97,6 +108,11 @@ describe("ProfilePage social relationships", () => {
     });
     apiMocks.threads.mockReset().mockResolvedValue({ items: [], hasMore: false, nextCursor: null });
     apiMocks.comments.mockReset().mockResolvedValue({ items: [], hasMore: false, nextCursor: null });
+    apiMocks.media.mockReset().mockResolvedValue({ items: [], hasMore: false, nextCursor: null });
+    apiMocks.likes.mockReset().mockResolvedValue({ items: [], hasMore: false, nextCursor: null });
+    apiMocks.bookmarks.mockReset().mockResolvedValue({ items: [], hasMore: false, nextCursor: null });
+    apiMocks.bookmark.mockReset().mockResolvedValue(undefined);
+    apiMocks.removeBookmark.mockReset().mockResolvedValue(undefined);
     apiMocks.relationship.mockReset().mockResolvedValue({
       isSelf: false,
       following: false,
@@ -129,6 +145,7 @@ describe("ProfilePage social relationships", () => {
     apiMocks.following.mockReset().mockResolvedValue({ items: [], hasMore: false, nextCursor: null });
     apiMocks.dm.mockReset().mockResolvedValue({ id: "10" });
     apiMocks.myActivity.mockReset().mockResolvedValue({ from: "2026-01-01", to: "2026-07-01", weights: { thread: 3, comment: 2, like: 1 }, days: [] });
+    apiMocks.wallet.mockReset().mockResolvedValue({ balance: 0 });
   });
 
   it("uses relationship and list APIs for follow, mute, block, and counts", async () => {
@@ -161,6 +178,7 @@ describe("ProfilePage social relationships", () => {
       id: "2",
       handle: "bob",
       displayName: "Bob Builder",
+      school: "同济大学",
       bio: "Campus maker",
       website: null,
       avatarUrl: null,
@@ -184,5 +202,75 @@ describe("ProfilePage social relationships", () => {
     expect(apiMocks.threads).not.toHaveBeenCalled();
     expect(apiMocks.comments).not.toHaveBeenCalled();
     await expectNoAccessibilityViolations(view.container);
+  });
+
+  it("loads real media and likes and bookmarks visible content", async () => {
+    apiMocks.media.mockResolvedValue({
+      items: [{
+        targetType: "thread",
+        id: "thread-1",
+        threadId: "thread-1",
+        title: "校园照片",
+        body: "今天的校园",
+        contentFormat: "plain_v1",
+        boardSlug: "campus",
+        authorHandle: "bob",
+        authorDisplayName: "Bob Builder",
+        replyCount: 2,
+        voteCount: 8,
+        viewerVote: null,
+        isBookmarked: false,
+        attachments: [{
+          assetId: "asset-1",
+          reference: "yourtj-asset:asset-1",
+          position: 0,
+          url: "https://cdn.example.test/asset-1.jpg",
+          alt: "校园",
+          width: 1200,
+          height: 800,
+          expiresAt: 1_900_000_000,
+        }],
+        createdAt: 1_700_000_000,
+        activityAt: 1_700_000_000,
+      }],
+      hasMore: false,
+      nextCursor: null,
+    });
+    apiMocks.likes.mockResolvedValue({
+      items: [{
+        targetType: "comment",
+        id: "comment-1",
+        threadId: "thread-2",
+        title: "选课讨论",
+        body: "很有帮助",
+        contentFormat: "plain_v1",
+        boardSlug: "courses",
+        authorHandle: "carol",
+        authorDisplayName: "Carol",
+        replyCount: 1,
+        voteCount: 5,
+        viewerVote: "up",
+        isBookmarked: false,
+        attachments: [],
+        createdAt: 1_700_000_100,
+        activityAt: 1_700_000_200,
+      }],
+      hasMore: false,
+      nextCursor: null,
+    });
+    const user = userEvent.setup();
+    renderPage();
+
+    expect(await screen.findByRole("heading", { name: "Bob Builder" })).toBeVisible();
+    await user.click(screen.getByRole("tab", { name: "媒体" }));
+    expect(await screen.findByText("校园照片")).toBeVisible();
+    expect(apiMocks.media).toHaveBeenCalledWith("bob", null);
+    await user.click(screen.getByRole("button", { name: "收藏" }));
+    await waitFor(() => expect(apiMocks.bookmark).toHaveBeenCalledWith("thread-1", "thread"));
+
+    await user.click(screen.getByRole("tab", { name: "喜欢" }));
+    expect(await screen.findByText("选课讨论")).toBeVisible();
+    expect(screen.getByLabelText("5 个赞")).toBeVisible();
+    expect(apiMocks.likes).toHaveBeenCalledWith("bob", null);
   });
 });

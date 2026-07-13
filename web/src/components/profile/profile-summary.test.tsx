@@ -15,6 +15,7 @@ describe("ProfileSummary verification semantics", () => {
             id: "42",
             handle: "campus-club",
             displayName: "校园组织",
+            school: "同济大学",
             bio: null,
             website: null,
             avatarUrl: null,

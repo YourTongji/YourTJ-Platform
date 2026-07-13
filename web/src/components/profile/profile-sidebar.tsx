@@ -24,6 +24,8 @@ interface ProfileSidebarProps {
   ariaLabel?: string;
   walletBalance?: number | null;
   walletLoading?: boolean;
+  walletError?: unknown;
+  onWalletRetry?: () => void;
   activity?: {
     calendar?: ActivityCalendar;
     isLoading: boolean;
@@ -77,6 +79,8 @@ export function ProfileSidebar({
   ariaLabel = "个人主页侧栏",
   walletBalance,
   walletLoading = false,
+  walletError,
+  onWalletRetry,
   activity,
 }: ProfileSidebarProps) {
   const visibleBadges = profile.badges.slice(0, 6);
@@ -122,9 +126,20 @@ export function ProfileSidebar({
           <CardContent className="space-y-3 p-4 pt-1">
             <div>
               <p className="text-[11px] text-muted-foreground">当前余额</p>
-              <p className="mt-1 text-[28px] font-bold tabular-nums tracking-tight text-foreground">
-                {walletLoading ? "…" : formatNumber(walletBalance ?? 0)}
-              </p>
+              {walletError ? (
+                <div className="mt-1 flex flex-wrap items-center gap-2">
+                  <p className="text-sm text-destructive">暂时无法获取余额</p>
+                  {onWalletRetry ? (
+                    <Button type="button" variant="outline" size="sm" onClick={onWalletRetry}>
+                      重试
+                    </Button>
+                  ) : null}
+                </div>
+              ) : (
+                <p className="mt-1 text-[28px] font-bold tabular-nums tracking-tight text-foreground">
+                  {walletLoading ? "…" : walletBalance === null || walletBalance === undefined ? "—" : formatNumber(walletBalance)}
+                </p>
+              )}
               <p className="mt-1 text-[11px] text-muted-foreground">平台闭环积分 · 不可提现</p>
             </div>
             <div className="grid grid-cols-3 gap-2">

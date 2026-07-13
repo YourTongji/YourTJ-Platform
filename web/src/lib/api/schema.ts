@@ -1865,6 +1865,92 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/users/{handle}/media": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** User's authored visible Forum content with at least one current clean image */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description Opaque pagination cursor */
+                    cursor?: components["parameters"]["Cursor"];
+                    limit?: components["parameters"]["Limit"];
+                };
+                header?: never;
+                path: {
+                    handle: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ProfileContentPage"];
+                    };
+                };
+                404: components["responses"]["NotFound"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/users/{handle}/likes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** User's positive Forum votes subject to profile activity visibility and relationship rules */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description Opaque pagination cursor */
+                    cursor?: components["parameters"]["Cursor"];
+                    limit?: components["parameters"]["Limit"];
+                };
+                header?: never;
+                path: {
+                    handle: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ProfileContentPage"];
+                    };
+                };
+                404: components["responses"]["NotFound"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/users/{handle}/relationship": {
         parameters: {
             query?: never;
@@ -4792,7 +4878,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List bookmarks */
+        /** List the current account's bookmarks with visible content projections */
         get: {
             parameters: {
                 query?: {
@@ -4812,7 +4898,7 @@ export interface paths {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": components["schemas"]["Page"];
+                        "application/json": components["schemas"]["BookmarkPage"];
                     };
                 };
             };
@@ -11069,6 +11155,7 @@ export interface components {
         MyProfile: {
             accountId: string;
             displayName: string | null;
+            school: string;
             bio: string | null;
             /** Format: uri */
             website: string | null;
@@ -11077,6 +11164,8 @@ export interface components {
         };
         ProfileUpdateInput: {
             displayName: string | null;
+            /** @description Optional only for rolling compatibility; current clients send the public school label. */
+            school?: string;
             bio: string | null;
             /**
              * Format: uri
@@ -11899,10 +11988,13 @@ export interface components {
             targetId: string;
         };
         Bookmark: {
-            targetType?: string;
-            targetId?: string;
-            note?: string | null;
-            createdAt?: number;
+            /** @enum {string} */
+            targetType: "thread" | "comment";
+            targetId: string;
+            note: string | null;
+            /** @description Unix timestamp when the current account bookmarked the content. */
+            createdAt: number;
+            content: components["schemas"]["ProfileContent"];
         };
         BookmarkInput: {
             /** @enum {string} */
@@ -12297,6 +12389,12 @@ export interface components {
         UserCommentPage: components["schemas"]["Page"] & {
             items?: components["schemas"]["UserComment"][];
         };
+        ProfileContentPage: components["schemas"]["Page"] & {
+            items?: components["schemas"]["ProfileContent"][];
+        };
+        BookmarkPage: components["schemas"]["Page"] & {
+            items?: components["schemas"]["Bookmark"][];
+        };
         UserSummaryPage: components["schemas"]["Page"] & {
             items?: components["schemas"]["UserSummary"][];
         };
@@ -12509,6 +12607,8 @@ export interface components {
             id: string;
             handle: string;
             displayName: string | null;
+            /** @description Owner-editable public school label governed by profile visibility. */
+            school: string;
             bio: string | null;
             /** Format: uri */
             website: string | null;
@@ -12532,9 +12632,15 @@ export interface components {
         UserThread: {
             id: string;
             title: string;
+            bodyExcerpt: string | null;
+            contentFormat: components["schemas"]["ContentFormat"];
             boardSlug: string;
             replyCount: number;
             voteCount: number;
+            /** @enum {string|null} */
+            viewerVote: "up" | "down" | null;
+            isBookmarked: boolean;
+            attachments: components["schemas"]["ForumAttachment"][];
             createdAt: number;
         };
         UserComment: {
@@ -12543,7 +12649,37 @@ export interface components {
             threadTitle: string;
             body: string;
             contentFormat: components["schemas"]["ContentFormat"];
+            /** @description Count of directly nested comments that remain visible. */
+            replyCount: number;
+            voteCount: number;
+            /** @enum {string|null} */
+            viewerVote: "up" | "down" | null;
+            isBookmarked: boolean;
+            attachments: components["schemas"]["ForumAttachment"][];
             createdAt: number;
+        };
+        /** @description One currently visible Forum thread or comment projected for profile media, likes, or owner bookmarks. */
+        ProfileContent: {
+            /** @enum {string} */
+            targetType: "thread" | "comment";
+            id: string;
+            threadId: string;
+            title: string;
+            body: string | null;
+            contentFormat: components["schemas"]["ContentFormat"];
+            boardSlug: string;
+            authorHandle: string;
+            authorDisplayName: string | null;
+            replyCount: number;
+            voteCount: number;
+            /** @enum {string|null} */
+            viewerVote: "up" | "down" | null;
+            isBookmarked: boolean;
+            attachments: components["schemas"]["ForumAttachment"][];
+            /** @description Canonical content creation time. */
+            createdAt: number;
+            /** @description Like time for liked content; otherwise the content creation time. */
+            activityAt: number;
         };
         /** @deprecated */
         UserProfileWithStats: components["schemas"]["UserProfile"];

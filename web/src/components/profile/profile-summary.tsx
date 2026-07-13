@@ -244,7 +244,7 @@ export function ProfileSummary({
             <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-[12px] text-muted-foreground">
               <span className="inline-flex items-center gap-1.5">
                 <MapPin className="size-3.5 shrink-0" aria-hidden="true" />
-                同济大学
+                {profile.school}
               </span>
               <span className="inline-flex items-center gap-1.5">
                 <CalendarDays className="size-3.5 shrink-0" aria-hidden="true" />
