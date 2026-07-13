@@ -42,6 +42,7 @@ describe("CommunityFeed", () => {
           isLoading={false}
           onRetry={vi.fn()}
           isAuthenticated
+          onAttachmentDeliveryRefresh={vi.fn()}
         />
       </MemoryRouter>,
     );
@@ -66,6 +67,7 @@ describe("CommunityFeed", () => {
           isLoading={false}
           onRetry={vi.fn()}
           isAuthenticated={false}
+          onAttachmentDeliveryRefresh={vi.fn()}
         />
       </MemoryRouter>,
     );
@@ -89,6 +91,7 @@ describe("CommunityFeed", () => {
           isLoadingMore={false}
           onLoadMore={onLoadMore}
           isAuthenticated
+          onAttachmentDeliveryRefresh={vi.fn()}
         />
       </MemoryRouter>,
     );

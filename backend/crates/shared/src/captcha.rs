@@ -192,9 +192,7 @@ pub async fn require_captcha(
         CaptchaOutcome::Invalid => {
             Err(crate::AppError::BadRequest("captcha verification failed".into()))
         }
-        CaptchaOutcome::Unavailable => {
-            Err(crate::AppError::BadRequest("captcha service unavailable".into()))
-        }
+        CaptchaOutcome::Unavailable => Err(crate::AppError::ServiceUnavailable),
     }
 }
 

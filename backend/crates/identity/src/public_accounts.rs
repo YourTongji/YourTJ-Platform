@@ -51,6 +51,40 @@ pub struct AccountAuthorizationState {
     pub status: String,
 }
 
+/// Purpose-limited account projection for bounded cross-domain staff target checks.
+#[derive(Debug, Clone, FromRow)]
+pub struct StaffTargetAuthorizationState {
+    pub account_id: i64,
+    pub role: String,
+}
+
+const MAX_STAFF_TARGET_BATCH: usize = 200;
+
+/// Batch-load only role for staff authorization targets.
+///
+/// Callers must supply IDs already selected by their owning domain. This API intentionally returns
+/// no email, handle, profile, sanctions, or relationship data and rejects unbounded batches.
+pub async fn find_staff_target_authorization_states_by_ids(
+    pool: &PgPool,
+    account_ids: &[i64],
+) -> AppResult<HashMap<i64, StaffTargetAuthorizationState>> {
+    let unique_ids = account_ids.iter().copied().collect::<HashSet<_>>();
+    if unique_ids.len() > MAX_STAFF_TARGET_BATCH {
+        return Err(AppError::BadRequest("staff target authorization batch is too large".into()));
+    }
+    if unique_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let unique_ids = unique_ids.into_iter().collect::<Vec<_>>();
+    let rows = sqlx::query_as::<_, StaffTargetAuthorizationState>(
+        "SELECT id AS account_id, role::text FROM identity.accounts WHERE id = ANY($1)",
+    )
+    .bind(&unique_ids)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().map(|row| (row.account_id, row)).collect())
+}
+
 /// Find an active, non-suspended account by public handle without selecting PII.
 pub async fn find_public_account_by_handle(
     pool: &PgPool,
@@ -442,4 +476,23 @@ pub async fn is_credit_recipient_eligible(
     .await?
     .unwrap_or(false);
     Ok(eligible)
+}
+
+#[cfg(test)]
+mod tests {
+    use sqlx::postgres::PgPoolOptions;
+
+    use super::find_staff_target_authorization_states_by_ids;
+
+    #[tokio::test]
+    async fn staff_target_projection_rejects_unbounded_unique_ids_before_database_access() {
+        let pool = PgPoolOptions::new()
+            .connect_lazy("postgres://unused:unused@127.0.0.1:1/unused")
+            .expect("syntactically valid lazy test pool");
+        let account_ids = (1_i64..=201).collect::<Vec<_>>();
+        let error = find_staff_target_authorization_states_by_ids(&pool, &account_ids)
+            .await
+            .expect_err("more than the bounded authorization batch must fail");
+        assert!(error.to_string().contains("batch is too large"));
+    }
 }

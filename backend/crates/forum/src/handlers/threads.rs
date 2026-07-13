@@ -574,25 +574,14 @@ pub async fn create_thread(
         can_bypass_board_gates: auth.has_capability(shared::auth::Capability::ModerateContent),
     };
     crate::repo::boards::authorize_board_posting(&state.db, board_id, posting_actor).await?;
-    if tl == 0 {
-        shared::ratelimit::check_token_bucket(
-            state.redis.as_ref(),
-            "thread_create_tl0",
-            &auth.id.to_string(),
-            2,
-            86400,
-        )
-        .await?;
-    } else {
-        shared::ratelimit::check_token_bucket(
-            state.redis.as_ref(),
-            "thread_create",
-            &auth.id.to_string(),
-            5,
-            60,
-        )
-        .await?;
-    }
+    shared::ratelimit::check_token_bucket(
+        state.redis.as_ref(),
+        "thread_create",
+        &auth.id.to_string(),
+        5,
+        60,
+    )
+    .await?;
 
     let row = repo::create_thread(
         &state.db,

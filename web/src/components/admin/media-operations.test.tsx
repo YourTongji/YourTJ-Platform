@@ -9,6 +9,7 @@ import { expectNoAccessibilityViolations } from "@/test/accessibility";
 import { MediaOperations } from "./media-operations";
 
 const apiMocks = vi.hoisted(() => ({
+  reconciliation: vi.fn(),
   listHolds: vi.fn(),
   listJobs: vi.fn(),
   placeHold: vi.fn(),
@@ -18,6 +19,7 @@ const apiMocks = vi.hoisted(() => ({
 
 vi.mock("@/lib/api/endpoints", () => ({
   api: {
+    adminMediaReconciliation: apiMocks.reconciliation,
     adminMediaRetentionHolds: apiMocks.listHolds,
     adminMediaDeletionJobs: apiMocks.listJobs,
     placeAdminMediaRetentionHold: apiMocks.placeHold,
@@ -76,6 +78,16 @@ function renderPanel() {
 
 describe("MediaOperations", () => {
   beforeEach(() => {
+    apiMocks.reconciliation.mockReset().mockResolvedValue({
+      dryRun: true,
+      items: [],
+      nextCursor: null,
+      providerInventory: {
+        state: "manual_inventory_required",
+        ingestCandidateCount: 1,
+        deliveryCandidateCount: 3,
+      },
+    });
     apiMocks.listHolds.mockReset().mockResolvedValue({ items: [hold], nextCursor: null, hasMore: false });
     apiMocks.listJobs.mockReset().mockResolvedValue({ items: [deadLetter], nextCursor: null, hasMore: false });
     apiMocks.placeHold.mockReset().mockResolvedValue(undefined);
@@ -129,6 +141,132 @@ describe("MediaOperations", () => {
     expect(await screen.findByText(deadLetter.reason)).toBeInTheDocument();
     expect(apiMocks.listJobs).toHaveBeenCalledTimes(2);
     await expectNoAccessibilityViolations(view.container);
+  });
+
+  it("shows the read-only provider boundary and follows the finding cursor", async () => {
+    const user = userEvent.setup();
+    apiMocks.reconciliation.mockImplementation(async (cursor?: string | null) => (
+      cursor === "42"
+        ? {
+            dryRun: true,
+            items: [{ assetId: "99", issueCodes: ["deletion_dead_letter"] }],
+            nextCursor: null,
+            providerInventory: {
+              state: "manual_inventory_required",
+              ingestCandidateCount: 8,
+              deliveryCandidateCount: 21,
+            },
+          }
+        : {
+            dryRun: true,
+            items: [{
+              assetId: "42",
+              issueCodes: ["publication_missing", "cleanup_plan_incomplete"],
+            }],
+            nextCursor: "42",
+            providerInventory: {
+              state: "manual_inventory_required",
+              ingestCandidateCount: 8,
+              deliveryCandidateCount: 21,
+            },
+          }
+    ));
+    const view = renderPanel();
+
+    expect(await screen.findByText("publication_missing")).toBeInTheDocument();
+    expect(screen.getByText("cleanup_plan_incomplete")).toBeInTheDocument();
+    expect(screen.getByText("manual_inventory_required")).toBeInTheDocument();
+    expect(screen.getByText("Ingest 候选记录").parentElement).toHaveTextContent("8");
+    expect(screen.getByText("Delivery 候选变体").parentElement).toHaveTextContent("21");
+    expect(screen.getByText(/此检查不会自动修复/)).toBeInTheDocument();
+    expect(screen.getByText(/不代表已读取 OSS\/CDN 的真实对象清单/)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "下一页" }));
+    expect(await screen.findByText("deletion_dead_letter")).toBeInTheDocument();
+    expect(screen.queryByText("publication_missing")).not.toBeInTheDocument();
+    expect(apiMocks.reconciliation).toHaveBeenLastCalledWith("42");
+
+    await user.click(screen.getByRole("button", { name: "上一页" }));
+    expect(await screen.findByText("publication_missing")).toBeInTheDocument();
+    expect(apiMocks.reconciliation).toHaveBeenLastCalledWith(null);
+    await expectNoAccessibilityViolations(view.container);
+  });
+
+  it("keeps the report in an explicit loading state until the bounded read completes", async () => {
+    let resolveReport: ((value: {
+      dryRun: true;
+      items: never[];
+      nextCursor: null;
+      providerInventory: {
+        state: "manual_inventory_required";
+        ingestCandidateCount: number;
+        deliveryCandidateCount: number;
+      };
+    }) => void) | undefined;
+    apiMocks.reconciliation.mockReturnValue(new Promise((resolve) => {
+      resolveReport = resolve;
+    }));
+    renderPanel();
+
+    expect(await screen.findByText("加载媒体一致性报告")).toBeInTheDocument();
+    resolveReport?.({
+      dryRun: true,
+      items: [],
+      nextCursor: null,
+      providerInventory: {
+        state: "manual_inventory_required",
+        ingestCandidateCount: 0,
+        deliveryCandidateCount: 0,
+      },
+    });
+    expect(await screen.findByText("本页未发现数据库一致性异常")).toBeInTheDocument();
+  });
+
+  it("recovers a failed reconciliation read without implying that it repaired state", async () => {
+    const user = userEvent.setup();
+    apiMocks.reconciliation
+      .mockRejectedValueOnce(new Error("temporary network failure"))
+      .mockResolvedValueOnce({
+        dryRun: true,
+        items: [],
+        nextCursor: null,
+        providerInventory: {
+          state: "manual_inventory_required",
+          ingestCandidateCount: 0,
+          deliveryCandidateCount: 0,
+        },
+      });
+    renderPanel();
+
+    expect(await screen.findByText("媒体一致性检查失败")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "重试" }));
+    expect(await screen.findByText("本页未发现数据库一致性异常")).toBeInTheDocument();
+    expect(apiMocks.reconciliation).toHaveBeenCalledTimes(2);
+    expect(screen.getByText(/不会自动修复、重新排队或删除任何对象/)).toBeInTheDocument();
+  });
+
+  it("requires recent authentication before exposing reconciliation findings", async () => {
+    const user = userEvent.setup();
+    apiMocks.reconciliation
+      .mockRejectedValueOnce(new ApiError(428, "recent authentication required", "RECENT_AUTH_REQUIRED"))
+      .mockResolvedValueOnce({
+        dryRun: true,
+        items: [{ assetId: "42", issueCodes: ["processing_dead_letter"] }],
+        nextCursor: null,
+        providerInventory: {
+          state: "manual_inventory_required",
+          ingestCandidateCount: 1,
+          deliveryCandidateCount: 0,
+        },
+      });
+    renderPanel();
+
+    expect(await screen.findByRole("dialog", { name: "重新验证身份" })).toBeInTheDocument();
+    expect(screen.queryByText("processing_dead_letter")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "验证完成" }));
+
+    expect(await screen.findByText("processing_dead_letter")).toBeInTheDocument();
+    expect(apiMocks.reconciliation).toHaveBeenCalledTimes(2);
   });
 
   it("places a compare-and-swap hold for an exact reviewed upload id", async () => {

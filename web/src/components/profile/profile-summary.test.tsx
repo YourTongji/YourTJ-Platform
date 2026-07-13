@@ -56,6 +56,7 @@ describe("ProfileSummary verification semantics", () => {
           onToggleMute={() => undefined}
           onToggleBlock={() => undefined}
           onOpenRelationshipList={() => undefined}
+          onMediaDeliveryRefresh={() => undefined}
         />
       </MemoryRouter>,
     );

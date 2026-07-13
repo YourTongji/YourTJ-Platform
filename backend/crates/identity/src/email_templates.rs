@@ -47,6 +47,24 @@ pub(crate) fn community_invitation() -> EmailContent {
     }
 }
 
+pub(crate) fn password_set_notice() -> EmailContent {
+    security_notice("YourTJ 密码已设置", "您的 YourTJ 账号刚刚设置了登录密码。")
+}
+
+pub(crate) fn password_changed_notice() -> EmailContent {
+    security_notice(
+        "YourTJ 密码已修改",
+        "您的 YourTJ 登录密码刚刚发生了修改，其他已登录设备均已退出。",
+    )
+}
+
+pub(crate) fn password_reset_notice() -> EmailContent {
+    security_notice(
+        "YourTJ 密码已重置",
+        "您的 YourTJ 登录密码刚刚通过校园邮箱验证码完成重置，之前的登录会话均已失效。",
+    )
+}
+
 fn code_email(subject: &'static str, introduction: &str, code: &str) -> EmailContent {
     EmailContent {
         subject,
@@ -54,6 +72,19 @@ fn code_email(subject: &'static str, introduction: &str, code: &str) -> EmailCon
             "{introduction}\n\n验证码：{code}\n\n验证码 10 分钟内有效。如非本人操作，请忽略此邮件。"
         ),
         html: email_shell(subject.trim_start_matches("YourTJ "), introduction, Some(code)),
+    }
+}
+
+fn security_notice(subject: &'static str, introduction: &str) -> EmailContent {
+    let guidance = "如果这不是您本人操作，请立即使用忘记密码流程重新保护账号，并联系社区管理员。";
+    EmailContent {
+        subject,
+        text: format!("{introduction}\n\n{guidance}"),
+        html: email_shell(
+            subject.trim_start_matches("YourTJ "),
+            &format!("{introduction} {guidance}"),
+            None,
+        ),
     }
 }
 
@@ -65,6 +96,11 @@ fn email_shell(title: &str, introduction: &str, code: Option<&str>) -> String {
              {value}</div>"
         )
     });
+    let footer = if code.is_some() {
+        "验证码 10 分钟内有效。如非本人操作，请忽略此邮件。"
+    } else {
+        "这是账号安全通知，请勿回复或向任何人提供密码与验证码。"
+    };
     format!(
         "<!doctype html><html><body style=\"margin:0;background:#f5f5f2;color:#20231f;\
          font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif\">\
@@ -73,6 +109,6 @@ fn email_shell(title: &str, introduction: &str, code: Option<&str>) -> String {
          <h1 style=\"margin:0 0 16px;font-size:24px\">{title}</h1>\
          <p style=\"margin:0;line-height:1.7\">{introduction}</p>{code_block}\
          <p style=\"margin:24px 0 0;color:#6b716c;font-size:13px;line-height:1.6\">\
-         验证码 10 分钟内有效。如非本人操作，请忽略此邮件。</p></div></body></html>"
+         {footer}</p></div></body></html>"
     )
 }

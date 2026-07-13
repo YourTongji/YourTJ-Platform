@@ -29,26 +29,14 @@ pub async fn vote_post(
     .map_err(|_r| AppError::Unauthorized)?;
     crate::sanctions::require_can_post(state.redis.as_ref(), &state.db, auth.id).await?;
 
-    let tl = crate::trust_levels::get_trust_level(&state.db, auth.id).await?;
-    if tl == 0 {
-        shared::ratelimit::check_token_bucket(
-            state.redis.as_ref(),
-            "vote_tl0",
-            &auth.id.to_string(),
-            30,
-            60,
-        )
-        .await?;
-    } else {
-        shared::ratelimit::check_token_bucket(
-            state.redis.as_ref(),
-            "vote",
-            &auth.id.to_string(),
-            60,
-            60,
-        )
-        .await?;
-    }
+    shared::ratelimit::check_token_bucket(
+        state.redis.as_ref(),
+        "vote",
+        &auth.id.to_string(),
+        60,
+        60,
+    )
+    .await?;
 
     let post_id: i64 = post_id_str.parse().map_err(|_| AppError::NotFound)?;
 

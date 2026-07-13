@@ -6,6 +6,10 @@ import { toast } from "sonner";
 
 import { PageHeader } from "@/components/common/page-header";
 import { EmptyState, ErrorState, LoadingState } from "@/components/common/states";
+import {
+  ForumDeliveryImage,
+  useForumDeliveryRefresh,
+} from "@/components/content/forum-delivery-image";
 import { DraftSyncNotice } from "@/components/forum/draft-sync-notice";
 import { useForumDraft } from "@/components/forum/use-forum-draft";
 import { Badge } from "@/components/ui/badge";
@@ -32,7 +36,15 @@ type ForumFeed = "hot" | "new" | "subscriptions" | "following" | "unread";
 const forumFeedOptions: ForumFeed[] = ["hot", "new", "subscriptions", "following", "unread"];
 const authenticatedFeeds: ForumFeed[] = ["subscriptions", "following", "unread"];
 
-function ThreadCard({ thread, boards }: { thread: ThreadFeed; boards: Board[] }) {
+function ThreadCard({
+  thread,
+  boards,
+  onAttachmentDeliveryRefresh,
+}: {
+  thread: ThreadFeed;
+  boards: Board[];
+  onAttachmentDeliveryRefresh: () => void;
+}) {
   const board = boards.find((item) => item.id === thread.boardId);
   return (
     <Link to={`/forum/threads/${thread.id}`} className="block">
@@ -56,14 +68,11 @@ function ThreadCard({ thread, boards }: { thread: ThreadFeed; boards: Board[] })
                 </p>
               ) : null}
               {thread.attachments?.[0] ? (
-                <img
-                  src={thread.attachments[0].url}
-                  alt={thread.attachments[0].alt}
-                  width={thread.attachments[0].width ?? undefined}
-                  height={thread.attachments[0].height ?? undefined}
+                <ForumDeliveryImage
+                  attachment={thread.attachments[0]}
+                  onDeliveryRefresh={onAttachmentDeliveryRefresh}
                   loading="lazy"
                   decoding="async"
-                  referrerPolicy="no-referrer"
                   className="mt-3 max-h-72 w-full rounded-xl border object-cover"
                 />
               ) : null}
@@ -325,6 +334,10 @@ export function ForumPage() {
 
   const boardItems = boards.data ?? [];
   const threadItems = threads.data?.pages.flatMap((page) => page.items ?? []) ?? [];
+  useForumDeliveryRefresh(
+    threadItems.map((thread) => thread.attachments?.[0]),
+    () => void threads.refetch(),
+  );
 
   return (
     <div>
@@ -374,7 +387,12 @@ export function ForumPage() {
             ) : (
               <div className="space-y-3">
                 {threadItems.map((thread) => (
-                  <ThreadCard key={thread.id} thread={thread} boards={boardItems} />
+                  <ThreadCard
+                    key={thread.id}
+                    thread={thread}
+                    boards={boardItems}
+                    onAttachmentDeliveryRefresh={() => void threads.refetch()}
+                  />
                 ))}
                 {threads.hasNextPage ? (
                   <Button

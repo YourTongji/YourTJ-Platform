@@ -12,37 +12,7 @@ async fn test_pool() -> PgPool {
     let url = std::env::var("DATABASE_URL")
         .unwrap_or_else(|_| "postgres://postgres:postgres@localhost:5432/yourtj_test".into());
     let pool = PgPool::connect(&url).await.expect("connect to activity test database");
-    let has_identity: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM information_schema.schemata WHERE schema_name = 'identity')",
-    )
-    .fetch_one(&pool)
-    .await
-    .expect("check identity schema");
-    if !has_identity {
-        MIGRATOR.run(&pool).await.expect("run activity test migrations");
-    } else {
-        let has_activity: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM information_schema.schemata WHERE schema_name = 'activity')",
-        )
-        .fetch_one(&pool)
-        .await
-        .expect("check activity schema");
-        if !has_activity {
-            sqlx::raw_sql(include_str!("../../../migrations/0020_activity.sql"))
-                .execute(&pool)
-                .await
-                .expect("run activity migration");
-        }
-    }
-    sqlx::query(
-        "INSERT INTO activity.score_policies \
-         (thread_weight, comment_weight, like_weight, reason) \
-         SELECT 10, 3, 1, 'initial activity policy' \
-         WHERE NOT EXISTS (SELECT 1 FROM activity.score_policies)",
-    )
-    .execute(&pool)
-    .await
-    .expect("ensure activity test policy");
+    MIGRATOR.run(&pool).await.expect("run activity test migrations");
     pool
 }
 

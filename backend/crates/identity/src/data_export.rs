@@ -43,6 +43,7 @@ pub struct IdentityExport {
     onboarding: IdentityOnboardingExport,
     lifecycle: crate::lifecycle::LifecycleRecord,
     sessions: Vec<IdentitySessionExport>,
+    security_events: Vec<IdentitySecurityEventExport>,
     sanctions: Vec<IdentitySanctionExport>,
 }
 
@@ -103,6 +104,14 @@ struct IdentitySessionExport {
     expires_at: DateTime<Utc>,
     #[serde(with = "chrono::serde::ts_seconds_option")]
     revoked_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, FromRow, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct IdentitySecurityEventExport {
+    event_type: String,
+    #[serde(with = "chrono::serde::ts_seconds")]
+    created_at: DateTime<Utc>,
 }
 
 #[derive(Debug, FromRow, Serialize)]
@@ -438,6 +447,13 @@ pub async fn snapshot(
     .bind(account_id)
     .fetch_all(pool)
     .await?;
+    let security_events = sqlx::query_as::<_, IdentitySecurityEventExport>(
+        "SELECT event_type, created_at FROM identity.security_events \
+         WHERE account_id = $1 AND expires_at > now() ORDER BY id",
+    )
+    .bind(account_id)
+    .fetch_all(pool)
+    .await?;
     let lifecycle = crate::lifecycle::get(pool, account_id).await?;
     Ok(IdentityExport {
         account: IdentityAccountExport {
@@ -454,6 +470,7 @@ pub async fn snapshot(
         onboarding,
         lifecycle,
         sessions,
+        security_events,
         sanctions,
     })
 }

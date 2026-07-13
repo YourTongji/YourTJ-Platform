@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, Clock3, Image as ImageIcon, ShieldX, Trash2 } from "lucide-react";
 import { toast } from "sonner";
+import * as React from "react";
 
 import { MediaUploadButton } from "@/components/media/media-upload-button";
 import { Badge } from "@/components/ui/badge";
@@ -10,6 +11,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/lib/api/endpoints";
 import type { MediaUsage, MyProfile, MyUpload, Page } from "@/lib/api/types";
 import { formatUnixTime } from "@/lib/format";
+import { mediaDeliveryRefetchInterval } from "@/lib/media-delivery";
+import { STATIC_IMAGE_REUPLOAD_MESSAGE } from "@/lib/media-policy";
 import { cn } from "@/lib/utils";
 
 interface ProfileMediaSlot {
@@ -24,13 +27,13 @@ const profileMediaSlots: ProfileMediaSlot[] = [
     slot: "avatar",
     usage: "profile_avatar",
     title: "头像",
-    description: "建议使用清晰的正方形图片。",
+    description: `建议使用清晰的正方形图片。${STATIC_IMAGE_REUPLOAD_MESSAGE}。`,
   },
   {
     slot: "banner",
     usage: "profile_banner",
     title: "封面",
-    description: "建议使用横向图片，重要内容保持居中。",
+    description: `建议使用横向图片，重要内容保持居中。${STATIC_IMAGE_REUPLOAD_MESSAGE}。`,
   },
 ];
 
@@ -38,21 +41,49 @@ function MediaImage({
   assetId,
   title,
   slot,
+  status,
+  deliveryState,
 }: {
   assetId: string;
   title: string;
   slot: ProfileMediaSlot["slot"];
+  status?: MyUpload["status"];
+  deliveryState?: MyUpload["deliveryState"];
 }) {
-  const media = useQuery({
-    queryKey: ["media-url", assetId],
-    queryFn: () => api.mediaUrl(assetId),
+  const pending = useQuery({
+    queryKey: ["media-owner-preview", assetId],
+    queryFn: () => api.myMediaPreview(assetId),
+    enabled: status === "pending",
+    staleTime: 60_000,
   });
+  const media = useQuery({
+    queryKey: ["media-delivery", assetId],
+    queryFn: () => api.mediaUrl(assetId),
+    enabled: status !== "pending"
+      && status !== "blocked"
+      && status !== "quarantined"
+      && (deliveryState == null || deliveryState === "published"),
+    refetchInterval: (query) => mediaDeliveryRefetchInterval(query.state.data),
+  });
+  const [pendingUrl, setPendingUrl] = React.useState<string | null>(null);
+  const retriedDeliveryUrl = React.useRef<string | null>(null);
   const frameClass = slot === "avatar" ? "aspect-square rounded-full" : "aspect-[3/1] rounded-lg";
 
-  if (media.isLoading) {
+  React.useEffect(() => {
+    if (!pending.data) {
+      setPendingUrl(null);
+      return;
+    }
+    const nextUrl = URL.createObjectURL(pending.data);
+    setPendingUrl(nextUrl);
+    return () => URL.revokeObjectURL(nextUrl);
+  }, [pending.data]);
+
+  if (media.isLoading || pending.isLoading) {
     return <Skeleton className={cn("w-full", frameClass)} />;
   }
-  if (!media.data?.url) {
+  const url = status === "pending" ? pendingUrl : media.data?.url;
+  if (!url) {
     return (
       <div className={cn("flex w-full items-center justify-center bg-muted text-muted-foreground", frameClass)}>
         <ImageIcon className="size-5" aria-hidden="true" />
@@ -60,18 +91,37 @@ function MediaImage({
       </div>
     );
   }
-  return <img src={media.data.url} alt={title} className={cn("w-full object-cover", frameClass)} />;
+  return (
+    <img
+      src={url}
+      alt={status === "pending" ? `${title}（待审核预览）` : title}
+      referrerPolicy="no-referrer"
+      className={cn("w-full object-cover", frameClass, status === "pending" && "opacity-80")}
+      onError={() => {
+        if (!media.data?.url || retriedDeliveryUrl.current === media.data.url) return;
+        retriedDeliveryUrl.current = media.data.url;
+        void media.refetch();
+      }}
+    />
+  );
 }
 
-function UploadStatus({ status }: { status: MyUpload["status"] }) {
-  if (status === "pending") {
+function UploadStatus({ upload }: { upload: MyUpload }) {
+  if (upload.status === "pending") {
     return (
       <Badge variant="outline" className="gap-1 text-amber-700 dark:text-amber-300">
         <Clock3 className="size-3" aria-hidden="true" />待审核
       </Badge>
     );
   }
-  if (status === "clean") {
+  if (upload.status === "clean" && upload.deliveryState === "processing") {
+    return (
+      <Badge variant="outline" className="gap-1 text-blue-700 dark:text-blue-300">
+        <Clock3 className="size-3" aria-hidden="true" />正在生成安全版本
+      </Badge>
+    );
+  }
+  if (upload.status === "clean" && upload.deliveryState === "published") {
     return (
       <Badge variant="outline" className="gap-1 text-emerald-700 dark:text-emerald-300">
         <CheckCircle2 className="size-3" aria-hidden="true" />已通过
@@ -102,7 +152,8 @@ function ProfileMediaSlotPanel({
     queryFn: () => api.myMediaUploads(definition.usage),
     refetchInterval: (query) => {
       const page = query.state.data as Page<MyUpload> | undefined;
-      return page?.items?.some((upload) => upload.status === "pending") ? 4_000 : false;
+      return page?.items?.some((upload) =>
+        upload.status === "pending" || upload.deliveryState === "processing") ? 4_000 : false;
     },
   });
 
@@ -186,7 +237,8 @@ function ProfileMediaSlotPanel({
       <div className="mt-5">
         <div className="flex items-center justify-between gap-3">
           <p className="text-sm font-medium">最近上传</p>
-          {items.some((upload) => upload.status === "pending") ? (
+          {items.some((upload) =>
+            upload.status === "pending" || upload.deliveryState === "processing") ? (
             <span role="status" className="text-xs text-muted-foreground">
               审核状态会自动刷新
             </span>
@@ -228,11 +280,13 @@ function ProfileMediaSlotPanel({
                           assetId={upload.id}
                           title={`${definition.title}候选，上传于 ${formatUnixTime(upload.createdAt)}`}
                           slot={definition.slot}
+                          status={upload.status}
+                          deliveryState={upload.deliveryState}
                         />
                       )}
                     </div>
                     <div className="min-w-0 flex-1">
-                      <UploadStatus status={upload.status} />
+                      <UploadStatus upload={upload} />
                       <p className="mt-1 truncate text-xs text-muted-foreground">
                         {formatUnixTime(upload.createdAt)}
                       </p>
@@ -241,7 +295,7 @@ function ProfileMediaSlotPanel({
                   <div className="mt-3">
                     {isCurrent ? (
                       <span className="text-xs font-medium text-primary">当前使用</span>
-                    ) : upload.status === "clean" ? (
+                    ) : upload.status === "clean" && upload.deliveryState === "published" ? (
                       <Button
                         type="button"
                         size="sm"
@@ -255,7 +309,11 @@ function ProfileMediaSlotPanel({
                       </Button>
                     ) : (
                       <p className="text-xs leading-5 text-muted-foreground">
-                        {upload.status === "pending" ? "审核通过后可使用" : "请重新上传其他图片"}
+                        {upload.status === "pending"
+                          ? "审核通过并生成安全版本后可使用"
+                          : upload.deliveryState === "processing"
+                            ? "安全版本生成完成后可使用"
+                            : "请重新上传其他图片"}
                       </p>
                     )}
                   </div>
@@ -277,7 +335,7 @@ export function ProfileMediaSettings() {
       <CardHeader>
         <CardTitle>头像与封面</CardTitle>
         <CardDescription>
-          图片直传平台 OSS，安全审核通过后才能绑定。待审核或未通过的图片不会出现在公开资料中。
+          原图进入私有上传区；审核通过并生成去元数据的安全版本后才能绑定。待审核原图不会进入公开 CDN。
         </CardDescription>
       </CardHeader>
       <CardContent>

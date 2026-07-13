@@ -23,19 +23,35 @@ pub async fn mark_password_recent_auth_if_current(
     .await
 }
 
+/// Result of an epoch-guarded password replacement and refresh-family rotation.
+pub struct ReplacedCredentialSession {
+    pub session_id: i64,
+    pub auth_version: i64,
+}
+
 pub async fn replace_password_if_current(
     pool: &PgPool,
     account_id: i64,
-    current_session_id: Option<i64>,
+    current_session_id: i64,
     expected_credential_version: i64,
     password_hash: &str,
-) -> AppResult<()> {
-    crate::repo::change_password_preserving_session(
+    successor_refresh_hash: &str,
+    successor_expires_at: DateTime<Utc>,
+) -> AppResult<ReplacedCredentialSession> {
+    let mutation = crate::repo::change_password_and_replace_sessions(
         pool,
         account_id,
         current_session_id,
         expected_credential_version,
         password_hash,
+        successor_refresh_hash,
+        successor_expires_at,
+        None,
+        None,
     )
-    .await
+    .await?;
+    Ok(ReplacedCredentialSession {
+        session_id: mutation.session_id,
+        auth_version: mutation.auth_version,
+    })
 }

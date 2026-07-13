@@ -6,7 +6,7 @@
 >
 > 负责人：Platform maintainers
 >
-> 最近核验：2026-07-12，`origin/main@0492746` 与 ADMIN/委派授权边界
+> 最近核验：2026-07-12，migrations `0060`–`0062`、domain workers 与 ADMIN/委派授权边界
 
 YourTJ 是 Rust/Axum 后端与 React Web 的 monorepo。论坛、课程、评课、选课、积分共享身份和
 PostgreSQL，但每个 domain 仍拥有自己的表、业务规则和 HTTP routes。
@@ -42,12 +42,15 @@ flowchart LR
     S --> F
     A --> Redis[("Redis")]
     A --> Meili[("Meilisearch")]
-    M --> OSS[("OSS provider boundary (when configured)")]
+    M --> Ingest[("Private OSS Ingest (when configured)")]
+    M --> Delivery[("Private OSS Delivery (when configured)")]
+    Delivery --> CDN[("Signed CDN delivery")]
 ```
 
 PostgreSQL 是业务事实源。Redis 用于限流、缓存和热计数；Meilisearch 是可重建搜索投影。仓库
-实现了 Alibaba OSS provider boundary，但 `origin/main` 不能证明某个部署已经配置 bucket/RAM/CDN；
-启用时 OSS 保存 media object，业务可见性仍由数据库 asset/status/binding 决定。
+实现了 Alibaba OSS private Ingest/Delivery 与 signed CDN provider boundary，但代码或 migration 不能
+证明某个部署已经配置双 bucket/RAM/CDN；启用时对象和 edge cache 仍是派生物，业务可见性由 PostgreSQL
+moderation/publication/binding 决定。
 
 ## Crate 与所有权
 
@@ -59,8 +62,8 @@ PostgreSQL 是业务事实源。Redis 用于限流、缓存和热计数；Meilis
 | `reviews` | 课评、反应、举报与课评审核 | 直接更新 course/identity 私有表 |
 | `credit` | append-only ledger、wallet projection、受控 escrow/tip/bounty | 充值、提现、自由转账 |
 | `forum` | boards、threads、comments、votes、subscriptions、notifications、DM | 校园邮箱与密码 |
-| `media` | upload intent、OSS callback、asset status/binding/draft reference、operational hold、durable delete 与 rollout-gated GC | 任意业务内容本身或 legal-hold policy |
-| `activity` | contribution events、daily projection、score policy | 从源表在读路径临时聚合 |
+| `media` | upload intent、OSS callback、moderation/publication、private Delivery variants、typed signed projection、binding、operational hold、durable processing/cleanup 与 rollout-gated GC | 任意业务内容本身、通用跨账号可见性或 legal-hold policy |
+| `activity` | contribution/check-in facts、daily/account score projection、score/trust policy 与 durable evaluator | 从源表在读路径临时聚合 |
 | `governance` | 跨域 append-only audit、申诉状态/历史、当事人治理通知 | 代替各域原处置状态或自行恢复内容/制裁 |
 | `platform` | 公告、用户 receipt、首页推广、人工认证 definition/grant 与 runtime settings | 业务域外的任意 gateway SQL |
 | `search` | 聚合 course/review/thread typed results、查询边界与限流 | 自有业务表、原始索引文档或跨 schema SQL |
@@ -106,9 +109,10 @@ iOS 与 Flutter 在独立仓库，只消费 OpenAPI 生成的类型和平台 HTT
 - Governance audit/appeal history 在 PostgreSQL 拒绝 row mutation 和 table truncate；comment reversal
   统一 thread→comment lock 并在锁后读取 parent state。Production runtime role 不拥有这些表，也不能
   disable trigger；migration owner 只用于受控 rollout。
-- 普通通知已经使用 transactional outbox 与幂等 receipt consumer，治理 notice 继续与处置/申诉同
-  事务；Redis/SSE 只提供刷新提示。搜索、部分媒体处理和重型 reconciliation 仍存在未持久化或
-  fire-and-forget 路径，应标为 `Partial`。
+- 普通通知与 identity security email 已使用 transactional/durable job + lease/retry/dead-letter，治理
+  notice 继续与处置/申诉同事务；Redis/SSE 只提供刷新提示。Media variant processing/ordered cleanup 与
+  activity daily evaluator 也已持久化；搜索和重型 reconciliation 仍有进程内/fire-and-forget 路径，应
+  标为 `Partial`。
 - 公开搜索必须在返回前应用数据库可见性/隐私 policy；索引不能扩大权限。
 - Profile authored-content 聚合由 Forum 提供，但 profile/activity/mention policy 仍归 Identity；Forum
   通过 owner public projection 或 batch API 取得最小 policy，再结合自己的 follow/block/mute 事实。
@@ -128,8 +132,9 @@ iOS 与 Flutter 在独立仓库，只消费 OpenAPI 生成的类型和平台 HTT
 - Staff 操作按服务端 effective capability、target hierarchy/ceiling、reason 和 audit 授权。目标模型中 ADMIN
   拥有所有平台定义的 staff capability，普通管理员只使用 ADMIN 给予的 account-scoped grant；当前静态
   role mapping 迁移前不能宣称已实现委派。
-- 利益冲突默认 no-self；目标中仅 ADMIN 的本人媒体审核有 recent-auth + reason + 专用 audit
-  例外，不改变申诉 recusal、append-only 审计、DM/PII 最小化和 credit 合规边界。
+- 利益冲突默认 no-self；当前仅 ADMIN 的本人媒体审核有显式确认 + recent-auth + reason + trusted preview +
+  专用 audit 例外，不改变申诉 recusal、append-only 审计、DM/PII 最小化和 credit 合规边界。普通管理员
+  委派本身仍为 `Planned`。
 - Revision history 只向作者本人或严格高于另一作者角色的内容审核 staff 返回，并使用有界 cursor page。
 - 公共 API 使用 `/api/v2`、camelCase DTO、稳定错误 envelope 和有界分页。
 

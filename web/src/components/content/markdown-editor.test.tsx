@@ -1,13 +1,20 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import * as React from "react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { expectNoAccessibilityViolations } from "@/test/accessibility";
 
 import { MarkdownEditor } from "./markdown-editor";
 
-const apiMocks = vi.hoisted(() => ({ myMediaUpload: vi.fn() }));
+const apiMocks = vi.hoisted(() => ({
+  myMediaUpload: vi.fn(),
+  myMediaPreview: vi.fn(),
+  mediaUrl: vi.fn(),
+}));
+const originalCreateObjectURL = URL.createObjectURL;
+const originalRevokeObjectURL = URL.revokeObjectURL;
 
 vi.mock("@/lib/api/endpoints", () => ({ api: apiMocks }));
 vi.mock("@/components/media/media-upload-button", () => ({
@@ -32,6 +39,28 @@ vi.mock("@/components/media/media-upload-button", () => ({
 }));
 
 describe("MarkdownEditor", () => {
+  beforeEach(() => {
+    Object.defineProperty(URL, "createObjectURL", {
+      configurable: true,
+      value: vi.fn(() => "blob:editor-owner-preview"),
+    });
+    Object.defineProperty(URL, "revokeObjectURL", {
+      configurable: true,
+      value: vi.fn(),
+    });
+  });
+
+  afterEach(() => {
+    Object.defineProperty(URL, "createObjectURL", {
+      configurable: true,
+      value: originalCreateObjectURL,
+    });
+    Object.defineProperty(URL, "revokeObjectURL", {
+      configurable: true,
+      value: originalRevokeObjectURL,
+    });
+  });
+
   it("uses the same safe renderer for its preview", async () => {
     const user = userEvent.setup();
     const view = render(
@@ -57,6 +86,7 @@ describe("MarkdownEditor", () => {
       bytes: 100,
       mime: "image/png",
       status: "pending",
+      deliveryState: "unpublished",
       imageWidth: null,
       imageHeight: null,
       createdAt: 1_700_000_000,
@@ -94,5 +124,44 @@ describe("MarkdownEditor", () => {
     expect(screen.getByTestId("source")).toBeEmptyDOMElement();
     expect(screen.getByTestId("asset-ids")).toBeEmptyDOMElement();
     await expectNoAccessibilityViolations(view.container);
+  });
+
+  it("resolves an owner-only pending projection in preview instead of showing a broken asset", async () => {
+    apiMocks.myMediaUpload.mockResolvedValue({
+      id: "42",
+      kind: "image",
+      usage: "forum_thread",
+      bytes: 100,
+      mime: "image/png",
+      status: "pending",
+      deliveryState: "unpublished",
+      imageWidth: null,
+      imageHeight: null,
+      createdAt: 1_700_000_000,
+    });
+    apiMocks.myMediaPreview.mockResolvedValue(new Blob(["preview"], { type: "image/png" }));
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    const user = userEvent.setup();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MarkdownEditor
+          value="![校园风景](yourtj-asset:42)"
+          onChange={vi.fn()}
+          label="主题正文"
+          maxLength={50_000}
+          attachmentAssetIds={["42"]}
+        />
+      </QueryClientProvider>,
+    );
+
+    await user.click(screen.getByRole("tab", { name: "预览" }));
+
+    expect(await screen.findByRole("img", { name: "校园风景（待审核预览）" })).toHaveAttribute(
+      "src",
+      "blob:editor-owner-preview",
+    );
+    expect(apiMocks.myMediaPreview).toHaveBeenCalledWith("42");
   });
 });

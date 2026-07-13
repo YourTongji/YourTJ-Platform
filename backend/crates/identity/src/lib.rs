@@ -12,6 +12,7 @@ pub mod auth_middleware;
 pub mod credential_state;
 pub mod data_export;
 mod email_code;
+pub mod email_delivery;
 mod email_templates;
 mod handlers;
 mod ledger;
@@ -21,8 +22,10 @@ mod password;
 pub mod profiles;
 pub mod public_accounts;
 pub mod public_search;
+mod rate_limit_subject;
 mod repo;
 pub mod sanctions;
+mod security_events;
 
 mod dto;
 mod error;
@@ -51,6 +54,7 @@ pub fn routes(state: AppState) -> Router {
         )
         .route("/api/v2/auth/password/forgot", post(handlers::password_forgot))
         .route("/api/v2/auth/password/reset", post(handlers::password_reset))
+        .route("/api/v2/auth/password/set", post(handlers::password_set))
         .route("/api/v2/auth/password/change", post(handlers::password_change))
         .route("/api/v2/auth/recent-auth", get(handlers::recent_auth_status))
         .route(

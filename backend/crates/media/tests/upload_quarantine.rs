@@ -7,6 +7,7 @@ use axum::http::{header, Method, Request, StatusCode};
 use media::{
     process_upload_deletion_job, routes_with_object_store, UploadObjectPreview, UploadObjectStore,
 };
+use sha2::{Digest, Sha256};
 use shared::{AppResult, AppState};
 use sqlx::PgPool;
 use tokio::sync::Notify;
@@ -120,6 +121,70 @@ fn test_state(pool: PgPool) -> AppState {
     }
 }
 
+async fn admin_session_token(pool: &PgPool, account_id: i64, is_recent: bool) -> String {
+    let session_id: i64 = sqlx::query_scalar(
+        "INSERT INTO identity.sessions \
+         (account_id, refresh_hash, family_id, user_agent, expires_at, \
+          recent_authenticated_at, recent_auth_method, recent_auth_credential_version) \
+         VALUES ($1, $2, $3, 'media-admin-self-review-test', now() + interval '1 day', \
+                 CASE WHEN $4 THEN now() ELSE NULL END, \
+                 CASE WHEN $4 THEN 'password' ELSE NULL END, \
+                 CASE WHEN $4 THEN (SELECT credential_version FROM identity.accounts WHERE id = $1) \
+                      ELSE NULL END) RETURNING id",
+    )
+    .bind(account_id)
+    .bind(uuid::Uuid::new_v4().simple().to_string())
+    .bind(uuid::Uuid::new_v4())
+    .bind(is_recent)
+    .fetch_one(pool)
+    .await
+    .expect("insert media admin session");
+    let auth_version: i64 =
+        sqlx::query_scalar("SELECT auth_version FROM identity.accounts WHERE id = $1")
+            .bind(account_id)
+            .fetch_one(pool)
+            .await
+            .expect("read media admin auth version");
+    identity::auth::create_session_access_token(
+        account_id,
+        session_id,
+        auth_version,
+        "integration-test-secret-32bytes!",
+        3_600,
+    )
+    .expect("create media admin session token")
+}
+
+async fn publish_synthetic_variants(pool: &PgPool, asset_id: i64, label: &str) {
+    for (variant_kind, dimension) in
+        [("thumb_256", 256_i32), ("display_1280", 1_280_i32), ("full_2048", 2_048_i32)]
+    {
+        let digest = hex::encode(Sha256::digest(format!("{label}-{variant_kind}").as_bytes()));
+        sqlx::query(
+            "INSERT INTO media.asset_variants \
+             (asset_id, variant_kind, policy_version, object_key, content_sha256, mime, \
+              bytes, width, height, status, published_at) \
+             VALUES ($1, $2, 1, $3, $4, 'image/webp', 10, $5, $5, 'published', now())",
+        )
+        .bind(asset_id)
+        .bind(variant_kind)
+        .bind(format!("assets/{asset_id}/1/{variant_kind}-{digest}.webp"))
+        .bind(digest)
+        .bind(dimension)
+        .execute(pool)
+        .await
+        .expect("insert synthetic published variant");
+    }
+    sqlx::query(
+        "UPDATE media.asset_publications \
+         SET status = 'published', published_at = now() WHERE asset_id = $1",
+    )
+    .bind(asset_id)
+    .execute(pool)
+    .await
+    .expect("publish synthetic variant set");
+}
+
 fn request(method: Method, uri: String, token: &str, body: Body) -> Request<Body> {
     Request::builder()
         .method(method)
@@ -201,6 +266,31 @@ async fn moderation_requires_evidence_and_deletion_remains_private_across_retrie
     assert!(listed_upload.get("ossKey").is_none());
     assert!(listed_upload.get("url").is_none());
     assert!(listed_upload.get("sha256").is_none());
+
+    let owner_preview = failing_app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            format!("/api/v2/me/media/uploads/{upload_id}/preview"),
+            &owner_token,
+            Body::empty(),
+        ))
+        .await
+        .expect("owner pending preview response");
+    assert_eq!(owner_preview.status(), StatusCode::OK);
+    assert_eq!(owner_preview.headers()[header::CACHE_CONTROL], "private, no-store, max-age=0");
+    assert_eq!(owner_preview.headers()["cross-origin-resource-policy"], "same-origin");
+    let cross_owner_preview = failing_app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            format!("/api/v2/me/media/uploads/{upload_id}/preview"),
+            &moderator_token,
+            Body::empty(),
+        ))
+        .await
+        .expect("cross-owner pending preview response");
+    assert_eq!(cross_owner_preview.status(), StatusCode::NOT_FOUND);
 
     let own_grant_response = failing_app
         .clone()
@@ -470,6 +560,14 @@ async fn moderation_requires_evidence_and_deletion_remains_private_across_retrie
     .execute(&pool)
     .await
     .expect("advance provider retry budget");
+    sqlx::query(
+        "UPDATE media.object_cleanup_steps SET available_at = now() \
+         WHERE deletion_job_id = (SELECT id FROM media.object_deletion_jobs WHERE upload_id = $1)",
+    )
+    .bind(upload_id)
+    .execute(&pool)
+    .await
+    .expect("advance cleanup-step retry window");
     assert!(process_upload_deletion_job(&pool, &FailingObjectStore, upload_id)
         .await
         .expect("final provider failure is recorded"));
@@ -570,6 +668,355 @@ async fn moderation_requires_evidence_and_deletion_remains_private_across_retrie
 }
 
 #[tokio::test]
+async fn admin_own_media_review_requires_recent_auth_confirmation_and_audited_evidence() {
+    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL for media integration");
+    let pool = PgPool::connect(&database_url).await.expect("media test database");
+    MIGRATOR.run(&pool).await.expect("media test migrations");
+    let suffix = uuid::Uuid::new_v4().simple().to_string();
+    let admin_id: i64 = sqlx::query_scalar(
+        "INSERT INTO identity.accounts (email, handle, role) \
+         VALUES ($1, $2, 'admin') RETURNING id",
+    )
+    .bind(format!("media-self-admin-{suffix}@tongji.edu.cn"))
+    .bind(format!("media-self-admin-{suffix}"))
+    .fetch_one(&pool)
+    .await
+    .expect("insert media self-review admin");
+    let upload_id: i64 = sqlx::query_scalar(
+        "INSERT INTO media.uploads \
+         (account_id, kind, oss_key, url, bytes, mime, sha256) \
+         VALUES ($1, 'image', $2, '', 10, 'image/png', $3) RETURNING id",
+    )
+    .bind(admin_id)
+    .bind(format!("uploads/{admin_id}/image/{suffix}.png"))
+    .bind("a".repeat(64))
+    .fetch_one(&pool)
+    .await
+    .expect("insert admin pending media");
+    let recent_token = admin_session_token(&pool, admin_id, true).await;
+    let stale_token = admin_session_token(&pool, admin_id, false).await;
+    let app = routes_with_object_store(test_state(pool.clone()), Arc::new(FailingObjectStore));
+
+    let queue = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            "/api/v2/admin/media/uploads".into(),
+            &recent_token,
+            Body::empty(),
+        ))
+        .await
+        .expect("ADMIN own-media queue");
+    assert_eq!(queue.status(), StatusCode::OK);
+    let queue_body = response_json(queue).await;
+    let own_item = queue_body["items"]
+        .as_array()
+        .expect("ADMIN moderation items")
+        .iter()
+        .find(|item| item["id"].as_str() == Some(&upload_id.to_string()))
+        .expect("ADMIN own upload in queue");
+    assert_eq!(own_item["isSelfReview"], true);
+
+    let unconfirmed = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            format!("/api/v2/admin/media/uploads/{upload_id}/preview-grants"),
+            &recent_token,
+            Body::from(r#"{"reason":"inspect own media"}"#),
+        ))
+        .await
+        .expect("unconfirmed ADMIN preview grant");
+    assert_eq!(unconfirmed.status(), StatusCode::FORBIDDEN);
+    let stale = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            format!("/api/v2/admin/media/uploads/{upload_id}/preview-grants"),
+            &stale_token,
+            Body::from(r#"{"reason":"inspect own media","selfReviewConfirmed":true}"#),
+        ))
+        .await
+        .expect("stale ADMIN preview grant");
+    assert_eq!(stale.status(), StatusCode::PRECONDITION_REQUIRED);
+    for action in ["approve", "block"] {
+        let stale_action = app
+            .clone()
+            .oneshot(request(
+                Method::POST,
+                format!("/api/v2/admin/media/uploads/{upload_id}/{action}"),
+                &stale_token,
+                Body::from(format!(
+                    r#"{{"reason":"stale own media {action}","selfReviewConfirmed":true}}"#,
+                )),
+            ))
+            .await
+            .expect("stale ADMIN moderation action");
+        assert_eq!(stale_action.status(), StatusCode::PRECONDITION_REQUIRED);
+    }
+    let grant = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            format!("/api/v2/admin/media/uploads/{upload_id}/preview-grants"),
+            &recent_token,
+            Body::from(r#"{"reason":"inspect own media","selfReviewConfirmed":true}"#),
+        ))
+        .await
+        .expect("confirmed ADMIN preview grant");
+    assert_eq!(grant.status(), StatusCode::OK);
+    let grant_body = response_json(grant).await;
+    let preview_token = grant_body["token"].as_str().expect("ADMIN preview token");
+    let preview = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!("/api/v2/admin/media/uploads/{upload_id}/preview"))
+                .header(header::AUTHORIZATION, format!("Bearer {recent_token}"))
+                .header("x-media-preview-token", preview_token)
+                .body(Body::empty())
+                .expect("ADMIN self-preview request"),
+        )
+        .await
+        .expect("ADMIN self-preview response");
+    assert_eq!(preview.status(), StatusCode::OK);
+    let approval = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            format!("/api/v2/admin/media/uploads/{upload_id}/approve"),
+            &recent_token,
+            Body::from(r#"{"reason":"approve own reviewed media","selfReviewConfirmed":true}"#),
+        ))
+        .await
+        .expect("ADMIN own-media approval");
+    assert_eq!(approval.status(), StatusCode::OK);
+    let (grant_self_review, evidence_self_review): (bool, bool) = sqlx::query_as(
+        "SELECT preview.self_review, evidence.self_review \
+         FROM media.moderation_preview_grants preview \
+         JOIN media.moderation_evidence evidence ON evidence.upload_id = preview.upload_id \
+         WHERE preview.upload_id = $1 AND preview.moderator_account_id = $2 \
+         ORDER BY preview.id DESC, evidence.id DESC LIMIT 1",
+    )
+    .bind(upload_id)
+    .bind(admin_id)
+    .fetch_one(&pool)
+    .await
+    .expect("persisted self-review evidence");
+    assert!(grant_self_review);
+    assert!(evidence_self_review);
+    let audit_flags: Vec<bool> = sqlx::query_scalar(
+        "SELECT (metadata->>'selfReview')::boolean FROM governance.audit_events \
+         WHERE actor_account_id = $1 AND target_type = 'upload' AND target_id = $2 \
+           AND action IN ('media.upload.previewed', 'media.upload.approved') \
+         ORDER BY id",
+    )
+    .bind(admin_id)
+    .bind(upload_id.to_string())
+    .fetch_all(&pool)
+    .await
+    .expect("ADMIN self-review audit events");
+    assert_eq!(audit_flags, vec![true, true]);
+}
+
+#[tokio::test]
+async fn operations_retry_requires_recent_auth_and_atomically_requeues_only_failed_delivery() {
+    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL for media integration");
+    let pool = PgPool::connect(&database_url).await.expect("media test database");
+    MIGRATOR.run(&pool).await.expect("media test migrations");
+    let suffix = uuid::Uuid::new_v4().simple().to_string();
+    let admin_id: i64 = sqlx::query_scalar(
+        "INSERT INTO identity.accounts (email, handle, role) \
+         VALUES ($1, $2, 'admin') RETURNING id",
+    )
+    .bind(format!("media-processing-admin-{suffix}@tongji.edu.cn"))
+    .bind(format!("media-processing-admin-{suffix}"))
+    .fetch_one(&pool)
+    .await
+    .expect("insert media processing administrator");
+    let owner_id: i64 = sqlx::query_scalar(
+        "INSERT INTO identity.accounts (email, handle) VALUES ($1, $2) RETURNING id",
+    )
+    .bind(format!("media-processing-owner-{suffix}@tongji.edu.cn"))
+    .bind(format!("media-processing-owner-{suffix}"))
+    .fetch_one(&pool)
+    .await
+    .expect("insert media processing owner");
+    let upload_id: i64 = sqlx::query_scalar(
+        "INSERT INTO media.uploads \
+         (account_id, kind, oss_key, url, bytes, mime, sha256, status) \
+         VALUES ($1, 'image', $2, '', 10, 'image/png', repeat('a', 64), 'clean') \
+         RETURNING id",
+    )
+    .bind(owner_id)
+    .bind(format!("uploads/{owner_id}/image/{suffix}.png"))
+    .fetch_one(&pool)
+    .await
+    .expect("insert failed Delivery upload");
+    sqlx::query(
+        "UPDATE media.asset_publications \
+         SET status = 'failed', last_error_code = 'delivery_write_failed' \
+         WHERE asset_id = $1",
+    )
+    .bind(upload_id)
+    .execute(&pool)
+    .await
+    .expect("mark Delivery publication failed");
+    sqlx::query(
+        "INSERT INTO media.variant_processing_jobs \
+         (asset_id, policy_version, status, attempt_count, last_error_code) \
+         VALUES ($1, 1, 'dead_letter', 8, 'delivery_write_failed')",
+    )
+    .bind(upload_id)
+    .execute(&pool)
+    .await
+    .expect("insert dead-lettered Delivery job");
+    let recent_admin_token = admin_session_token(&pool, admin_id, true).await;
+    let stale_admin_token = admin_session_token(&pool, admin_id, false).await;
+    let owner_token = admin_session_token(&pool, owner_id, true).await;
+    let app = routes_with_object_store(test_state(pool.clone()), Arc::new(SuccessfulObjectStore));
+    let endpoint = format!("/api/v2/admin/media/uploads/{upload_id}/processing/retry");
+
+    let forbidden = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            endpoint.clone(),
+            &owner_token,
+            Body::from(r#"{"reason":"retry reviewed Delivery failure"}"#),
+        ))
+        .await
+        .expect("non-operations retry response");
+    assert_eq!(forbidden.status(), StatusCode::FORBIDDEN);
+    let invalid_reason = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            endpoint.clone(),
+            &recent_admin_token,
+            Body::from(r#"{"reason":""}"#),
+        ))
+        .await
+        .expect("empty retry reason response");
+    assert_eq!(invalid_reason.status(), StatusCode::BAD_REQUEST);
+    let stale = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            endpoint.clone(),
+            &stale_admin_token,
+            Body::from(r#"{"reason":"retry reviewed Delivery failure"}"#),
+        ))
+        .await
+        .expect("stale operations retry response");
+    assert_eq!(stale.status(), StatusCode::PRECONDITION_REQUIRED);
+
+    let failed_queue = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            "/api/v2/admin/media/uploads?status=clean&limit=100".into(),
+            &recent_admin_token,
+            Body::empty(),
+        ))
+        .await
+        .expect("failed Delivery moderation response");
+    assert_eq!(failed_queue.status(), StatusCode::OK);
+    let failed_body = response_json(failed_queue).await;
+    let failed_item = failed_body["items"]
+        .as_array()
+        .expect("failed Delivery moderation items")
+        .iter()
+        .find(|item| item["id"].as_str() == Some(&upload_id.to_string()))
+        .expect("failed Delivery upload in moderation queue");
+    assert_eq!(failed_item["deliveryState"], "failed");
+    assert_eq!(failed_item["deliveryErrorCode"], "delivery_write_failed");
+
+    let accepted = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            endpoint.clone(),
+            &recent_admin_token,
+            Body::from(r#"{"reason":"retry reviewed Delivery failure"}"#),
+        ))
+        .await
+        .expect("accepted operations retry response");
+    assert_eq!(accepted.status(), StatusCode::ACCEPTED);
+    let state: (String, String, i32, Option<String>, Option<String>) = sqlx::query_as(
+        "SELECT publication.status, job.status, job.attempt_count, \
+                publication.last_error_code, job.last_error_code \
+         FROM media.asset_publications publication \
+         JOIN media.variant_processing_jobs job \
+           ON job.asset_id = publication.asset_id \
+          AND job.policy_version = publication.policy_version \
+         WHERE publication.asset_id = $1",
+    )
+    .bind(upload_id)
+    .fetch_one(&pool)
+    .await
+    .expect("atomically requeued Delivery state");
+    assert_eq!(state, ("processing".into(), "queued".into(), 0, None, None));
+    let audit: (String, i64) = sqlx::query_as(
+        "SELECT reason, (metadata->>'previousAttemptCount')::bigint \
+         FROM governance.audit_events \
+         WHERE actor_account_id = $1 AND action = 'media.asset.processing_requeued' \
+           AND target_type = 'upload' AND target_id = $2",
+    )
+    .bind(admin_id)
+    .bind(upload_id.to_string())
+    .fetch_one(&pool)
+    .await
+    .expect("processing retry audit event");
+    assert_eq!(audit, ("retry reviewed Delivery failure".into(), 8));
+
+    let owner_state = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            format!("/api/v2/me/media/uploads/{upload_id}"),
+            &owner_token,
+            Body::empty(),
+        ))
+        .await
+        .expect("owner Delivery state response");
+    assert_eq!(owner_state.status(), StatusCode::OK);
+    assert_eq!(response_json(owner_state).await["deliveryState"], "processing");
+    let moderation_queue = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            "/api/v2/admin/media/uploads?status=clean&limit=100".into(),
+            &recent_admin_token,
+            Body::empty(),
+        ))
+        .await
+        .expect("moderation Delivery state response");
+    assert_eq!(moderation_queue.status(), StatusCode::OK);
+    let moderation_body = response_json(moderation_queue).await;
+    let item = moderation_body["items"]
+        .as_array()
+        .expect("moderation Delivery items")
+        .iter()
+        .find(|item| item["id"].as_str() == Some(&upload_id.to_string()))
+        .expect("failed Delivery upload in moderation queue");
+    assert_eq!(item["deliveryState"], "processing");
+    assert_eq!(item["deliveryErrorCode"], serde_json::Value::Null);
+
+    let duplicate = app
+        .oneshot(request(
+            Method::POST,
+            endpoint,
+            &recent_admin_token,
+            Body::from(r#"{"reason":"duplicate Delivery retry"}"#),
+        ))
+        .await
+        .expect("duplicate retry response");
+    assert_eq!(duplicate.status(), StatusCode::CONFLICT);
+}
+
+#[tokio::test]
 async fn moderation_queue_applies_role_hierarchy_before_pagination() {
     let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL for media integration");
     let pool = PgPool::connect(&database_url).await.expect("media test database");
@@ -593,6 +1040,13 @@ async fn moderation_queue_applies_role_hierarchy_before_pagination() {
     .fetch_one(&pool)
     .await
     .expect("seed user owner");
+    sqlx::query(
+        "UPDATE identity.accounts SET status = 'deactivated', deactivated_at = now() WHERE id = $1",
+    )
+    .bind(user_id)
+    .execute(&pool)
+    .await
+    .expect("preserve moderation of retained content for a deactivated owner");
     let peer_moderator_id: i64 = sqlx::query_scalar(
         "INSERT INTO identity.accounts (email, handle, role) \
          VALUES ($1, $2, 'mod') RETURNING id",
@@ -611,6 +1065,15 @@ async fn moderation_queue_applies_role_hierarchy_before_pagination() {
     .fetch_one(&pool)
     .await
     .expect("seed administrator");
+    let peer_administrator_id: i64 = sqlx::query_scalar(
+        "INSERT INTO identity.accounts (email, handle, role) \
+         VALUES ($1, $2, 'admin') RETURNING id",
+    )
+    .bind(format!("media-role-peer-admin-{suffix}@tongji.edu.cn"))
+    .bind(format!("media-role-peer-admin-{suffix}"))
+    .fetch_one(&pool)
+    .await
+    .expect("seed peer administrator");
 
     let insert_upload = |account_id: i64, label: &'static str| {
         let pool = pool.clone();
@@ -631,9 +1094,49 @@ async fn moderation_queue_applies_role_hierarchy_before_pagination() {
         }
     };
     let user_upload_id = insert_upload(user_id, "user").await;
+    let older_user_upload_id = insert_upload(user_id, "older-user").await;
     let peer_upload_id = insert_upload(peer_moderator_id, "peer").await;
     let admin_upload_id = insert_upload(administrator_id, "admin").await;
     let self_upload_id = insert_upload(actor_id, "self").await;
+    let peer_administrator_upload_ids: Vec<i64> = sqlx::query_scalar(
+        "INSERT INTO media.uploads \
+         (account_id, kind, oss_key, url, bytes, mime, sha256, created_at) \
+         SELECT $1, 'image', \
+                'uploads/' || $1::text || '/image/' || $2 || '-admin-' || sequence::text || '.png', \
+                'https://example.invalid/' || $2 || '-admin-' || sequence::text || '.png', \
+                10, 'image/png', repeat('c', 64), \
+                now() + interval '10 days' + sequence * interval '1 second' \
+         FROM generate_series(1, 201) sequence RETURNING id",
+    )
+    .bind(peer_administrator_id)
+    .bind(&suffix)
+    .fetch_all(&pool)
+    .await
+    .expect("seed more than one candidate batch of higher-role media");
+    sqlx::query(
+        "UPDATE media.uploads SET created_at = CASE id \
+           WHEN $1 THEN now() + interval '2 days' \
+           WHEN $2 THEN now() + interval '1 day' \
+           WHEN $3 THEN now() + interval '5 days' \
+           WHEN $4 THEN now() + interval '4 days' \
+           WHEN $5 THEN now() + interval '3 days' END \
+         WHERE id = ANY($6)",
+    )
+    .bind(user_upload_id)
+    .bind(older_user_upload_id)
+    .bind(peer_upload_id)
+    .bind(admin_upload_id)
+    .bind(self_upload_id)
+    .bind(vec![
+        user_upload_id,
+        older_user_upload_id,
+        peer_upload_id,
+        admin_upload_id,
+        self_upload_id,
+    ])
+    .execute(&pool)
+    .await
+    .expect("isolate hierarchy pagination order from concurrent fixtures");
 
     let state = test_state(pool.clone());
     let moderator_token = identity::auth::create_access_token(actor_id, &state.jwt_secret, 3600)
@@ -643,46 +1146,100 @@ async fn moderation_queue_applies_role_hierarchy_before_pagination() {
             .expect("administrator token");
     let app = routes_with_object_store(state, Arc::new(FailingObjectStore));
 
-    let moderator_queue = app
-        .clone()
-        .oneshot(request(
-            Method::GET,
-            "/api/v2/admin/media/uploads?status=pending&limit=1".into(),
-            &moderator_token,
-            Body::empty(),
-        ))
-        .await
-        .expect("moderator queue response");
-    assert_eq!(moderator_queue.status(), StatusCode::OK);
-    let moderator_items = response_json(moderator_queue).await["items"]
-        .as_array()
-        .expect("moderator queue items")
-        .to_owned();
-    assert_eq!(moderator_items.len(), 1);
-    assert_eq!(moderator_items[0]["id"], user_upload_id.to_string());
+    let mut moderator_cursor: Option<String> = None;
+    let mut moderator_cursors = std::collections::HashSet::new();
+    let mut moderator_ids = Vec::new();
+    let mut empty_pages = 0;
+    for _ in 0..8 {
+        let uri = moderator_cursor.as_ref().map_or_else(
+            || "/api/v2/admin/media/uploads?status=pending&limit=1".to_owned(),
+            |cursor| format!("/api/v2/admin/media/uploads?status=pending&limit=1&cursor={cursor}"),
+        );
+        let moderator_queue = app
+            .clone()
+            .oneshot(request(Method::GET, uri, &moderator_token, Body::empty()))
+            .await
+            .expect("moderator queue response");
+        assert_eq!(moderator_queue.status(), StatusCode::OK);
+        let moderator_body = response_json(moderator_queue).await;
+        let page_items = moderator_body["items"].as_array().expect("moderator queue items");
+        if page_items.is_empty() {
+            empty_pages += 1;
+        }
+        for item in page_items {
+            let upload_id = item["id"].as_str().expect("moderator upload id").to_owned();
+            assert_ne!(upload_id, peer_upload_id.to_string());
+            assert_ne!(upload_id, admin_upload_id.to_string());
+            assert_ne!(upload_id, self_upload_id.to_string());
+            assert!(!peer_administrator_upload_ids
+                .iter()
+                .any(|peer_id| peer_id.to_string() == upload_id));
+            moderator_ids.push(upload_id);
+        }
+        if moderator_ids.len() >= 2 {
+            break;
+        }
+        moderator_cursor = moderator_body["nextCursor"].as_str().map(str::to_owned);
+        assert!(moderator_cursor.is_some(), "bounded scan must advance until eligible media");
+        assert!(
+            moderator_cursors.insert(moderator_cursor.clone()),
+            "bounded scan cursor must make forward progress"
+        );
+    }
+    assert!(empty_pages >= 2, "the fixture must cross multiple bounded empty pages");
+    assert_eq!(
+        &moderator_ids[..2],
+        &[user_upload_id.to_string(), older_user_upload_id.to_string()]
+    );
 
-    let administrator_queue = app
-        .clone()
-        .oneshot(request(
-            Method::GET,
-            "/api/v2/admin/media/uploads?status=pending&limit=10".into(),
-            &administrator_token,
-            Body::empty(),
-        ))
-        .await
-        .expect("administrator queue response");
-    assert_eq!(administrator_queue.status(), StatusCode::OK);
-    let administrator_body = response_json(administrator_queue).await;
-    let administrator_ids = administrator_body["items"]
-        .as_array()
-        .expect("administrator queue items")
+    let mut administrator_cursor: Option<String> = None;
+    let mut administrator_items = Vec::new();
+    loop {
+        let uri = administrator_cursor.as_ref().map_or_else(
+            || "/api/v2/admin/media/uploads?status=pending&limit=100".to_owned(),
+            |cursor| {
+                format!("/api/v2/admin/media/uploads?status=pending&limit=100&cursor={cursor}")
+            },
+        );
+        let administrator_queue = app
+            .clone()
+            .oneshot(request(Method::GET, uri, &administrator_token, Body::empty()))
+            .await
+            .expect("administrator queue response");
+        assert_eq!(administrator_queue.status(), StatusCode::OK);
+        let administrator_body = response_json(administrator_queue).await;
+        administrator_items.extend(
+            administrator_body["items"]
+                .as_array()
+                .expect("administrator queue items")
+                .iter()
+                .cloned(),
+        );
+        administrator_cursor = administrator_body["nextCursor"].as_str().map(str::to_owned);
+        if administrator_cursor.is_none() {
+            break;
+        }
+    }
+    let administrator_ids = administrator_items
         .iter()
         .filter_map(|item| item["id"].as_str().map(str::to_owned))
         .collect::<Vec<_>>();
     assert!(administrator_ids.contains(&user_upload_id.to_string()));
+    assert!(administrator_ids.contains(&older_user_upload_id.to_string()));
     assert!(administrator_ids.contains(&peer_upload_id.to_string()));
-    assert!(!administrator_ids.contains(&admin_upload_id.to_string()));
+    assert!(administrator_ids.contains(&admin_upload_id.to_string()));
     assert!(administrator_ids.contains(&self_upload_id.to_string()));
+    assert!(peer_administrator_upload_ids
+        .iter()
+        .all(|peer_id| !administrator_ids.contains(&peer_id.to_string())));
+    let admin_upload_id_text = admin_upload_id.to_string();
+    assert_eq!(
+        administrator_items
+            .iter()
+            .find(|item| item["id"].as_str() == Some(admin_upload_id_text.as_str()))
+            .expect("ADMIN own media item")["isSelfReview"],
+        true
+    );
 
     let peer_preview = app
         .oneshot(request(
@@ -696,12 +1253,23 @@ async fn moderation_queue_applies_role_hierarchy_before_pagination() {
     assert_eq!(peer_preview.status(), StatusCode::FORBIDDEN);
 
     sqlx::query("DELETE FROM media.uploads WHERE id = ANY($1)")
-        .bind(vec![user_upload_id, peer_upload_id, admin_upload_id, self_upload_id])
+        .bind(vec![
+            user_upload_id,
+            older_user_upload_id,
+            peer_upload_id,
+            admin_upload_id,
+            self_upload_id,
+        ])
+        .execute(&pool)
+        .await
+        .ok();
+    sqlx::query("DELETE FROM media.uploads WHERE id = ANY($1)")
+        .bind(&peer_administrator_upload_ids)
         .execute(&pool)
         .await
         .ok();
     sqlx::query("DELETE FROM identity.accounts WHERE id = ANY($1)")
-        .bind(vec![actor_id, user_id, peer_moderator_id, administrator_id])
+        .bind(vec![actor_id, user_id, peer_moderator_id, administrator_id, peer_administrator_id])
         .execute(&pool)
         .await
         .ok();
@@ -898,10 +1466,25 @@ async fn profile_images_require_an_owned_clean_oss_asset() {
     .fetch_one(&pool)
     .await
     .expect("seed other profile image");
+    publish_synthetic_variants(&pool, clean_upload_id, "clean-profile").await;
+    publish_synthetic_variants(&pool, replacement_upload_id, "replacement-profile").await;
+    publish_synthetic_variants(&pool, other_upload_id, "other-profile").await;
     let state = test_state(pool.clone());
     let token = identity::auth::create_access_token(owner_id, &state.jwt_secret, 3600)
         .expect("profile media token");
     let app = routes_with_object_store(state, Arc::new(SuccessfulObjectStore));
+
+    let foreign_delivery_response = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            format!("/api/v2/media/{other_upload_id}/url"),
+            &token,
+            Body::empty(),
+        ))
+        .await
+        .expect("foreign Delivery URL response");
+    assert_eq!(foreign_delivery_response.status(), StatusCode::NOT_FOUND);
 
     let list_response = app
         .clone()

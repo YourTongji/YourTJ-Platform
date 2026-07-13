@@ -148,7 +148,7 @@ pub async fn create_or_get_conversation_handler(
     }
 
     let trust_level = crate::trust_levels::get_trust_level(&state.db, auth.id).await?;
-    if trust_level == 0 {
+    if trust_level < 1 {
         return Err(AppError::Forbidden);
     }
 

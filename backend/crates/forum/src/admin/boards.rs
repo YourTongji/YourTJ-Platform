@@ -27,11 +27,15 @@ pub struct CreateBoardInput {
     pub position: i32,
     #[serde(default)]
     pub is_locked: bool,
-    #[serde(default)]
+    #[serde(default = "default_min_trust_to_post")]
     pub min_trust_to_post: i16,
     #[serde(default)]
     pub is_qa: bool,
     pub reason: String,
+}
+
+fn default_min_trust_to_post() -> i16 {
+    1
 }
 
 #[derive(Debug, Deserialize)]
@@ -91,7 +95,7 @@ pub async fn create_board(
         || name.chars().count() > 100
         || body.description.as_ref().is_some_and(|value| value.trim().chars().count() > 500)
         || body.position < 0
-        || !(0..=3).contains(&body.min_trust_to_post)
+        || !(1..=6).contains(&body.min_trust_to_post)
     {
         return Err(AppError::BadRequest("invalid board settings".into()));
     }
@@ -178,7 +182,7 @@ pub async fn update_board(
         || name.is_some_and(|name| name.chars().count() > 100)
         || description.is_some_and(|value| value.chars().count() > 500)
         || body.position.is_some_and(|position| position < 0)
-        || body.min_trust_to_post.is_some_and(|level| !(0..=3).contains(&level))
+        || body.min_trust_to_post.is_some_and(|level| !(1..=6).contains(&level))
         || (slug.is_none()
             && name.is_none()
             && body.description.is_none()

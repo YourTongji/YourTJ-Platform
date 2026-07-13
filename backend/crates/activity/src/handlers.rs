@@ -1,12 +1,16 @@
-use axum::extract::{Query, State};
+use axum::extract::{Path, Query, State};
 use axum::http::HeaderMap;
 use axum::Json;
 use chrono::{Duration, NaiveDate};
 use serde::Deserialize;
 use shared::{AppError, AppResult, AppState, Page};
 
-use crate::dto::{ActivityCalendarDto, ActivityPolicyDto, ActivityPolicyUpdateInput};
-use crate::repo;
+use crate::dto::{
+    ActivityCalendarDto, ActivityPolicyDto, ActivityPolicyUpdateInput, CheckInStatusDto,
+    TrustLevelAdjustInput, TrustLevelEventDto, TrustLevelPolicyDto, TrustLevelPolicyUpdateInput,
+    TrustProgressDto,
+};
+use crate::{check_ins, repo, trust};
 
 const DEFAULT_ACTIVITY_DAYS: i64 = 365;
 const MAX_ACTIVITY_DAYS: i64 = 371;
@@ -38,6 +42,25 @@ pub(crate) async fn get_my_activity(
     let (from, to) = resolve_range(&query, today)?;
     let calendar = repo::activity_calendar(&state.db, auth.id, from, to).await?;
     Ok(Json(calendar))
+}
+
+pub(crate) async fn get_check_in_status(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> AppResult<Json<CheckInStatusDto>> {
+    let auth = authenticate(&state, &headers).await?;
+    Ok(Json(check_ins::current_status(&state.db, auth.id).await?))
+}
+
+pub(crate) async fn check_in(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> AppResult<Json<CheckInStatusDto>> {
+    let auth = authenticate(&state, &headers).await?;
+    if identity::sanctions::is_silenced(state.redis.as_ref(), &state.db, auth.id).await? {
+        return Err(AppError::Forbidden);
+    }
+    Ok(Json(check_ins::check_in(&state.db, auth.id).await?))
 }
 
 pub(crate) async fn get_activity_policy(
@@ -90,6 +113,86 @@ pub(crate) async fn get_activity_policy_history(
     Ok(Json(repo::policy_history(&state.db, cursor, query.limit).await?))
 }
 
+pub(crate) async fn get_my_trust_progress(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> AppResult<Json<TrustProgressDto>> {
+    let auth = authenticate(&state, &headers).await?;
+    Ok(Json(trust::trust_progress(&state.db, auth.id).await?))
+}
+
+pub(crate) async fn get_trust_policy(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> AppResult<Json<TrustLevelPolicyDto>> {
+    let auth = authenticate(&state, &headers).await?;
+    auth.require_capability(shared::auth::Capability::ManageActivity)
+        .map_err(|_| AppError::Forbidden)?;
+    Ok(Json(trust::current_policy(&state.db).await?))
+}
+
+pub(crate) async fn update_trust_policy(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(input): Json<TrustLevelPolicyUpdateInput>,
+) -> AppResult<Json<TrustLevelPolicyDto>> {
+    let auth = authenticate(&state, &headers).await?;
+    auth.require_capability(shared::auth::Capability::ManageActivity)
+        .map_err(|_| AppError::Forbidden)?;
+    Ok(Json(trust::append_policy(&state.db, &input, auth.id, &auth.role).await?))
+}
+
+pub(crate) async fn get_trust_policy_history(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<PolicyHistoryQuery>,
+) -> AppResult<Json<Page<TrustLevelPolicyDto>>> {
+    let auth = authenticate(&state, &headers).await?;
+    auth.require_capability(shared::auth::Capability::ManageActivity)
+        .map_err(|_| AppError::Forbidden)?;
+    let cursor = query
+        .cursor
+        .as_deref()
+        .map(|value| {
+            value.parse::<i64>().map_err(|_| AppError::BadRequest("invalid cursor".into()))
+        })
+        .transpose()?;
+    Ok(Json(trust::policy_history(&state.db, cursor, query.limit).await?))
+}
+
+pub(crate) async fn adjust_user_trust_level(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(input): Json<TrustLevelAdjustInput>,
+) -> AppResult<Json<TrustProgressDto>> {
+    let auth = authenticate(&state, &headers).await?;
+    auth.require_capability(shared::auth::Capability::ManageActivity)
+        .map_err(|_| AppError::Forbidden)?;
+    let account_id: i64 = id.parse().map_err(|_| AppError::NotFound)?;
+    Ok(Json(trust::adjust_trust_level(&state.db, account_id, &input, auth.id, &auth.role).await?))
+}
+
+pub(crate) async fn get_user_trust_events(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Query(query): Query<PolicyHistoryQuery>,
+) -> AppResult<Json<Page<TrustLevelEventDto>>> {
+    let auth = authenticate(&state, &headers).await?;
+    auth.require_capability(shared::auth::Capability::ManageActivity)
+        .map_err(|_| AppError::Forbidden)?;
+    let account_id: i64 = id.parse().map_err(|_| AppError::NotFound)?;
+    let cursor = query
+        .cursor
+        .as_deref()
+        .map(|value| {
+            value.parse::<i64>().map_err(|_| AppError::BadRequest("invalid cursor".into()))
+        })
+        .transpose()?;
+    Ok(Json(trust::event_history(&state.db, account_id, cursor, query.limit).await?))
+}
+
 async fn authenticate(state: &AppState, headers: &HeaderMap) -> AppResult<shared::AuthAccount> {
     identity::auth_middleware::authenticate(
         headers,
@@ -124,7 +227,12 @@ fn parse_date(value: &str) -> AppResult<NaiveDate> {
 }
 
 fn validate_policy_input(input: &ActivityPolicyUpdateInput) -> AppResult<()> {
-    let weights = [&input.weights.thread, &input.weights.comment, &input.weights.like];
+    let weights = [
+        &input.weights.thread,
+        &input.weights.comment,
+        &input.weights.like,
+        &input.weights.check_in,
+    ];
     if weights.into_iter().any(|weight| !(0..=1000).contains(weight)) {
         return Err(AppError::BadRequest("activity weights must be between 0 and 1000".into()));
     }
@@ -164,7 +272,7 @@ mod tests {
     fn rejects_policy_reason_shorter_than_contract_minimum() {
         let input = ActivityPolicyUpdateInput {
             expected_version: 1,
-            weights: ActivityWeightsDto { thread: 10, comment: 3, like: 1 },
+            weights: ActivityWeightsDto { thread: 10, comment: 3, like: 1, check_in: 1 },
             reason: "x".into(),
         };
         assert!(validate_policy_input(&input).is_err());

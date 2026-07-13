@@ -549,11 +549,27 @@ async fn report_reject_uphold_and_appeal_overturn_synchronize_complete_subtree()
     let (second_reporter_id, second_reporter_token) =
         create_test_account(&pool, "activity-flag-two@tongji.edu.cn", "activity-flag-two").await;
     promote_moderator(&pool, moderator_id).await;
-    sqlx::query("UPDATE identity.accounts SET trust_level = 2 WHERE id = ANY($1)")
+    sqlx::query(
+        "INSERT INTO activity.account_trust_progress \
+         (account_id, trust_level, qualifying_score, policy_version) \
+         SELECT ids.account_id, 3, 120, policy.version \
+         FROM unnest($1::bigint[]) AS ids(account_id) \
+         CROSS JOIN LATERAL ( \
+           SELECT version FROM activity.trust_level_policies ORDER BY version DESC LIMIT 1 \
+         ) policy \
+         ON CONFLICT (account_id) DO UPDATE \
+         SET trust_level = 3, qualifying_score = 120, policy_version = EXCLUDED.policy_version, \
+             updated_at = now()",
+    )
+    .bind(vec![first_reporter_id, second_reporter_id])
+    .execute(&pool)
+    .await
+    .expect("raise activity reporters trust");
+    sqlx::query("UPDATE identity.accounts SET trust_level = 3 WHERE id = ANY($1)")
         .bind(vec![first_reporter_id, second_reporter_id])
         .execute(&pool)
         .await
-        .expect("raise activity reporters trust");
+        .expect("project activity reporters trust");
     let fixture = create_activity_fixture(
         &app,
         &thread_author_token,

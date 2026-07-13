@@ -82,7 +82,7 @@ function buildIntensityMap(days: ActivityDay[]) {
 }
 
 function activityLabel(day: ActivityDay, intensity: number) {
-  return `${formatActivityDate(day.date)}：活跃度 ${day.score} 分；发帖 ${day.threads}，评论 ${day.comments}，点赞 ${day.likes}；强度 ${intensity} / 4`;
+  return `${formatActivityDate(day.date)}：活跃度 ${day.score} 分；发帖 ${day.threads}，评论 ${day.comments}，点赞 ${day.likes}，签到 ${day.checkIns}；强度 ${intensity} / 4`;
 }
 
 function HeatmapGrid({ calendar }: { calendar: ActivityCalendar }) {
@@ -202,7 +202,7 @@ function HeatmapGrid({ calendar }: { calendar: ActivityCalendar }) {
                 </TooltipTrigger>
                 <TooltipContent side="top" className="space-y-0.5 text-center">
                   <p className="font-medium">{formatActivityDate(slot.day.date)} · {slot.day.score} 分</p>
-                  <p>发帖 {slot.day.threads} · 评论 {slot.day.comments} · 点赞 {slot.day.likes}</p>
+                  <p>发帖 {slot.day.threads} · 评论 {slot.day.comments} · 点赞 {slot.day.likes} · 签到 {slot.day.checkIns}</p>
                 </TooltipContent>
               </Tooltip>
             );
@@ -212,7 +212,7 @@ function HeatmapGrid({ calendar }: { calendar: ActivityCalendar }) {
 
       <div className="mt-2 flex items-center justify-between gap-2 text-[9px] text-muted-foreground">
         <span className="truncate">
-          发帖 ×{calendar.weights.thread} · 评论 ×{calendar.weights.comment} · 点赞 ×{calendar.weights.like}
+          发帖 ×{calendar.weights.thread} · 评论 ×{calendar.weights.comment} · 点赞 ×{calendar.weights.like}（每日最多 {calendar.likeDailyCap} 分）· 签到 ×{calendar.weights.checkIn}
         </span>
         <span className="flex shrink-0 items-center gap-1" aria-label="活跃度强度从少到多">
           <span>少</span>
@@ -240,7 +240,7 @@ export function ActivityHeatmap({
         <p className="text-xs font-medium">活跃度</p>
         <div className="flex min-h-24 flex-col items-center justify-center gap-2 text-center">
           <p className="max-w-56 text-[10px] leading-4 text-muted-foreground">
-            登录后查看近 20 周每天的发帖、评论和点赞活跃度。
+            登录后查看近 20 周每天的发帖、评论、点赞和签到活跃度。
           </p>
           <Button asChild variant="link" size="sm" className="h-auto p-0 text-xs">
             <Link to="/login">登录查看</Link>

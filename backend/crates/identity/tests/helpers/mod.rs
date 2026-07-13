@@ -21,6 +21,16 @@ pub async fn create_test_app_with_config(test_config: shared::Config) -> (PgPool
     create_test_app_with_config_and_redis(test_config, test_redis_pool()).await
 }
 
+#[allow(dead_code)] // reason: durable-worker integration tests need the same state as the HTTP router
+pub async fn create_test_app_and_state_with_config(
+    test_config: shared::Config,
+) -> (PgPool, axum::Router, AppState) {
+    let (pool, state) =
+        create_test_state_with_config_and_redis(test_config, test_redis_pool()).await;
+    let router = identity::routes(state.clone());
+    (pool, router, state)
+}
+
 #[allow(dead_code)] // reason: concurrency tests that do not exercise CAPTCHA or limits avoid shared Redis state
 pub async fn create_test_app_without_redis() -> (PgPool, axum::Router) {
     let test_config = shared::Config::from_env().expect("test Config::from_env");
@@ -31,6 +41,15 @@ async fn create_test_app_with_config_and_redis(
     test_config: shared::Config,
     redis: Option<deadpool_redis::Pool>,
 ) -> (PgPool, axum::Router) {
+    let (pool, state) = create_test_state_with_config_and_redis(test_config, redis).await;
+    let router = identity::routes(state);
+    (pool, router)
+}
+
+async fn create_test_state_with_config_and_redis(
+    test_config: shared::Config,
+    redis: Option<deadpool_redis::Pool>,
+) -> (PgPool, AppState) {
     let url = std::env::var("DATABASE_URL")
         .unwrap_or_else(|_| "postgres://postgres:postgres@localhost:5432/yourtj_test".to_string());
 
@@ -54,8 +73,7 @@ async fn create_test_app_with_config_and_redis(
         sse_tx: None,
     };
 
-    let router = identity::routes(state);
-    (pool, router)
+    (pool, state)
 }
 
 #[allow(dead_code)]
@@ -212,6 +230,20 @@ async fn run_migrations(pool: &PgPool) {
             .expect("migration 0033 failed");
     }
 
+    let has_governance_notices: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM information_schema.tables \
+         WHERE table_schema = 'governance' AND table_name = 'notices')",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or(false);
+    if !has_governance_notices {
+        sqlx::raw_sql(include_str!("../../../../migrations/0047_governance_appeals.sql"))
+            .execute(pool)
+            .await
+            .expect("migration 0047 failed");
+    }
+
     let has_social_privacy: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM information_schema.tables \
          WHERE table_schema = 'identity' AND table_name = 'profile_privacy')",
@@ -307,6 +339,20 @@ async fn run_migrations(pool: &PgPool) {
             .expect("migration 0058 failed");
     }
 
+    let has_identity_delivery: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM information_schema.tables \
+         WHERE table_schema = 'identity' AND table_name = 'email_delivery_jobs')",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or(false);
+    if !has_identity_delivery {
+        sqlx::raw_sql(include_str!("../../../../migrations/0062_identity_security_delivery.sql"))
+            .execute(pool)
+            .await
+            .expect("migration 0062 failed");
+    }
+
     let database_name: String = sqlx::query_scalar("SELECT current_database()")
         .fetch_one(pool)
         .await
@@ -314,6 +360,7 @@ async fn run_migrations(pool: &PgPool) {
     assert!(database_name.ends_with("_test"), "refuse destructive cleanup outside a test database");
 
     // Clean test data from previous runs (always run, even if migrations were skipped).
+    sqlx::query("DELETE FROM identity.email_delivery_jobs").execute(pool).await.ok();
     sqlx::query("DELETE FROM identity.sessions").execute(pool).await.ok();
     sqlx::query("DELETE FROM identity.email_codes").execute(pool).await.ok();
     sqlx::query("DELETE FROM identity.account_export_download_grants").execute(pool).await.ok();
@@ -385,15 +432,26 @@ pub async fn insert_valid_code(pool: &PgPool, email: &str, code: &str) {
 #[allow(dead_code)]
 pub async fn insert_valid_code_for_purpose(pool: &PgPool, email: &str, code: &str, purpose: &str) {
     let code_hash = hex::encode(Sha256::digest(code));
+    let credential_version: Option<i64> = if purpose == "password_reset" {
+        sqlx::query_scalar("SELECT credential_version FROM identity.accounts WHERE email = $1")
+            .bind(email)
+            .fetch_optional(pool)
+            .await
+            .expect("read reset-code credential version")
+    } else {
+        None
+    };
     sqlx::query(
         "INSERT INTO identity.email_codes \
-         (email, purpose, request_id, code_hash, expires_at, delivery_accepted_at) \
-         VALUES ($1, $2, $3, $4, now() + interval '10 minutes', now())",
+         (email, purpose, request_id, code_hash, expires_at, delivery_accepted_at, \
+          credential_version) \
+         VALUES ($1, $2, $3, $4, now() + interval '10 minutes', now(), $5)",
     )
     .bind(email)
     .bind(purpose)
     .bind(uuid::Uuid::new_v4())
     .bind(&code_hash)
+    .bind(credential_version)
     .execute(pool)
     .await
     .expect("insert test code");

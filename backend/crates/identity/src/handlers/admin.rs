@@ -386,20 +386,13 @@ pub async fn invite_user(
         Some(&metadata),
     )
     .await?;
-    tx.commit().await?;
-
-    let invitation = crate::email_templates::community_invitation();
-    if let Err(error) = shared::email::send_email(
-        &state.config,
-        &email,
-        invitation.subject,
-        &invitation.text,
-        Some(&invitation.html),
+    crate::email_delivery::enqueue_tx(
+        &mut tx,
+        account.id,
+        crate::email_delivery::EmailDeliveryKind::AdminInvitation,
     )
-    .await
-    {
-        tracing::warn!(?error, account_id = account.id, "community invitation email failed");
-    }
+    .await?;
+    tx.commit().await?;
     let row = repo::find_admin_user(&state.db, account.id).await?.ok_or(AppError::NotFound)?;
     Ok((StatusCode::CREATED, Json(admin_user_dto(row))))
 }

@@ -7,6 +7,9 @@ on:
       - "web/**"
       - "backend/**"
       - "contract/openapi.yaml"
+      - "ops/deploy/deploy-pr.sh"
+      - "ops/deploy/cleanup-pr.sh"
+      - "ops/deploy/frontend-nginx.conf.template"
       - ".github/workflows/pr-preview.yml"
   workflow_dispatch:
     inputs:
@@ -31,7 +34,7 @@ jobs:
         env:
           PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr_number }}
         run: |
-          if ! [[ "$PR_NUMBER" =~ ^[0-9]+$ ]] || (( PR_NUMBER > 99 )); then
+          if ! [[ "$PR_NUMBER" =~ ^[1-9][0-9]{0,2}$ ]]; then
             echo "invalid or unsupported PR number: $PR_NUMBER" >&2
             exit 64
           fi
@@ -43,6 +46,9 @@ jobs:
               - "backend/**"
               - "web/**"
               - "contract/openapi.yaml"
+              - "ops/deploy/deploy-pr.sh"
+              - "ops/deploy/cleanup-pr.sh"
+              - "ops/deploy/frontend-nginx.conf.template"
               - ".github/workflows/pr-preview.yml"
 
   # ── Build backend Docker image ──
@@ -113,6 +119,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           name: api-image-${{ github.event.pull_request.number || github.event.inputs.pr_number }}
@@ -147,17 +154,44 @@ jobs:
 
       - name: transfer frontend dist
         run: |
+          set -Eeuo pipefail
           ART="frontend-dist-${{ github.event.pull_request.number || github.event.inputs.pr_number }}"
-          FE_DIR="/opt/yourtj-preview/pr/${{ github.event.pull_request.number || github.event.inputs.pr_number }}/frontend"
+          PR="${{ github.event.pull_request.number || github.event.inputs.pr_number }}"
+          RELEASE="${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          FE_DIR="/opt/yourtj-preview/pr/${PR}/releases/${RELEASE}/frontend"
+          transferred=0
+          cleanup() {
+            if ((transferred == 0)); then
+              ssh preview "rm -rf '${FE_DIR}'" || true
+            fi
+          }
+          trap cleanup EXIT
           test -f "${ART}/index.html"
-          ssh preview "mkdir -p ${FE_DIR} && rm -rf ${FE_DIR}/*"
-          scp -r "$ART"/* preview:${FE_DIR}/
+          ssh preview "install -d -m 755 '${FE_DIR}'"
+          scp -r "$ART"/* "preview:${FE_DIR}/"
+          transferred=1
 
       - name: run deploy script
         run: |
+          set -Eeuo pipefail
           PR="${{ github.event.pull_request.number || github.event.inputs.pr_number }}"
-          FE_DIR="/opt/yourtj-preview/pr/${PR}/frontend"
-          ssh preview /opt/yourtj-preview/deploy-pr.sh "$PR" "$FE_DIR"
+          RELEASE="${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          FE_DIR="/opt/yourtj-preview/pr/${PR}/releases/${RELEASE}/frontend"
+          remote_script="/tmp/deploy-pr-${GITHUB_RUN_ID}.sh"
+          remote_nginx="/tmp/frontend-nginx-${GITHUB_RUN_ID}.conf.template"
+          deployed=0
+          cleanup() {
+            ssh preview "rm -f '${remote_script}' '${remote_nginx}'" || true
+            if ((deployed == 0)); then
+              ssh preview "rm -rf '${FE_DIR}'" || true
+            fi
+          }
+          trap cleanup EXIT
+          scp ops/deploy/deploy-pr.sh "preview:${remote_script}"
+          scp ops/deploy/frontend-nginx.conf.template "preview:${remote_nginx}"
+          ssh preview "chmod 700 '${remote_script}' && chmod 600 '${remote_nginx}'"
+          ssh preview bash "$remote_script" "$PR" "$FE_DIR" "$GITHUB_SHA" "$remote_nginx"
+          deployed=1
 
       - name: verify public preview routes
         run: |
@@ -168,7 +202,34 @@ jobs:
               http://127.0.0.1:8080/pr-${PR}/ >/dev/null
             curl --fail --silent --show-error --retry 60 --retry-delay 1 --retry-connrefused \
               http://127.0.0.1:8080/pr-${PR}/api/v2/health >/dev/null
+            curl --fail --silent --show-error --retry 60 --retry-delay 1 --retry-connrefused \
+              http://127.0.0.1:8080/pr-${PR}/api/v2/ready >/dev/null
           EOF
+
+      - name: verify preview container ports are not public
+        env:
+          PREVIEW_HOST: ${{ secrets.PREVIEW_HOST }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+        run: |
+          python3 - "$PREVIEW_HOST" "$PR_NUMBER" <<'PY'
+          import socket
+          import sys
+
+          host = sys.argv[1]
+          pr_number = int(sys.argv[2])
+          suffix = f"{pr_number:03d}"
+          exposed = []
+          for port in (int(f"15{suffix}"), int(f"16{suffix}")):
+              try:
+                  connection = socket.create_connection((host, port), timeout=2)
+              except OSError:
+                  continue
+              else:
+                  connection.close()
+                  exposed.append(port)
+          if exposed:
+              raise SystemExit(f"preview container ports are publicly reachable: {exposed}")
+          PY
 
       - name: summary
         run: |
@@ -179,15 +240,16 @@ jobs:
           echo "| Frontend | http://${{ secrets.PREVIEW_HOST }}:8080/pr-${PR}/ |" >> $GITHUB_STEP_SUMMARY
           echo "| Backend  | http://${{ secrets.PREVIEW_HOST }}:8080/pr-${PR}/api/v2/health |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo ":warning: Preview auto-expires after 24 hours. Re-run this workflow to redeploy." >> $GITHUB_STEP_SUMMARY
+          echo ":information_source: Preview remains until the PR close cleanup runs. Re-run this workflow to redeploy." >> $GITHUB_STEP_SUMMARY
 
   # ── Cleanup on PR close ──
   cleanup:
-    # Only clean up when PR is closed without merging (merged → deploy-main handles it)
-    if: github.event.action == 'closed' && github.event.pull_request.merged == false
+    # Main deploy and preview cleanup own disjoint resources; merged previews must not leak.
+    if: github.event.action == 'closed'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - uses: actions/checkout@v4
       - name: setup SSH
         run: |
           mkdir -p ~/.ssh
@@ -206,12 +268,5 @@ jobs:
       - name: cleanup
         run: |
           PR="${{ github.event.pull_request.number }}"
-          ssh preview "
-            docker stop pr-${PR}-fe pr-${PR}-be 2>/dev/null || true
-            docker rm pr-${PR}-fe pr-${PR}-be 2>/dev/null || true
-            docker rmi yourtj-api:pr-${PR} 2>/dev/null || true
-            rm -rf /opt/yourtj-preview/pr/${PR}
-            PGPASSWORD=preview_pass_2026 psql -h 127.0.0.1 -p 5433 -U yourtj_preview -d postgres \
-              -c \"DROP DATABASE IF EXISTS yourtj_pr_${PR}\" 2>/dev/null || true
-          "
+          ssh preview bash -s -- "$PR" < ops/deploy/cleanup-pr.sh
           echo "### :broom: PR Preview Cleaned Up" >> $GITHUB_STEP_SUMMARY
