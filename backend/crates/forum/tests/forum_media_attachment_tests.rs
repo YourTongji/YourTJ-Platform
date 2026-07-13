@@ -185,7 +185,8 @@ async fn forum_content_projects_only_the_current_publishable_author_avatar() {
     assert_eq!(comments_json["items"][0]["authorAvatar"]["assetId"], avatar_id.to_string());
 
     sqlx::query(
-        "UPDATE media.asset_publications SET status = 'processing', updated_at = now() \
+        "UPDATE media.asset_publications \
+         SET status = 'processing', published_at = NULL, updated_at = now() \
          WHERE asset_id = $1",
     )
     .bind(avatar_id)
