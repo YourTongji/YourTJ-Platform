@@ -25,6 +25,7 @@ import { useAuth } from "@/context/auth-provider";
 import { api } from "@/lib/api/endpoints";
 import { accountQueryKeys } from "@/lib/account-query-keys";
 import { mediaDeliveryRefetchInterval } from "@/lib/media-delivery";
+import { invalidateMediaDeliveryUrl } from "@/lib/media-delivery-cache";
 import { cn } from "@/lib/utils";
 
 function ThemeToggle() {
@@ -83,7 +84,7 @@ export function AppLayout() {
   });
   const navigationAvatar = useQuery({
     queryKey: ["navigation-avatar-delivery", ownProfile.data?.avatarAssetId],
-    queryFn: () => api.mediaUrl(ownProfile.data?.avatarAssetId ?? ""),
+    queryFn: () => api.mediaUrl(ownProfile.data?.avatarAssetId ?? "", "thumb_256"),
     enabled: canUseCommunity && Boolean(ownProfile.data?.avatarAssetId),
     refetchInterval: (query) => mediaDeliveryRefetchInterval(query.state.data),
   });
@@ -220,12 +221,15 @@ export function AppLayout() {
                           src={navigationAvatar.data?.url ?? account?.avatarUrl ?? undefined}
                           width={navigationAvatar.data?.width}
                           height={navigationAvatar.data?.height}
+                          loading="eager"
+                          decoding="async"
                           referrerPolicy="no-referrer"
                           onError={() => {
                             if (
                               !navigationAvatar.data?.url
                               || retriedAvatarUrl.current === navigationAvatar.data.url
                             ) return;
+                            invalidateMediaDeliveryUrl(navigationAvatar.data);
                             retriedAvatarUrl.current = navigationAvatar.data.url;
                             void navigationAvatar.refetch();
                           }}

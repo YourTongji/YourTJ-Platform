@@ -1,4 +1,5 @@
 import type { Account } from "@/lib/api/types";
+import { clearMediaDeliveryUrlCache } from "@/lib/media-delivery-cache";
 
 const ACCESS_TOKEN_KEY = "yourtj.accessToken";
 const REFRESH_TOKEN_KEY = "yourtj.refreshToken";
@@ -32,6 +33,9 @@ export function readStoredAccount(): Account | null {
 }
 
 export function writeAuth(auth: StoredAuth) {
+  if (readStoredAccount()?.id !== auth.account.id) {
+    clearMediaDeliveryUrlCache();
+  }
   localStorage.setItem(ACCESS_TOKEN_KEY, auth.accessToken);
   localStorage.setItem(REFRESH_TOKEN_KEY, auth.refreshToken);
   localStorage.setItem(ACCOUNT_KEY, JSON.stringify(auth.account));
@@ -42,6 +46,7 @@ export function writeAccount(account: Account) {
 }
 
 export function clearAuth() {
+  clearMediaDeliveryUrlCache();
   localStorage.removeItem(ACCESS_TOKEN_KEY);
   localStorage.removeItem(REFRESH_TOKEN_KEY);
   localStorage.removeItem(ACCOUNT_KEY);

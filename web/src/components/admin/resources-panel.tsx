@@ -249,6 +249,8 @@ function MediaQueue({ canRunOperations }: { canRunOperations: boolean }) {
                   <img
                     src={previewObject.url}
                     alt={`待审上传 ${upload.id} 的一次性预览`}
+                    loading="lazy"
+                    decoding="async"
                     className="max-h-80 max-w-full rounded object-contain"
                   />
                   <Button type="button" size="sm" variant="ghost" className="mt-2" onClick={() => setPreviewObject(null)}>

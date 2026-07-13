@@ -12,8 +12,20 @@ function Avatar({ className, ...props }: React.ComponentProps<typeof AvatarPrimi
   );
 }
 
-function AvatarImage({ className, ...props }: React.ComponentProps<typeof AvatarPrimitive.Image>) {
-  return <AvatarPrimitive.Image className={cn("aspect-square h-full w-full", className)} {...props} />;
+function AvatarImage({
+  className,
+  loading = "lazy",
+  decoding = "async",
+  ...props
+}: React.ComponentProps<typeof AvatarPrimitive.Image>) {
+  return (
+    <AvatarPrimitive.Image
+      className={cn("aspect-square h-full w-full", className)}
+      loading={loading}
+      decoding={decoding}
+      {...props}
+    />
+  );
 }
 
 function AvatarFallback({

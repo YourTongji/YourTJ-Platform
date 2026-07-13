@@ -1,5 +1,7 @@
 //! Private 1:1 conversation handlers and the scoped DM report queue.
 
+use std::collections::HashMap;
+
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
@@ -52,13 +54,16 @@ fn validate_limit(limit: i64) -> AppResult<i64> {
     Ok(limit)
 }
 
-fn conversation_to_dto(row: DmConversationListRow) -> DmConversationDto {
+fn conversation_to_dto(
+    row: DmConversationListRow,
+    participant_avatar_url: Option<String>,
+) -> DmConversationDto {
     DmConversationDto {
         id: row.id.to_string(),
         participant_id: row.other_account_id.to_string(),
         participant_handle: row.other_handle,
         participant_display_name: row.other_display_name,
-        participant_avatar_url: row.other_avatar_url,
+        participant_avatar_url,
         last_message_excerpt: row.last_message_excerpt,
         last_message_at: row.last_message_at.timestamp(),
         unread_count: row.unread_count,
@@ -70,6 +75,45 @@ fn conversation_to_dto(row: DmConversationListRow) -> DmConversationDto {
         can_send: row.can_send,
         created_at: row.created_at.timestamp(),
     }
+}
+
+async fn project_conversations(
+    pool: &sqlx::PgPool,
+    rows: Vec<DmConversationListRow>,
+) -> AppResult<Vec<DmConversationDto>> {
+    let participant_ids = rows.iter().map(|row| row.other_account_id).collect::<Vec<_>>();
+    let accounts = identity::public_accounts::find_public_accounts_by_ids(pool, &participant_ids)
+        .await?
+        .into_iter()
+        .map(|account| (account.id, account))
+        .collect::<HashMap<_, _>>();
+    let asset_ids =
+        accounts.values().filter_map(|account| account.avatar_asset_id).collect::<Vec<_>>();
+    let avatar_urls =
+        media::resolve_clean_profile_images(pool, &asset_ids, media::ImageVariant::Thumb256)
+            .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| {
+            let avatar_url = accounts
+                .get(&row.other_account_id)
+                .and_then(|account| account.avatar_asset_id)
+                .and_then(|asset_id| avatar_urls.get(&asset_id).cloned());
+            conversation_to_dto(row, avatar_url)
+        })
+        .collect())
+}
+
+async fn project_conversation(
+    pool: &sqlx::PgPool,
+    row: DmConversationListRow,
+) -> AppResult<DmConversationDto> {
+    project_conversations(pool, vec![row])
+        .await?
+        .into_iter()
+        .next()
+        .ok_or_else(|| AppError::Internal(anyhow::anyhow!("conversation projection missing")))
 }
 
 fn dm_idempotency_key(headers: &HeaderMap) -> AppResult<Option<&str>> {
@@ -210,7 +254,7 @@ pub async fn create_or_get_conversation_handler(
             let conversation = repo::dms::get_conversation(&state.db, conversation_id, auth.id)
                 .await?
                 .ok_or(AppError::NotFound)?;
-            return Ok(Json(conversation_to_dto(conversation)));
+            return Ok(Json(project_conversation(&state.db, conversation).await?));
         }
     }
     shared::ratelimit::check_token_bucket(
@@ -233,7 +277,7 @@ pub async fn create_or_get_conversation_handler(
     let conversation = repo::dms::get_conversation(&state.db, result.conversation_id, auth.id)
         .await?
         .ok_or(AppError::NotFound)?;
-    Ok(Json(conversation_to_dto(conversation)))
+    Ok(Json(project_conversation(&state.db, conversation).await?))
 }
 
 /// Return the authenticated participant's paginated inbox.
@@ -266,7 +310,7 @@ pub async fn list_conversations_handler(
     let (rows, next_cursor) =
         repo::dms::list_conversations(&state.db, auth.id, view, search_query, cursor, limit)
             .await?;
-    let items = rows.into_iter().map(conversation_to_dto).collect();
+    let items = project_conversations(&state.db, rows).await?;
     Ok(Json(Page::new(items, next_cursor)))
 }
 
@@ -324,7 +368,7 @@ pub async fn accept_message_request_handler(
     let conversation = repo::dms::get_conversation(&state.db, conversation_id, auth.id)
         .await?
         .ok_or(AppError::NotFound)?;
-    Ok(Json(conversation_to_dto(conversation)))
+    Ok(Json(project_conversation(&state.db, conversation).await?))
 }
 
 /// Decline an incoming request or withdraw an outgoing request without notifying either side.

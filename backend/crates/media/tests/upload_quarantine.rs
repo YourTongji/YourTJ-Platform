@@ -1658,6 +1658,22 @@ async fn profile_images_require_an_owned_clean_oss_asset() {
         .expect("foreign Delivery URL response");
     assert_eq!(foreign_delivery_response.status(), StatusCode::NOT_FOUND);
 
+    let thumb_delivery_response = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            format!("/api/v2/media/{clean_upload_id}/url?variant=thumb_256"),
+            &token,
+            Body::empty(),
+        ))
+        .await
+        .expect("owned thumb Delivery URL response");
+    assert_eq!(thumb_delivery_response.status(), StatusCode::OK);
+    let thumb_delivery = response_json(thumb_delivery_response).await;
+    assert_eq!(thumb_delivery["assetId"], clean_upload_id.to_string());
+    assert_eq!(thumb_delivery["variant"], "thumb_256");
+    assert_eq!(thumb_delivery["width"], 256);
+
     let list_response = app
         .clone()
         .oneshot(request(

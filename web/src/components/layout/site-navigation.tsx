@@ -21,6 +21,7 @@ import { capabilitiesForAccount } from "@/components/admin/capabilities";
 import { useAuth } from "@/context/auth-provider";
 import { api } from "@/lib/api/endpoints";
 import type { Promotion } from "@/lib/api/types";
+import { invalidateMediaDeliveryUrl } from "@/lib/media-delivery-cache";
 import { cn } from "@/lib/utils";
 
 const primaryNavigation = [
@@ -108,17 +109,23 @@ function PromotionAsset({
   promotion: Promotion;
   onDeliveryError: () => void;
 }) {
-  if (!promotion.assetDelivery?.url) {
+  const assetDelivery = promotion.assetDelivery;
+  if (!assetDelivery?.url) {
     return null;
   }
   return (
     <img
-      src={promotion.assetDelivery.url}
+      src={assetDelivery.url}
       alt=""
-      width={promotion.assetDelivery.width}
-      height={promotion.assetDelivery.height}
+      width={assetDelivery.width}
+      height={assetDelivery.height}
+      loading="lazy"
+      decoding="async"
       referrerPolicy="no-referrer"
-      onError={onDeliveryError}
+      onError={() => {
+        invalidateMediaDeliveryUrl(assetDelivery);
+        onDeliveryError();
+      }}
       className="mb-3 aspect-[16/7] w-full rounded-md object-cover"
     />
   );

@@ -242,6 +242,7 @@ pub async fn consume_upload_intent(
 pub async fn find_clean_image_deliveries(
     pool: &PgPool,
     upload_ids: &[i64],
+    variant: crate::delivery::ImageVariant,
 ) -> AppResult<Vec<(i64, crate::delivery::ImageDeliveryProjection)>> {
     if upload_ids.is_empty() {
         return Ok(Vec::new());
@@ -254,11 +255,12 @@ pub async fn find_clean_image_deliveries(
          JOIN media.asset_variants variant \
            ON variant.asset_id = upload.id \
           AND variant.policy_version = publication.policy_version \
-          AND variant.variant_kind = 'display_1280' \
+          AND variant.variant_kind = $2 \
          WHERE upload.id = ANY($1) AND upload.kind = 'image' AND upload.status = 'clean' \
            AND publication.status = 'published' AND variant.status = 'published'",
     )
     .bind(upload_ids)
+    .bind(variant.as_database())
     .fetch_all(pool)
     .await?;
     if rows.is_empty() {

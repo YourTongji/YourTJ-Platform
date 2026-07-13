@@ -330,7 +330,7 @@ async fn clean_asset_publishes_atomically_then_block_purges_delivery_before_inge
     let mut shared_identity = runtime_config.clone();
     shared_identity.oss_access_key_id = "deliverytestak".into();
     assert!(validate_delivery_runtime(&shared_identity).is_err());
-    let delivery = resolve_clean_image_delivery(&pool, Some(asset_id))
+    let delivery = resolve_clean_image_delivery(&pool, Some(asset_id), ImageVariant::Display1280)
         .await
         .expect("resolve typed Delivery projection")
         .expect("published Delivery projection");
@@ -505,7 +505,7 @@ async fn clean_asset_publishes_atomically_then_block_purges_delivery_before_inge
     .await
     .expect("terminal media deletion state");
     assert_eq!(terminal_state, ("blocked".into(), "succeeded".into(), 0, 0, 1));
-    assert!(resolve_clean_image_delivery(&pool, Some(asset_id))
+    assert!(resolve_clean_image_delivery(&pool, Some(asset_id), ImageVariant::Display1280)
         .await
         .expect("resolve blocked Delivery projection")
         .is_none());

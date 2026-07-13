@@ -10,6 +10,7 @@ import { api } from "@/lib/api/endpoints";
 import { cn } from "@/lib/utils";
 import type { ForumAttachment } from "@/lib/api/types";
 import { mediaDeliveryRefetchInterval } from "@/lib/media-delivery";
+import { invalidateMediaDeliveryUrl } from "@/lib/media-delivery-cache";
 
 export type ContentFormat = "plain_v1" | "markdown_v1";
 
@@ -130,6 +131,8 @@ function OwnerMediaPreview({ assetId, alt }: { assetId: string; alt?: string }) 
       <img
         src={pendingUrl}
         alt={`${label}（待审核预览）`}
+        loading="lazy"
+        decoding="async"
         referrerPolicy="no-referrer"
         className="my-4 max-h-[36rem] max-w-full rounded-xl border object-contain opacity-80"
       />
@@ -142,18 +145,22 @@ function OwnerMediaPreview({ assetId, alt }: { assetId: string; alt?: string }) 
   if (upload.data?.status === "clean" && upload.data.deliveryState === "processing") {
     return <span role="status" className="text-sm text-muted-foreground">图片正在生成安全版本</span>;
   }
-  if (delivery.data?.url) {
+  const deliveryData = delivery.data;
+  if (deliveryData?.url) {
     return (
       <img
-        src={delivery.data.url}
+        src={deliveryData.url}
         alt={label}
-        width={delivery.data.width}
-        height={delivery.data.height}
+        width={deliveryData.width}
+        height={deliveryData.height}
+        loading="lazy"
+        decoding="async"
         referrerPolicy="no-referrer"
         className="my-4 max-h-[36rem] max-w-full rounded-xl border object-contain"
         onError={() => {
-          if (retriedDeliveryUrl.current === delivery.data?.url) return;
-          retriedDeliveryUrl.current = delivery.data?.url ?? null;
+          if (retriedDeliveryUrl.current === deliveryData.url) return;
+          invalidateMediaDeliveryUrl(deliveryData);
+          retriedDeliveryUrl.current = deliveryData.url;
           void delivery.refetch();
         }}
       />

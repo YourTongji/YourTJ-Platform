@@ -457,6 +457,15 @@ async fn profile_routes_preserve_contract_and_exclude_unavailable_content() {
     .expect("seed profile bookmark");
 
     let media_asset_id = seed_published_profile_image(&pool, account_id).await;
+    sqlx::query(
+        "UPDATE identity.profiles SET avatar_asset_id = $2, banner_asset_id = $2 \
+         WHERE account_id = $1",
+    )
+    .bind(account_id)
+    .bind(media_asset_id)
+    .execute(&pool)
+    .await
+    .expect("bind profile avatar and banner variants");
     let media_thread_id: i64 = sqlx::query_scalar(
         "INSERT INTO forum.threads \
          (board_id, author_id, title, body, content_format, content_version) \
@@ -484,6 +493,8 @@ async fn profile_routes_preserve_contract_and_exclude_unavailable_content() {
     assert_eq!(profile["id"], account_id.to_string());
     assert_eq!(profile["handle"], "profile-boundary");
     assert_eq!(profile["school"], "同济大学嘉定校区");
+    assert!(profile["avatarUrl"].as_str().is_some_and(|url| url.contains("thumb_256")));
+    assert!(profile["bannerUrl"].as_str().is_some_and(|url| url.contains("display_1280")));
     assert_eq!(profile["threadCount"], 8);
     assert_eq!(profile["commentCount"], 13);
     assert_eq!(profile["votesReceived"], 21);

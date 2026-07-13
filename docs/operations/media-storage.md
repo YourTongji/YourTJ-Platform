@@ -6,7 +6,7 @@
 >
 > 负责人：Media maintainers、Platform maintainers、Security owner
 >
-> 最近核验：2026-07-12，migration <code>0061</code>、阿里云 OSS/CDN 官方文档
+> 最近核验：2026-07-14，migration <code>0061</code>、媒体投影实现与阿里云 OSS/CDN 官方文档
 
 本 runbook 负责 YourTJ 媒体的 Alibaba Cloud OSS/CDN 配置、部署、验收、轮换和故障处置。
 代码支持不代表目标环境已经配置；operator 必须逐项记录控制台配置和 smoke 结果。Target production
@@ -40,9 +40,14 @@
   明确支持的 JPEG/WebP 应用 orientation 后重编码为不携带 EXIF/GPS 的确定性 lossless WebP；当前不承诺
   PNG EXIF orientation 或 ICC/wide-gamut 到 sRGB 的色彩转换，客户端应上传已归一到 sRGB 的静态图片。
 - Delivery 变体为 <code>thumb_256</code>、<code>display_1280</code>、<code>full_2048</code>，
-  object key 包含 policy version 和内容 SHA-256。
+  object key 包含 policy version 和内容 SHA-256。头像固定投影 <code>thumb_256</code>；封面、Forum 正文图和
+  Promotion 默认投影 <code>display_1280</code>。Owner-only URL route 默认 display，并只允许显式选择这三种
+  已生成的 server-owned variant。
 - 公开/校园可见资源使用 CDN Type A 五分钟 bearer URL。签名 URL 在到期前可转发，不是 viewer-bound；
   真正私密的 DM 媒体仍不得复用这条公开交付链路。
+- Web 只在内存中按 <code>assetId + variant</code> 复用 typed bearer URL，最多复用到 expiry 前 30 秒；图片
+  失败、身份切换或临近过期必须淘汰。缓存有 512 项上限，不写 local/session storage，且不能改变 API
+  <code>private, no-store</code>、五分钟 TTL 或 owning-domain 授权边界。非首屏头像和内容图片默认懒加载。
 - Block 先在 PostgreSQL 停止签名，再持久排队 CDN force purge、全部 Delivery 删除和 Ingest 删除。
   Operational hold 只保留私有 Ingest 证据，不能保留 Delivery 变体或 CDN cache。
 - 普通审核员和委派管理员禁止自审。只有最高角色 ADMIN 可审核本人媒体，并且必须有 recent-auth、
@@ -301,8 +306,10 @@ request 与固定时间签名同时由阿里云官方 canonical vector 和 Rust 
    owner preview 为 <code>private, no-store</code>，响应/DOM 无 aliyuncs host 和 object key。
 5. 回退人工路径中，普通管理员不能自审；ADMIN 自审缺 recent-auth/confirmation 时拒绝。完成可信 preview
    + approve 后状态先 processing；file/PDF 即使 flag=true 仍不可批准。
-6. 三个变体完成并原子 published；Type A URL 200。
-7. 修改 auth_key、等待超过 300 秒分别得到 403；客户端重新拉 owner resource 获得新 URL。
+6. 三个变体完成并原子 published；头像 projection 返回 <code>thumb_256</code>，正文/封面返回
+   <code>display_1280</code>，Type A URL 均为 200。
+7. 同一 asset/variant 重取 owning resource 时，Web 在安全窗口内继续使用同一 URL；修改 auth_key 或等待
+   超过 300 秒分别得到 403，图片错误会淘汰旧 URL 并重新拉 owning resource。
 8. Block 后立即不能签新 URL；一分钟内出现 purge task。
 9. Delivery objects 被删除；有 hold 时 Ingest original 仍存在但不可公开。
 10. 解除 hold 后 Ingest 删除，upload 进入 blocked/redacted。

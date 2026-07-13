@@ -6,7 +6,7 @@
 >
 > 负责人：Forum/Identity/Web maintainers、Privacy owner、Product owner
 >
-> 最近核验：2026-07-13，migrations `0034`、`0044`、`0045`、`0050`、`0054`、`0061`、`0064`、`0065` 与 owner-domain tests
+> 最近核验：2026-07-14，migrations `0034`、`0044`、`0045`、`0050`、`0054`、`0061`、`0064`、`0065` 与 owner-domain tests
 
 本规范定义公开资料、用户关注、板块/主题订阅、block、mute、资料隐私和徽章语义。目标是
 建立可解释的社交关系，而不是把所有关系都命名为 “following” 或 “屏蔽”。
@@ -21,14 +21,16 @@
   返回；设置页限制为去除首尾空白后的 1–100 字符，owner export 包含原值，账号 purge 删除资料行。
 - Forum 的主题、评论、私信会话/消息及治理举报投影同时返回可选 display name 与不可变 canonical
   handle；主题列表、主题详情和评论还通过 Identity public account batch 与 Media batch resolver 返回
-  当前 clean + published 的 typed avatar Delivery，Web 同时展示头像、名称与 `@handle`，并在 URL 临近
-  到期或首次加载失败时刷新 owning resource。关注流的候选过滤继续复用 Identity public account
-  projection，并完整传递其 display name。
+  当前 clean + published 的 typed `thumb_256` avatar Delivery；私信会话、公开资料、关系列表与搜索的
+  兼容头像 URL 也由同一规格投影，不再读取旧任意 URL。Web 同时展示头像、名称与 `@handle`，非首屏头像
+  默认 lazy-load，typed URL 在临近到期或首次加载失败时刷新 owning resource。关注流的候选过滤继续复用
+  Identity public account projection，并完整传递其 display name。
 - Web 资料设置已接 profile-specific OSS 上传、owner-only 状态恢复与轮询；默认自动策略下新 raster
   callback 直接进入 processing，策略关闭或不符合自动条件时 pending owner preview 仍走同源鉴权 blob。
   只有 clean + published 才出现绑定操作，当前头像/封面可解除绑定。
-- 资料响应包含 owner-domain 授权后的五分钟 signed Delivery URL、角色、信任等级、徽章、主题/回复/获赞
-  与准确 followers/following 计数；动态 API 默认 `private, no-store`，URL 不是持久字段。
+- 资料响应包含 owner-domain 授权后的五分钟 signed Delivery URL；头像使用 `thumb_256`，封面使用
+  `display_1280`。响应还包含角色、信任等级、徽章、主题/回复/获赞与准确 followers/following 计数；
+  动态 API 默认 `private, no-store`，URL 不是持久字段。
 - 公开资料把成就徽章、实时角色标识与人工身份/特殊认证分开；人工认证只返回仍有效、类型允许公开且
   grant 明确 `displayOnProfile` 的 label/说明/受控图标/有效期，不返回签发人、原因或证据引用。
 - Platform 持有 versioned 成就定义、可撤销/可重新授予的账号成就和 append-only 事件历史；图标使用
@@ -77,10 +79,11 @@
   仍需签字，不能声称 staging/production 已完成运营验收。Raster 当前默认由有审计的 system policy 自动批准
   后进入安全变体处理，可按环境回退 staff 人工审核；这不是内容安全扫描。File/PDF scanner 仍缺，Web
   不再提供任意 URL 输入。
-- Public profile/account/relationship/search/DM avatar 的兼容 DTO 目前仍把 typed Media projection 降为
-  nullable URL string，不携带 `expiresAt`；Profile Web 也未统一在四分钟刷新或首次 image error 时回源。
-  已加载图片通常不受 URL 到期影响，但长驻 React Query cache/lazy image 可能持有过期 bearer URL；在
-  统一 typed DTO 或受控 refetch 前，该跨 surface 刷新闭环保留为 `Partial`。
+- Public profile/relationship/search/DM avatar 已由 Media 投影 `thumb_256`，但这些兼容 DTO 与 account
+  legacy field 仍把 projection 降为 nullable URL string，不携带 asset id/variant/`expiresAt`。Typed Forum
+  avatar 已在 Web 按 `assetId + variant` 复用到过期前 30 秒并在图片错误时精确淘汰；字符串兼容 surface
+  无法使用该缓存，也未统一定时刷新。在统一 typed DTO 或受控 refetch 前，该跨 surface 刷新闭环保留为
+  `Partial`。
 - 旧 `/me/ignores` 作为 block-by-id 兼容 alias 保留，新客户端只使用 handle-based block API。
 
 ## 四种关系不得混用

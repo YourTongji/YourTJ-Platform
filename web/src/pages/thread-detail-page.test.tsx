@@ -53,7 +53,7 @@ describe("ThreadDetailPage Markdown content", () => {
       authorDisplayName: "Alice Chen",
       authorAvatar: {
         assetId: "11",
-        variant: "display_1280",
+        variant: "thumb_256",
         url: "https://media.example.test/alice.webp",
         expiresAt: Math.floor(Date.now() / 1000) + 300,
         mime: "image/webp",
@@ -96,7 +96,7 @@ describe("ThreadDetailPage Markdown content", () => {
         authorDisplayName: "Bob Li",
         authorAvatar: {
           assetId: "12",
-          variant: "display_1280",
+          variant: "thumb_256",
           url: "https://media.example.test/bob.webp",
           expiresAt: Math.floor(Date.now() / 1000) + 300,
           mime: "image/webp",

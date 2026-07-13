@@ -2,6 +2,7 @@ import * as React from "react";
 
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import type { MediaDelivery } from "@/lib/api/types";
+import { invalidateMediaDeliveryUrl } from "@/lib/media-delivery-cache";
 import { cn } from "@/lib/utils";
 
 const RECOVERY_COOLDOWN_MS = 15_000;
@@ -36,9 +37,14 @@ export function ForumAuthorAvatar({
           alt={`${handle} 的头像`}
           width={avatar.width}
           height={avatar.height}
+          loading="lazy"
+          decoding="async"
           referrerPolicy="no-referrer"
           onLoadingStatusChange={(status) => {
-            if (status === "error") recoverDelivery();
+            if (status === "error") {
+              invalidateMediaDeliveryUrl(avatar);
+              recoverDelivery();
+            }
           }}
         />
       ) : null}

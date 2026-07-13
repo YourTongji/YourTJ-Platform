@@ -28,7 +28,7 @@ const thread = {
   authorDisplayName: "Alice Chen",
   authorAvatar: {
     assetId: "7",
-    variant: "display_1280" as const,
+    variant: "thumb_256" as const,
     url: "https://media.example.test/alice.webp",
     expiresAt: Math.floor(Date.now() / 1000) + 300,
     mime: "image/webp" as const,
@@ -82,6 +82,8 @@ describe("CommunityFeed", () => {
       "src",
       "https://media.example.test/alice.webp",
     );
+    expect(screen.getByAltText("alice 的头像")).toHaveAttribute("loading", "lazy");
+    expect(screen.getByAltText("alice 的头像")).toHaveAttribute("decoding", "async");
     await expectNoAccessibilityViolations(view.container);
   });
 

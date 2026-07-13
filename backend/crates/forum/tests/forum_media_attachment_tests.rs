@@ -140,7 +140,9 @@ async fn forum_content_projects_only_the_current_publishable_author_avatar() {
     let created_json = read_json(created).await;
     let thread_id = created_json["id"].as_str().expect("thread id").to_owned();
     assert_eq!(created_json["authorAvatar"]["assetId"], avatar_id.to_string());
-    assert_eq!(created_json["authorAvatar"]["variant"], "display_1280");
+    assert_eq!(created_json["authorAvatar"]["variant"], "thumb_256");
+    assert_eq!(created_json["authorAvatar"]["width"], 256);
+    assert_eq!(created_json["authorAvatar"]["height"], 171);
     assert!(created_json["authorAvatar"]["url"]
         .as_str()
         .is_some_and(|url| url.starts_with("https://media.example.test/")));
@@ -159,6 +161,7 @@ async fn forum_content_projects_only_the_current_publishable_author_avatar() {
         .find(|thread| thread["id"] == thread_id)
         .expect("created thread in feed");
     assert_eq!(listed["authorAvatar"]["assetId"], avatar_id.to_string());
+    assert_eq!(listed["authorAvatar"]["variant"], "thumb_256");
 
     let comment = request(
         &app,
@@ -171,6 +174,7 @@ async fn forum_content_projects_only_the_current_publishable_author_avatar() {
     assert_eq!(comment.status(), StatusCode::CREATED);
     let comment_json = read_json(comment).await;
     assert_eq!(comment_json["authorAvatar"]["assetId"], avatar_id.to_string());
+    assert_eq!(comment_json["authorAvatar"]["variant"], "thumb_256");
 
     let comments = request(
         &app,
@@ -183,6 +187,7 @@ async fn forum_content_projects_only_the_current_publishable_author_avatar() {
     assert_eq!(comments.status(), StatusCode::OK);
     let comments_json = read_json(comments).await;
     assert_eq!(comments_json["items"][0]["authorAvatar"]["assetId"], avatar_id.to_string());
+    assert_eq!(comments_json["items"][0]["authorAvatar"]["variant"], "thumb_256");
 
     sqlx::query(
         "UPDATE media.asset_publications \

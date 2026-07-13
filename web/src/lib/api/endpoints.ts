@@ -70,6 +70,7 @@ import type {
   Major,
   MediaDeletionJob,
   MediaDelivery,
+  MediaDeliveryVariant,
   MediaReconciliationReport,
   MediaRetentionHold,
   MediaRetentionHoldInput,
@@ -514,8 +515,10 @@ export const api = {
     });
   },
 
-  mediaUrl(id: string) {
-    return apiRequest<MediaDelivery>(`/media/${encodeURIComponent(id)}/url`);
+  mediaUrl(id: string, variant: MediaDeliveryVariant = "display_1280") {
+    return apiRequest<MediaDelivery>(`/media/${encodeURIComponent(id)}/url`, {
+      query: { variant },
+    });
   },
 
   myMediaUploads(usage?: MediaUsage, cursor?: string | null) {

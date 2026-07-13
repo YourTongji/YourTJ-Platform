@@ -274,7 +274,6 @@ pub struct DmConversationListRow {
     pub other_account_id: i64,
     pub other_handle: String,
     pub other_display_name: Option<String>,
-    pub other_avatar_url: Option<String>,
     pub last_message_excerpt: Option<String>,
     pub last_message_at: chrono::DateTime<chrono::Utc>,
     pub unread_count: i64,
