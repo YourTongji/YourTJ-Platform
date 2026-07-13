@@ -871,28 +871,11 @@ pub async fn insert_session(
             .bind(account_id)
             .fetch_one(&mut *tx)
             .await?;
-    // Same browser UA re-login should not stack zombie device rows for 7 days.
-    // Match exact user_agent (including NULL) among still-active sessions only.
-    if let Some(label) = user_agent {
-        sqlx::query(
-            "UPDATE identity.sessions SET revoked_at = COALESCE(revoked_at, now()) \
-             WHERE account_id = $1 AND revoked_at IS NULL AND expires_at > now() \
-               AND user_agent IS NOT DISTINCT FROM $2",
-        )
-        .bind(account_id)
-        .bind(label)
-        .execute(&mut *tx)
-        .await?;
-    } else {
-        sqlx::query(
-            "UPDATE identity.sessions SET revoked_at = COALESCE(revoked_at, now()) \
-             WHERE account_id = $1 AND revoked_at IS NULL AND expires_at > now() \
-               AND user_agent IS NULL",
-        )
-        .bind(account_id)
-        .execute(&mut *tx)
-        .await?;
-    }
+    // Keep concurrent sessions independent. User-Agent is only a display label
+    // (browser/OS string), not a stable device id — revoking by UA would drop
+    // valid multi-device logins that share the same browser fingerprint and can
+    // turn a later refresh on the old device into a false replay that bumps
+    // auth_version for the whole account.
     let family_id = uuid::Uuid::new_v4();
     let session_id: i64 = sqlx::query_scalar(
         "INSERT INTO identity.sessions \

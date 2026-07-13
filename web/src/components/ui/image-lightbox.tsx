@@ -62,17 +62,22 @@ export function ImageLightbox({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         className={cn(
-          "max-h-[min(96vh,960px)] w-[min(96vw,1200px)] max-w-none gap-0 border-none bg-transparent p-0 shadow-none",
-          "left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2",
+          // Full-viewport transparent content so "empty" space around tall/narrow
+          // images still receives clicks (Radix only closes on true outside clicks).
+          "fixed inset-0 left-0 top-0 flex h-svh max-h-none w-screen max-w-none translate-x-0 translate-y-0 items-center justify-center gap-0 border-none bg-transparent p-0 shadow-none",
         )}
         aria-describedby={undefined}
         hideClose
+        onClick={() => onOpenChange(false)}
       >
         <DialogTitle className="sr-only">
           {current?.alt?.trim() || "查看图片"}
           {canNavigate ? `（${safeIndex + 1}/${images.length}）` : ""}
         </DialogTitle>
-        <div className="relative flex max-h-[min(96vh,960px)] items-center justify-center">
+        <div
+          className="relative flex max-h-[min(96vh,960px)] max-w-[min(96vw,1200px)] items-center justify-center"
+          onClick={(event) => event.stopPropagation()}
+        >
           {current ? (
             <img
               src={current.src}
