@@ -8,7 +8,9 @@ const RECOVERY_COOLDOWN_MS = 15_000;
 export function ForumDeliveryImage({
   attachment,
   onDeliveryRefresh,
-  enableLightbox = true,
+  // Off by default: list/feed cards often wrap this image in a Link; a nested
+  // button trigger would create invalid a>button markup and break navigation.
+  enableLightbox = false,
   ...imageProps
 }: Omit<React.ImgHTMLAttributes<HTMLImageElement>, "src" | "alt" | "width" | "height" | "onError">
   & {

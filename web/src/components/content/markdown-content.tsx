@@ -195,6 +195,7 @@ function markdownComponents(
       }
       return (
         <ForumDeliveryImage
+          enableLightbox
           attachment={attachment}
           onDeliveryRefresh={onAttachmentDeliveryRefresh}
           loading="lazy"
