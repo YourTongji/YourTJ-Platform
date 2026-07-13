@@ -486,6 +486,29 @@ async fn clean_asset_publishes_atomically_then_block_purges_delivery_before_inge
             .await
             .expect("blocked upload state");
     assert_eq!(upload_status, "blocked");
+    let terminal_state: (String, String, i64, i64, i64) = sqlx::query_as(
+        "SELECT publication.status, deletion.status, \
+                (SELECT count(*)::bigint FROM media.asset_variants \
+                 WHERE asset_id = upload.id), \
+                (SELECT count(*)::bigint FROM media.object_cleanup_steps \
+                 WHERE deletion_job_id = deletion.id), \
+                (SELECT count(*)::bigint FROM governance.audit_events \
+                 WHERE action = 'media.upload.blocked' AND target_type = 'upload' \
+                   AND target_id = upload.id::text) \
+         FROM media.uploads upload \
+         JOIN media.asset_publications publication ON publication.asset_id = upload.id \
+         JOIN media.object_deletion_jobs deletion ON deletion.upload_id = upload.id \
+         WHERE upload.id = $1",
+    )
+    .bind(asset_id)
+    .fetch_one(&pool)
+    .await
+    .expect("terminal media deletion state");
+    assert_eq!(terminal_state, ("blocked".into(), "succeeded".into(), 0, 0, 1));
+    assert!(resolve_clean_image_delivery(&pool, Some(asset_id))
+        .await
+        .expect("resolve blocked Delivery projection")
+        .is_none());
     let events = provider.events();
     let ingress_position = events
         .iter()
