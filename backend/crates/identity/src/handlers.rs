@@ -1464,7 +1464,14 @@ pub async fn password_login(
         return Err(IdentityError::WrongPassword.into());
     }
     let account = account.ok_or(shared::AppError::Unauthorized)?;
-    ensure_login_allowed(&state, &account).await?;
+    match ensure_login_allowed(&state, &account).await {
+        Ok(()) => {}
+        Err(shared::AppError::Forbidden) => {
+            tracing::warn!(account_id = account.id, "password login rejected by account state");
+            return Err(IdentityError::WrongPassword.into());
+        }
+        Err(error) => return Err(error),
+    }
 
     Ok(Json(issue_tokens(&state, &account, device_label(&headers).as_deref()).await?))
 }

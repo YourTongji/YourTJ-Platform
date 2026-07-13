@@ -6,7 +6,7 @@
 >
 > 负责人：Identity maintainers、Security owner、Product owner
 >
-> 最近核验：2026-07-12，migration `0062`、identity credential/delivery tests 与 Web account journeys
+> 最近核验：2026-07-13，migration `0062`、identity credential/delivery tests 与 Web account journeys
 
 身份域证明“谁在使用平台”和“是否具备校园资格”，但不把校园邮箱变成公开身份。本规范定义
 登录、注册、密码、会话、onboarding、handle 与账号生命周期的目标语义。
@@ -20,7 +20,8 @@
 - 后端已有密码登录、忘记密码、重置密码和修改密码；Argon2id 由进程级四槽 semaphore
   限制内存并发，容量耗尽稳定返回 503。未认证 credential 路径同时使用 opaque client-network/global
   Redis bucket；验证码设置/重置密码先做不消费的 proof preflight，再在最终凭据事务重验并一次性消费，
-  随机 code 不会触发 Argon2。不存在账号、无密码和密码错误使用相同登录响应。
+  随机 code 不会触发 Argon2。不存在账号、无密码、密码错误和普通登录不可用的账号状态使用相同
+  登录响应，并且 missing/invalid hash 分支仍执行一次受同一 semaphore 约束的 dummy Argon2。
 - 新 access JWT 绑定 server-side session 与账号 auth version；refresh rotation 只创建一个 successor，
   consumed token 重放会撤销整个 token family。
 - 后端支持当前设备、其他设备和全部设备撤销，以及本人设备 session 列表。首次设密、密码
@@ -101,6 +102,8 @@ code 不可使用。
 ## 密码与会话
 
 - 密码登录、忘记密码和 reset 的无效证明对“账号是否存在/是否具备密码”提供中性外部响应。
+  普通密码登录在密码正确但账号停用或被 suspend 时也保持同一 401 响应；需要申诉的账号使用独立的
+  appeal-purpose password/email credential，不通过普通登录错误暴露账号状态。
   忘记密码即使 provider 失败也返回相同的 204；reset 对 missing/ineligible/expired/invalid code 返回
   相同 400。失败 code 保持不可用并由不含 PII 的运维指标告警。
 - 修改密码当前要求当前密码；重置密码依赖 reset-purpose code。

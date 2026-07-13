@@ -92,7 +92,15 @@ pub async fn hash(password: &str) -> Result<String, AppError> {
 
 /// Verify a password without blocking a Tokio worker thread.
 pub async fn verify(password: &str, phc: &str) -> Result<bool, AppError> {
-    let permit = ARGON2_LIMITER.try_acquire()?;
+    verify_with_limiter(password, phc, &ARGON2_LIMITER).await
+}
+
+async fn verify_with_limiter(
+    password: &str,
+    phc: &str,
+    limiter: &Argon2Limiter,
+) -> Result<bool, AppError> {
+    let permit = limiter.try_acquire()?;
     let password = password.to_owned();
     let phc = phc.to_owned();
     tokio::task::spawn_blocking(move || {
@@ -105,10 +113,19 @@ pub async fn verify(password: &str, phc: &str) -> Result<bool, AppError> {
 
 /// Perform one Argon2 verification even when an account has no stored password.
 pub async fn verify_or_dummy(password: &str, phc: Option<&str>) -> Result<bool, AppError> {
+    verify_or_dummy_with_limiter(password, phc, &ARGON2_LIMITER).await
+}
+
+async fn verify_or_dummy_with_limiter(
+    password: &str,
+    phc: Option<&str>,
+    limiter: &Argon2Limiter,
+) -> Result<bool, AppError> {
     let has_valid_hash = phc.is_some_and(|stored| PasswordHash::new(stored).is_ok());
     let selected_hash =
         if has_valid_hash { phc.unwrap_or(DUMMY_PASSWORD_HASH) } else { DUMMY_PASSWORD_HASH };
-    Ok(has_valid_hash && verify(password, selected_hash).await?)
+    let password_matches = verify_with_limiter(password, selected_hash, limiter).await?;
+    Ok(has_valid_hash && password_matches)
 }
 
 /// Validate password strength via zxcvbn and length checks.
@@ -264,5 +281,17 @@ mod tests {
         assert!(!verify_or_dummy("yourtj-constant-dummy-password", Some("invalid-phc"))
             .await
             .expect("verify invalid stored hash"));
+    }
+
+    #[tokio::test]
+    async fn missing_hash_still_enters_the_argon2_limiter() {
+        let exhausted_limiter = Argon2Limiter::new(0);
+        let result = verify_or_dummy_with_limiter(
+            "yourtj-constant-dummy-password",
+            None,
+            &exhausted_limiter,
+        )
+        .await;
+        assert!(matches!(result, Err(AppError::ServiceUnavailable)));
     }
 }

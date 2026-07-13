@@ -203,21 +203,33 @@ async fn fifty_concurrent_verifications_consume_code_once() {
 }
 
 #[tokio::test]
-async fn password_login_is_neutral_for_missing_password_and_missing_account() {
+async fn password_login_is_neutral_for_missing_password_account_and_unavailable_state() {
     const DUMMY_HASH: &str = "$argon2id$v=19$m=19456,t=2,p=1$lMsuCNrM/Jk4lpdAY/Gk9w$NkmJDYSq0o5US61ZPai1ajtpZWKmn7Rvn4wqQn3DR7Y";
+    const DUMMY_PASSWORD: &str = "yourtj-constant-dummy-password";
     let (pool, app) = helpers::create_test_app().await;
     let suffix = uuid::Uuid::new_v4().simple().to_string();
     let wrong_email = format!("wrong-{suffix}@tongji.edu.cn");
     let no_password_email = format!("no-password-{suffix}@tongji.edu.cn");
     let missing_email = format!("missing-{suffix}@tongji.edu.cn");
+    let deactivated_email = format!("deactivated-{suffix}@tongji.edu.cn");
     let wrong_id = insert_account(&pool, &wrong_email, &format!("wrong-{suffix}")).await;
     insert_account(&pool, &no_password_email, &format!("none-{suffix}")).await;
+    let deactivated_id =
+        insert_account(&pool, &deactivated_email, &format!("deactivated-{suffix}")).await;
     sqlx::query("UPDATE identity.accounts SET password_hash = $1 WHERE id = $2")
         .bind(DUMMY_HASH)
         .bind(wrong_id)
         .execute(&pool)
         .await
         .expect("set password hash");
+    sqlx::query(
+        "UPDATE identity.accounts SET password_hash = $1, status = 'deactivated' WHERE id = $2",
+    )
+    .bind(DUMMY_HASH)
+    .bind(deactivated_id)
+    .execute(&pool)
+    .await
+    .expect("set deactivated password account");
 
     let mut bodies = Vec::new();
     for email in [wrong_email, no_password_email, missing_email] {
@@ -235,6 +247,17 @@ async fn password_login_is_neutral_for_missing_password_and_missing_account() {
     }
     assert_eq!(bodies[0], bodies[1]);
     assert_eq!(bodies[1], bodies[2]);
+
+    let deactivated_response = app
+        .oneshot(json_request(
+            Method::POST,
+            "/api/v2/auth/password/login",
+            json!({ "email": deactivated_email, "password": DUMMY_PASSWORD }),
+        ))
+        .await
+        .expect("deactivated password login response");
+    assert_eq!(deactivated_response.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(helpers::read_json(deactivated_response).await, bodies[0]);
 }
 
 #[tokio::test]
