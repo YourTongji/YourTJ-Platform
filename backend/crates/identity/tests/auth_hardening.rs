@@ -211,25 +211,31 @@ async fn password_login_is_neutral_for_missing_password_account_and_unavailable_
     let wrong_email = format!("wrong-{suffix}@tongji.edu.cn");
     let no_password_email = format!("no-password-{suffix}@tongji.edu.cn");
     let missing_email = format!("missing-{suffix}@tongji.edu.cn");
-    let deactivated_email = format!("deactivated-{suffix}@tongji.edu.cn");
+    let suspended_email = format!("suspended-{suffix}@tongji.edu.cn");
     let wrong_id = insert_account(&pool, &wrong_email, &format!("wrong-{suffix}")).await;
     insert_account(&pool, &no_password_email, &format!("none-{suffix}")).await;
-    let deactivated_id =
-        insert_account(&pool, &deactivated_email, &format!("deactivated-{suffix}")).await;
+    let suspended_id =
+        insert_account(&pool, &suspended_email, &format!("suspended-{suffix}")).await;
     sqlx::query("UPDATE identity.accounts SET password_hash = $1 WHERE id = $2")
         .bind(DUMMY_HASH)
         .bind(wrong_id)
         .execute(&pool)
         .await
         .expect("set password hash");
+    sqlx::query("UPDATE identity.accounts SET password_hash = $1 WHERE id = $2")
+        .bind(DUMMY_HASH)
+        .bind(suspended_id)
+        .execute(&pool)
+        .await
+        .expect("set suspended password account");
     sqlx::query(
-        "UPDATE identity.accounts SET password_hash = $1, status = 'deactivated' WHERE id = $2",
+        "INSERT INTO identity.sanctions (account_id, kind, reason, ends_at) \
+         VALUES ($1, 'suspend', 'password response neutrality test', now() + interval '1 day')",
     )
-    .bind(DUMMY_HASH)
-    .bind(deactivated_id)
+    .bind(suspended_id)
     .execute(&pool)
     .await
-    .expect("set deactivated password account");
+    .expect("suspend password account");
 
     let mut bodies = Vec::new();
     for email in [wrong_email, no_password_email, missing_email] {
@@ -248,16 +254,16 @@ async fn password_login_is_neutral_for_missing_password_account_and_unavailable_
     assert_eq!(bodies[0], bodies[1]);
     assert_eq!(bodies[1], bodies[2]);
 
-    let deactivated_response = app
+    let suspended_response = app
         .oneshot(json_request(
             Method::POST,
             "/api/v2/auth/password/login",
-            json!({ "email": deactivated_email, "password": DUMMY_PASSWORD }),
+            json!({ "email": suspended_email, "password": DUMMY_PASSWORD }),
         ))
         .await
-        .expect("deactivated password login response");
-    assert_eq!(deactivated_response.status(), StatusCode::UNAUTHORIZED);
-    assert_eq!(helpers::read_json(deactivated_response).await, bodies[0]);
+        .expect("suspended password login response");
+    assert_eq!(suspended_response.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(helpers::read_json(suspended_response).await, bodies[0]);
 }
 
 #[tokio::test]
