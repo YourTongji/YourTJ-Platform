@@ -91,7 +91,10 @@ export function AppLayout() {
     refetchInterval: (query) => mediaDeliveryRefetchInterval(query.state.data),
   });
   const navigationAvatarSrc = navigationAvatar.data?.url ?? account?.avatarUrl ?? undefined;
-  const navigationAvatarPending = Boolean(navigationAvatarAssetId) && !navigationAvatarSrc;
+  // Only delay fallback while delivery is still loading; errors/empty should show initials.
+  const navigationAvatarPending = Boolean(navigationAvatarAssetId)
+    && !navigationAvatarSrc
+    && (navigationAvatar.isPending || navigationAvatar.isFetching);
   const retriedAvatarUrl = React.useRef<string | null>(null);
 
   React.useEffect(() => {
