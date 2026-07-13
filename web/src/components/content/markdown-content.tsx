@@ -14,6 +14,9 @@ import { mediaDeliveryRefetchInterval } from "@/lib/media-delivery";
 
 export type ContentFormat = "plain_v1" | "markdown_v1";
 
+/** Tracks whether markdown image renderers sit inside an <a> (linked image). */
+const MarkdownInsideLinkContext = React.createContext(false);
+
 function safeMarkdownUrl(url: string, key: string) {
   if (key === "src") {
     return /^\/__yourtj_asset__\/[1-9][0-9]*$/.test(url) ? url : "";
@@ -58,7 +61,9 @@ const baseComponents: Components = {
         rel={isExternal ? "noopener noreferrer nofollow ugc" : undefined}
         className="font-medium text-primary underline decoration-primary/35 underline-offset-4 hover:decoration-primary"
       >
-        {children}
+        <MarkdownInsideLinkContext.Provider value={true}>
+          {children}
+        </MarkdownInsideLinkContext.Provider>
       </a>
     );
   },
@@ -87,6 +92,55 @@ const baseComponents: Components = {
   th: ({ children }) => <th className="border bg-muted px-3 py-2 text-left font-semibold">{children}</th>,
   td: ({ children }) => <td className="border px-3 py-2 align-top">{children}</td>,
 };
+
+function MarkdownForumImage(
+  props: React.ComponentProps<typeof ForumDeliveryImage>,
+) {
+  const insideLink = React.useContext(MarkdownInsideLinkContext);
+  return <ForumDeliveryImage {...props} enableLightbox={!insideLink} />;
+}
+
+function MarkdownPreviewImage({
+  src,
+  alt,
+  width,
+  height,
+  className,
+  onError,
+}: {
+  src: string;
+  alt?: string;
+  width?: number | null;
+  height?: number | null;
+  className?: string;
+  onError?: React.ReactEventHandler<HTMLImageElement>;
+}) {
+  const insideLink = React.useContext(MarkdownInsideLinkContext);
+  if (insideLink) {
+    return (
+      <img
+        src={src}
+        alt={alt}
+        width={width ?? undefined}
+        height={height ?? undefined}
+        referrerPolicy="no-referrer"
+        className={className}
+        onError={onError}
+      />
+    );
+  }
+  return (
+    <LightboxableImage
+      src={src}
+      alt={alt}
+      width={width}
+      height={height}
+      referrerPolicy="no-referrer"
+      className={className}
+      onError={onError}
+    />
+  );
+}
 
 function OwnerMediaPreview({ assetId, alt }: { assetId: string; alt?: string }) {
   const upload = useQuery({
@@ -128,7 +182,7 @@ function OwnerMediaPreview({ assetId, alt }: { assetId: string; alt?: string }) 
   }
   if (upload.data?.status === "pending") {
     return pendingUrl ? (
-      <LightboxableImage
+      <MarkdownPreviewImage
         src={pendingUrl}
         alt={`${label}（待审核预览）`}
         referrerPolicy="no-referrer"
@@ -145,7 +199,7 @@ function OwnerMediaPreview({ assetId, alt }: { assetId: string; alt?: string }) 
   }
   if (delivery.data?.url) {
     return (
-      <LightboxableImage
+      <MarkdownPreviewImage
         src={delivery.data.url}
         alt={label}
         width={delivery.data.width}
@@ -194,8 +248,7 @@ function markdownComponents(
         );
       }
       return (
-        <ForumDeliveryImage
-          enableLightbox
+        <MarkdownForumImage
           attachment={attachment}
           onDeliveryRefresh={onAttachmentDeliveryRefresh}
           loading="lazy"
