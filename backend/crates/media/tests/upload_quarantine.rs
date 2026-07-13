@@ -186,6 +186,24 @@ async fn publish_synthetic_variants(pool: &PgPool, asset_id: i64, label: &str) {
     .expect("publish synthetic variant set");
 }
 
+fn configure_test_delivery() {
+    for (key, value) in [
+        ("OSS_REGION", "cn-shanghai"),
+        ("MEDIA_DELIVERY_OSS_BUCKET", "yourtj-test-delivery"),
+        ("MEDIA_DELIVERY_OSS_ACCESS_KEY_ID", "test-delivery-writer"),
+        ("MEDIA_DELIVERY_OSS_ACCESS_KEY_SECRET", "test-delivery-secret"),
+        ("MEDIA_CDN_BASE_URL", "https://media.example.test"),
+        ("MEDIA_CDN_PRIMARY_KEY", "testprimarysigningkey"),
+        ("MEDIA_CDN_SECONDARY_KEY", "testsecondarysigningkey"),
+        ("MEDIA_CDN_SIGNING_KEY_SLOT", "primary"),
+        ("MEDIA_CDN_URL_TTL_SECONDS", "300"),
+        ("CDN_ACCESS_KEY_ID", "test-cdn-purge-writer"),
+        ("CDN_ACCESS_KEY_SECRET", "test-cdn-purge-secret"),
+    ] {
+        std::env::set_var(key, value);
+    }
+}
+
 fn request(method: Method, uri: String, token: &str, body: Body) -> Request<Body> {
     Request::builder()
         .method(method)
@@ -1567,6 +1585,7 @@ async fn provider_deletion_does_not_hold_upload_or_job_locks() {
 
 #[tokio::test]
 async fn profile_images_require_an_owned_clean_oss_asset() {
+    configure_test_delivery();
     let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL for media integration");
     let pool = PgPool::connect(&database_url).await.expect("media test database");
     MIGRATOR.run(&pool).await.expect("media test migrations");
