@@ -464,6 +464,35 @@ class VerifyOssTests(unittest.TestCase):
         self.assertEqual(calls, 2)
         self.assertEqual(clock.value, 6)
 
+    def test_cdn_purge_visibility_lag_is_retried(self):
+        responses = [
+            b'{"Tasks":[]}',
+            b'{"Tasks":[{"Status":"Complete","TaskId":"123"}]}',
+        ]
+
+        def opener(request, timeout):
+            self.assertEqual(timeout, 8)
+            parameters = urllib.parse.parse_qs(request.data.decode())
+            self.assertEqual(parameters["Action"], ["DescribeRefreshTaskById"])
+            return FakeResponse(responses.pop(0))
+
+        clock = FakeClock()
+        uuid_factory = SequenceUuids(
+            "11111111-1111-1111-1111-111111111111",
+            "22222222-2222-2222-2222-222222222222",
+        )
+        verify_oss.poll_cdn_purge(
+            VALID_CONFIG,
+            opener,
+            "123",
+            now=lambda: datetime(2026, 7, 12, 3, 30, tzinfo=timezone.utc),
+            uuid_factory=uuid_factory,
+            monotonic=clock.monotonic,
+            sleep=clock.sleep,
+        )
+        self.assertEqual(responses, [])
+        self.assertEqual(clock.value, 5)
+
     def test_unsigned_cdn_404_is_rejected_and_fixture_is_cleaned_up(self):
         actions: list[str] = []
 

@@ -144,7 +144,8 @@ SSH command line 传递，并在退出时删除。
 - 对这个确认存在的同一路径，unsigned CDN GET 必须精确为 403（404 也失败），当前 slot 的 Type-A URL
   必须为 200 且 body 与源 fixture 完全一致；
 - 独立 CDN purge principal 以 POST 提交 `RefreshObjectCaches`，轮询
-  `DescribeRefreshTaskById` 直到全部 `Complete`，总等待上限十分钟；无论中途成功或失败都尽力按
+  `DescribeRefreshTaskById` 直到全部 `Complete`，总等待上限十分钟；刚提交后任务列表因 provider
+  最终一致性短暂为空时继续有界轮询，持续不可见仍在 deadline 失败。无论中途成功或失败都尽力按
   purge → DELETE 清理合成对象，清理失败也会让 preflight fail closed；
 - frontend CSP template 分别保留一个 Ingest-origin 与 CDN-origin placeholder；main 从已校验的
   `OSS_BUCKET`/`OSS_REGION` 渲染精确 Ingest HTTPS origin 到 `connect-src`，从

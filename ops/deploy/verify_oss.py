@@ -961,8 +961,10 @@ def cdn_purge_is_complete(
         nonce,
     )
     tasks = response.get("Tasks")
-    if not isinstance(tasks, list) or not tasks:
-        raise PreflightError("CDN purge task was not found")
+    if not isinstance(tasks, list):
+        raise PreflightError("CDN purge status response is invalid")
+    if not tasks:
+        return False
 
     observed_ids: set[str] = set()
     is_refreshing = False
