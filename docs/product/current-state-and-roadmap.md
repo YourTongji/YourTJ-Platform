@@ -6,7 +6,7 @@
 >
 > 负责人：Product owner、Platform maintainers
 >
-> 最近核验：2026-07-13，migrations `0053`–`0065`、OpenAPI/Web 与 deploy workflows
+> 最近核验：2026-07-14，migrations `0053`–`0066`、OpenAPI/Web 与 deploy workflows
 
 本盘点以当前源码、OpenAPI、migration 和 Web 为基线。它说明已经存在什么、哪里只有骨架、
 哪些界面承诺与实际行为不一致。后续 PR 改变这些结论时，必须在同一 PR 同步更新本文件的
@@ -32,7 +32,7 @@
 | 领域 | 状态 | 已验证问题 |
 |---|---|---|
 | 登录注册 | `Current` | purpose-bound 一次性 code、只用密码登录、首次设置/修改/找回密码的原子 session replacement 与防枚举已完成；Web 已拆分密码、验证码、注册和找回。密码/邀请安全邮件进入不保存收件人/正文的 durable job、lease/retry/dead-letter，而验证码发送仍同步确认 provider 接受 |
-| 账号与会话 | `Partial` | session-bound access、refresh replay、防 stale-password recent-auth、focused onboarding、recovery-only credential、30 天停用/删除恢复、八域 owner export/purge、durable worker 与 Web 自助入口已完成；仍缺 versioned policy publish、handle history、legal-hold/备份/OSS 全闭环，refresh token 仍存 localStorage，JWT signing key rotation/多 key 验证尚未交付 |
+| 账号与会话 | `Partial` | session-bound access、refresh replay、防 stale-password recent-auth、同源 installation 摘要下的重复登录 session replacement/30 活跃上限、focused onboarding、recovery-only credential、30 天停用/删除恢复、八域 owner export/purge、durable worker 与 Web 自助入口已完成；仍缺完整跨标签 refresh single-flight、versioned policy publish、handle history、legal-hold/备份/OSS 全闭环，refresh token 仍存 localStorage，JWT signing key rotation/多 key 验证尚未交付 |
 | 社交图 | `Current` | 已有公开单向 follow、幂等接口、owner remove-follower、followers/following、relationship API 与 trigger 维护的准确计数；移除关注者不等于 block，第一阶段明确不做私密账号审批 |
 | block/mute | `Current` | mute 为单向私密 feed/通知过滤，block 为双向安全边界并原子移除双方 follow；profile、feed、通知、DM、回复与投票已接统一规则 |
 | 个人资料 | `Partial` | display name、默认同济大学且 owner 可编辑的院校、bio、HTTPS website、clean + published avatar/banner reference、owner 上传/状态恢复/绑定 UI、关系数和 profile/list/DM/discoverability/activity/mention 隐私已落地；Profile 提供 `canViewActivity`，posts/replies/media/likes 与 owner bookmarks 使用真实稳定分页和互动状态。仍缺 handle history，且 public profile/account/relationship/search/DM avatar 兼容字段尚未携带签名 URL expiry/统一错误刷新 |
@@ -41,7 +41,7 @@
 | 创作体验 | `Partial` | 主题/评论已持久化显式 content format，Web 已接 CodeMirror 编辑/预览、安全 renderer、debounced 云端草稿和 clean + published 图片插入；owner pending preview/processing 状态可恢复，作者编辑冲突保留本地输入；仍缺跨客户端 conformance |
 | Link preview/Onebox | `Partial` | HTTPS 抓取边界已有逐跳 allowlist/DNS/public-IP pin、禁用代理、精确 HTML MIME/UTF-8、流式 body 上限、HTML5 parser、规范化 URL、无远程预览图、版本化成功/失败 cache 和不访问公网的受控 TLS fixture；Web 尚未消费 `/onebox`，若未来展示预览图还需 media proxy |
 | 媒体 | `Partial` | 代码已交付 private Ingest → bounded decode/metadata stripping → private Delivery 三变体 → 五分钟 signed CDN 的 publication pipeline；新 JPEG/PNG/WebP callback 当前默认由 system policy 审计后自动进入 processing，可按环境回退 pending + 可信预览人工审核。Owner pending preview、ADMIN 受控自审、Forum attachment/author avatar 与 Promotion typed projection、processing retry 和 block 后 ordered cleanup 均保留。Profile/list avatar 兼容 DTO 的 expiry/refetch 尚未统一；通用 GC 默认关闭，目标环境双 bucket/RAM/CDN/secrets、真实 smoke 与 inventory reconciliation 尚需签字；内容安全自动扫描、课评/私信 binding、file/PDF scanner 与 legal hold 仍待决 |
-| Feed | `Partial` | latest/hot/subscriptions/following 已拆分真实后端语义，following 基于 user_follows 并执行账号/内容/block/mute 过滤；列表已有 canonical 摘要、typed 作者头像与 viewer state，首页和论坛页会刷新临期或加载失败的头像并以明确“加载更多”控件消费稳定游标；仍缺透明的 recommended 规则 |
+| Feed | `Partial` | latest/hot/subscriptions/following 已拆分真实后端语义，following 基于 user_follows 并执行账号/内容/block/mute 过滤；列表已有 canonical 摘要、typed 作者头像与 viewer state，首页和论坛页会刷新临期或加载失败的头像、以独立灯箱查看 attachment，并用明确“加载更多”控件消费稳定游标；仍缺透明的 recommended 规则 |
 | 聚合搜索 | `Partial` | courses/reviews/threads/users/boards/tags 已由独立 search domain 返回 typed、可跳转且回表重验的结果；type/limit、query+scope 绑定的有界 cursor、all→单类“查看更多”、局部失败保真、安全 canonical 字符区间高亮、保守拼写建议和 Web 综合页已生效；仍缺拼音/别名与可靠 outbox 更新 |
 | 通知 | `Partial` | 论坛/互动/关注/DM/成就/认证 producer 与业务事实同事务写 0054 outbox，consumer 有 lease/SKIP LOCKED、幂等 receipt、聚合、当前 privacy/prefs/content 与可撤销 source generation 重验、自动重试/dead-letter、理由化人工重试；target、Redis 多实例 SSE hint、账号/受限凭证分区 Web cache 已完成。治理通知继续使用同处置事务 private store；仍缺 digest delivery status/retry、dead-letter 告警/SLO 与外部渠道运营验证 |
 | 公告 | `Current` | 有状态、排期、受众、严重度、presentation、version/revision、seen/dismiss/ack receipt、全局未看弹窗、公告页和后台 revision history；队列等待 auth/onboarding 初始化后才选择匿名本地 seen 或登录用户服务端 receipt，避免身份切换时重复/漏弹 |

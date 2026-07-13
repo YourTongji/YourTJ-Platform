@@ -240,6 +240,12 @@ function markdownComponents(
   onAttachmentDeliveryRefresh?: () => void,
 ): Components {
   const byReference = new Map(attachments.map((attachment) => [attachment.reference, attachment]));
+  const lightboxImages = attachments.map((attachment) => ({
+    src: attachment.url,
+    alt: attachment.alt,
+    width: attachment.width,
+    height: attachment.height,
+  }));
   const ownerPreviewIds = new Set(ownerPreviewAssetIds);
   return {
     ...baseComponents,
@@ -264,6 +270,8 @@ function markdownComponents(
         <MarkdownForumImage
           attachment={attachment}
           onDeliveryRefresh={onAttachmentDeliveryRefresh}
+          lightboxImages={lightboxImages}
+          lightboxIndex={attachments.findIndex((item) => item.reference === attachment.reference)}
           loading="lazy"
           decoding="async"
           className="my-4 max-h-[36rem] max-w-full rounded-xl border object-contain"

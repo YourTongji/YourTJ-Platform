@@ -1,6 +1,9 @@
 import * as React from "react";
 
-import { LightboxableImage } from "@/components/ui/image-lightbox";
+import {
+  LightboxableImage,
+  type LightboxImage,
+} from "@/components/ui/image-lightbox";
 import type { ForumAttachment } from "@/lib/api/types";
 import { invalidateMediaDeliveryUrl } from "@/lib/media-delivery-cache";
 
@@ -12,6 +15,8 @@ export function ForumDeliveryImage({
   // Off by default: list/feed cards often wrap this image in a Link; a nested
   // button trigger would create invalid a>button markup and break navigation.
   enableLightbox = false,
+  lightboxImages,
+  lightboxIndex,
   loading = "lazy",
   decoding = "async",
   ...imageProps
@@ -20,6 +25,8 @@ export function ForumDeliveryImage({
     attachment: ForumAttachment;
     onDeliveryRefresh?: () => void;
     enableLightbox?: boolean;
+    lightboxImages?: LightboxImage[];
+    lightboxIndex?: number;
   }) {
   const lastRecoveryAt = React.useRef(0);
   const handleError = () => {
@@ -38,6 +45,8 @@ export function ForumDeliveryImage({
         alt={attachment.alt}
         width={attachment.width}
         height={attachment.height}
+        images={lightboxImages}
+        imageIndex={lightboxIndex}
         loading={loading}
         decoding={decoding}
         referrerPolicy="no-referrer"

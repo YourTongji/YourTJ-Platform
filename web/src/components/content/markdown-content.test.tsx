@@ -70,4 +70,28 @@ describe("MarkdownContent", () => {
     expect(view.container.querySelector("strong")).not.toBeInTheDocument();
     expect(screen.getByText("**仍是纯文本**")).toBeVisible();
   });
+
+  it("keeps linked images as links without nesting a lightbox button", () => {
+    const view = render(
+      <MarkdownContent
+        format="markdown_v1"
+        content="[![校园风景](yourtj-asset:42)](https://example.com/gallery)"
+        attachments={[{
+          assetId: "42",
+          reference: "yourtj-asset:42",
+          position: 0,
+          alt: "校园风景",
+          url: "https://cdn.example.test/derived-42.webp",
+          expiresAt: 1_900_000_000,
+          width: 1200,
+          height: 800,
+        }]}
+      />,
+    );
+
+    const link = screen.getByRole("link", { name: "校园风景" });
+    expect(link).toHaveAttribute("href", "https://example.com/gallery");
+    expect(link.querySelector("button")).toBeNull();
+    expect(view.container.querySelector("a button")).toBeNull();
+  });
 });

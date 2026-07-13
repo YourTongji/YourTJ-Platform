@@ -100,16 +100,18 @@ function PostCard({
               {thread.bodyExcerpt}
             </p>
           ) : null}
-          {thread.attachments?.[0] ? (
-            <ForumDeliveryImage
-              attachment={thread.attachments[0]}
-              onDeliveryRefresh={onAttachmentDeliveryRefresh}
-              loading="lazy"
-              decoding="async"
-              className="mt-3 max-h-80 w-full rounded-xl border object-cover"
-            />
-          ) : null}
         </Link>
+
+        {thread.attachments?.[0] ? (
+          <ForumDeliveryImage
+            attachment={thread.attachments[0]}
+            onDeliveryRefresh={onAttachmentDeliveryRefresh}
+            enableLightbox
+            loading="lazy"
+            decoding="async"
+            className="mt-3 max-h-80 w-full rounded-xl border object-cover"
+          />
+        ) : null}
 
         <div className="mt-3 flex items-center gap-5 border-t border-border/70 pt-3 text-xs text-muted-foreground">
           <span className="inline-flex items-center gap-1.5">

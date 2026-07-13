@@ -1,7 +1,13 @@
 import { ChevronLeft, ChevronRight, X } from "lucide-react";
 import * as React from "react";
 
-import { Dialog, DialogClose, DialogContent, DialogTitle } from "@/components/ui/dialog";
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 
 export type LightboxImage = {
@@ -12,6 +18,7 @@ export type LightboxImage = {
 };
 
 type ImageLightboxProps = {
+  trigger: React.ReactElement;
   images: LightboxImage[];
   openIndex: number | null;
   onOpenChange: (open: boolean) => void;
@@ -19,6 +26,7 @@ type ImageLightboxProps = {
 };
 
 export function ImageLightbox({
+  trigger,
   images,
   openIndex,
   onOpenChange,
@@ -60,6 +68,7 @@ export function ImageLightbox({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogTrigger asChild>{trigger}</DialogTrigger>
       <DialogContent
         className={cn(
           // Full-viewport transparent content so "empty" space around tall/narrow
@@ -145,30 +154,27 @@ export function LightboxableImage({
     : [{ src, alt, width, height }];
 
   return (
-    <>
-      <button
-        type="button"
-        className="group block max-w-full cursor-zoom-in border-0 bg-transparent p-0 text-left"
-        onClick={() => setOpenIndex(imageIndex)}
-        aria-label={alt?.trim() ? `查看大图：${alt.trim()}` : "查看大图"}
-      >
-        <img
-          {...imageProps}
-          src={src}
-          alt={alt}
-          width={width ?? undefined}
-          height={height ?? undefined}
-          className={cn(className)}
-        />
-      </button>
-      <ImageLightbox
-        images={gallery}
-        openIndex={openIndex}
-        onOpenChange={(nextOpen) => {
-          if (!nextOpen) setOpenIndex(null);
-        }}
-        onIndexChange={setOpenIndex}
-      />
-    </>
+    <ImageLightbox
+      trigger={(
+        <button
+          type="button"
+          className="group block max-w-full cursor-zoom-in border-0 bg-transparent p-0 text-left"
+          aria-label={alt?.trim() ? `查看大图：${alt.trim()}` : "查看大图"}
+        >
+          <img
+            {...imageProps}
+            src={src}
+            alt={alt}
+            width={width ?? undefined}
+            height={height ?? undefined}
+            className={cn(className)}
+          />
+        </button>
+      )}
+      images={gallery}
+      openIndex={openIndex}
+      onOpenChange={(nextOpen) => setOpenIndex(nextOpen ? imageIndex : null)}
+      onIndexChange={setOpenIndex}
+    />
   );
 }

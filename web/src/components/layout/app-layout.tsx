@@ -4,12 +4,12 @@ import * as React from "react";
 import { Link, Outlet, useLocation, useNavigate } from "react-router";
 
 import { SearchDialog } from "@/components/layout/search-dialog";
+import { NavigationAvatar } from "@/components/layout/navigation-avatar";
 import { RealtimeRefresh } from "@/components/notifications/realtime-refresh";
 import { Brand, SiteSidebar } from "@/components/layout/site-navigation";
 import { AnnouncementModalQueue } from "@/components/announcements/announcement-modal-queue";
 import { PageTransition } from "@/components/common/page-transition";
 import { RouteLoadingState } from "@/components/common/route-loading-state";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -91,17 +91,6 @@ export function AppLayout() {
     gcTime: 30 * 60_000,
     refetchInterval: (query) => mediaDeliveryRefetchInterval(query.state.data),
   });
-  const navigationAvatarSrc = navigationAvatar.data?.url ?? account?.avatarUrl ?? undefined;
-  // Keep fallback delayed until the <img> actually loads (or fails). A delivery URL
-  // can resolve before the CDN bytes arrive; treating "src present" as ready still
-  // flashes initials under Radix Avatar.
-  const [navigationAvatarImageReady, setNavigationAvatarImageReady] = React.useState(false);
-  React.useEffect(() => {
-    setNavigationAvatarImageReady(false);
-  }, [navigationAvatarSrc]);
-  const navigationAvatarPending = navigationAvatarSrc
-    ? !navigationAvatarImageReady
-    : Boolean(navigationAvatarAssetId) && (navigationAvatar.isPending || navigationAvatar.isFetching);
   const retriedAvatarUrl = React.useRef<string | null>(null);
 
   React.useEffect(() => {
@@ -229,38 +218,25 @@ export function AppLayout() {
               {isAuthenticated ? (
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
-                    <button className="motion-interactive rounded-full border bg-card p-1 focus-visible:ring-[3px] focus-visible:ring-ring/50">
-                      <Avatar className="size-8">
-                        {navigationAvatarSrc ? (
-                          <AvatarImage
-                            src={navigationAvatarSrc}
-                            width={navigationAvatar.data?.width}
-                            height={navigationAvatar.data?.height}
-                            referrerPolicy="no-referrer"
-                            onLoadingStatusChange={(status) => {
-                              if (status === "loaded") {
-                                setNavigationAvatarImageReady(true);
-                                return;
-                              }
-                              if (status === "error") {
-                                setNavigationAvatarImageReady(true);
-                                if (
-                                  !navigationAvatar.data?.url
-                                  || retriedAvatarUrl.current === navigationAvatar.data.url
-                                ) return;
-                                invalidateMediaDeliveryUrl(navigationAvatar.data);
-                                retriedAvatarUrl.current = navigationAvatar.data.url;
-                                void navigationAvatar.refetch();
-                              }
-                            }}
-                          />
-                        ) : null}
-                        <AvatarFallback delayMs={navigationAvatarPending ? 600 : 0}>
-                          {navigationAvatarPending
-                            ? null
-                            : (account?.handle?.slice(0, 1).toUpperCase() ?? "我")}
-                        </AvatarFallback>
-                      </Avatar>
+                    <button
+                      aria-label="打开账户菜单"
+                      className="motion-interactive rounded-full border bg-card p-1 focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                    >
+                      <NavigationAvatar
+                        delivery={navigationAvatar.data}
+                        legacyUrl={account?.avatarUrl}
+                        handle={account?.handle}
+                        isResolving={canUseCommunity && (
+                          ownProfile.isPending
+                          || (Boolean(navigationAvatarAssetId) && !navigationAvatar.data)
+                        )}
+                        onDeliveryError={(delivery) => {
+                          if (retriedAvatarUrl.current === delivery.url) return;
+                          invalidateMediaDeliveryUrl(delivery);
+                          retriedAvatarUrl.current = delivery.url;
+                          void navigationAvatar.refetch();
+                        }}
+                      />
                     </button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end" className="w-52">
