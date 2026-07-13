@@ -118,7 +118,8 @@ Main deployment concurrency 按 revision 串行排队，禁止 `cancel-in-progre
 Main 使用仓库内版本化的 `ops/deploy/deploy-main.sh`、OSS verifier、frontend Nginx template 和 host
 `preview-proxy.conf`。Workflow 每次把当前 revision 传到受限临时路径，不依赖
 `/opt/yourtj-preview/deploy-main.sh` 一类可漂移副本。Host proxy 更新先备份现有配置，经 `nginx -t`
-成功后 reload；校验失败恢复备份并终止发布。
+成功后 reload；校验失败恢复备份并终止发布。CI 也会把 versioned host proxy 挂载到隔离的
+`nginx:alpine` container 执行 `nginx -t`，在进入发布流程前拦截 Nginx 语法回归。
 
 服务器仍需维护权限为 `0600` 的 `/opt/yourtj-preview/shared/main-runtime.env` 与 `email-main.env`；前者
 保存数据库、JWT、积分签名以及邮箱加密版本/AEAD/blind-index key，并必须设置

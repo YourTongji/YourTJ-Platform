@@ -26,6 +26,11 @@ jobs:
         run: |
           shellcheck ops/deploy/deploy-main.sh
           python3 -m unittest discover -s ops/deploy/tests
+      - name: validate host Nginx configuration
+        run: >-
+          docker run --rm
+          -v "$PWD/ops/deploy/preview-proxy.conf:/etc/nginx/conf.d/yourtj-preview.conf:ro"
+          nginx:alpine nginx -t
       - name: validate PR documentation impact
         if: github.event_name == 'pull_request'
         env:
