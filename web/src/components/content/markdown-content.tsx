@@ -185,7 +185,6 @@ function OwnerMediaPreview({ assetId, alt }: { assetId: string; alt?: string }) 
       <MarkdownPreviewImage
         src={pendingUrl}
         alt={`${label}（待审核预览）`}
-        referrerPolicy="no-referrer"
         className="my-4 max-h-[36rem] max-w-full rounded-xl border object-contain opacity-80"
       />
     ) : (
@@ -204,7 +203,6 @@ function OwnerMediaPreview({ assetId, alt }: { assetId: string; alt?: string }) 
         alt={label}
         width={delivery.data.width}
         height={delivery.data.height}
-        referrerPolicy="no-referrer"
         className="my-4 max-h-[36rem] max-w-full rounded-xl border object-contain"
         onError={() => {
           if (retriedDeliveryUrl.current === delivery.data?.url) return;
