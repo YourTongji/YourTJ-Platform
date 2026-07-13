@@ -6,7 +6,7 @@
 >
 > 负责人：Privacy owner、Security owner、Domain maintainers
 >
-> 最近核验：2026-07-12，`origin/main@0492746`、隐私/生命周期实现与 ADMIN 媒体自审边界
+> 最近核验：2026-07-13，migrations `0064`–`0065`、隐私/生命周期实现与 ADMIN 媒体自审边界
 
 本规范将数据最小化、可见性、导出、删除和保留作为产品前置条件。它不是法律意见；涉及 PIPL、
 未成年人、广告或跨境处理的最终政策需要合格法律与隐私负责人确认。
@@ -40,8 +40,9 @@
   已关注的人发起。匿名只有在 owner 显式选择 `public` 后才能访问资料。
 - Follow、mute、block 是独立事实；mute/block 不向对方提供列表接口。Block 删除双方 follow，
   suspended/deleted 账号不进入公开资料与关系列表。
-- Display name、bio、HTTPS website 与 privacy setting 可由 owner 替换；avatar/banner 只保存本人
-  clean OSS asset id，公开 URL 是状态校验后的派生值。
+- Display name、院校、bio、HTTPS website 与 privacy setting 可由 owner 替换；院校默认“同济大学”且
+  与其他公开资料一起受 profile visibility 控制；avatar/banner 只保存本人 clean OSS asset id，公开
+  URL 是状态校验后的派生值。
 - 人工认证默认私密；公开 profile 只返回 definition 允许且 grant 明确公开的有效 label/说明/有效期，
   不返回 issuer、reason、evidence reference 或内部 grant id。
 - 账号搜索只索引已验证、discoverable 且非 `only_me` 账号的 id、handle 和可选 display name；响应
@@ -58,8 +59,11 @@
   credential；不能把没有 `sid/ver` 的 appeal token 当作 legacy access token。钱包、账本、订单、履约和
   credit 管理端点均有负向矩阵测试。
 - Activity visibility 默认 `only_me`，本人始终可读，`public` 允许匿名、`campus` 只允许已登录校园
-  账号；它在 profile visibility 和双向 block 之后控制逐条主题/回复列表及未来 likes/media/activity
+  账号；它在 profile visibility 和双向 block 之后控制逐条主题/回复/likes/media
   tabs。Profile 可见时，主题/回复/获赞 aggregate 仍是公共内容贡献计数，不因列表私密而置零。
+- Likes tab 只披露仍有效的正向 Forum vote 所指向的当前可见内容；media tab 只披露 owner-authored、
+  exact binding 仍 clean/published 的内容。Bookmarks 只向 owner 返回并在读取时过滤已不可见目标；三者
+  都应用 lifecycle、block/mute 和 content policy，不向客户端返回存储 key、hash 或他人私密字段。
 - Mention policy 默认 `everyone`；`following` 表示接收方关注作者。Identity 的 batch projection 只
   返回 active、未 suspended 账号的 id/handle/policy，Forum 再应用 follow/block/mute 和通知偏好。
   不满足策略、未知或生命周期关闭的 handle 仍保留为公开普通文字，不产生通知或存在性信号。
@@ -108,7 +112,7 @@
 | 资格 PII | 校园邮箱、邮箱验证状态 | identity purpose only | 加密/盲索引、绝不公开、限制保留 |
 | 安全凭据 | password hash、code hash、refresh hash、keys/tokens | security code only | 不记录明文、最短保留、可撤销 |
 | 会话元数据 | bounded user-agent、创建/最近使用/到期时间、recent-auth 时间/方法 | 账号本人、安全代码 | 不收集精确 IP，不存 credential，随 session retention 删除 |
-| 公开身份 | handle、公开头像、display name、bio | 按 profile visibility | 用户可控、handle history 防冒用 |
+| 公开身份 | handle、公开头像、display name、院校、bio | 按 profile visibility | 用户可控、handle history 防冒用 |
 | 公共内容 | thread、comment、review、reaction | 按 board/content policy | revision、治理、导出/删除规则 |
 | 社交关系 | follow、block、mute、subscription | 本人及 policy 允许对象 | block/mute 默认私密、最小暴露 |
 | 私密通信 | DM body、单条 request 附言、private attachment | participants | staff 仅举报证据；未举报 declined request 正文立即删除，其他内容独立 retention |
@@ -152,8 +156,9 @@
 服务端授权。`forum.user_follows` 用于用户关系和准确计数，`forum.user_mutes` 与保留旧物理名但
 语义已固定为 block 的 `forum.user_ignores` 用于本人过滤与安全边界。可见者和生命周期如下：
 
-- display name/bio/website/asset id：owner 可编辑，viewer 仅在 profile policy 允许时读取；账号导出
-  包含原值，账号 purge worker 显式删除 profile，公共内容不因此改写。
+- display name/院校/bio/website/asset id：owner 可编辑，viewer 仅在 profile policy 允许时读取；院校
+  用于公开校园归属展示，默认“同济大学”，不作为邮箱资格或认证证明；账号导出包含原值，账号 purge
+  worker 显式删除 profile，公共内容不因此改写。
 - privacy policy：仅 owner 写，服务端读取；导出包含，purge worker 显式删除，不进入公开 DTO 或日志。
 - `activity_visibility` 与 `mention_policy` 是非 PII 授权偏好，和其他 privacy policy 一起仅 owner 写、
   导出包含、账号 purge 时删除。公开 DTO 只输出 viewer-specific `canViewActivity/canMention`，不输出

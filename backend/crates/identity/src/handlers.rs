@@ -153,6 +153,7 @@ fn profile_to_dto(profile: crate::profiles::ProfileRecord) -> MyProfileDto {
     MyProfileDto {
         account_id: profile.account_id.to_string(),
         display_name: profile.display_name,
+        school: profile.school,
         bio: profile.bio,
         website: profile.website,
         avatar_asset_id: profile.avatar_asset_id.map(|id| id.to_string()),
@@ -1094,12 +1095,20 @@ pub async fn replace_my_profile(
     .map_err(|_| shared::AppError::Unauthorized)?;
     let display_name =
         normalize_profile_text(body.display_name.as_deref(), "displayName", 50, false)?;
+    let school = match body.school.as_deref() {
+        Some(value) => Some(
+            normalize_profile_text(Some(value), "school", 100, false)?
+                .ok_or_else(|| shared::AppError::BadRequest("school cannot be empty".into()))?,
+        ),
+        None => None,
+    };
     let bio = normalize_profile_text(body.bio.as_deref(), "bio", 500, true)?;
     let website = normalize_website(body.website.as_deref())?;
     let profile = crate::profiles::replace_profile_text(
         &state.db,
         auth.id,
         display_name.as_deref(),
+        school.as_deref(),
         bio.as_deref(),
         website.as_deref(),
     )

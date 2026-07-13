@@ -6,7 +6,7 @@
 >
 > 负责人：Forum/Identity/Web maintainers、Privacy owner、Product owner
 >
-> 最近核验：2026-07-12，migrations `0034`、`0044`、`0045`、`0050`、`0054`、`0061` 与 owner-domain tests
+> 最近核验：2026-07-13，migrations `0034`、`0044`、`0045`、`0050`、`0054`、`0061`、`0064`、`0065` 与 owner-domain tests
 
 本规范定义公开资料、用户关注、板块/主题订阅、block、mute、资料隐私和徽章语义。目标是
 建立可解释的社交关系，而不是把所有关系都命名为 “following” 或 “屏蔽”。
@@ -15,8 +15,10 @@
 
 ### Current
 
-- Identity 持有 display name、bio、HTTPS website、clean + published avatar/banner asset reference 和独立
+- Identity 持有 display name、院校、bio、HTTPS website、clean + published avatar/banner asset reference 和独立
   profile/list/discoverability/DM policy；任意头像 URL 已停止写入并在 migration 中清除。
+- 院校是 owner 可编辑的公开资料字段，现有和新建资料默认“同济大学”，只在 profile visibility 允许后
+  返回；设置页限制为去除首尾空白后的 1–100 字符，owner export 包含原值，账号 purge 删除资料行。
 - Forum 的主题、评论、私信会话/消息及治理举报投影同时返回可选 display name 与不可变 canonical
   handle；Web 在存在 display name 时仍展示 `@handle` 以消歧，缺失时直接展示 `@handle`。关注流的
   候选过滤继续复用 Identity public account projection，并完整传递其 display name。
@@ -48,7 +50,13 @@
   public/campus，`only_me` 和 `discoverable=false` 不进入第三方搜索结果。
 - Activity visibility 已独立于 profile visibility：本人始终可看；`public` 允许匿名、`campus` 要求
   登录校园账号、`only_me` 只允许本人。Profile DTO 返回 viewer-specific `canViewActivity`，Web 在
-  无权限时展示明确私密状态而不重复请求主题/回复列表；未来 likes/media/activity tabs 复用同一 gate。
+  无权限时展示明确私密状态而不重复请求逐条列表；主题、回复、媒体和喜欢 tabs 复用同一 gate。
+- Profile media 只列出本人创作、当前可见且正文 exact binding 仍解析为 clean + published 图片的 Forum
+  内容；likes 只列出本人仍有效的正向 Forum vote，并在读取时重新应用内容状态、账号生命周期和
+  block/mute。收藏是 owner-only tab，返回仍可见内容的最小完整投影，不向第三方开放。
+- Profile 主题、回复、媒体、喜欢和收藏卡片统一使用真实回复数、赞数、viewer bookmark state 与短期
+  Media projection；收藏/取消收藏幂等写回后端，分享优先调用系统 share、否则复制 canonical URL，
+  “更多”只提供真实的打开内容和复制链接动作。请求失败显示可重试错误，不以 `0` 冒充钱包余额。
 - Profile 上的主题、回复和获赞 aggregate 继续表示公共内容贡献总量，只要 profile 本身可见就展示；
   activity policy 控制逐条列表，不反向隐藏 canonical 公共主题，也不把公开计数伪装成私密事实。
 - Mention policy 已支持 `everyone/following/nobody`；`following` 表示接收方关注发起人。Identity 批量
@@ -58,8 +66,8 @@
 
 ### Partial
 
-- 暂无 handle history/cooldown/redirect、公开 media/likes tabs；公开 activity tab 只有主题/回复列表，
-  尚未形成 reaction/media 的独立 read model。
+- 暂无 handle history/cooldown/redirect；公开 profile 的 tabs 已形成 owner-domain read model，但仍缺
+  浏览器级跨 viewport/登录态旅程验收。
 - Public profile 是否允许外部搜索引擎索引仍需独立政策。
 - 第一阶段不做私密账号与 follow pending request；DM message request 使用独立状态机，二者不得混用。
 - Avatar/banner 已有 owner + clean/published binding、上传/处理状态 UI、sanitized variants、解绑 grace
@@ -121,11 +129,11 @@ relationship 一次返回 `following`、`followedBy`、`blockedByMe`、`blockedM
 
 目标公开资料字段：
 
-- 不可变 account id、handle、display name、avatar asset、banner asset、bio。
+- 不可变 account id、handle；owner-editable display name、院校、avatar asset、banner asset、bio。
 - 有协议/域名白名单和数量限制的外部链接。
 - join time、公开角色/认证、信任等级、成就徽章。
 - followers、following、主题、回复、获赞等准确计数。
-- tabs：posts、replies；likes、media 和 activity 是否公开由隐私设置决定。
+- tabs：posts、replies、likes、media；bookmarks 仅本人可见，其他逐条列表由 activity visibility 决定。
 
 校园邮箱、制裁证据、设备、内部风险分和私信绝不属于公开资料。Staff console 按 capability
 获取必要运营字段，也不因为“管理员”而默认显示邮箱或任意 DM。
@@ -197,8 +205,9 @@ usage 不是放宽授权的凭证，最终绑定仍重新验证 owner、image ki
 Mention handle 解析属于 Identity 的最小 public batch API，只返回 account id、canonical handle 和
 mention policy，不返回邮箱、资料正文或生命周期内部原因；Forum 使用自己的 follow/block/mute 事实
 在内容事务中写候选 outbox，并在最终 delivery transaction 重读当前 mention policy、偏好、关系、
-账号生命周期和 canonical 内容可见性。Profile activity list 由 Forum 持有，但只消费 Identity 返回的
-activity visibility，不跨 schema 读取私有字段。
+账号生命周期和 canonical 内容可见性。Profile activity/media/likes list 与 owner bookmarks 由 Forum
+持有，但只消费 Identity 返回的 activity visibility/public account projection，不跨 schema 读取私有
+字段；媒体 URL 由 Media 对 exact binding 批量授权后返回，Forum 不直接读取 Media 表。
 
 ## 已决策与后续决策
 
@@ -217,8 +226,10 @@ activity visibility，不跨 schema 读取私有字段。
 - follow、subscription、mute、block 的文案、API 与行为不混用。
 - block/mute 在 profile、feed、search、notification、DM 和互动中使用同一 policy。
 - 隐私设置对匿名、校园成员、关系用户、本人和 staff 有矩阵化授权测试。
-- Profile 的 `canViewActivity` 与主题/回复 endpoint 使用同一 policy；私密状态不触发 Web 重试风暴，
+- Profile 的 `canViewActivity` 与主题/回复/media/likes endpoint 使用同一 policy；私密状态不触发 Web 重试风暴，
   aggregate 公共内容计数仍保持可解释。
+- 收藏 endpoint 只允许 owner，按收藏顺序返回当前仍可见内容；媒体列表不披露 stale binding，喜欢列表
+  不返回已撤销 vote 或当前 viewer 已被关系策略排除的内容。
 - Mention 覆盖 everyone/following/nobody/self/block/inactive/suspended；被拒绝的文字仍原样公开且没有
   通知，relationship `canMention` 与最终写入授权一致；privacy/mute/block/content hide 与排队 delivery
   的竞态由同一事务 advisory/row lock 重验覆盖。

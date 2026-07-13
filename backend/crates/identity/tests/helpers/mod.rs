@@ -353,6 +353,21 @@ async fn run_migrations(pool: &PgPool) {
             .expect("migration 0062 failed");
     }
 
+    let has_profile_school: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM information_schema.columns \
+         WHERE table_schema = 'identity' AND table_name = 'profiles' \
+           AND column_name = 'school')",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or(false);
+    if !has_profile_school {
+        sqlx::raw_sql(include_str!("../../../../migrations/0064_identity_profile_school.sql"))
+            .execute(pool)
+            .await
+            .expect("migration 0064 failed");
+    }
+
     let database_name: String = sqlx::query_scalar("SELECT current_database()")
         .fetch_one(pool)
         .await

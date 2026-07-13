@@ -274,10 +274,11 @@ components:
       enum: [everyone, following, nobody]
     MyProfile:
       type: object
-      required: [accountId, displayName, bio, website, avatarAssetId, bannerAssetId]
+      required: [accountId, displayName, school, bio, website, avatarAssetId, bannerAssetId]
       properties:
         accountId: { type: string }
         displayName: { type: string, nullable: true, minLength: 1, maxLength: 50 }
+        school: { type: string, minLength: 1, maxLength: 100 }
         bio: { type: string, nullable: true, maxLength: 500 }
         website: { type: string, format: uri, nullable: true, maxLength: 2048 }
         avatarAssetId: { type: string, nullable: true }
@@ -287,6 +288,11 @@ components:
       required: [displayName, bio, website]
       properties:
         displayName: { type: string, nullable: true, minLength: 1, maxLength: 50 }
+        school:
+          type: string
+          minLength: 1
+          maxLength: 100
+          description: Optional only for rolling compatibility; current clients send the public school label.
         bio: { type: string, nullable: true, maxLength: 500 }
         website:
           type: string
@@ -1209,7 +1215,15 @@ components:
         - { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/Subscription" } } } }
     SubscriptionInput: { type: object, required: [targetType, targetId, level], properties: { targetType: { type: string, enum: [board, thread] }, targetId: { type: string }, level: { type: string, enum: [watching, tracking, muted] } } }
     UnsubscribeInput: { type: object, required: [targetType, targetId], properties: { targetType: { type: string, enum: [board, thread] }, targetId: { type: string } } }
-    Bookmark: { type: object, properties: { targetType: { type: string }, targetId: { type: string }, note: { type: string, nullable: true }, createdAt: { type: integer } } }
+    Bookmark:
+      type: object
+      required: [targetType, targetId, note, createdAt, content]
+      properties:
+        targetType: { type: string, enum: [thread, comment] }
+        targetId: { type: string }
+        note: { type: string, nullable: true }
+        createdAt: { type: integer, description: Unix timestamp when the current account bookmarked the content. }
+        content: { $ref: "#/components/schemas/ProfileContent" }
     BookmarkInput:
       type: object
       required: [postType]
@@ -1653,6 +1667,14 @@ components:
       allOf:
         - $ref: "#/components/schemas/Page"
         - { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/UserComment" } } } }
+    ProfileContentPage:
+      allOf:
+        - $ref: "#/components/schemas/Page"
+        - { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/ProfileContent" } } } }
+    BookmarkPage:
+      allOf:
+        - $ref: "#/components/schemas/Page"
+        - { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/Bookmark" } } } }
     UserSummaryPage:
       allOf:
         - $ref: "#/components/schemas/Page"
@@ -1933,11 +1955,12 @@ components:
         expiresAt: { type: integer, nullable: true }
     UserProfile:
       type: object
-      required: [id, handle, displayName, bio, website, avatarUrl, bannerUrl, role, trustLevel, badges, verifications, threadCount, commentCount, votesReceived, followerCount, followingCount, canViewActivity, createdAt]
+      required: [id, handle, displayName, school, bio, website, avatarUrl, bannerUrl, role, trustLevel, badges, verifications, threadCount, commentCount, votesReceived, followerCount, followingCount, canViewActivity, createdAt]
       properties:
         id: { type: string }
         handle: { type: string }
         displayName: { type: string, nullable: true }
+        school: { type: string, minLength: 1, maxLength: 100, description: Owner-editable public school label governed by profile visibility. }
         bio: { type: string, nullable: true }
         website: { type: string, format: uri, nullable: true }
         avatarUrl: { type: string, nullable: true }
@@ -1960,24 +1983,55 @@ components:
         createdAt: { type: integer }
     UserThread:
       type: object
-      required: [id, title, boardSlug, replyCount, voteCount, createdAt]
+      required: [id, title, bodyExcerpt, contentFormat, boardSlug, replyCount, voteCount, viewerVote, isBookmarked, attachments, createdAt]
       properties:
         id: { type: string }
         title: { type: string }
+        bodyExcerpt: { type: string, nullable: true }
+        contentFormat: { $ref: "#/components/schemas/ContentFormat" }
         boardSlug: { type: string }
         replyCount: { type: integer, minimum: 0 }
         voteCount: { type: integer }
+        viewerVote: { type: string, enum: [up, down], nullable: true }
+        isBookmarked: { type: boolean }
+        attachments: { type: array, maxItems: 1, items: { $ref: "#/components/schemas/ForumAttachment" } }
         createdAt: { type: integer }
     UserComment:
       type: object
-      required: [id, threadId, threadTitle, body, contentFormat, createdAt]
+      required: [id, threadId, threadTitle, body, contentFormat, replyCount, voteCount, viewerVote, isBookmarked, attachments, createdAt]
       properties:
         id: { type: string }
         threadId: { type: string }
         threadTitle: { type: string }
         body: { type: string }
         contentFormat: { $ref: "#/components/schemas/ContentFormat" }
+        replyCount: { type: integer, minimum: 0, description: Count of directly nested comments that remain visible. }
+        voteCount: { type: integer }
+        viewerVote: { type: string, enum: [up, down], nullable: true }
+        isBookmarked: { type: boolean }
+        attachments: { type: array, maxItems: 4, items: { $ref: "#/components/schemas/ForumAttachment" } }
         createdAt: { type: integer }
+    ProfileContent:
+      type: object
+      description: One currently visible Forum thread or comment projected for profile media, likes, or owner bookmarks.
+      required: [targetType, id, threadId, title, body, contentFormat, boardSlug, authorHandle, authorDisplayName, replyCount, voteCount, viewerVote, isBookmarked, attachments, createdAt, activityAt]
+      properties:
+        targetType: { type: string, enum: [thread, comment] }
+        id: { type: string }
+        threadId: { type: string }
+        title: { type: string }
+        body: { type: string, nullable: true }
+        contentFormat: { $ref: "#/components/schemas/ContentFormat" }
+        boardSlug: { type: string }
+        authorHandle: { type: string }
+        authorDisplayName: { type: string, nullable: true }
+        replyCount: { type: integer, minimum: 0 }
+        voteCount: { type: integer }
+        viewerVote: { type: string, enum: [up, down], nullable: true }
+        isBookmarked: { type: boolean }
+        attachments: { type: array, maxItems: 8, items: { $ref: "#/components/schemas/ForumAttachment" } }
+        createdAt: { type: integer, description: Canonical content creation time. }
+        activityAt: { type: integer, description: Like time for liked content; otherwise the content creation time. }
     UserProfileWithStats:
       allOf: [{ $ref: "#/components/schemas/UserProfile" }]
       deprecated: true
@@ -3242,6 +3296,24 @@ paths:
       responses:
         "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/UserCommentPage" } } } }
         "404": { $ref: "#/components/responses/NotFound" }
+  /users/{handle}/media:
+    get:
+      tags: [forum]
+      security: [{ bearer: [] }, {}]
+      summary: User's authored visible Forum content with at least one current clean image
+      parameters: [{ name: handle, in: path, required: true, schema: { type: string } }, { $ref: "#/components/parameters/Cursor" }, { $ref: "#/components/parameters/Limit" }]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/ProfileContentPage" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /users/{handle}/likes:
+    get:
+      tags: [forum]
+      security: [{ bearer: [] }, {}]
+      summary: User's positive Forum votes subject to profile activity visibility and relationship rules
+      parameters: [{ name: handle, in: path, required: true, schema: { type: string } }, { $ref: "#/components/parameters/Cursor" }, { $ref: "#/components/parameters/Limit" }]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/ProfileContentPage" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
   /users/{handle}/relationship:
     get:
       tags: [identity]
@@ -3774,7 +3846,7 @@ paths:
         - { name: id, in: path, required: true, schema: { type: string } }
         - { name: postType, in: query, required: true, schema: { type: string, enum: [thread, comment] } }
       responses: { "204": { description: removed or already absent } }
-  /forum/bookmarks: { get: { tags: [forum], summary: List bookmarks, parameters: [{ $ref: "#/components/parameters/Cursor" }, { $ref: "#/components/parameters/Limit" }], responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Page" } } } } } } }
+  /forum/bookmarks: { get: { tags: [forum], summary: List the current account's bookmarks with visible content projections, parameters: [{ $ref: "#/components/parameters/Cursor" }, { $ref: "#/components/parameters/Limit" }], responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/BookmarkPage" } } } } } } }
   /forum/subscriptions:
     put: { tags: [forum], summary: Set subscription, requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/SubscriptionInput" } } } }, responses: { "204": { description: ok } } }
     delete: { tags: [forum], summary: Remove subscription, requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/UnsubscribeInput" } } } }, responses: { "204": { description: ok } } }

@@ -227,6 +227,7 @@ pub struct BookmarkDto {
     pub target_id: String,
     pub note: Option<String>,
     pub created_at: i64,
+    pub content: ProfileContentDto,
 }
 
 /// POST /forum/posts/{id}/flag
@@ -641,6 +642,7 @@ pub struct UserProfileDto {
     pub id: String,
     pub handle: String,
     pub display_name: Option<String>,
+    pub school: String,
     pub bio: Option<String>,
     pub website: Option<String>,
     pub avatar_url: Option<String>,
@@ -699,9 +701,14 @@ pub struct UserBadgeDto {
 pub struct UserThreadDto {
     pub id: String,
     pub title: String,
+    pub body_excerpt: Option<String>,
+    pub content_format: ContentFormat,
     pub board_slug: String,
     pub reply_count: i32,
     pub vote_count: i32,
+    pub viewer_vote: Option<String>,
+    pub is_bookmarked: bool,
+    pub attachments: Vec<media::attachments::ForumAttachment>,
     pub created_at: i64,
 }
 
@@ -714,5 +721,32 @@ pub struct UserCommentDto {
     pub thread_title: String,
     pub body: String,
     pub content_format: ContentFormat,
+    pub reply_count: i32,
+    pub vote_count: i32,
+    pub viewer_vote: Option<String>,
+    pub is_bookmarked: bool,
+    pub attachments: Vec<media::attachments::ForumAttachment>,
     pub created_at: i64,
+}
+
+/// A currently visible Forum item shown in profile media, likes, or owner bookmarks.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileContentDto {
+    pub target_type: String,
+    pub id: String,
+    pub thread_id: String,
+    pub title: String,
+    pub body: Option<String>,
+    pub content_format: ContentFormat,
+    pub board_slug: String,
+    pub author_handle: String,
+    pub author_display_name: Option<String>,
+    pub reply_count: i32,
+    pub vote_count: i32,
+    pub viewer_vote: Option<String>,
+    pub is_bookmarked: bool,
+    pub attachments: Vec<media::attachments::ForumAttachment>,
+    pub created_at: i64,
+    pub activity_at: i64,
 }

@@ -1,5 +1,7 @@
 //! Bookmark handlers.
 
+use std::collections::HashMap;
+
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
@@ -104,13 +106,39 @@ pub async fn list_bookmarks_handler(
     let (rows, next_cursor) =
         crate::repo::list_bookmarks(&state.db, auth.id, q.cursor.as_deref(), q.limit).await?;
 
-    let items: Vec<BookmarkDto> = rows
+    let thread_ids = rows
+        .iter()
+        .filter_map(|row| (row.target_type == "thread").then_some(row.target_id))
+        .collect::<Vec<_>>();
+    let comment_ids = rows
+        .iter()
+        .filter_map(|row| (row.target_type == "comment").then_some(row.target_id))
+        .collect::<Vec<_>>();
+    let content_rows = crate::repo::profiles::get_visible_profile_content(
+        &state.db,
+        &thread_ids,
+        &comment_ids,
+        auth.id,
+    )
+    .await?;
+    let content = super::profiles::hydrate_profile_content(&state, Some(auth.id), content_rows)
+        .await?
         .into_iter()
-        .map(|r| BookmarkDto {
-            target_type: r.target_type,
-            target_id: r.target_id.to_string(),
-            note: r.note,
-            created_at: r.created_at.timestamp(),
+        .map(|item| ((item.target_type.clone(), item.id.clone()), item))
+        .collect::<HashMap<_, _>>();
+    let mut content = content;
+    let items = rows
+        .into_iter()
+        .filter_map(|row| {
+            let target_id = row.target_id.to_string();
+            let item = content.remove(&(row.target_type.clone(), target_id.clone()))?;
+            Some(BookmarkDto {
+                target_type: row.target_type,
+                target_id,
+                note: row.note,
+                created_at: row.created_at.timestamp(),
+                content: item,
+            })
         })
         .collect();
 

@@ -449,6 +449,48 @@ async fn run_migrations(pool: &PgPool) {
             .expect("migration 0057 failed");
     }
 
+    let has_media_delivery: bool =
+        sqlx::query_scalar("SELECT to_regclass('media.asset_publications') IS NOT NULL")
+            .fetch_one(pool)
+            .await
+            .unwrap_or(false);
+    if !has_media_delivery {
+        sqlx::raw_sql(include_str!("../../../../migrations/0061_media_delivery.sql"))
+            .execute(pool)
+            .await
+            .expect("migration 0061 failed");
+    }
+
+    let has_profile_school: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM information_schema.columns \
+         WHERE table_schema = 'identity' AND table_name = 'profiles' \
+           AND column_name = 'school')",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or(false);
+    if !has_profile_school {
+        sqlx::raw_sql(include_str!("../../../../migrations/0064_identity_profile_school.sql"))
+            .execute(pool)
+            .await
+            .expect("migration 0064 failed");
+    }
+
+    let has_comment_reply_counts: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM information_schema.columns \
+         WHERE table_schema = 'forum' AND table_name = 'comments' \
+           AND column_name = 'reply_count')",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or(false);
+    if !has_comment_reply_counts {
+        sqlx::raw_sql(include_str!("../../../../migrations/0065_forum_comment_reply_counts.sql"))
+            .execute(pool)
+            .await
+            .expect("migration 0065 failed");
+    }
+
     let has_trust_levels: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM information_schema.tables \
          WHERE table_schema = 'activity' AND table_name = 'trust_level_policies')",

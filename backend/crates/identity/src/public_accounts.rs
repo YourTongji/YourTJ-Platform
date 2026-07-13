@@ -12,6 +12,7 @@ pub struct PublicAccount {
     pub id: i64,
     pub handle: String,
     pub display_name: Option<String>,
+    pub school: String,
     pub bio: Option<String>,
     pub website: Option<String>,
     pub avatar_asset_id: Option<i64>,
@@ -91,7 +92,8 @@ pub async fn find_public_account_by_handle(
     handle: &str,
 ) -> AppResult<Option<PublicAccount>> {
     let account = sqlx::query_as::<_, PublicAccount>(
-        "SELECT account.id, account.handle::text, profile.display_name, profile.bio, \
+        "SELECT account.id, account.handle::text, profile.display_name, \
+                COALESCE(profile.school, '同济大学') AS school, profile.bio, \
                 profile.website, profile.avatar_asset_id, profile.banner_asset_id, \
                 account.role::text, account.trust_level, \
                 COALESCE(privacy.profile_visibility, 'campus') AS profile_visibility, \
@@ -138,7 +140,8 @@ pub async fn find_public_accounts_by_ids(
         return Ok(Vec::new());
     }
     let accounts = sqlx::query_as::<_, PublicAccount>(
-        "SELECT account.id, account.handle::text, profile.display_name, profile.bio, \
+        "SELECT account.id, account.handle::text, profile.display_name, \
+                COALESCE(profile.school, '同济大学') AS school, profile.bio, \
                 profile.website, profile.avatar_asset_id, profile.banner_asset_id, \
                 account.role::text, account.trust_level, \
                 COALESCE(privacy.profile_visibility, 'campus') AS profile_visibility, \
