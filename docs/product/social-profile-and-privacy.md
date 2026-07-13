@@ -22,9 +22,9 @@
 - Forum 的主题、评论、私信会话/消息及治理举报投影同时返回可选 display name 与不可变 canonical
   handle；Web 在存在 display name 时仍展示 `@handle` 以消歧，缺失时直接展示 `@handle`。关注流的
   候选过滤继续复用 Identity public account projection，并完整传递其 display name。
-- Web 资料设置已接 profile-specific OSS 上传、owner-only 状态恢复与轮询；pending owner preview 走
-  同源鉴权 blob，审核通过后继续区分 processing/published/failed。只有 clean + published 才出现绑定
-  操作，当前头像/封面可解除绑定。
+- Web 资料设置已接 profile-specific OSS 上传、owner-only 状态恢复与轮询；默认自动策略下新 raster
+  callback 直接进入 processing，策略关闭或不符合自动条件时 pending owner preview 仍走同源鉴权 blob。
+  只有 clean + published 才出现绑定操作，当前头像/封面可解除绑定。
 - 资料响应包含 owner-domain 授权后的五分钟 signed Delivery URL、角色、信任等级、徽章、主题/回复/获赞
   与准确 followers/following 计数；动态 API 默认 `private, no-store`，URL 不是持久字段。
 - 公开资料把成就徽章、实时角色标识与人工身份/特殊认证分开；人工认证只返回仍有效、类型允许公开且
@@ -72,8 +72,9 @@
 - 第一阶段不做私密账号与 follow pending request；DM message request 使用独立状态机，二者不得混用。
 - Avatar/banner 已有 owner + clean/published binding、上传/处理状态 UI、sanitized variants、解绑 grace
   与 retention-aware GC 代码/测试，但 GC 默认 rollout flag 关闭，且目标环境双 bucket/CDN/provider smoke
-  仍需签字，不能声称 staging/production 已完成运营验收。Raster 依赖 staff 人工内容审核；file/PDF
-  scanner 仍缺，Web 不再提供任意 URL 输入。
+  仍需签字，不能声称 staging/production 已完成运营验收。Raster 当前默认由有审计的 system policy 自动批准
+  后进入安全变体处理，可按环境回退 staff 人工审核；这不是内容安全扫描。File/PDF scanner 仍缺，Web
+  不再提供任意 URL 输入。
 - Public profile/account/relationship/search/DM avatar 的兼容 DTO 目前仍把 typed Media projection 降为
   nullable URL string，不携带 `expiresAt`；Profile Web 也未统一在四分钟刷新或首次 image error 时回源。
   已加载图片通常不受 URL 到期影响，但长驻 React Query cache/lazy image 可能持有过期 bearer URL；在

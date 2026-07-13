@@ -32,7 +32,7 @@ export function MediaUploadButton({
     try {
       const upload = await uploadMedia(file, kind, usage);
       onUploaded(upload);
-      toast.success("文件已上传，审核通过后才会公开显示");
+      toast.success("文件已上传，安全处理完成前不会公开显示");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "上传失败");
     } finally {

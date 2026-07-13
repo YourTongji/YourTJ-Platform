@@ -5823,7 +5823,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Alibaba OSS signed upload callback */
+        /**
+         * Alibaba OSS signed upload callback
+         * @description Verifies the provider signature, one-time callback token, exact object metadata, and upload intent before atomically creating the upload. When the runtime image auto-approval policy is enabled, supported JPEG/PNG/WebP uploads enter sanitized Delivery processing with a system audit event; all other uploads remain pending. No callback result is publicly deliverable until publication completes.
+         */
         post: {
             parameters: {
                 query?: never;
@@ -5903,7 +5906,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List the current account's recent uploads for review-status recovery */
+        /** List the current account's recent uploads for moderation and processing recovery */
         get: {
             parameters: {
                 query?: {
@@ -5946,7 +5949,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Poll one owned upload's moderation status */
+        /** Poll one owned upload's moderation and Delivery status */
         get: {
             parameters: {
                 query?: never;

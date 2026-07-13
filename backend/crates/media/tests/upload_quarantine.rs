@@ -5,7 +5,8 @@ use std::sync::Arc;
 use axum::body::{to_bytes, Body};
 use axum::http::{header, Method, Request, StatusCode};
 use media::{
-    process_upload_deletion_job, routes_with_object_store, UploadObjectPreview, UploadObjectStore,
+    complete_upload_callback, process_upload_deletion_job, reserve_upload_intent,
+    routes_with_object_store, UploadObjectPreview, UploadObjectStore,
 };
 use sha2::{Digest, Sha256};
 use shared::{AppResult, AppState};
@@ -198,6 +199,177 @@ fn request(method: Method, uri: String, token: &str, body: Body) -> Request<Body
 async fn response_json(response: axum::response::Response) -> serde_json::Value {
     let bytes = to_bytes(response.into_body(), usize::MAX).await.expect("media response body");
     serde_json::from_slice(&bytes).expect("media response JSON")
+}
+
+#[tokio::test]
+async fn callback_policy_auto_approves_only_supported_images_and_is_replay_safe() {
+    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL for media integration");
+    let pool = PgPool::connect(&database_url).await.expect("media test database");
+    MIGRATOR.run(&pool).await.expect("media test migrations");
+    let suffix = uuid::Uuid::new_v4().simple().to_string();
+    let owner_id: i64 = sqlx::query_scalar(
+        "INSERT INTO identity.accounts (email, handle) VALUES ($1, $2) RETURNING id",
+    )
+    .bind(format!("media-callback-owner-{suffix}@tongji.edu.cn"))
+    .bind(format!("media-callback-owner-{suffix}"))
+    .fetch_one(&pool)
+    .await
+    .expect("seed callback upload owner");
+    let source_sha256 = "a".repeat(64);
+
+    let image_token = format!("{suffix}-image-callback");
+    let image_intent = reserve_upload_intent(
+        &pool,
+        owner_id,
+        "image",
+        "image/png",
+        Some("profile_avatar"),
+        &image_token,
+    )
+    .await
+    .expect("reserve image callback intent");
+    let image_completion = complete_upload_callback(
+        &pool,
+        image_intent.id,
+        &image_token,
+        &image_intent.oss_key,
+        10,
+        "image/png",
+        &source_sha256,
+        true,
+    )
+    .await
+    .expect("complete automatically approved image callback");
+    assert!(image_completion.was_auto_approved);
+    let image_state: (String, String, String) = sqlx::query_as(
+        "SELECT upload.status, publication.status, job.status \
+         FROM media.uploads upload \
+         JOIN media.asset_publications publication ON publication.asset_id = upload.id \
+         JOIN media.variant_processing_jobs job ON job.asset_id = upload.id \
+         WHERE upload.id = $1",
+    )
+    .bind(image_completion.upload_id)
+    .fetch_one(&pool)
+    .await
+    .expect("read auto-approved image state");
+    assert_eq!(image_state, ("clean".into(), "processing".into(), "queued".into()));
+    let (actor_kind, metadata): (String, serde_json::Value) = sqlx::query_as(
+        "SELECT actor_kind, metadata FROM governance.audit_events \
+         WHERE action = 'media.upload.auto_approved' \
+           AND target_type = 'upload' AND target_id = $1",
+    )
+    .bind(image_completion.upload_id.to_string())
+    .fetch_one(&pool)
+    .await
+    .expect("read automatic approval audit");
+    assert_eq!(actor_kind, "system");
+    assert_eq!(metadata["contentReview"], "not_performed");
+    assert_eq!(metadata["publicationState"], "processing");
+    assert!(metadata.get("ossKey").is_none());
+    assert!(metadata.get("url").is_none());
+    assert!(metadata.get("sha256").is_none());
+
+    let replay = complete_upload_callback(
+        &pool,
+        image_intent.id,
+        &image_token,
+        &image_intent.oss_key,
+        10,
+        "image/png",
+        &source_sha256,
+        true,
+    )
+    .await
+    .expect("replay completed image callback");
+    assert_eq!(replay.upload_id, image_completion.upload_id);
+    assert!(!replay.was_auto_approved);
+    let replay_counts: (i64, i64) = sqlx::query_as(
+        "SELECT \
+           (SELECT count(*)::bigint FROM media.variant_processing_jobs WHERE asset_id = $1), \
+           (SELECT count(*)::bigint FROM governance.audit_events \
+            WHERE action = 'media.upload.auto_approved' AND target_type = 'upload' \
+              AND target_id = $1::text)",
+    )
+    .bind(image_completion.upload_id)
+    .fetch_one(&pool)
+    .await
+    .expect("read replay-safe callback counts");
+    assert_eq!(replay_counts, (1, 1));
+    assert!(complete_upload_callback(
+        &pool,
+        image_intent.id,
+        "wrong-callback-token",
+        &image_intent.oss_key,
+        10,
+        "image/png",
+        &source_sha256,
+        true,
+    )
+    .await
+    .is_err());
+
+    let manual_token = format!("{suffix}-manual-image-callback");
+    let manual_intent =
+        reserve_upload_intent(&pool, owner_id, "image", "image/jpeg", None, &manual_token)
+            .await
+            .expect("reserve manual-policy image callback intent");
+    let manual_completion = complete_upload_callback(
+        &pool,
+        manual_intent.id,
+        &manual_token,
+        &manual_intent.oss_key,
+        10,
+        "image/jpeg",
+        &source_sha256,
+        false,
+    )
+    .await
+    .expect("complete image callback with automatic policy disabled");
+    assert!(!manual_completion.was_auto_approved);
+
+    let file_token = format!("{suffix}-file-callback");
+    let file_intent =
+        reserve_upload_intent(&pool, owner_id, "file", "application/pdf", None, &file_token)
+            .await
+            .expect("reserve file callback intent");
+    let file_completion = complete_upload_callback(
+        &pool,
+        file_intent.id,
+        &file_token,
+        &file_intent.oss_key,
+        10,
+        "application/pdf",
+        &source_sha256,
+        true,
+    )
+    .await
+    .expect("complete file callback with automatic image policy enabled");
+    assert!(!file_completion.was_auto_approved);
+    let pending_states: Vec<(i64, String, String)> = sqlx::query_as(
+        "SELECT upload.id, upload.status, publication.status \
+         FROM media.uploads upload \
+         JOIN media.asset_publications publication ON publication.asset_id = upload.id \
+         WHERE upload.id = ANY($1) ORDER BY upload.id",
+    )
+    .bind(vec![manual_completion.upload_id, file_completion.upload_id])
+    .fetch_all(&pool)
+    .await
+    .expect("read fail-closed pending callback states");
+    assert_eq!(
+        pending_states,
+        vec![
+            (manual_completion.upload_id, "pending".into(), "unpublished".into()),
+            (file_completion.upload_id, "pending".into(), "unpublished".into()),
+        ]
+    );
+    let pending_job_count: i64 = sqlx::query_scalar(
+        "SELECT count(*)::bigint FROM media.variant_processing_jobs WHERE asset_id = ANY($1)",
+    )
+    .bind(vec![manual_completion.upload_id, file_completion.upload_id])
+    .fetch_one(&pool)
+    .await
+    .expect("read fail-closed pending callback jobs");
+    assert_eq!(pending_job_count, 0);
 }
 
 #[tokio::test]

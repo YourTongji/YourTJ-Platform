@@ -350,8 +350,9 @@ pub async fn upload_credentials(
 
 /// POST /api/v2/media/callback — OSS callback endpoint
 ///
-/// Called by OSS after a successful upload. Creates a media.uploads row with
-/// status `pending` and consumes the upload intent atomically.
+/// Called by OSS after a successful upload. Creates a media.uploads row and consumes the upload
+/// intent atomically. Eligible images enter fail-closed Delivery processing when the automatic
+/// moderation policy is enabled; every other upload remains pending.
 pub async fn callback(
     State(state): State<AppState>,
     OriginalUri(uri): OriginalUri,
@@ -402,42 +403,28 @@ pub async fn callback(
         .parse::<uuid::Uuid>()
         .map_err(|_| AppError::BadRequest("invalid uploadIntentId".into()))?;
 
-    let mut tx = state.db.begin().await?;
-    let intent = repo::lock_upload_intent(&mut tx, intent_id).await?.ok_or(MediaError::NotFound)?;
-    if let Some(upload_id) = intent.upload_id {
-        tx.commit().await?;
-        return Ok(Json(serde_json::json!({ "ok": true, "uploadId": upload_id.to_string() })));
-    }
-    if intent.expires_at <= chrono::Utc::now() {
-        return Err(MediaError::BadRequest("upload intent expired".into()).into());
-    }
-    if !oss::verify_callback_token_hash(&intent.callback_token_hash, &input.callback_token) {
-        return Err(MediaError::BadRequest("upload intent mismatch".into()).into());
-    }
-    oss::validate_callback_metadata(
-        &intent.oss_key,
-        &intent.content_type,
-        intent.max_bytes,
+    let completion = crate::complete_upload_callback(
+        &state.db,
+        intent_id,
+        &input.callback_token,
         &input.oss_key,
         input.bytes,
         &input.mime,
         &input.sha256,
-    )?;
-    let row = repo::insert_upload_in_tx(
-        &mut tx,
-        intent.account_id,
-        &intent.kind,
-        &intent.oss_key,
-        input.bytes,
-        &intent.content_type,
-        &input.sha256,
-        intent.usage.as_deref(),
+        state.config.media_image_auto_approval_enabled,
     )
     .await?;
-    repo::consume_upload_intent(&mut tx, intent.id, row.id).await?;
-    tx.commit().await?;
+    if completion.was_auto_approved {
+        tracing::info!(
+            upload_id = completion.upload_id,
+            "image upload entered automatic Delivery processing"
+        );
+    }
 
-    Ok(Json(serde_json::json!({ "ok": true, "uploadId": row.id.to_string() })))
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "uploadId": completion.upload_id.to_string(),
+    })))
 }
 
 fn verify_callback_signature_for_uri(

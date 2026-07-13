@@ -52,6 +52,10 @@
   approve/block 与 cleanup audit 都记录 `selfReview=true`。Moderator、未来委派管理员及其他业务域仍禁止自审。
 - Media 处理状态与审核状态分离；`operations.jobs` 可在 recent-auth、reason 和原子状态重验后重排
   failed/dead-letter Delivery processing，普通审核 queue 只看到有界 error code，不能直接写 published。
+- 新 JPEG/PNG/WebP callback 当前由固定 purpose 的 system policy 默认自动批准并写
+  `media.upload.auto_approved` audit；system actor 不伪装上传者或 staff，因此不是“用户自审”或 ADMIN
+  自审例外。该决定只进入 processing，不能绕过 private Ingest、decoder、完整变体和发布约束；关闭环境
+  flag 后，人工审核的 hierarchy、可信 preview、reason 与自审规则原样恢复。File/PDF 始终等待 scanner。
 - Activity 后台同时管理发帖、评论、点赞和签到四项版本化权重；trust policy 管理升级阈值、每日点赞
   计分上限与治理降级冷却。签到与其他有效贡献进入同一 score projection 和每日自动等级评估。
 
@@ -178,19 +182,19 @@ ADMIN 的“最高权限”指最高的平台管理权限，不等于数据库 t
 1. forum reports：uphold/reject/ignore，查看必要上下文和自动隐藏 provenance。
 2. review reports/status：决定举报、隐藏、恢复或软移除，不改写作者评分/正文。
 3. reported DM：仅具体举报消息和有限上下文，无通用私信浏览器。
-4. media review：pending/clean/quarantined/dead-letter asset；mod 和未来普通管理员只能在有效权限/目标
-   上限内审核，不能自审。ADMIN 可审核 lower-role 的非 blocked 上传，并可使用本人媒体自审例外；
-   不能审核另一 ADMIN。自审必须完成 recent-auth、强制 reason、显式确认，且 audit 记录
-   `selfReview=true`。Image approve 仍必须由同一 reviewer 先完成可信预览；self-block 不要求预览证据；
-   file/PDF 在 scanner
-   证据接入前不可批准；block 先停止公开派生，再由 durable job 删除 provider object。普通 queue 只
-   显示通用 hold state，不披露 operations reason/actor。
+4. media review：pending/clean/quarantined/dead-letter asset；默认 raster system policy 处理正常新上传，
+   人工队列负责策略关闭后的 pending、异常与 block。Mod 和未来普通管理员只能在有效权限/目标上限内审核，
+   不能自审。ADMIN 可审核 lower-role 的非 blocked 上传，并可使用本人媒体自审例外；不能审核另一 ADMIN。
+   人工自审必须完成 recent-auth、强制 reason、显式确认，且 audit 记录 `selfReview=true`。人工 image approve
+   仍必须由同一 reviewer 先完成可信预览；self-block 不要求预览证据；file/PDF 在 scanner 证据接入前不可
+   批准。Block 先停止公开派生，再由 durable job 删除 provider object；普通 queue 只显示通用 hold state，
+   不披露 operations reason/actor。
 5. media operations：限时 `moderation/security` operational hold 与 system dead-letter 独立于 moderator
    日常审核，只向 `operations.jobs` 暴露。Hold inventory 需 recent-auth，续期/解除以 `expectedHoldId`
    compare-and-set；system deletion inventory 每页读取同样要求 recent-auth 并审计 result count，retry
    另外要求 reason。所有 inventory 都是 `private, no-store`。该机制只暂停物理删除，不恢复
    quarantined 内容，也不构成 legal hold。
-6. media processing：审核通过只进入 processing，不代表素材已可公开。Delivery job dead-letter 时，
+6. media processing：自动或人工批准只进入 processing，不代表素材已可公开。Delivery job dead-letter 时，
    `operations.jobs` actor 在 recent-auth 后填写 reason 才能重排；状态、job 与 audit 同事务重验，UI 的
    “已重试”只表示 queued。管理员不能跳过 decoder/variant completeness 直接设置 published。
 7. content recovery：通过精确 id 查找 retained hidden/deleted 内容并执行理由化恢复。
@@ -329,7 +333,8 @@ draft/review/published/retired、effective time、owner/approver、diff、适用
   ceiling 和 stale version 必须有 handler→PostgreSQL 负向测试。在这些产物出现前保持 `Planned`。
 - 自操作、同级/更高角色、缺理由、过期 recent-auth 和利益冲突案件默认有负向测试；ADMIN 媒体自审只在
   专用正向用例中成立，并覆盖 recent-auth、reason、approve 的预览证据、self-block fail-closed、明确告警
-  和 `selfReview` audit。
+  和 `selfReview` audit。System raster auto-approval 另行覆盖开关、受支持 MIME、file/PDF fail-closed、
+  原子 processing enqueue 与 system audit，不能借它放宽人工审核授权。
 - 内容处置、恢复、处罚、申诉和策略变更在业务事务中追加审计。
 - audit/appeal history 的 row mutation 与 table truncate 均被真实 PostgreSQL 负向测试拒绝，拒绝后
   正常 append 和申诉状态流仍可继续。

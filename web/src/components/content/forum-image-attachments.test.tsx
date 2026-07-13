@@ -13,7 +13,6 @@ vi.mock("@/components/media/media-upload-button", () => ({
   MediaUploadButton: ({ onUploaded }: { onUploaded: (upload: {
     uploadId: string;
     ossKey: string;
-    status: "pending";
     originalName: string;
   }) => void }) => (
     <button
@@ -21,7 +20,6 @@ vi.mock("@/components/media/media-upload-button", () => ({
       onClick={() => onUploaded({
         uploadId: "14",
         ossKey: "private-key-must-not-render",
-        status: "pending",
         originalName: "校园 风景.png",
       })}
     >
@@ -68,9 +66,9 @@ describe("ForumImageAttachments", () => {
       />,
     );
 
-    expect(await screen.findByText("审核中，暂不可发布")).toBeVisible();
+    expect(await screen.findByText("等待安全处理，暂不可发布")).toBeVisible();
     expect(screen.getByText(/GIF 或其他动图请转换为静态图片后重新上传/)).toBeVisible();
-    expect(screen.getByText("审核通过，可发布")).toBeVisible();
+    expect(screen.getByText("安全版本已就绪，可发布")).toBeVisible();
     expect(screen.getByText("未通过，请移除")).toBeVisible();
     expect(view.container).not.toHaveTextContent("private-key-must-not-render");
     expect(onReadyChange).toHaveBeenLastCalledWith(false);

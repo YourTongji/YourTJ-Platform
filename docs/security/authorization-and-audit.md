@@ -47,6 +47,11 @@
   对象仍执行 no-self。
 - Media Delivery processing retry 使用 `operations.jobs`，每次要求 recent-auth、reason、failed/dead-letter
   状态重验和同事务 audit；不能通过 retry capability 直接写 publication=published。
+- Media raster auto-approval 是服务端固定 purpose 的 system actor，不使用虚构账号，也不继承
+  `moderation.content`。它只在环境策略启用、OSS callback 已验签且 intent metadata 匹配时处理
+  JPEG/PNG/WebP，并在 callback 事务中原子写 `media.upload.auto_approved` audit 与 processing job；
+  metadata 明确 `contentReview=not_performed`，不记录 object key、URL 或 hash。File/PDF 和不受支持 MIME
+  保持 pending，人工审核的 hierarchy/no-self/ADMIN 专用例外不受该 system policy 影响。
 
 ### Partial
 

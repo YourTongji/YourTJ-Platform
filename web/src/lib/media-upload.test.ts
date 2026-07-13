@@ -88,7 +88,6 @@ describe("media upload boundary", () => {
     await expect(uploadMedia(file, "image", "profile_avatar")).resolves.toEqual({
       uploadId: "42",
       ossKey: "uploads/1/image/intent.png",
-      status: "pending",
       originalName: "photo.png",
     });
     expect(apiMocks.mediaUploadCredentials).toHaveBeenCalledWith(

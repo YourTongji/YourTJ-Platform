@@ -4022,6 +4022,7 @@ paths:
       tags: [media]
       security: []
       summary: Alibaba OSS signed upload callback
+      description: Verifies the provider signature, one-time callback token, exact object metadata, and upload intent before atomically creating the upload. When the runtime image auto-approval policy is enabled, supported JPEG/PNG/WebP uploads enter sanitized Delivery processing with a system audit event; all other uploads remain pending. No callback result is publicly deliverable until publication completes.
       requestBody: { required: true, content: { application/json: { schema: { type: object } } } }
       responses:
         "200": { description: ok }
@@ -4039,7 +4040,7 @@ paths:
   /me/media/uploads:
     get:
       tags: [media]
-      summary: List the current account's recent uploads for review-status recovery
+      summary: List the current account's recent uploads for moderation and processing recovery
       parameters:
         - name: usage
           in: query
@@ -4053,7 +4054,7 @@ paths:
   /me/media/uploads/{id}:
     get:
       tags: [media]
-      summary: Poll one owned upload's moderation status
+      summary: Poll one owned upload's moderation and Delivery status
       parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
       responses:
         "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/MyUpload" } } } }

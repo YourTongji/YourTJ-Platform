@@ -240,7 +240,7 @@ function ProfileMediaSlotPanel({
           {items.some((upload) =>
             upload.status === "pending" || upload.deliveryState === "processing") ? (
             <span role="status" className="text-xs text-muted-foreground">
-              审核状态会自动刷新
+              安全处理状态会自动刷新
             </span>
           ) : null}
         </div>
@@ -258,7 +258,7 @@ function ProfileMediaSlotPanel({
           </div>
         ) : items.length === 0 ? (
           <p className="mt-3 rounded-lg border border-dashed p-3 text-sm text-muted-foreground">
-            上传后会先进入安全审核；通过前不会公开，也不能设为{definition.title}。
+            上传后会进入平台安全处理；完成前不会公开，也不能设为{definition.title}。
           </p>
         ) : (
           <ul className="mt-3 grid gap-3 sm:grid-cols-2">
@@ -310,7 +310,7 @@ function ProfileMediaSlotPanel({
                     ) : (
                       <p className="text-xs leading-5 text-muted-foreground">
                         {upload.status === "pending"
-                          ? "审核通过并生成安全版本后可使用"
+                          ? "等待人工处理并生成安全版本后可使用"
                           : upload.deliveryState === "processing"
                             ? "安全版本生成完成后可使用"
                             : "请重新上传其他图片"}
@@ -335,7 +335,7 @@ export function ProfileMediaSettings() {
       <CardHeader>
         <CardTitle>头像与封面</CardTitle>
         <CardDescription>
-          原图进入私有上传区；审核通过并生成去元数据的安全版本后才能绑定。待审核原图不会进入公开 CDN。
+          原图进入私有上传区；平台生成去元数据的安全版本后才能绑定。待处理原图不会进入公开 CDN。
         </CardDescription>
       </CardHeader>
       <CardContent>

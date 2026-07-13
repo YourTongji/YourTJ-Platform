@@ -151,7 +151,7 @@ export function ProfilePrivacySettings() {
         <CardHeader>
           <CardTitle>公开资料</CardTitle>
           <CardDescription>
-            邮箱永不公开；头像和封面只接受本人已通过审核的 OSS 图片，不能填写第三方 URL。
+            邮箱永不公开；头像和封面只接受本人已完成平台安全处理的 OSS 图片，不能填写第三方 URL。
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">

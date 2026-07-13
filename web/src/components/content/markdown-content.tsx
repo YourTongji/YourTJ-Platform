@@ -140,7 +140,7 @@ function OwnerMediaPreview({ assetId, alt }: { assetId: string; alt?: string }) 
     );
   }
   if (upload.data?.status === "clean" && upload.data.deliveryState === "processing") {
-    return <span role="status" className="text-sm text-muted-foreground">图片已通过审核，正在生成安全版本</span>;
+    return <span role="status" className="text-sm text-muted-foreground">图片正在生成安全版本</span>;
   }
   if (delivery.data?.url) {
     return (

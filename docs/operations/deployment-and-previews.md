@@ -126,7 +126,9 @@ Main 使用仓库内版本化的 `ops/deploy/deploy-main.sh`、OSS verifier、fr
 `EMAIL_ENCRYPTION_STRICT=true`；后者保存邮件 provider secret。Main preflight 拒绝缺失、非 32-byte hex、
 重复的邮箱加密 key 或 strict=false，应用启动后还会 backfill 并确认不存在明文邮箱。Ingest、Delivery、
 CDN signing/purge 配置由 runner 写入本次 run 专用的 `0600` 临时 env file，通过 stdin/文件传输而不是
-SSH command line 传递，并在退出时删除。
+SSH command line 传递，并在退出时删除。Raster 自动审核策略也由 main runtime file 覆盖：当前缺省为
+`MEDIA_IMAGE_AUTO_APPROVAL_ENABLED=true`；设置 `false` 并重启/滚动 backend 可恢复 pending + 人工可信
+preview，既有 clean/processing/published row 不做反向迁移。
 
 脚本在停止旧容器前执行以下 fail-closed preflight：
 
@@ -180,8 +182,9 @@ GET /api/v2/ready     -> PostgreSQL 可达且 migration ledger 到达当前 bina
 
 Workflow 随后从 GitHub runner 对 `MAIN_PUBLIC_BASE_URL` 的 exact HTTPS origin 验证 Web、health 与
 readiness，避免只有服务器 loopback 正常却公网 DNS/TLS/proxy 失效。还需使用真实 main 测试账号执行
-upload intent → browser direct upload → callback → owner preview → approve → processing → published CDN
-URL 的关键 smoke journey。自动 preflight 已覆盖合成 Delivery Put/Head/Get、当前 Type-A auth 与 purge，
+upload intent → browser direct upload → callback → automatic processing → published CDN URL 的关键 smoke
+journey，并在隔离环境验证关闭 flag 后 owner preview → manual approve 的回退路径。自动 preflight 已覆盖
+合成 Delivery Put/Head/Get、当前 Type-A auth 与 purge，
 但不能替代 Browser CORS、Ingest callback body、runtime V4、实际变体处理、篡改/过期 URL 或跨权限负向
 测试。当前仍缺 release manifest；backend 跨 migration 失败必须 forward-fix，不能依赖自动 rollback 或
 summary 文案判断“已部署”。

@@ -5,6 +5,7 @@ use shared::{AppError, AppResult};
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use crate::error::MediaError;
 use crate::{oss, repo};
 
 /// Persisted intent facts needed to request one exact-key STS credential.
@@ -13,6 +14,13 @@ pub struct UploadIntentReservation {
     pub id: Uuid,
     pub oss_key: String,
     pub expires_at: DateTime<Utc>,
+}
+
+/// Result of atomically consuming one verified OSS callback.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UploadCallbackCompletion {
+    pub upload_id: i64,
+    pub was_auto_approved: bool,
 }
 
 fn validate_usage(kind: &str, usage: Option<&str>) -> AppResult<()> {
@@ -73,4 +81,67 @@ pub async fn reserve_upload_intent(
         oss_key: intent.oss_key,
         expires_at: intent.expires_at,
     })
+}
+
+/// Consume a callback token and exact object metadata after the HTTP edge verifies OSS signing.
+///
+/// Callback replay returns the original upload without repeating moderation, processing enqueue,
+/// or audit. The automatic policy is limited to supported raster images; every other upload stays
+/// pending.
+#[allow(clippy::too_many_arguments)] // reason: every provider callback fact is verified against the locked intent
+pub async fn complete_upload_callback(
+    pool: &PgPool,
+    intent_id: Uuid,
+    callback_token: &str,
+    oss_key: &str,
+    bytes: i64,
+    mime: &str,
+    sha256: &str,
+    is_image_auto_approval_enabled: bool,
+) -> AppResult<UploadCallbackCompletion> {
+    let mut transaction = pool.begin().await?;
+    let intent =
+        repo::lock_upload_intent(&mut transaction, intent_id).await?.ok_or(MediaError::NotFound)?;
+    if !oss::verify_callback_token_hash(&intent.callback_token_hash, callback_token) {
+        return Err(MediaError::BadRequest("upload intent mismatch".into()).into());
+    }
+    oss::validate_callback_metadata(
+        &intent.oss_key,
+        &intent.content_type,
+        intent.max_bytes,
+        oss_key,
+        bytes,
+        mime,
+        sha256,
+    )?;
+    if let Some(upload_id) = intent.upload_id {
+        transaction.commit().await?;
+        return Ok(UploadCallbackCompletion { upload_id, was_auto_approved: false });
+    }
+    if intent.expires_at <= Utc::now() {
+        return Err(MediaError::BadRequest("upload intent expired".into()).into());
+    }
+    let upload = repo::insert_upload_in_tx(
+        &mut transaction,
+        intent.account_id,
+        &intent.kind,
+        &intent.oss_key,
+        bytes,
+        &intent.content_type,
+        sha256,
+        intent.usage.as_deref(),
+    )
+    .await?;
+    repo::consume_upload_intent(&mut transaction, intent.id, upload.id).await?;
+    let was_auto_approved = crate::approval::apply_callback_policy(
+        &mut transaction,
+        upload.id,
+        &upload.kind,
+        &upload.mime,
+        is_image_auto_approval_enabled,
+    )
+    .await?;
+    transaction.commit().await?;
+
+    Ok(UploadCallbackCompletion { upload_id: upload.id, was_auto_approved })
 }

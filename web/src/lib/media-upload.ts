@@ -10,7 +10,6 @@ export type MediaKind = "image" | "file";
 export interface CompletedMediaUpload {
   uploadId: string;
   ossKey: string;
-  status: "pending";
   originalName: string;
 }
 
@@ -103,7 +102,6 @@ export async function uploadMedia(
   return {
     uploadId: parseUploadCallbackData(result.data),
     ossKey: credentials.ossKey,
-    status: "pending",
     originalName: file.name,
   };
 }

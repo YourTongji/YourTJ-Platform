@@ -21,7 +21,6 @@ vi.mock("@/components/media/media-upload-button", () => ({
   MediaUploadButton: ({ onUploaded }: { onUploaded: (upload: {
     uploadId: string;
     ossKey: string;
-    status: "pending";
     originalName: string;
   }) => void }) => (
     <button
@@ -29,7 +28,6 @@ vi.mock("@/components/media/media-upload-button", () => ({
       onClick={() => onUploaded({
         uploadId: "42",
         ossKey: "must-not-render",
-        status: "pending",
         originalName: "[校园]\n风景.png",
       })}
     >

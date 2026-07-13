@@ -47,6 +47,7 @@ pub struct Config {
     pub oss_access_key_secret: String,
     pub oss_role_arn: String,
     pub oss_callback_base_url: String,
+    pub media_image_auto_approval_enabled: bool,
     pub media_retention_gc_enabled: bool,
     pub media_operations_history_purge_enabled: bool,
     pub email_encryption_active_version: u8,
@@ -109,6 +110,10 @@ impl Config {
             oss_access_key_secret: env_or_default("OSS_ACCESS_KEY_SECRET", ""),
             oss_role_arn: env_or_default("OSS_ROLE_ARN", ""),
             oss_callback_base_url: env_or_default("OSS_CALLBACK_BASE_URL", ""),
+            media_image_auto_approval_enabled: env_or_default_bool(
+                "MEDIA_IMAGE_AUTO_APPROVAL_ENABLED",
+                true,
+            )?,
             media_retention_gc_enabled: env_or_default_bool("MEDIA_RETENTION_GC_ENABLED", false)?,
             media_operations_history_purge_enabled: env_or_default_bool(
                 "MEDIA_OPERATIONS_HISTORY_PURGE_ENABLED",

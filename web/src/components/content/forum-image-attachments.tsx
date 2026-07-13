@@ -15,17 +15,17 @@ function defaultAlt(fileName: string) {
 
 function statusPresentation(status: MyUpload["status"]) {
   if (status === "clean") {
-    return { label: "审核通过，可发布", icon: CheckCircle2, variant: "secondary" as const };
+    return { label: "安全版本已就绪，可发布", icon: CheckCircle2, variant: "secondary" as const };
   }
   if (status === "blocked") {
     return { label: "未通过，请移除", icon: AlertCircle, variant: "destructive" as const };
   }
-  return { label: "审核中，暂不可发布", icon: Clock3, variant: "outline" as const };
+  return { label: "等待安全处理，暂不可发布", icon: Clock3, variant: "outline" as const };
 }
 
 function uploadPresentation(upload: MyUpload) {
   if (upload.status === "clean" && upload.deliveryState === "processing") {
-    return { label: "审核通过，正在生成安全版本", icon: Clock3, variant: "outline" as const };
+    return { label: "正在生成安全版本", icon: Clock3, variant: "outline" as const };
   }
   if (upload.status === "clean" && upload.deliveryState === "failed") {
     return { label: "安全版本生成失败，等待运维重试", icon: AlertCircle, variant: "destructive" as const };
@@ -70,7 +70,7 @@ export function ForumImageAttachments({
       setError(null);
     } catch (refreshError) {
       if (generation !== generationRef.current) return;
-      setError(refreshError instanceof Error ? refreshError.message : "无法读取图片审核状态");
+      setError(refreshError instanceof Error ? refreshError.message : "无法读取图片处理状态");
     } finally {
       if (generation === generationRef.current) setIsLoading(false);
     }
@@ -109,7 +109,7 @@ export function ForumImageAttachments({
           <h3 id={`forum-images-${usage}`} className="text-sm font-medium">正文图片</h3>
           <p className="text-xs text-muted-foreground">
             最多 {maxImages} 张；{STATIC_IMAGE_REUPLOAD_MESSAGE}。上传后会插入平台引用，
-            审核与去元数据安全版本均完成后才能发布。
+            平台安全处理与去元数据版本生成完成后才能发布。
           </p>
         </div>
         <MediaUploadButton
@@ -133,7 +133,7 @@ export function ForumImageAttachments({
       {assetIds.length === 0 ? (
         <p className="text-xs text-muted-foreground">尚未添加图片。</p>
       ) : isLoading && Object.keys(uploads).length === 0 && !error ? (
-        <p role="status" className="text-xs text-muted-foreground">正在读取图片审核状态…</p>
+        <p role="status" className="text-xs text-muted-foreground">正在读取图片处理状态…</p>
       ) : (
         <ul className="space-y-2">
           {assetIds.map((assetId) => {

@@ -181,7 +181,7 @@ function MediaQueue({ canRunOperations }: { canRunOperations: boolean }) {
     <div className="space-y-3">
       <Card className="border-primary/30 bg-primary/5">
         <CardContent className="p-4 text-xs leading-5 text-muted-foreground">
-          图片必须由当前审核员完成一次安全预览后才能批准；通用文件在恶意软件与沙箱扫描接入前不能批准。阻止会先隔离公开访问，再由持久任务删除 OSS 对象。界面不会暴露 object key、hash 或持久 URL。
+          正常 JPEG、PNG、WebP 新上传当前默认由系统策略自动进入安全版本处理；待审核图片仍必须由当前审核员完成一次安全预览后才能人工批准。通用文件在恶意软件与沙箱扫描接入前不能批准。阻止会先隔离公开访问，再由持久任务删除 OSS 对象。界面不会暴露 object key、hash 或持久 URL。
         </CardContent>
       </Card>
       <div className="grid grid-cols-2 gap-1 rounded-lg bg-muted p-1 sm:grid-cols-4" role="group" aria-label="媒体状态筛选">

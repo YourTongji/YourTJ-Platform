@@ -140,7 +140,8 @@ Media binding/retention/删除变更还必须在 fresh database 运行
 `cargo test -p media --test retention_gc -- --test-threads=1` 和 upload quarantine/profile binding 用例，
 覆盖 profile/promotion/draft reference、clean approval age、pending 不按年龄进入 GC、未 callback intent
 digest/exact-key cleanup、callback plaintext 不落库、10/100/512 MiB/500/2,000 quota 边界与 48 小时 attempt
-retention、preview expiry+1 天、detached-grace cleanup、30 天 synthetic tombstone 及 hold/retry history 延长、
+retention、raster auto-approval 开关、file/PDF fail-closed、callback replay 幂等与 system audit、preview
+expiry+1 天、detached-grace cleanup、30 天 synthetic tombstone 及 hold/retry history 延长、
 operational hold CAS/release、recent-auth/capability、rollout gate、account-purge held enqueue/missing-job terminal、
 lease fence、provider-success redaction、system inventory every-read audit/dead-letter retry、history-purge flag 和
 系统/账号 audit。测试 object store 必须是进程内 fake，不连接真实 OSS。

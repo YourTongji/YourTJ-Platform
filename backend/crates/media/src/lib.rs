@@ -8,6 +8,7 @@
 
 use std::sync::Arc;
 
+mod approval;
 mod bindings;
 pub mod data_export;
 mod deletion;
@@ -45,7 +46,10 @@ pub use gc::{
     schedule_expired_upload_intent_cleanup_batch, schedule_retention_gc_batch,
     AccountMediaPurgeProgress,
 };
-pub use issuance::{reserve_upload_intent, UploadIntentReservation};
+pub use issuance::{
+    complete_upload_callback, reserve_upload_intent, UploadCallbackCompletion,
+    UploadIntentReservation,
+};
 pub use processing::{process_one_variant_job, process_upload_variant_job};
 pub use quarantine::{DeliveryPurgeTaskState, UploadObjectPreview, UploadObjectStore};
 pub use retention::{

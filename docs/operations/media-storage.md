@@ -23,7 +23,9 @@
   开放，不存在 deploy 例外。
 - Pending owner preview 和 staff moderation preview 都通过同源、鉴权、<code>no-store</code> 代理，
   不返回 provider URL、bucket 或 object key。
-- 审核通过只得到 <code>clean</code> 状态；worker 完成全部可信变体后才原子进入
+- 当前默认对 callback 已验签且 metadata 与 intent 匹配的 JPEG、PNG、WebP 使用 system actor 自动批准，
+  并在同一事务写审计和 processing job；这项策略不执行内容安全识别。自动或人工批准只得到
+  <code>clean</code> 状态；worker 完成全部可信变体后才原子进入
   <code>published</code>。Clean 但未 published 的资产不能绑定或签发 URL。
 - Owner upload DTO 和 moderation queue 都返回独立的 <code>deliveryState</code>，其状态只允许
   unpublished、processing、published、failed、blocked；客户端不得用 moderation <code>status</code>
@@ -66,8 +68,10 @@
 2. Backend 用 Ingest caller credential AssumeRole，session policy 只允许该 key 的
    <code>oss:PutObject</code>。
 3. Browser 直传私有 Ingest；OSS callback 创建 <code>pending</code> row，数据库不保存可交付 URL。
-4. Owner 可通过同源 pending preview 查看本人图片；审核员通过一次性、审计化 preview grant 查看。
-5. 审核通过后 publication 进入 <code>processing</code>，durable worker 从 Ingest V4 读取并验证实际
+4. 当 <code>MEDIA_IMAGE_AUTO_APPROVAL_ENABLED=true</code> 且上传是受支持 raster 时，同一 callback 事务
+   将 row 改为 <code>clean</code>、publication 置为 <code>processing</code>、排队 worker 并写 system audit。
+   Flag 关闭或上传不符合条件时仍保持 pending；owner 可走同源 preview，审核员走一次性审计 preview grant。
+5. 自动或人工审核通过后，durable worker 从 Ingest V4 读取并验证实际
    MIME、长度、SHA-256、尺寸和解码限制。
 6. Worker 重新编码并使用独立 Delivery credential V4 PutObject，带
    <code>x-oss-forbid-overwrite:true</code>；随后 V4 HEAD 校验每个变体。
@@ -105,6 +109,7 @@ PostgreSQL 是 moderation/publication/job 的权威来源；OSS object、CDN cac
 | <code>MEDIA_CDN_SIGNING_KEY_SLOT</code> | 否 | <code>primary</code> 或 <code>secondary</code> |
 | <code>MEDIA_CDN_URL_TTL_SECONDS</code> | 否 | 必须为 <code>300</code>；代码拒绝其他值 |
 | <code>CDN_ACCESS_KEY_ID</code> / <code>CDN_ACCESS_KEY_SECRET</code> | 是 | 仅调用 CDN force purge/status API 的独立最小权限身份 |
+| <code>MEDIA_IMAGE_AUTO_APPROVAL_ENABLED</code> | 否 | 新 JPEG/PNG/WebP callback 是否自动进入 processing；当前默认 <code>true</code>，设为 <code>false</code> 恢复人工可信预览审批 |
 | <code>MEDIA_RETENTION_GC_ENABLED</code> | 否 | 通用 clean-object GC/account purge enqueue；默认 <code>false</code> |
 | <code>MEDIA_OPERATIONS_HISTORY_PURGE_ENABLED</code> | 否 | 365 天 operations metadata purge；默认 <code>false</code> |
 
@@ -289,10 +294,13 @@ request 与固定时间签名同时由阿里云官方 canonical vector 和 Rust 
 真实 staging smoke 使用不含 PII 的合成图片：
 
 1. 请求 intent，检查 credential 只对应 Ingest exact key。
-2. PutObject + callback 成功，upload 为 pending。
-3. Owner pending preview 200，<code>private, no-store</code>，响应/DOM 无 aliyuncs host 和 object key。
-4. 普通管理员不能自审；ADMIN 自审缺 recent-auth/confirmation 时拒绝。
-5. 完成可信 preview + approve 后状态先 processing；此时 URL endpoint 仍不可交付。
+2. PutObject + callback 成功；默认策略下 upload 为 clean、deliveryState 为 processing，存在一次
+   <code>media.upload.auto_approved</code> system audit，且 audit 不含 object key/URL/hash。
+3. Processing 期间 URL endpoint 仍不可交付，Ingest 原图保持 private，Web 不把 clean 误报为 published。
+4. 在隔离测试环境设置 <code>MEDIA_IMAGE_AUTO_APPROVAL_ENABLED=false</code> 并重启后，新 upload 保持 pending；
+   owner preview 为 <code>private, no-store</code>，响应/DOM 无 aliyuncs host 和 object key。
+5. 回退人工路径中，普通管理员不能自审；ADMIN 自审缺 recent-auth/confirmation 时拒绝。完成可信 preview
+   + approve 后状态先 processing；file/PDF 即使 flag=true 仍不可批准。
 6. 三个变体完成并原子 published；Type A URL 200。
 7. 修改 auth_key、等待超过 300 秒分别得到 403；客户端重新拉 owner resource 获得新 URL。
 8. Block 后立即不能签新 URL；一分钟内出现 purge task。
@@ -356,7 +364,7 @@ inventory role；不要使用过宽的默认 role。Inventory 是快照，执行
 至少监控：
 
 - intent issued/expired/consumed、STS/callback latency/error；
-- pending age、preview、approve/block/self-review；
+- pending age、system auto-approval 数量/失败、preview、人工 approve/block/self-review；
 - processing queue age、attempt、dead-letter、decode rejection code；
 - publication incomplete/mismatch；
 - CDN signed 2xx/403/5xx、hit ratio、back-to-origin、purge task；
@@ -372,7 +380,7 @@ Block 后 signer 应立即停止；purge 应在 1 分钟内提交。Alibaba CDN 
 - **Callback 502**：若 gateway 无访问记录，检查 callback URL、DNS/TLS 和
   <code>callbackSNI=true</code>；若已有访问记录，检查签名、原始 path/body 和 intent metadata。
 - **Pending preview 403/404**：browser 不应直读 OSS。检查调用的是 owner same-origin preview route，
-  asset 是否仍 pending/owned/static raster。
+  asset 是否仍 pending/owned/static raster；默认自动策略下正常 raster 已进入 processing，不再提供 pending preview。
 - **Processing dead letter**：资产保持 clean 且 <code>deliveryState=failed</code>；不能手工写 published。
   检查 source digest/MIME、decoder limit、Delivery V4 permission、prevent-overwrite/HEAD，然后由
   recent-auth 的 RunOperations actor 使用 processing retry endpoint，填写具体 reason；确认 audit 后等待
@@ -412,7 +420,8 @@ Block 后 signer 应立即停止；purge 应在 1 分钟内提交。Alibaba CDN 
 - [ ] Main preflight 的 Delivery Put/Head/Get、同路径 unsigned 403、当前 Type-A exact body、purge Complete
       和 DELETE cleanup 已通过，Actions log 无 secret/provider body/task ID/object locator。
 - [ ] Fresh migration、媒体 unit/integration/fake provider tests 通过。
-- [ ] 真实 upload → callback → preview → approve → process → signed CDN → block → purge/delete smoke 通过。
+- [ ] 默认 auto-approval 与关闭 flag 后的 preview/approve 回退路径都通过；两条路径随后均完成
+      process → signed CDN → block → purge/delete smoke。
 - [ ] DB/Forum/Ingest/Delivery reconciliation 无未处置 drift。
 - [ ] Processing/cleanup/purge alerts、key rotation、incident owner 已演练。
 - [ ] GC 仍为 false，或启用审批与证据已单独记录。
