@@ -98,7 +98,7 @@ export function AppLayout() {
   React.useEffect(() => {
     setNavigationAvatarImageReady(false);
   }, [navigationAvatarSrc]);
-  const navigationAvatarPending = Boolean(navigationAvatarSrc)
+  const navigationAvatarPending = navigationAvatarSrc
     ? !navigationAvatarImageReady
     : Boolean(navigationAvatarAssetId) && (navigationAvatar.isPending || navigationAvatar.isFetching);
   const retriedAvatarUrl = React.useRef<string | null>(null);
