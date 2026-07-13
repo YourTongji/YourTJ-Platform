@@ -195,13 +195,22 @@ pub async fn get_user_profile(
         visible_account_by_handle(&state, &headers, &handle).await?;
     let can_view_activity =
         super::relationships::activity_is_visible(&account, viewer_id, relationship);
-    let asset_ids: Vec<i64> =
-        [account.avatar_asset_id, account.banner_asset_id].into_iter().flatten().collect();
-    let (stats, social_counts, badge_rows, asset_urls, verifications) = tokio::try_join!(
+    let avatar_asset_ids = account.avatar_asset_id.into_iter().collect::<Vec<_>>();
+    let banner_asset_ids = account.banner_asset_id.into_iter().collect::<Vec<_>>();
+    let (stats, social_counts, badge_rows, avatar_urls, banner_urls, verifications) = tokio::try_join!(
         crate::repo::profiles::get_public_profile_stats(&state.db, account.id),
         crate::repo::relationships::get_social_counts(&state.db, account.id),
         platform::achievements::list_public_account_achievements(&state.db, account.id),
-        media::resolve_clean_profile_images(&state.db, &asset_ids),
+        media::resolve_clean_profile_images(
+            &state.db,
+            &avatar_asset_ids,
+            media::ImageVariant::Thumb256,
+        ),
+        media::resolve_clean_profile_images(
+            &state.db,
+            &banner_asset_ids,
+            media::ImageVariant::Display1280,
+        ),
         platform::verifications::list_public_account_verifications(&state.db, account.id),
     )?;
     let badges = badge_rows
@@ -215,8 +224,8 @@ pub async fn get_user_profile(
         school: account.school,
         bio: account.bio,
         website: account.website,
-        avatar_url: account.avatar_asset_id.and_then(|id| asset_urls.get(&id).cloned()),
-        banner_url: account.banner_asset_id.and_then(|id| asset_urls.get(&id).cloned()),
+        avatar_url: account.avatar_asset_id.and_then(|id| avatar_urls.get(&id).cloned()),
+        banner_url: account.banner_asset_id.and_then(|id| banner_urls.get(&id).cloned()),
         role: account.role,
         trust_level: account.trust_level,
         badges,

@@ -92,6 +92,14 @@ pub struct ModerateUploadInput {
     self_review_confirmed: bool,
 }
 
+/// Selects one of the sanitized variants already owned by the server.
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MediaUrlQuery {
+    #[serde(default)]
+    variant: crate::delivery::ImageVariant,
+}
+
 fn default_limit() -> i64 {
     DEFAULT_PAGE_LIMIT
 }
@@ -436,12 +444,13 @@ fn verify_callback_signature_for_uri(
     oss::verify_callback_signature(headers, uri, body, public_key_pem).map_err(Into::into)
 }
 
-/// GET /api/v2/media/{id}/url — get media URL
+/// GET /api/v2/media/{id}/url — get one server-owned media variant URL.
 ///
 /// Returns the CDN / signed URL for a media upload. Requires authentication.
 pub async fn get_url(
     State(state): State<AppState>,
     Path(id_str): Path<String>,
+    Query(query): Query<MediaUrlQuery>,
     headers: HeaderMap,
 ) -> AppResult<Response> {
     let auth = identity::auth_middleware::authenticate(
@@ -459,7 +468,7 @@ pub async fn get_url(
         &state.config,
         id,
         auth.id,
-        crate::delivery::DISPLAY_VARIANT,
+        query.variant.as_database(),
     )
     .await?
     .ok_or(MediaError::NotFound)?;

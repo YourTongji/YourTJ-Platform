@@ -491,7 +491,6 @@ pub async fn get_conversation(
                 other_account.id AS other_account_id, \
                 other_account.handle::text AS other_handle, \
                 other_profile.display_name AS other_display_name, \
-                other_account.avatar_url AS other_avatar_url, \
                 LEFT(last_message.body, 160) AS last_message_excerpt, \
                 COALESCE(last_message.created_at, conversation.created_at) AS last_message_at, \
                 CASE WHEN conversation.request_status = 'accepted' THEN \
@@ -573,7 +572,6 @@ pub async fn list_conversations(
                 other_account.id AS other_account_id, \
                 other_account.handle::text AS other_handle, \
                 other_profile.display_name AS other_display_name, \
-                other_account.avatar_url AS other_avatar_url, \
                 LEFT(last_message.body, 160) AS last_message_excerpt, \
                 COALESCE(last_message.created_at, conversation.created_at) AS last_message_at, \
                 CASE WHEN conversation.request_status = 'accepted' THEN \

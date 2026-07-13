@@ -6,7 +6,7 @@
 >
 > 负责人：Forum/Reviews/Media/Courses/Web maintainers、Product owner
 >
-> 最近核验：2026-07-13，`contract/openapi.yaml`、migrations `0061`、`0065` 与 owner-domain tests
+> 最近核验：2026-07-14，`contract/openapi.yaml`、migrations `0061`、`0065` 与 owner-domain tests
 
 本规范覆盖主题、评论、课评、Markdown、草稿、OSS 资产、互动状态、feed、聚合搜索和社区
 推广位。核心原则是先定义内容与媒体边界，再选择编辑器和推荐算法。
@@ -27,9 +27,11 @@
   过滤、active/suspension、block/mute 与公开内容状态在服务端生效，不再复用 subscription 语义。
 - 所有主题列表返回同一 canonical Markdown 纯文本摘要及批量 viewer vote/bookmark state；首页与论坛页
   只展示这些服务端事实，不从数组位置或本地假数据推断摘要和互动状态。
-- 主题列表、主题详情和评论返回作者当前 clean + published avatar 的 typed Delivery projection；Forum 通过
-  Identity/Media owner API 批量投影，不跨域读表。Web 在首页、论坛页和详情页显示真实头像与资料链接，
-  缺失时使用 handle 首字母，并在签名临近到期或首次加载失败时刷新对应 owning resource。
+- 主题列表、主题详情和评论返回作者当前 clean + published `thumb_256` avatar 的 typed Delivery
+  projection；Forum 通过 Identity/Media owner API 批量投影，不跨域读表。Web 在首页、论坛页和详情页
+  显示真实头像与资料链接，缺失时使用 handle 首字母；非首屏头像与内容图片默认 lazy-load。统一 API
+  响应层按 `assetId + variant` 在内存复用仍距离过期超过 30 秒的 bearer URL，加载失败先淘汰精确旧 URL，
+  再刷新对应 owning resource。
 - 首页和论坛页以服务端 `nextCursor/hasMore` 继续当前 feed/filter，显式“加载更多”控件支持键盘和
   辅助技术；切换 feed、板块或标签会建立新的查询边界，不拼接旧条件的数据。
 - 主题/评论详情返回当前用户 vote/bookmark 状态；主题同时返回有效 subscription、read position 和
@@ -126,9 +128,11 @@
   binding、Forum draft reference、私有 Delivery 变体、短期 signed CDN projection 和解绑 grace。
   Retention-aware GC 已有实现与测试但默认 rollout flag 关闭；课评/私信仍没有 binding，file/PDF scanner
   未完成，且目标环境双 bucket/CDN/provider reconciliation 仍需按 runbook 验收。
-- Forum attachment、Forum content author avatar 与 Promotion 已保留 Delivery expiry/刷新语义；public
-  profile/account/relationship/search/DM avatar 的兼容 DTO 仍只有 URL string，尚未统一 typed expiry 或
-  image-error refetch。该 gap 不允许通过延长签名 TTL、改 public-read 或恢复 direct OSS URL 规避。
+- Forum attachment、Forum content author avatar 与 Promotion 已保留 Delivery expiry/刷新语义；Web 对这些
+  typed projection 按 asset/variant 有界复用 URL，并在临近过期、图片错误或登录主体变化时失效。
+  Public profile/relationship/search/DM avatar 已统一投影 `thumb_256`，但与 account legacy field 一样，兼容
+  DTO 仍只有 URL string，尚未统一 typed expiry 或全 surface 的定时刷新。该 gap 不允许通过延长签名 TTL、
+  改 public-read 或恢复 direct OSS URL 规避。
 - 聚合搜索已有六类 typed 结果、有效 type filter、独立 Web 综合结果页与全局搜索入口；高亮由 owner
   domain 回表授权后的 canonical text 计算 Unicode character ranges，Web 只拆分文本节点并用 `mark`
   渲染，不接受索引 HTML/snippet。拼写建议只从本页已授权 canonical fields 推导，候选歧义时不返回；

@@ -5865,11 +5865,14 @@ export interface paths {
         };
         /**
          * Get the owner's short-lived published CDN delivery projection
-         * @description Owner-only compatibility route. It returns only a clean, atomically published sanitized display variant; pending preview uses the separate same-origin no-store endpoint. Public business surfaces receive Media projections through their owning API rather than calling this route.
+         * @description Owner-only compatibility route. It returns a clean, atomically published sanitized server-owned variant; pending preview uses the separate same-origin no-store endpoint. Public business surfaces receive Media projections through their owning API rather than calling this route.
          */
         get: {
             parameters: {
-                query?: never;
+                query?: {
+                    /** @description Existing sanitized variant to project; defaults to display_1280 for backward compatibility. */
+                    variant?: components["schemas"]["MediaDeliveryVariant"];
+                };
                 header?: never;
                 path: {
                     id: string;
@@ -5887,6 +5890,7 @@ export interface paths {
                         "application/json": components["schemas"]["MediaDelivery"];
                     };
                 };
+                400: components["responses"]["BadRequest"];
                 401: components["responses"]["Unauthorized"];
                 404: components["responses"]["NotFound"];
             };
@@ -11619,6 +11623,7 @@ export interface components {
             id: string;
             handle: string;
             displayName: string | null;
+            /** @description Short-lived clean thumb_256 compatibility URL; refresh the owning search response after expiry. */
             avatarUrl: string | null;
             /** @enum {string} */
             role: "user" | "mod" | "admin";
@@ -11768,7 +11773,7 @@ export interface components {
             boardId: string;
             authorHandle: string;
             authorDisplayName?: string | null;
-            /** @description Current short-lived clean avatar projection for the active author; null when no publishable avatar is available. */
+            /** @description Current short-lived clean thumb_256 avatar projection for the active author; null when no publishable avatar is available. */
             authorAvatar: components["schemas"]["MediaDelivery"] | null;
             title: string;
             bodyExcerpt: string | null;
@@ -11802,7 +11807,7 @@ export interface components {
             boardId: string;
             authorHandle: string;
             authorDisplayName?: string | null;
-            /** @description Current short-lived clean avatar projection for the active author; null when no publishable avatar is available. */
+            /** @description Current short-lived clean thumb_256 avatar projection for the active author; null when no publishable avatar is available. */
             authorAvatar: components["schemas"]["MediaDelivery"] | null;
             authorId: string;
             title: string;
@@ -11899,7 +11904,7 @@ export interface components {
             path: string;
             authorHandle: string;
             authorDisplayName?: string | null;
-            /** @description Current short-lived clean avatar projection for the active author; null when no publishable avatar is available. */
+            /** @description Current short-lived clean thumb_256 avatar projection for the active author; null when no publishable avatar is available. */
             authorAvatar: components["schemas"]["MediaDelivery"] | null;
             authorId: string;
             body: string;
@@ -12418,6 +12423,7 @@ export interface components {
             participantId: string;
             participantHandle: string;
             participantDisplayName?: string | null;
+            /** @description Short-lived clean thumb_256 compatibility URL; refresh the owning conversation response after expiry. */
             participantAvatarUrl?: string | null;
             lastMessageExcerpt?: string | null;
             lastMessageAt?: number | null;
@@ -12561,6 +12567,7 @@ export interface components {
         IgnoreUser: {
             accountId?: string;
             handle?: string;
+            /** @description Short-lived clean thumb_256 compatibility URL; refresh the owning ignore-list response after expiry. */
             avatarUrl?: string | null;
             createdAt?: number;
         };
@@ -12568,6 +12575,7 @@ export interface components {
             id: string;
             handle: string;
             displayName: string | null;
+            /** @description Short-lived clean thumb_256 compatibility URL; refresh the owning relationship-list response after expiry. */
             avatarUrl: string | null;
             /** @enum {string} */
             role: "user" | "mod" | "admin";
@@ -12621,6 +12629,7 @@ export interface components {
             bio: string | null;
             /** Format: uri */
             website: string | null;
+            /** @description Short-lived clean thumb_256 compatibility URL; refresh the owning profile response after expiry. */
             avatarUrl: string | null;
             bannerUrl: string | null;
             /** @enum {string} */

@@ -482,7 +482,12 @@ async fn list_active(
     .fetch_all(&state.db)
     .await?;
     let asset_ids = rows.iter().filter_map(|record| record.asset_id).collect::<Vec<_>>();
-    let deliveries = media::resolve_clean_image_deliveries(&state.db, &asset_ids).await?;
+    let deliveries = media::resolve_clean_image_deliveries(
+        &state.db,
+        &asset_ids,
+        media::ImageVariant::Display1280,
+    )
+    .await?;
     let items = rows
         .into_iter()
         .map(|record| {
@@ -519,7 +524,12 @@ async fn admin_list(
     let promotion_ids = visible.iter().map(|record| record.id).collect::<Vec<_>>();
     let asset_ids = visible.iter().filter_map(|record| record.asset_id).collect::<Vec<_>>();
     let mut summaries = metric_summaries(&state.db, &promotion_ids).await?;
-    let deliveries = media::resolve_clean_image_deliveries(&state.db, &asset_ids).await?;
+    let deliveries = media::resolve_clean_image_deliveries(
+        &state.db,
+        &asset_ids,
+        media::ImageVariant::Display1280,
+    )
+    .await?;
     let items = visible
         .into_iter()
         .map(|record| {

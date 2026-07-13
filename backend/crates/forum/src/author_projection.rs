@@ -14,7 +14,12 @@ pub(crate) async fn resolve_author_avatars(
     let accounts = identity::public_accounts::find_public_accounts_by_ids(pool, author_ids).await?;
     let avatar_asset_ids =
         accounts.iter().filter_map(|account| account.avatar_asset_id).collect::<Vec<_>>();
-    let deliveries = media::resolve_clean_image_deliveries(pool, &avatar_asset_ids).await?;
+    let deliveries = media::resolve_clean_image_deliveries(
+        pool,
+        &avatar_asset_ids,
+        media::ImageVariant::Thumb256,
+    )
+    .await?;
 
     Ok(accounts
         .into_iter()

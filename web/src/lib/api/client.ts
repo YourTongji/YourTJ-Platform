@@ -8,6 +8,7 @@ import {
   isSupportedStaticImageContentType,
   STATIC_IMAGE_REUPLOAD_MESSAGE,
 } from "@/lib/media-policy";
+import { reuseMediaDeliveryUrls } from "@/lib/media-delivery-cache";
 import type { Account, ApiErrorBody } from "./types";
 
 export const API_BASE_URL =
@@ -125,7 +126,7 @@ async function fetchOnce<T>(path: string, options: RequestOptions) {
   if (!contentType.includes("application/json")) {
     return undefined as T;
   }
-  return (await response.json()) as T;
+  return reuseMediaDeliveryUrls((await response.json()) as T);
 }
 
 export async function apiRequest<T>(path: string, options: RequestOptions = {}) {

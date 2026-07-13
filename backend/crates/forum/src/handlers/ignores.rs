@@ -124,7 +124,9 @@ pub async fn list_ignores_handler(
         identity::public_accounts::find_public_accounts_by_ids(&state.db, &account_ids).await?;
     let accounts: HashMap<i64, _> = accounts.into_iter().map(|row| (row.id, row)).collect();
     let asset_ids: Vec<i64> = accounts.values().filter_map(|row| row.avatar_asset_id).collect();
-    let avatar_urls = media::resolve_clean_profile_images(&state.db, &asset_ids).await?;
+    let avatar_urls =
+        media::resolve_clean_profile_images(&state.db, &asset_ids, media::ImageVariant::Thumb256)
+            .await?;
     let items = rows
         .into_iter()
         .filter_map(|row| {
