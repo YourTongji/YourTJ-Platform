@@ -161,6 +161,10 @@ function ProfileMediaSlotPanel({
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: ["my-profile"] }),
       queryClient.invalidateQueries({ queryKey: ["profile"] }),
+      queryClient.invalidateQueries({ queryKey: ["home", "threads"] }),
+      queryClient.invalidateQueries({ queryKey: ["forum", "threads"] }),
+      queryClient.invalidateQueries({ queryKey: ["thread"] }),
+      queryClient.invalidateQueries({ queryKey: ["thread-comments"] }),
     ]);
   }
 

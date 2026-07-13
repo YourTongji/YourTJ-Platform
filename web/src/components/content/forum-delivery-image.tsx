@@ -34,14 +34,14 @@ export function ForumDeliveryImage({
 }
 
 export function useForumDeliveryRefresh(
-  attachments: ReadonlyArray<ForumAttachment | null | undefined>,
+  deliveries: ReadonlyArray<Pick<ForumAttachment, "expiresAt"> | null | undefined>,
   onDeliveryRefresh: () => void,
 ) {
   const refresh = React.useRef(onDeliveryRefresh);
   refresh.current = onDeliveryRefresh;
-  const earliestExpiry = attachments.reduce<number | null>((earliest, attachment) => {
-    if (!attachment) return earliest;
-    return earliest === null ? attachment.expiresAt : Math.min(earliest, attachment.expiresAt);
+  const earliestExpiry = deliveries.reduce<number | null>((earliest, delivery) => {
+    if (!delivery) return earliest;
+    return earliest === null ? delivery.expiresAt : Math.min(earliest, delivery.expiresAt);
   }, null);
 
   React.useEffect(() => {

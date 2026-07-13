@@ -20,8 +20,10 @@
 - 院校是 owner 可编辑的公开资料字段，现有和新建资料默认“同济大学”，只在 profile visibility 允许后
   返回；设置页限制为去除首尾空白后的 1–100 字符，owner export 包含原值，账号 purge 删除资料行。
 - Forum 的主题、评论、私信会话/消息及治理举报投影同时返回可选 display name 与不可变 canonical
-  handle；Web 在存在 display name 时仍展示 `@handle` 以消歧，缺失时直接展示 `@handle`。关注流的
-  候选过滤继续复用 Identity public account projection，并完整传递其 display name。
+  handle；主题列表、主题详情和评论还通过 Identity public account batch 与 Media batch resolver 返回
+  当前 clean + published 的 typed avatar Delivery，Web 同时展示头像、名称与 `@handle`，并在 URL 临近
+  到期或首次加载失败时刷新 owning resource。关注流的候选过滤继续复用 Identity public account
+  projection，并完整传递其 display name。
 - Web 资料设置已接 profile-specific OSS 上传、owner-only 状态恢复与轮询；默认自动策略下新 raster
   callback 直接进入 processing，策略关闭或不符合自动条件时 pending owner preview 仍走同源鉴权 blob。
   只有 clean + published 才出现绑定操作，当前头像/封面可解除绑定。
@@ -196,10 +198,13 @@ Identity 同时维护最小化的用户搜索候选文档，只包含 account id
 通过 Identity public account API 取回当前可见资料，再叠加自己的 follow/block/mute、计数和 Media
 派生 URL。搜索聚合层不得跨域读取账号表，也不得把索引 hit 原样返回。
 
-头像和 banner 只保存 clean + published media asset reference。Identity/Forum 先授权 profile viewer，
-再由 Media 返回 typed、到期的 Delivery projection；当前兼容 HTTP DTO 只取其中 URL，不能让客户端提交
-任意第三方 URL 或把 bearer URL 当权威字段。新/修改的公开 surface 应保留 `expiresAt`，既有 profile/list
-需要通过 additive contract 或有界 refetch 收敛。
+头像和 banner 只保存 clean + published media asset reference。资料页先授权 profile viewer；公开论坛内容
+则先按 board/content policy 选择 canonical row，再把作者归属作为内容署名，通过 Identity public account
+batch 和 Media batch resolver 返回 typed、到期的 avatar Delivery。资料页隐藏或 activity list 私密不会
+抹去作者已经发布在公共讨论中的 handle、display name 或当前公开头像；账号生命周期关闭、内容不可见或
+头像不再 clean/published 时投影立即为空。当前 profile/account/relationship/search/DM 兼容 HTTP DTO 仍只取
+Delivery URL，不能让客户端提交任意第三方 URL 或把 bearer URL 当权威字段。新/修改的公开 surface 应保留
+`expiresAt`，既有兼容 surface 需要通过 additive contract 或有界 refetch 收敛。
 上传 intent 会持久化可选的 `profile_avatar/profile_banner` usage，使待审/处理状态可在刷新后恢复；
 usage 不是放宽授权的凭证，最终绑定仍重新验证 owner、image kind、clean 和完整 publication。
 

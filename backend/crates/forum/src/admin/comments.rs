@@ -58,7 +58,7 @@ pub async fn get_comment_for_moderation(
     let parent_allows_edit =
         crate::repo::thread_allows_comment_edits(&state.db, comment.thread_id).await?;
     let mut dto = crate::handlers::comment_to_dto(&comment, solved_comment_id);
-    crate::handlers::hydrate_comment_attachments(&state.db, std::slice::from_mut(&mut dto)).await?;
+    crate::handlers::hydrate_comment_media(&state.db, std::slice::from_mut(&mut dto)).await?;
     crate::content_permissions::hydrate_comments(
         &state.db,
         Some(&auth),

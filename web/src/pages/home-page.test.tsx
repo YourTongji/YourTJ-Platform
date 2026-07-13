@@ -37,6 +37,7 @@ const firstThread = {
   id: "21",
   boardId: "1",
   authorHandle: "alice",
+  authorAvatar: null,
   title: "首页第一页",
   bodyExcerpt: "第一页摘要",
   contentVersion: 1,

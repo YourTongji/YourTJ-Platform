@@ -27,6 +27,7 @@ const firstThread = {
   boardId: "1",
   authorHandle: "alice",
   authorDisplayName: "Alice Chen",
+  authorAvatar: null,
   title: "第一页帖子",
   bodyExcerpt: "第一页摘要",
   contentVersion: 1,

@@ -43,6 +43,10 @@
 - Display name、院校、bio、HTTPS website 与 privacy setting 可由 owner 替换；院校默认“同济大学”且
   与其他公开资料一起受 profile visibility 控制；avatar/banner 只保存本人 clean OSS asset id，公开
   URL 是状态校验后的派生值。
+- 公共 board 中仍可见的主题/评论把 canonical handle、可选 display name 与当前 clean + published avatar
+  作为内容署名，而不是资料页披露；因此 profile/activity visibility 不会匿名化已经发布的公共讨论。
+  Forum 只对已授权内容行批量请求 active public account 与短期 typed Media Delivery，账号生命周期关闭、
+  内容隐藏或头像失去 clean/published 状态后不再返回头像；DTO 不包含邮箱、object key 或持久 vendor URL。
 - 人工认证默认私密；公开 profile 只返回 definition 允许且 grant 明确公开的有效 label/说明/有效期，
   不返回 issuer、reason、evidence reference 或内部 grant id。
 - 账号搜索只索引已验证、discoverable 且非 `only_me` 账号的 id、handle 和可选 display name；响应
@@ -112,7 +116,7 @@
 | 资格 PII | 校园邮箱、邮箱验证状态 | identity purpose only | 加密/盲索引、绝不公开、限制保留 |
 | 安全凭据 | password hash、code hash、refresh hash、keys/tokens | security code only | 不记录明文、最短保留、可撤销 |
 | 会话元数据 | bounded user-agent、创建/最近使用/到期时间、recent-auth 时间/方法 | 账号本人、安全代码 | 不收集精确 IP，不存 credential，随 session retention 删除 |
-| 公开身份 | handle、公开头像、display name、院校、bio | 按 profile visibility | 用户可控、handle history 防冒用 |
+| 公开身份 | handle、公开头像、display name、院校、bio | 资料按 profile visibility；公共内容保留最小作者署名 | 用户可控、handle history 防冒用；内容署名不携带资料正文或 PII |
 | 公共内容 | thread、comment、review、reaction | 按 board/content policy | revision、治理、导出/删除规则 |
 | 社交关系 | follow、block、mute、subscription | 本人及 policy 允许对象 | block/mute 默认私密、最小暴露 |
 | 私密通信 | DM body、单条 request 附言、private attachment | participants | staff 仅举报证据；未举报 declined request 正文立即删除，其他内容独立 retention |

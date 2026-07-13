@@ -110,6 +110,102 @@ async fn create_thread(app: &axum::Router, token: &str, body: Value) -> axum::re
 }
 
 #[tokio::test]
+async fn forum_content_projects_only_the_current_publishable_author_avatar() {
+    let (pool, app) = create_test_app().await;
+    let (author_id, author_token) =
+        create_test_account(&pool, "forum-avatar@tongji.edu.cn", "forum-avatar").await;
+    let avatar_id = seed_upload(&pool, author_id, "profile_avatar", "clean").await;
+    sqlx::query(
+        "INSERT INTO identity.profiles (account_id, avatar_asset_id) VALUES ($1, $2) \
+         ON CONFLICT (account_id) DO UPDATE SET avatar_asset_id = EXCLUDED.avatar_asset_id",
+    )
+    .bind(author_id)
+    .bind(avatar_id)
+    .execute(&pool)
+    .await
+    .expect("bind forum author avatar");
+
+    let created = create_thread(
+        &app,
+        &author_token,
+        json!({
+            "boardId": "1",
+            "title": "作者头像投影",
+            "body": "正文",
+            "contentFormat": "markdown_v1"
+        }),
+    )
+    .await;
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let created_json = read_json(created).await;
+    let thread_id = created_json["id"].as_str().expect("thread id").to_owned();
+    assert_eq!(created_json["authorAvatar"]["assetId"], avatar_id.to_string());
+    assert_eq!(created_json["authorAvatar"]["variant"], "display_1280");
+    assert!(created_json["authorAvatar"]["url"]
+        .as_str()
+        .is_some_and(|url| url.starts_with("https://media.example.test/")));
+    assert!(created_json["authorAvatar"]["expiresAt"]
+        .as_i64()
+        .is_some_and(|expires_at| expires_at > chrono::Utc::now().timestamp()));
+    assert!(created_json["authorAvatar"].get("objectKey").is_none());
+
+    let list = request(&app, Method::GET, "/api/v2/forum/threads?sort=new", None, None).await;
+    assert_eq!(list.status(), StatusCode::OK);
+    let list_json = read_json(list).await;
+    let listed = list_json["items"]
+        .as_array()
+        .expect("thread list")
+        .iter()
+        .find(|thread| thread["id"] == thread_id)
+        .expect("created thread in feed");
+    assert_eq!(listed["authorAvatar"]["assetId"], avatar_id.to_string());
+
+    let comment = request(
+        &app,
+        Method::POST,
+        &format!("/api/v2/forum/threads/{thread_id}/comments"),
+        Some(&author_token),
+        Some(json!({ "body": "带头像的回复", "contentFormat": "markdown_v1" })),
+    )
+    .await;
+    assert_eq!(comment.status(), StatusCode::CREATED);
+    let comment_json = read_json(comment).await;
+    assert_eq!(comment_json["authorAvatar"]["assetId"], avatar_id.to_string());
+
+    let comments = request(
+        &app,
+        Method::GET,
+        &format!("/api/v2/forum/threads/{thread_id}/comments"),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(comments.status(), StatusCode::OK);
+    let comments_json = read_json(comments).await;
+    assert_eq!(comments_json["items"][0]["authorAvatar"]["assetId"], avatar_id.to_string());
+
+    sqlx::query(
+        "UPDATE media.asset_publications SET status = 'processing', updated_at = now() \
+         WHERE asset_id = $1",
+    )
+    .bind(avatar_id)
+    .execute(&pool)
+    .await
+    .expect("make author avatar unavailable");
+
+    let detail = request(
+        &app,
+        Method::GET,
+        &format!("/api/v2/forum/threads/{thread_id}"),
+        Some(&author_token),
+        None,
+    )
+    .await;
+    assert_eq!(detail.status(), StatusCode::OK);
+    assert!(read_json(detail).await["authorAvatar"].is_null());
+}
+
+#[tokio::test]
 async fn thread_images_require_exact_owned_clean_bindings_and_disclose_only_safe_projection() {
     let (pool, app) = create_test_app().await;
     let (owner_id, owner_token) =
