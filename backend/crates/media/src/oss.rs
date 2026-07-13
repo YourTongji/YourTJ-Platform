@@ -393,24 +393,39 @@ impl ObjectStore for AliyunOssClient {
                     MediaError::Unavailable("media Delivery verification unavailable".into())
                 },
             )?;
-        let content_type = response
-            .headers()
-            .get(reqwest::header::CONTENT_TYPE)
-            .and_then(|value| value.to_str().ok());
-        let content_sha256 = response
-            .headers()
-            .get("x-oss-meta-content-sha256")
-            .and_then(|value| value.to_str().ok());
-        if !response.status().is_success()
-            || content_type != Some(expected_content_type)
-            || response.content_length() != Some(expected_bytes)
-            || content_sha256 != Some(expected_sha256)
-        {
+        if !delivery_head_matches(
+            response.status(),
+            response.headers(),
+            expected_content_type,
+            expected_bytes,
+            expected_sha256,
+        ) {
             tracing::warn!(status = %response.status(), "OSS V4 Delivery verification mismatch");
             return Err(MediaError::Unavailable("media Delivery verification failed".into()));
         }
         Ok(())
     }
+}
+
+fn delivery_head_matches(
+    status: reqwest::StatusCode,
+    headers: &HeaderMap,
+    expected_content_type: &str,
+    expected_bytes: u64,
+    expected_sha256: &str,
+) -> bool {
+    let content_type =
+        headers.get(reqwest::header::CONTENT_TYPE).and_then(|value| value.to_str().ok());
+    let content_length = headers
+        .get(reqwest::header::CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok());
+    let content_sha256 =
+        headers.get("x-oss-meta-content-sha256").and_then(|value| value.to_str().ok());
+    status.is_success()
+        && content_type == Some(expected_content_type)
+        && content_length == Some(expected_bytes)
+        && content_sha256 == Some(expected_sha256)
 }
 
 #[derive(Debug)]
@@ -921,6 +936,32 @@ fn header_str<'a>(headers: &'a HeaderMap, name: &str) -> Result<&'a str, MediaEr
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn delivery_head_uses_object_length_header_for_empty_head_response() {
+        let digest = "a".repeat(64);
+        let mut headers = HeaderMap::new();
+        headers.insert(reqwest::header::CONTENT_TYPE, "image/webp".parse().expect("MIME header"));
+        headers.insert(reqwest::header::CONTENT_LENGTH, "77240".parse().expect("length header"));
+        headers.insert("x-oss-meta-content-sha256", digest.parse().expect("digest header"));
+
+        assert!(delivery_head_matches(
+            reqwest::StatusCode::OK,
+            &headers,
+            "image/webp",
+            77_240,
+            &digest,
+        ));
+
+        headers.remove(reqwest::header::CONTENT_LENGTH);
+        assert!(!delivery_head_matches(
+            reqwest::StatusCode::OK,
+            &headers,
+            "image/webp",
+            77_240,
+            &digest,
+        ));
+    }
 
     #[test]
     fn callback_token_is_verified_only_against_its_digest() {
