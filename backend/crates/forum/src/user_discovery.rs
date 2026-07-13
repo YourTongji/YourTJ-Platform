@@ -81,7 +81,9 @@ pub async fn load_user_hits(
     };
     let asset_ids =
         accounts.values().filter_map(|account| account.avatar_asset_id).collect::<Vec<_>>();
-    let avatar_urls = media::resolve_clean_profile_images(pool, &asset_ids).await?;
+    let avatar_urls =
+        media::resolve_clean_profile_images(pool, &asset_ids, media::ImageVariant::Thumb256)
+            .await?;
     let mut items = Vec::new();
     for account_id in candidate_ids {
         if hidden_ids.contains(account_id) {

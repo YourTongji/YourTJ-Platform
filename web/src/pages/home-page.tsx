@@ -92,7 +92,7 @@ export function HomePage() {
 
   const threadItems = threads.data?.pages.flatMap((page) => page.items ?? []) ?? [];
   useForumDeliveryRefresh(
-    threadItems.map((thread) => thread.attachments?.[0]),
+    threadItems.flatMap((thread) => [thread.authorAvatar, thread.attachments?.[0]]),
     () => void threads.refetch(),
   );
 

@@ -122,6 +122,10 @@ describe("SiteSidebar promotions", () => {
       "referrerpolicy",
       "no-referrer",
     );
+    expect(view.container.querySelector("img[src*='media.example.test']")).toHaveAttribute(
+      "loading",
+      "lazy",
+    );
     await waitFor(() => {
       expect(apiMocks.recordPromotionEvent).toHaveBeenCalledWith(
         "5",

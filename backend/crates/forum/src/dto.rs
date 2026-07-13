@@ -56,6 +56,7 @@ pub struct ThreadDto {
     pub board_id: String,
     pub author_handle: String,
     pub author_display_name: Option<String>,
+    pub author_avatar: Option<media::ImageDeliveryProjection>,
     pub title: String,
     pub body_excerpt: Option<String>,
     #[serde(default = "legacy_content_version")]
@@ -88,6 +89,7 @@ pub struct ThreadDetailDto {
     pub board_id: String,
     pub author_handle: String,
     pub author_display_name: Option<String>,
+    pub author_avatar: Option<media::ImageDeliveryProjection>,
     pub author_id: String,
     pub title: String,
     pub body: Option<String>,
@@ -151,6 +153,7 @@ pub struct CommentDto {
     pub path: String,
     pub author_handle: String,
     pub author_display_name: Option<String>,
+    pub author_avatar: Option<media::ImageDeliveryProjection>,
     pub author_id: String,
     pub body: String,
     pub content_format: ContentFormat,

@@ -2,6 +2,7 @@ import * as React from "react";
 
 import { LightboxableImage } from "@/components/ui/image-lightbox";
 import type { ForumAttachment } from "@/lib/api/types";
+import { invalidateMediaDeliveryUrl } from "@/lib/media-delivery-cache";
 
 const RECOVERY_COOLDOWN_MS = 15_000;
 
@@ -11,6 +12,8 @@ export function ForumDeliveryImage({
   // Off by default: list/feed cards often wrap this image in a Link; a nested
   // button trigger would create invalid a>button markup and break navigation.
   enableLightbox = false,
+  loading = "lazy",
+  decoding = "async",
   ...imageProps
 }: Omit<React.ImgHTMLAttributes<HTMLImageElement>, "src" | "alt" | "width" | "height" | "onError">
   & {
@@ -20,6 +23,7 @@ export function ForumDeliveryImage({
   }) {
   const lastRecoveryAt = React.useRef(0);
   const handleError = () => {
+    invalidateMediaDeliveryUrl(attachment);
     const now = Date.now();
     if (!onDeliveryRefresh || now - lastRecoveryAt.current < RECOVERY_COOLDOWN_MS) return;
     lastRecoveryAt.current = now;
@@ -34,6 +38,8 @@ export function ForumDeliveryImage({
         alt={attachment.alt}
         width={attachment.width}
         height={attachment.height}
+        loading={loading}
+        decoding={decoding}
         referrerPolicy="no-referrer"
         onError={handleError}
       />
@@ -43,6 +49,8 @@ export function ForumDeliveryImage({
   return (
     <img
       {...imageProps}
+      loading={loading}
+      decoding={decoding}
       src={attachment.url}
       alt={attachment.alt}
       width={attachment.width ?? undefined}
@@ -54,14 +62,14 @@ export function ForumDeliveryImage({
 }
 
 export function useForumDeliveryRefresh(
-  attachments: ReadonlyArray<ForumAttachment | null | undefined>,
+  deliveries: ReadonlyArray<Pick<ForumAttachment, "expiresAt"> | null | undefined>,
   onDeliveryRefresh: () => void,
 ) {
   const refresh = React.useRef(onDeliveryRefresh);
   refresh.current = onDeliveryRefresh;
-  const earliestExpiry = attachments.reduce<number | null>((earliest, attachment) => {
-    if (!attachment) return earliest;
-    return earliest === null ? attachment.expiresAt : Math.min(earliest, attachment.expiresAt);
+  const earliestExpiry = deliveries.reduce<number | null>((earliest, delivery) => {
+    if (!delivery) return earliest;
+    return earliest === null ? delivery.expiresAt : Math.min(earliest, delivery.expiresAt);
   }, null);
 
   React.useEffect(() => {

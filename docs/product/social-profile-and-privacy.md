@@ -6,7 +6,7 @@
 >
 > 负责人：Forum/Identity/Web maintainers、Privacy owner、Product owner
 >
-> 最近核验：2026-07-13，migrations `0034`、`0044`、`0045`、`0050`、`0054`、`0061`、`0064`、`0065` 与 owner-domain tests
+> 最近核验：2026-07-14，migrations `0034`、`0044`、`0045`、`0050`、`0054`、`0061`、`0064`、`0065` 与 owner-domain tests
 
 本规范定义公开资料、用户关注、板块/主题订阅、block、mute、资料隐私和徽章语义。目标是
 建立可解释的社交关系，而不是把所有关系都命名为 “following” 或 “屏蔽”。
@@ -20,13 +20,17 @@
 - 院校是 owner 可编辑的公开资料字段，现有和新建资料默认“同济大学”，只在 profile visibility 允许后
   返回；设置页限制为去除首尾空白后的 1–100 字符，owner export 包含原值，账号 purge 删除资料行。
 - Forum 的主题、评论、私信会话/消息及治理举报投影同时返回可选 display name 与不可变 canonical
-  handle；Web 在存在 display name 时仍展示 `@handle` 以消歧，缺失时直接展示 `@handle`。关注流的
-  候选过滤继续复用 Identity public account projection，并完整传递其 display name。
+  handle；主题列表、主题详情和评论还通过 Identity public account batch 与 Media batch resolver 返回
+  当前 clean + published 的 typed `thumb_256` avatar Delivery；私信会话、公开资料、关系列表与搜索的
+  兼容头像 URL 也由同一规格投影，不再读取旧任意 URL。Web 同时展示头像、名称与 `@handle`，非首屏头像
+  默认 lazy-load，typed URL 在临近到期或首次加载失败时刷新 owning resource。关注流的候选过滤继续复用
+  Identity public account projection，并完整传递其 display name。
 - Web 资料设置已接 profile-specific OSS 上传、owner-only 状态恢复与轮询；默认自动策略下新 raster
   callback 直接进入 processing，策略关闭或不符合自动条件时 pending owner preview 仍走同源鉴权 blob。
   只有 clean + published 才出现绑定操作，当前头像/封面可解除绑定。
-- 资料响应包含 owner-domain 授权后的五分钟 signed Delivery URL、角色、信任等级、徽章、主题/回复/获赞
-  与准确 followers/following 计数；动态 API 默认 `private, no-store`，URL 不是持久字段。
+- 资料响应包含 owner-domain 授权后的五分钟 signed Delivery URL；头像使用 `thumb_256`，封面使用
+  `display_1280`。响应还包含角色、信任等级、徽章、主题/回复/获赞与准确 followers/following 计数；
+  动态 API 默认 `private, no-store`，URL 不是持久字段。
 - 公开资料把成就徽章、实时角色标识与人工身份/特殊认证分开；人工认证只返回仍有效、类型允许公开且
   grant 明确 `displayOnProfile` 的 label/说明/受控图标/有效期，不返回签发人、原因或证据引用。
 - Platform 持有 versioned 成就定义、可撤销/可重新授予的账号成就和 append-only 事件历史；图标使用
@@ -75,10 +79,11 @@
   仍需签字，不能声称 staging/production 已完成运营验收。Raster 当前默认由有审计的 system policy 自动批准
   后进入安全变体处理，可按环境回退 staff 人工审核；这不是内容安全扫描。File/PDF scanner 仍缺，Web
   不再提供任意 URL 输入。
-- Public profile/account/relationship/search/DM avatar 的兼容 DTO 目前仍把 typed Media projection 降为
-  nullable URL string，不携带 `expiresAt`；Profile Web 也未统一在四分钟刷新或首次 image error 时回源。
-  已加载图片通常不受 URL 到期影响，但长驻 React Query cache/lazy image 可能持有过期 bearer URL；在
-  统一 typed DTO 或受控 refetch 前，该跨 surface 刷新闭环保留为 `Partial`。
+- Public profile/relationship/search/DM avatar 已由 Media 投影 `thumb_256`，但这些兼容 DTO 与 account
+  legacy field 仍把 projection 降为 nullable URL string，不携带 asset id/variant/`expiresAt`。Typed Forum
+  avatar 已在 Web 按 `assetId + variant` 复用到过期前 30 秒并在图片错误时精确淘汰；字符串兼容 surface
+  无法使用该缓存，也未统一定时刷新。在统一 typed DTO 或受控 refetch 前，该跨 surface 刷新闭环保留为
+  `Partial`。
 - 旧 `/me/ignores` 作为 block-by-id 兼容 alias 保留，新客户端只使用 handle-based block API。
 
 ## 四种关系不得混用
@@ -196,10 +201,13 @@ Identity 同时维护最小化的用户搜索候选文档，只包含 account id
 通过 Identity public account API 取回当前可见资料，再叠加自己的 follow/block/mute、计数和 Media
 派生 URL。搜索聚合层不得跨域读取账号表，也不得把索引 hit 原样返回。
 
-头像和 banner 只保存 clean + published media asset reference。Identity/Forum 先授权 profile viewer，
-再由 Media 返回 typed、到期的 Delivery projection；当前兼容 HTTP DTO 只取其中 URL，不能让客户端提交
-任意第三方 URL 或把 bearer URL 当权威字段。新/修改的公开 surface 应保留 `expiresAt`，既有 profile/list
-需要通过 additive contract 或有界 refetch 收敛。
+头像和 banner 只保存 clean + published media asset reference。资料页先授权 profile viewer；公开论坛内容
+则先按 board/content policy 选择 canonical row，再把作者归属作为内容署名，通过 Identity public account
+batch 和 Media batch resolver 返回 typed、到期的 avatar Delivery。资料页隐藏或 activity list 私密不会
+抹去作者已经发布在公共讨论中的 handle、display name 或当前公开头像；账号生命周期关闭、内容不可见或
+头像不再 clean/published 时投影立即为空。当前 profile/account/relationship/search/DM 兼容 HTTP DTO 仍只取
+Delivery URL，不能让客户端提交任意第三方 URL 或把 bearer URL 当权威字段。新/修改的公开 surface 应保留
+`expiresAt`，既有兼容 surface 需要通过 additive contract 或有界 refetch 收敛。
 上传 intent 会持久化可选的 `profile_avatar/profile_banner` usage，使待审/处理状态可在刷新后恢复；
 usage 不是放宽授权的凭证，最终绑定仍重新验证 owner、image kind、clean 和完整 publication。
 

@@ -211,7 +211,7 @@ async fn insert_comment(
     comment_id
 }
 
-async fn seed_published_profile_image(pool: &sqlx::PgPool, account_id: i64) -> i64 {
+async fn seed_published_profile_image(pool: &sqlx::PgPool, account_id: i64, usage: &str) -> i64 {
     for (key, value) in [
         ("OSS_REGION", "cn-shanghai"),
         ("MEDIA_DELIVERY_OSS_BUCKET", "yourtj-test-delivery"),
@@ -233,12 +233,13 @@ async fn seed_published_profile_image(pool: &sqlx::PgPool, account_id: i64) -> i
          (account_id, kind, oss_key, url, bytes, mime, sha256, status, usage, \
           image_width, image_height) \
          VALUES ($1, 'image', $2, $3, 1024, 'image/png', $4, 'clean', \
-                 'forum_thread', 1200, 800) RETURNING id",
+                 $5, 1200, 800) RETURNING id",
     )
     .bind(account_id)
     .bind(format!("uploads/{account_id}/image/{suffix}.png"))
     .bind(format!("https://cdn.example.test/{suffix}.png"))
     .bind("a".repeat(64))
+    .bind(usage)
     .fetch_one(pool)
     .await
     .expect("seed profile media upload");
@@ -456,7 +457,19 @@ async fn profile_routes_preserve_contract_and_exclude_unavailable_content() {
     .await
     .expect("seed profile bookmark");
 
-    let media_asset_id = seed_published_profile_image(&pool, account_id).await;
+    let avatar_asset_id = seed_published_profile_image(&pool, account_id, "profile_avatar").await;
+    let banner_asset_id = seed_published_profile_image(&pool, account_id, "profile_banner").await;
+    let media_asset_id = seed_published_profile_image(&pool, account_id, "forum_thread").await;
+    sqlx::query(
+        "UPDATE identity.profiles SET avatar_asset_id = $2, banner_asset_id = $3 \
+         WHERE account_id = $1",
+    )
+    .bind(account_id)
+    .bind(avatar_asset_id)
+    .bind(banner_asset_id)
+    .execute(&pool)
+    .await
+    .expect("bind profile avatar and banner variants");
     let media_thread_id: i64 = sqlx::query_scalar(
         "INSERT INTO forum.threads \
          (board_id, author_id, title, body, content_format, content_version) \
@@ -484,6 +497,8 @@ async fn profile_routes_preserve_contract_and_exclude_unavailable_content() {
     assert_eq!(profile["id"], account_id.to_string());
     assert_eq!(profile["handle"], "profile-boundary");
     assert_eq!(profile["school"], "同济大学嘉定校区");
+    assert!(profile["avatarUrl"].as_str().is_some_and(|url| url.contains("thumb_256")));
+    assert!(profile["bannerUrl"].as_str().is_some_and(|url| url.contains("display_1280")));
     assert_eq!(profile["threadCount"], 8);
     assert_eq!(profile["commentCount"], 13);
     assert_eq!(profile["votesReceived"], 21);

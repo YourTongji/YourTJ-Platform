@@ -16,7 +16,6 @@ use crate::error::MediaError;
 
 pub(crate) const CDN_URL_TTL_SECONDS: i64 = 5 * 60;
 pub(crate) const DELIVERY_POLICY_VERSION: i32 = 1;
-pub(crate) const DISPLAY_VARIANT: &str = "display_1280";
 const RPC_ENCODE_SET: &AsciiSet =
     &NON_ALPHANUMERIC.remove(b'-').remove(b'_').remove(b'.').remove(b'~');
 const CDN_RPC_ENDPOINT: &str = "https://cdn.aliyuncs.com/";
@@ -51,7 +50,7 @@ pub(crate) struct SignedDeliveryUrl {
 }
 
 /// Storage-opaque image delivery data returned only after an owning domain authorizes disclosure.
-#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ImageDeliveryProjection {
     pub asset_id: String,
@@ -64,17 +63,26 @@ pub struct ImageDeliveryProjection {
 }
 
 /// Stable image variants that owning domains may intentionally disclose.
-#[derive(Debug, Clone, Copy, serde::Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
 pub enum ImageVariant {
     #[serde(rename = "thumb_256")]
     Thumb256,
     #[serde(rename = "display_1280")]
+    #[default]
     Display1280,
     #[serde(rename = "full_2048")]
     Full2048,
 }
 
 impl ImageVariant {
+    pub(crate) fn as_database(self) -> &'static str {
+        match self {
+            Self::Thumb256 => "thumb_256",
+            Self::Display1280 => "display_1280",
+            Self::Full2048 => "full_2048",
+        }
+    }
+
     pub(crate) fn from_database(value: &str) -> Result<Self, MediaError> {
         match value {
             "thumb_256" => Ok(Self::Thumb256),

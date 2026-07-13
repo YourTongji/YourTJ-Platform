@@ -377,7 +377,9 @@ async fn relationship_rows_to_dtos(
         .collect();
     let asset_ids: Vec<i64> =
         accounts.values().filter_map(|account| account.avatar_asset_id).collect();
-    let urls = media::resolve_clean_profile_images(&state.db, &asset_ids).await?;
+    let urls =
+        media::resolve_clean_profile_images(&state.db, &asset_ids, media::ImageVariant::Thumb256)
+            .await?;
     let mut items = Vec::with_capacity(rows.len());
     for row in rows {
         let Some(account) = accounts.get(&row.account_id) else {

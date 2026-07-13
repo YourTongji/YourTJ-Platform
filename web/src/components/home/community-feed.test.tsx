@@ -1,5 +1,6 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { ComponentProps } from "react";
 import { MemoryRouter } from "react-router";
 import { describe, expect, it, vi } from "vitest";
 
@@ -7,10 +8,33 @@ import { expectNoAccessibilityViolations } from "@/test/accessibility";
 
 import { CommunityFeed } from "./community-feed";
 
+vi.mock("@/components/ui/avatar", () => ({
+  Avatar: ({ children, ...props }: ComponentProps<"span">) => <span {...props}>{children}</span>,
+  AvatarImage: ({
+    onLoadingStatusChange,
+    ...props
+  }: ComponentProps<"img"> & { onLoadingStatusChange?: (status: string) => void }) => (
+    <img {...props} onError={() => onLoadingStatusChange?.("error")} />
+  ),
+  AvatarFallback: ({ children, ...props }: ComponentProps<"span">) => (
+    <span {...props}>{children}</span>
+  ),
+}));
+
 const thread = {
   id: "42",
   boardId: "1",
   authorHandle: "alice",
+  authorDisplayName: "Alice Chen",
+  authorAvatar: {
+    assetId: "7",
+    variant: "thumb_256" as const,
+    url: "https://media.example.test/alice.webp",
+    expiresAt: Math.floor(Date.now() / 1000) + 300,
+    mime: "image/webp" as const,
+    width: 256,
+    height: 256,
+  },
   title: "关注动态",
   bodyExcerpt: "这是从服务端正文投影生成的摘要。",
   contentVersion: 1,
@@ -54,7 +78,33 @@ describe("CommunityFeed", () => {
       "href",
       "/forum/threads/42",
     );
+    expect(screen.getByAltText("alice 的头像")).toHaveAttribute(
+      "src",
+      "https://media.example.test/alice.webp",
+    );
+    expect(screen.getByAltText("alice 的头像")).toHaveAttribute("loading", "lazy");
+    expect(screen.getByAltText("alice 的头像")).toHaveAttribute("decoding", "async");
     await expectNoAccessibilityViolations(view.container);
+  });
+
+  it("refreshes the owning feed when an author avatar delivery fails", () => {
+    const onDeliveryRefresh = vi.fn();
+    render(
+      <MemoryRouter>
+        <CommunityFeed
+          mode="hot"
+          onModeChange={vi.fn()}
+          items={[thread]}
+          isLoading={false}
+          onRetry={vi.fn()}
+          isAuthenticated
+          onAttachmentDeliveryRefresh={onDeliveryRefresh}
+        />
+      </MemoryRouter>,
+    );
+
+    fireEvent.error(screen.getByAltText("alice 的头像"));
+    expect(onDeliveryRefresh).toHaveBeenCalledOnce();
   });
 
   it("keeps the following feed unavailable to anonymous visitors", () => {

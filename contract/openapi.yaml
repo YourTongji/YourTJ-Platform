@@ -831,7 +831,7 @@ components:
         id: { type: string }
         handle: { type: string }
         displayName: { type: string, nullable: true }
-        avatarUrl: { type: string, nullable: true }
+        avatarUrl: { type: string, nullable: true, description: Short-lived clean thumb_256 compatibility URL; refresh the owning search response after expiry. }
         role: { type: string, enum: [user, mod, admin] }
         followerCount: { type: integer, minimum: 0 }
         following: { type: boolean }
@@ -981,12 +981,16 @@ components:
         height: { type: integer, minimum: 1, maximum: 1280, nullable: true }
     Thread:
       type: object
-      required: [id, boardId, authorHandle, title, bodyExcerpt, contentVersion, replyCount, voteCount, hotScore, status, createdAt, lastActivityAt, tags, attachments, viewerVote, isBookmarked, canEdit, canDelete, canModerate]
+      required: [id, boardId, authorHandle, authorAvatar, title, bodyExcerpt, contentVersion, replyCount, voteCount, hotScore, status, createdAt, lastActivityAt, tags, attachments, viewerVote, isBookmarked, canEdit, canDelete, canModerate]
       properties:
         id: { type: string }
         boardId: { type: string }
         authorHandle: { type: string }
         authorDisplayName: { type: string, nullable: true }
+        authorAvatar:
+          allOf: [{ $ref: "#/components/schemas/MediaDelivery" }]
+          nullable: true
+          description: Current short-lived clean thumb_256 avatar projection for the active author; null when no publishable avatar is available.
         title: { type: string }
         bodyExcerpt: { type: string, nullable: true }
         contentVersion: { type: integer, format: int64, minimum: 1 }
@@ -1007,12 +1011,16 @@ components:
       allOf: [{ $ref: "#/components/schemas/Thread" }, { type: object, properties: { unreadCount: { type: integer, nullable: true } } }]
     ThreadDetail:
       type: object
-      required: [id, boardId, authorHandle, authorId, title, body, contentFormat, contentVersion, replyCount, voteCount, hotScore, tags, attachments, status, pinnedAt, pinnedGlobally, featuredAt, closedAt, archivedAt, deletedAt, editedAt, hiddenAt, createdAt, lastActivityAt, solvedAnswerId, viewerVote, isBookmarked, myLastReadCommentId, mySubscriptionLevel, poll, canEdit, canDelete, canModerate]
+      required: [id, boardId, authorHandle, authorAvatar, authorId, title, body, contentFormat, contentVersion, replyCount, voteCount, hotScore, tags, attachments, status, pinnedAt, pinnedGlobally, featuredAt, closedAt, archivedAt, deletedAt, editedAt, hiddenAt, createdAt, lastActivityAt, solvedAnswerId, viewerVote, isBookmarked, myLastReadCommentId, mySubscriptionLevel, poll, canEdit, canDelete, canModerate]
       properties:
         id: { type: string }
         boardId: { type: string }
         authorHandle: { type: string }
         authorDisplayName: { type: string, nullable: true }
+        authorAvatar:
+          allOf: [{ $ref: "#/components/schemas/MediaDelivery" }]
+          nullable: true
+          description: Current short-lived clean thumb_256 avatar projection for the active author; null when no publishable avatar is available.
         authorId: { type: string }
         title: { type: string }
         body: { type: string, nullable: true }
@@ -1111,7 +1119,7 @@ components:
         createdAt: { type: integer }
     Comment:
       type: object
-      required: [id, threadId, parentId, path, authorHandle, authorId, body, contentFormat, contentVersion, attachments, voteCount, viewerVote, isBookmarked, isDeleted, isHidden, editedAt, createdAt, quotedCommentId, isSolved, canEdit, canDelete, canModerate]
+      required: [id, threadId, parentId, path, authorHandle, authorAvatar, authorId, body, contentFormat, contentVersion, attachments, voteCount, viewerVote, isBookmarked, isDeleted, isHidden, editedAt, createdAt, quotedCommentId, isSolved, canEdit, canDelete, canModerate]
       properties:
         id: { type: string }
         threadId: { type: string }
@@ -1119,6 +1127,10 @@ components:
         path: { type: string }
         authorHandle: { type: string }
         authorDisplayName: { type: string, nullable: true }
+        authorAvatar:
+          allOf: [{ $ref: "#/components/schemas/MediaDelivery" }]
+          nullable: true
+          description: Current short-lived clean thumb_256 avatar projection for the active author; null when no publishable avatar is available.
         authorId: { type: string }
         body: { type: string }
         contentFormat: { $ref: "#/components/schemas/ContentFormat" }
@@ -1697,7 +1709,7 @@ components:
         participantId: { type: string }
         participantHandle: { type: string }
         participantDisplayName: { type: string, nullable: true }
-        participantAvatarUrl: { type: string, nullable: true }
+        participantAvatarUrl: { type: string, nullable: true, description: Short-lived clean thumb_256 compatibility URL; refresh the owning conversation response after expiry. }
         lastMessageExcerpt: { type: string, nullable: true }
         lastMessageAt: { type: integer, nullable: true }
         unreadCount: { type: integer, minimum: 0 }
@@ -1894,7 +1906,7 @@ components:
       properties:
         accountId: { type: string }
         handle: { type: string }
-        avatarUrl: { type: string, nullable: true }
+        avatarUrl: { type: string, nullable: true, description: Short-lived clean thumb_256 compatibility URL; refresh the owning ignore-list response after expiry. }
         createdAt: { type: integer }
     UserSummary:
       type: object
@@ -1903,7 +1915,7 @@ components:
         id: { type: string }
         handle: { type: string }
         displayName: { type: string, nullable: true }
-        avatarUrl: { type: string, nullable: true }
+        avatarUrl: { type: string, nullable: true, description: Short-lived clean thumb_256 compatibility URL; refresh the owning relationship-list response after expiry. }
         role: { type: string, enum: [user, mod, admin] }
         followedAt: { type: integer }
     UserRelationship:
@@ -1963,7 +1975,7 @@ components:
         school: { type: string, minLength: 1, maxLength: 100, description: Owner-editable public school label governed by profile visibility. }
         bio: { type: string, nullable: true }
         website: { type: string, format: uri, nullable: true }
-        avatarUrl: { type: string, nullable: true }
+        avatarUrl: { type: string, nullable: true, description: Short-lived clean thumb_256 compatibility URL; refresh the owning profile response after expiry. }
         bannerUrl: { type: string, nullable: true }
         role: { type: string, enum: [user, mod, admin] }
         trustLevel: { type: integer, minimum: 0, maximum: 6 }
@@ -4031,10 +4043,19 @@ paths:
     get:
       tags: [media]
       summary: Get the owner's short-lived published CDN delivery projection
-      description: Owner-only compatibility route. It returns only a clean, atomically published sanitized display variant; pending preview uses the separate same-origin no-store endpoint. Public business surfaces receive Media projections through their owning API rather than calling this route.
-      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      description: Owner-only compatibility route. It returns a clean, atomically published sanitized server-owned variant; pending preview uses the separate same-origin no-store endpoint. Public business surfaces receive Media projections through their owning API rather than calling this route.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - name: variant
+          in: query
+          required: false
+          description: Existing sanitized variant to project; defaults to display_1280 for backward compatibility.
+          schema:
+            allOf: [{ $ref: "#/components/schemas/MediaDeliveryVariant" }]
+            default: display_1280
       responses:
         "200": { description: short-lived CDN projection, content: { application/json: { schema: { $ref: "#/components/schemas/MediaDelivery" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
   /me/media/uploads:

@@ -166,43 +166,49 @@ pub fn routes_with_object_store(
         .with_state(state)
 }
 
-/// Resolve typed clean image delivery after the owning domain authorizes disclosure.
+/// Resolve one typed clean image variant after the owning domain authorizes disclosure.
 pub async fn resolve_clean_image_delivery(
     pool: &sqlx::PgPool,
     asset_id: Option<i64>,
+    variant: ImageVariant,
 ) -> shared::AppResult<Option<ImageDeliveryProjection>> {
     let Some(asset_id) = asset_id else {
         return Ok(None);
     };
-    Ok(repo::find_clean_image_deliveries(pool, &[asset_id])
+    Ok(repo::find_clean_image_deliveries(pool, &[asset_id], variant)
         .await?
         .into_iter()
         .next()
         .map(|(_, projection)| projection))
 }
 
-/// Batch-resolve typed clean image delivery for owner-authorized projections.
+/// Batch-resolve one clean image variant for owner-authorized projections.
 pub async fn resolve_clean_image_deliveries(
     pool: &sqlx::PgPool,
     asset_ids: &[i64],
+    variant: ImageVariant,
 ) -> shared::AppResult<std::collections::HashMap<i64, ImageDeliveryProjection>> {
-    Ok(repo::find_clean_image_deliveries(pool, asset_ids).await?.into_iter().collect())
+    Ok(repo::find_clean_image_deliveries(pool, asset_ids, variant).await?.into_iter().collect())
 }
 
-/// Resolve a clean platform-controlled image URL for compatibility with profile consumers.
+/// Resolve one clean platform-controlled image variant for compatibility consumers.
 pub async fn resolve_clean_profile_image(
     pool: &sqlx::PgPool,
     asset_id: Option<i64>,
+    variant: ImageVariant,
 ) -> shared::AppResult<Option<String>> {
-    Ok(resolve_clean_image_delivery(pool, asset_id).await?.map(|projection| projection.url))
+    Ok(resolve_clean_image_delivery(pool, asset_id, variant)
+        .await?
+        .map(|projection| projection.url))
 }
 
-/// Batch-resolve clean platform-controlled images for an authorized projection.
+/// Batch-resolve one clean platform-controlled image variant for an authorized projection.
 pub async fn resolve_clean_profile_images(
     pool: &sqlx::PgPool,
     asset_ids: &[i64],
+    variant: ImageVariant,
 ) -> shared::AppResult<std::collections::HashMap<i64, String>> {
-    Ok(resolve_clean_image_deliveries(pool, asset_ids)
+    Ok(resolve_clean_image_deliveries(pool, asset_ids, variant)
         .await?
         .into_iter()
         .map(|(asset_id, projection)| (asset_id, projection.url))

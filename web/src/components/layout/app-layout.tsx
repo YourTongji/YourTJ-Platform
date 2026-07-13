@@ -25,6 +25,7 @@ import { useAuth } from "@/context/auth-provider";
 import { api } from "@/lib/api/endpoints";
 import { accountQueryKeys } from "@/lib/account-query-keys";
 import { mediaDeliveryRefetchInterval } from "@/lib/media-delivery";
+import { invalidateMediaDeliveryUrl } from "@/lib/media-delivery-cache";
 import { cn } from "@/lib/utils";
 
 function ThemeToggle() {
@@ -83,8 +84,8 @@ export function AppLayout() {
   });
   const navigationAvatarAssetId = ownProfile.data?.avatarAssetId ?? null;
   const navigationAvatar = useQuery({
-    queryKey: ["media-delivery", navigationAvatarAssetId],
-    queryFn: () => api.mediaUrl(navigationAvatarAssetId ?? ""),
+    queryKey: ["navigation-avatar-delivery", navigationAvatarAssetId, "thumb_256"],
+    queryFn: () => api.mediaUrl(navigationAvatarAssetId ?? "", "thumb_256"),
     enabled: canUseCommunity && Boolean(navigationAvatarAssetId),
     staleTime: 60_000,
     gcTime: 30 * 60_000,
@@ -247,6 +248,7 @@ export function AppLayout() {
                                   !navigationAvatar.data?.url
                                   || retriedAvatarUrl.current === navigationAvatar.data.url
                                 ) return;
+                                invalidateMediaDeliveryUrl(navigationAvatar.data);
                                 retriedAvatarUrl.current = navigationAvatar.data.url;
                                 void navigationAvatar.refetch();
                               }

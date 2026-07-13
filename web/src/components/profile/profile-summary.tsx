@@ -141,6 +141,8 @@ export function ProfileSummary({
               src={profile.bannerUrl}
               alt=""
               aria-hidden="true"
+              loading="eager"
+              decoding="async"
               referrerPolicy="no-referrer"
               onError={recoverMediaDelivery}
               className="absolute inset-0 size-full object-cover"
@@ -155,6 +157,8 @@ export function ProfileSummary({
               <AvatarImage
                 src={profile.avatarUrl ?? undefined}
                 alt={`${profile.handle} 的头像`}
+                loading="eager"
+                decoding="async"
                 referrerPolicy="no-referrer"
                 onError={recoverMediaDelivery}
               />

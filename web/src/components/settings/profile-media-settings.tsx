@@ -12,6 +12,7 @@ import { api } from "@/lib/api/endpoints";
 import type { MediaUsage, MyProfile, MyUpload, Page } from "@/lib/api/types";
 import { formatUnixTime } from "@/lib/format";
 import { mediaDeliveryRefetchInterval } from "@/lib/media-delivery";
+import { invalidateMediaDeliveryUrl } from "@/lib/media-delivery-cache";
 import { STATIC_IMAGE_REUPLOAD_MESSAGE } from "@/lib/media-policy";
 import { cn } from "@/lib/utils";
 
@@ -57,8 +58,8 @@ function MediaImage({
     staleTime: 60_000,
   });
   const media = useQuery({
-    queryKey: ["media-delivery", assetId],
-    queryFn: () => api.mediaUrl(assetId),
+    queryKey: ["media-delivery", assetId, slot],
+    queryFn: () => api.mediaUrl(assetId, slot === "avatar" ? "thumb_256" : "display_1280"),
     enabled: status !== "pending"
       && status !== "blocked"
       && status !== "quarantined"
@@ -95,10 +96,13 @@ function MediaImage({
     <img
       src={url}
       alt={status === "pending" ? `${title}（待审核预览）` : title}
+      loading="lazy"
+      decoding="async"
       referrerPolicy="no-referrer"
       className={cn("w-full object-cover", frameClass, status === "pending" && "opacity-80")}
       onError={() => {
         if (!media.data?.url || retriedDeliveryUrl.current === media.data.url) return;
+        invalidateMediaDeliveryUrl(media.data);
         retriedDeliveryUrl.current = media.data.url;
         void media.refetch();
       }}
@@ -161,6 +165,10 @@ function ProfileMediaSlotPanel({
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: ["my-profile"] }),
       queryClient.invalidateQueries({ queryKey: ["profile"] }),
+      queryClient.invalidateQueries({ queryKey: ["home", "threads"] }),
+      queryClient.invalidateQueries({ queryKey: ["forum", "threads"] }),
+      queryClient.invalidateQueries({ queryKey: ["thread"] }),
+      queryClient.invalidateQueries({ queryKey: ["thread-comments"] }),
     ]);
   }
 

@@ -25,7 +25,15 @@ pub(crate) async fn hydrate_thread_summaries(
     let viewer_id = actor.map(|account| account.id);
     let thread_ids =
         threads.iter().filter_map(|thread| thread.id.parse::<i64>().ok()).collect::<Vec<_>>();
-    let (mut tags, mut excerpts, mut viewer_states, mut image_references, mut attachments) = tokio::try_join!(
+    let author_ids = rows.iter().map(|row| row.author_id).collect::<Vec<_>>();
+    let (
+        mut tags,
+        mut excerpts,
+        mut viewer_states,
+        mut image_references,
+        mut attachments,
+        author_avatars,
+    ) = tokio::try_join!(
         repo::get_thread_tag_slugs_batch(pool, &thread_ids),
         repo::get_thread_body_excerpts(pool, &thread_ids),
         async {
@@ -42,7 +50,11 @@ pub(crate) async fn hydrate_thread_summaries(
             media::attachments::ForumTargetType::Thread,
             &thread_ids,
         ),
+        crate::author_projection::resolve_author_avatars(pool, &author_ids),
     )?;
+    for (row, thread) in rows.iter().zip(threads.iter_mut()) {
+        thread.author_avatar = author_avatars.get(&row.author_id).cloned();
+    }
     for thread in threads.iter_mut() {
         if let Ok(thread_id) = thread.id.parse::<i64>() {
             thread.tags = tags.remove(&thread_id).unwrap_or_default();
@@ -112,15 +124,21 @@ pub(crate) async fn hydrate_thread_detail(
     actor: Option<&AuthAccount>,
     dto: &mut ThreadDetailDto,
 ) -> AppResult<()> {
-    dto.tags = repo::get_thread_tag_slugs(pool, thread_id).await?;
-    let projected = media::attachments::resolve_forum_attachments_batch(
-        pool,
-        media::attachments::ForumTargetType::Thread,
-        &[thread_id],
-    )
-    .await?
-    .remove(&thread_id)
-    .unwrap_or_default();
+    let author_id = dto.author_id.parse::<i64>().ok();
+    let author_ids = author_id.into_iter().collect::<Vec<_>>();
+    let thread_ids = [thread_id];
+    let (tags, mut attachments, mut author_avatars) = tokio::try_join!(
+        repo::get_thread_tag_slugs(pool, thread_id),
+        media::attachments::resolve_forum_attachments_batch(
+            pool,
+            media::attachments::ForumTargetType::Thread,
+            &thread_ids,
+        ),
+        crate::author_projection::resolve_author_avatars(pool, &author_ids),
+    )?;
+    dto.tags = tags;
+    dto.author_avatar = author_id.and_then(|author_id| author_avatars.remove(&author_id));
+    let projected = attachments.remove(&thread_id).unwrap_or_default();
     let references = crate::content_policy::image_references_for_stored_content(
         dto.body.as_deref(),
         dto.content_format,
