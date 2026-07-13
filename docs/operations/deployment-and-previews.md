@@ -146,7 +146,10 @@ SSH command line 传递，并在退出时删除。
 - 独立 CDN purge principal 以 POST 提交 `RefreshObjectCaches`，轮询
   `DescribeRefreshTaskById` 直到全部 `Complete`，总等待上限十分钟；无论中途成功或失败都尽力按
   purge → DELETE 清理合成对象，清理失败也会让 preflight fail closed；
-- frontend CSP template 只含一个 CDN-origin placeholder，渲染后以 `nginx:alpine nginx -t` 验证。
+- frontend CSP template 分别保留一个 Ingest-origin 与 CDN-origin placeholder；main 从已校验的
+  `OSS_BUCKET`/`OSS_REGION` 渲染精确 Ingest HTTPS origin 到 `connect-src`，从
+  `MEDIA_CDN_BASE_URL` 渲染精确 CDN origin 到 `img-src`，再以 `nginx:alpine nginx -t` 验证且拒绝
+  未替换 placeholder。PR Preview 不注入 provider 配置，只渲染不可达的 `.invalid` origins。
 - backend container 必须精确注入 `BIND_ADDRESS=127.0.0.1`，frontend publish 必须精确为
   `127.0.0.1:15000`；脚本在 public probe 前检查二者，防止 Docker 默认暴露到所有 interface。
 

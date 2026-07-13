@@ -37,6 +37,16 @@ class WorkflowBoundaryTests(unittest.TestCase):
         ):
             self.assertNotIn(key, workflow)
 
+    def test_frontend_csp_separates_ingest_uploads_from_cdn_reads(self):
+        template = (ROOT / "ops/deploy/frontend-nginx.conf.template").read_text()
+        main_deploy = (ROOT / "ops/deploy/deploy-main.sh").read_text()
+        preview_deploy = (ROOT / "ops/deploy/deploy-pr.sh").read_text()
+        self.assertIn("connect-src 'self' https://captcha.07211024.xyz __MEDIA_INGEST_ORIGIN__", template)
+        self.assertIn("img-src 'self' data: blob: https://captcha.07211024.xyz __MEDIA_CDN_ORIGIN__", template)
+        self.assertIn('https://${OSS_BUCKET}.oss-${OSS_REGION}.aliyuncs.com', main_deploy)
+        self.assertIn("https://ingest.invalid", preview_deploy)
+        self.assertIn("https://media.invalid", preview_deploy)
+
     def test_preview_cleanup_is_versioned_and_contains_no_password_literal(self):
         workflow = (ROOT / ".github/workflows/pr-preview.yml").read_text()
         cleanup = (ROOT / "ops/deploy/cleanup-pr.sh").read_text()

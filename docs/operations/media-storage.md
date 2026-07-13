@@ -169,6 +169,9 @@ Browser 只直连 Ingest，因此 CORS 只配置在 Ingest：
 - Allowed headers：authorization、content-type、<code>x-oss-*</code>。
 - Expose headers：ETag、<code>x-oss-request-id</code>。
 - Max age 建议 600 秒，并确认响应带正确 <code>Vary: Origin</code>。
+- Main frontend CSP 的 <code>connect-src</code> 必须只增加由 Ingest bucket 和 Region 推导的精确 OSS HTTPS
+  origin（例如 <code>https://bucket.oss-cn-shanghai.aliyuncs.com</code>）；不能用通配符，也不能把 Delivery
+  origin 或 CDN domain 当作上传目标。部署脚本从同一份已校验 provider 配置渲染该 origin，避免另设可漂移值。
 
 Delivery OSS 不开放 browser CORS，因为 browser 不得直连 origin。普通 <code>img</code> 展示不要求 CDN
 CORS；只有 canvas/download 等明确用例才在 CDN response header 配置精确 CORS。参考

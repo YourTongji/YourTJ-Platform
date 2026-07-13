@@ -84,9 +84,15 @@ readonly BACKEND_BACKUP="${BACKEND_CONTAINER}-rollback-${BACKUP_SUFFIX}"
 [[ -f "$PGPASS_FILE" && ! -L "$PGPASS_FILE" ]] || fail "preview .pgpass is missing"
 [[ "$(stat -c '%a' "$PGPASS_FILE")" == "600" ]] || fail "preview .pgpass must have mode 600"
 docker image inspect "$BACKEND_IMAGE" >/dev/null 2>&1 || fail "backend image is missing"
-grep -q '__MEDIA_CDN_ORIGIN__' "$NGINX_TEMPLATE" || fail "frontend Nginx placeholder is missing"
-sed 's|__MEDIA_CDN_ORIGIN__|https://media.invalid|g' "$NGINX_TEMPLATE" > "$RENDERED_NGINX"
-if grep -q '__MEDIA_CDN_ORIGIN__' "$RENDERED_NGINX"; then
+[[ "$(grep -c '__MEDIA_CDN_ORIGIN__' "$NGINX_TEMPLATE")" -eq 1 ]] ||
+  fail "frontend Nginx template must contain one CDN-origin placeholder"
+[[ "$(grep -c '__MEDIA_INGEST_ORIGIN__' "$NGINX_TEMPLATE")" -eq 1 ]] ||
+  fail "frontend Nginx template must contain one Ingest-origin placeholder"
+sed \
+  -e 's|__MEDIA_CDN_ORIGIN__|https://media.invalid|g' \
+  -e 's|__MEDIA_INGEST_ORIGIN__|https://ingest.invalid|g' \
+  "$NGINX_TEMPLATE" > "$RENDERED_NGINX"
+if grep -Eq '__MEDIA_(CDN|INGEST)_ORIGIN__' "$RENDERED_NGINX"; then
   fail "frontend Nginx rendering failed"
 fi
 

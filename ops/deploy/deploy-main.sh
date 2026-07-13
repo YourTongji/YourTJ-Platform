@@ -273,9 +273,25 @@ MEDIA_CDN_BASE_URL="$(sed -n 's/^MEDIA_CDN_BASE_URL=//p' "$OSS_ENV_FILE")"
 readonly MEDIA_CDN_BASE_URL
 [[ "$MEDIA_CDN_BASE_URL" =~ ^https://[A-Za-z0-9.-]+$ ]] ||
   fail "MEDIA_CDN_BASE_URL is not one exact HTTPS origin"
+OSS_REGION="$(sed -n 's/^OSS_REGION=//p' "$OSS_ENV_FILE")"
+readonly OSS_REGION
+[[ "$OSS_REGION" =~ ^[a-z0-9]+(-[a-z0-9]+)+$ ]] || fail "OSS_REGION has an invalid format"
+OSS_BUCKET="$(sed -n 's/^OSS_BUCKET=//p' "$OSS_ENV_FILE")"
+readonly OSS_BUCKET
+[[ "$OSS_BUCKET" =~ ^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$ ]] ||
+  fail "OSS_BUCKET has an invalid format"
+readonly MEDIA_INGEST_ORIGIN="https://${OSS_BUCKET}.oss-${OSS_REGION}.aliyuncs.com"
 [[ "$(grep -c '__MEDIA_CDN_ORIGIN__' "$NGINX_TEMPLATE")" -eq 1 ]] ||
   fail "frontend Nginx template must contain one CDN-origin placeholder"
-sed "s|__MEDIA_CDN_ORIGIN__|${MEDIA_CDN_BASE_URL}|g" "$NGINX_TEMPLATE" > "$RENDERED_NGINX"
+[[ "$(grep -c '__MEDIA_INGEST_ORIGIN__' "$NGINX_TEMPLATE")" -eq 1 ]] ||
+  fail "frontend Nginx template must contain one Ingest-origin placeholder"
+sed \
+  -e "s|__MEDIA_CDN_ORIGIN__|${MEDIA_CDN_BASE_URL}|g" \
+  -e "s|__MEDIA_INGEST_ORIGIN__|${MEDIA_INGEST_ORIGIN}|g" \
+  "$NGINX_TEMPLATE" > "$RENDERED_NGINX"
+if grep -Eq '__MEDIA_(CDN|INGEST)_ORIGIN__' "$RENDERED_NGINX"; then
+  fail "frontend Nginx rendering failed"
+fi
 docker run --rm \
   -v "${FRONTEND_DIR}:/usr/share/nginx/html:ro" \
   -v "${RENDERED_NGINX}:/etc/nginx/conf.d/default.conf:ro" \

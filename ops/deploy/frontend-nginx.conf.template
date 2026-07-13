@@ -4,7 +4,7 @@ server {
     root /usr/share/nginx/html;
     index index.html;
 
-    add_header Content-Security-Policy "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://captcha.07211024.xyz; img-src 'self' data: blob: https://captcha.07211024.xyz __MEDIA_CDN_ORIGIN__; font-src 'self' data:; media-src 'self' blob:; worker-src 'self' blob:" always;
+    add_header Content-Security-Policy "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://captcha.07211024.xyz __MEDIA_INGEST_ORIGIN__; img-src 'self' data: blob: https://captcha.07211024.xyz __MEDIA_CDN_ORIGIN__; font-src 'self' data:; media-src 'self' blob:; worker-src 'self' blob:" always;
     add_header Cross-Origin-Opener-Policy "same-origin" always;
     add_header Cross-Origin-Resource-Policy "same-origin" always;
     add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=()" always;

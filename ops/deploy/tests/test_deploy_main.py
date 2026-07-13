@@ -205,6 +205,7 @@ class DeployMainTests(unittest.TestCase):
         self.oss_env = Path(oss.name)
         self.oss_env.write_text(
             "OSS_REGION=cn-shanghai\n"
+            "OSS_BUCKET=yourtj-media\n"
             "MEDIA_CDN_BASE_URL=https://media.example.test\n"
         )
         os.chmod(self.oss_env, 0o600)
@@ -222,7 +223,7 @@ class DeployMainTests(unittest.TestCase):
         nginx.close()
         self.nginx = Path(nginx.name)
         self.nginx.write_text(
-            "server { listen 80; # __MEDIA_CDN_ORIGIN__\n"
+            "server { listen 80; # __MEDIA_CDN_ORIGIN__ __MEDIA_INGEST_ORIGIN__\n"
             "root /usr/share/nginx/html; }\n"
         )
         self.addCleanup(self.nginx.unlink, missing_ok=True)
@@ -287,6 +288,10 @@ class DeployMainTests(unittest.TestCase):
         self.assertTrue((self.state / "container-main-fe").exists())
         self.assertFalse(list(self.state.glob("container-*-rollback-*")))
         self.assertIn("MAIN DEPLOYED", result.stdout)
+        rendered_nginx = (self.frontend / "nginx.conf").read_text()
+        self.assertIn("https://media.example.test", rendered_nginx)
+        self.assertIn("https://yourtj-media.oss-cn-shanghai.aliyuncs.com", rendered_nginx)
+        self.assertNotIn("__MEDIA_", rendered_nginx)
 
     def test_rejects_runtime_without_strict_email_encryption(self):
         self.runtime_env.write_text(
