@@ -193,7 +193,7 @@ export function SecuritySettings() {
             <Laptop className="size-5 text-primary" aria-hidden="true" />
             登录会话
           </CardTitle>
-          <CardDescription>按登录会话展示；相同浏览器标识再次登录时会替换对应旧会话。只展示可读标签和有限时间信息，不保存可见的精确 IP 历史。</CardDescription>
+          <CardDescription>按登录会话展示。每次完整登录都会创建新会话；若同一账号在多台设备保持登录，列表中会同时出现多条。只展示可读标签和有限时间信息，不保存可见的精确 IP 历史。</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           {sessions.isLoading ? (
