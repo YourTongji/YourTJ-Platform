@@ -981,12 +981,16 @@ components:
         height: { type: integer, minimum: 1, maximum: 1280, nullable: true }
     Thread:
       type: object
-      required: [id, boardId, authorHandle, title, bodyExcerpt, contentVersion, replyCount, voteCount, hotScore, status, createdAt, lastActivityAt, tags, attachments, viewerVote, isBookmarked, canEdit, canDelete, canModerate]
+      required: [id, boardId, authorHandle, authorAvatar, title, bodyExcerpt, contentVersion, replyCount, voteCount, hotScore, status, createdAt, lastActivityAt, tags, attachments, viewerVote, isBookmarked, canEdit, canDelete, canModerate]
       properties:
         id: { type: string }
         boardId: { type: string }
         authorHandle: { type: string }
         authorDisplayName: { type: string, nullable: true }
+        authorAvatar:
+          allOf: [{ $ref: "#/components/schemas/MediaDelivery" }]
+          nullable: true
+          description: Current short-lived clean avatar projection for the active author; null when no publishable avatar is available.
         title: { type: string }
         bodyExcerpt: { type: string, nullable: true }
         contentVersion: { type: integer, format: int64, minimum: 1 }
@@ -1007,12 +1011,16 @@ components:
       allOf: [{ $ref: "#/components/schemas/Thread" }, { type: object, properties: { unreadCount: { type: integer, nullable: true } } }]
     ThreadDetail:
       type: object
-      required: [id, boardId, authorHandle, authorId, title, body, contentFormat, contentVersion, replyCount, voteCount, hotScore, tags, attachments, status, pinnedAt, pinnedGlobally, featuredAt, closedAt, archivedAt, deletedAt, editedAt, hiddenAt, createdAt, lastActivityAt, solvedAnswerId, viewerVote, isBookmarked, myLastReadCommentId, mySubscriptionLevel, poll, canEdit, canDelete, canModerate]
+      required: [id, boardId, authorHandle, authorAvatar, authorId, title, body, contentFormat, contentVersion, replyCount, voteCount, hotScore, tags, attachments, status, pinnedAt, pinnedGlobally, featuredAt, closedAt, archivedAt, deletedAt, editedAt, hiddenAt, createdAt, lastActivityAt, solvedAnswerId, viewerVote, isBookmarked, myLastReadCommentId, mySubscriptionLevel, poll, canEdit, canDelete, canModerate]
       properties:
         id: { type: string }
         boardId: { type: string }
         authorHandle: { type: string }
         authorDisplayName: { type: string, nullable: true }
+        authorAvatar:
+          allOf: [{ $ref: "#/components/schemas/MediaDelivery" }]
+          nullable: true
+          description: Current short-lived clean avatar projection for the active author; null when no publishable avatar is available.
         authorId: { type: string }
         title: { type: string }
         body: { type: string, nullable: true }
@@ -1111,7 +1119,7 @@ components:
         createdAt: { type: integer }
     Comment:
       type: object
-      required: [id, threadId, parentId, path, authorHandle, authorId, body, contentFormat, contentVersion, attachments, voteCount, viewerVote, isBookmarked, isDeleted, isHidden, editedAt, createdAt, quotedCommentId, isSolved, canEdit, canDelete, canModerate]
+      required: [id, threadId, parentId, path, authorHandle, authorAvatar, authorId, body, contentFormat, contentVersion, attachments, voteCount, viewerVote, isBookmarked, isDeleted, isHidden, editedAt, createdAt, quotedCommentId, isSolved, canEdit, canDelete, canModerate]
       properties:
         id: { type: string }
         threadId: { type: string }
@@ -1119,6 +1127,10 @@ components:
         path: { type: string }
         authorHandle: { type: string }
         authorDisplayName: { type: string, nullable: true }
+        authorAvatar:
+          allOf: [{ $ref: "#/components/schemas/MediaDelivery" }]
+          nullable: true
+          description: Current short-lived clean avatar projection for the active author; null when no publishable avatar is available.
         authorId: { type: string }
         body: { type: string }
         contentFormat: { $ref: "#/components/schemas/ContentFormat" }

@@ -31,19 +31,30 @@ async fn hydrate_comment_viewer_states(
     Ok(())
 }
 
-pub(crate) async fn hydrate_comment_attachments(
+pub(crate) async fn hydrate_comment_media(
     pool: &sqlx::PgPool,
     comments: &mut [CommentDto],
 ) -> AppResult<()> {
     let comment_ids =
         comments.iter().filter_map(|comment| comment.id.parse::<i64>().ok()).collect::<Vec<_>>();
-    let mut attachments = media::attachments::resolve_forum_attachments_batch(
-        pool,
-        media::attachments::ForumTargetType::Comment,
-        &comment_ids,
-    )
-    .await?;
+    let author_ids = comments
+        .iter()
+        .filter_map(|comment| comment.author_id.parse::<i64>().ok())
+        .collect::<Vec<_>>();
+    let (mut attachments, author_avatars) = tokio::try_join!(
+        media::attachments::resolve_forum_attachments_batch(
+            pool,
+            media::attachments::ForumTargetType::Comment,
+            &comment_ids,
+        ),
+        crate::author_projection::resolve_author_avatars(pool, &author_ids),
+    )?;
     for comment in comments {
+        comment.author_avatar = comment
+            .author_id
+            .parse::<i64>()
+            .ok()
+            .and_then(|author_id| author_avatars.get(&author_id).cloned());
         if let Ok(comment_id) = comment.id.parse::<i64>() {
             let projected = attachments.remove(&comment_id).unwrap_or_default();
             let references = crate::content_policy::image_references_for_stored_content(
@@ -123,7 +134,7 @@ pub async fn list_comments(
 
     let mut items: Vec<CommentDto> =
         rows.iter().map(|r| comment_to_dto(r, solved_comment_id)).collect();
-    hydrate_comment_attachments(&state.db, &mut items).await?;
+    hydrate_comment_media(&state.db, &mut items).await?;
     if let Some(account_id) = current_user_id {
         hydrate_comment_viewer_states(&state.db, account_id, &mut items).await?;
     }
@@ -206,7 +217,7 @@ pub async fn create_comment(
     crate::cache::invalidate_thread_by_id(state.redis.as_ref(), &state.db, thread_id).await;
 
     let mut dto = comment_to_dto(&row, None);
-    hydrate_comment_attachments(&state.db, std::slice::from_mut(&mut dto)).await?;
+    hydrate_comment_media(&state.db, std::slice::from_mut(&mut dto)).await?;
     crate::content_permissions::hydrate_comments(
         &state.db,
         Some(&auth),
@@ -267,7 +278,7 @@ pub async fn update_comment(
     crate::cache::invalidate_thread_by_id(state.redis.as_ref(), &state.db, row.thread_id).await;
 
     let mut dto = comment_to_dto(&row, solved_comment_id);
-    hydrate_comment_attachments(&state.db, std::slice::from_mut(&mut dto)).await?;
+    hydrate_comment_media(&state.db, std::slice::from_mut(&mut dto)).await?;
     hydrate_comment_viewer_states(&state.db, auth.id, std::slice::from_mut(&mut dto)).await?;
     crate::content_permissions::hydrate_comments(
         &state.db,

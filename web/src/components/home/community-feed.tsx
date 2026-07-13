@@ -7,7 +7,7 @@ import { Link } from "react-router";
 
 import { EmptyState, ErrorState } from "@/components/common/states";
 import { ForumDeliveryImage } from "@/components/content/forum-delivery-image";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { ForumAuthorAvatar } from "@/components/forum/forum-author-avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -56,7 +56,8 @@ function PostCard({
   onAttachmentDeliveryRefresh: () => void;
 }) {
   const threadUrl = thread.id ? `/forum/threads/${thread.id}` : "/forum";
-  const author = thread.authorHandle || "YourTJ 用户";
+  const authorHandle = thread.authorHandle || "YourTJ 用户";
+  const authorName = thread.authorDisplayName || authorHandle;
   const tag = thread.tags?.[0];
 
   return (
@@ -65,12 +66,19 @@ function PostCard({
         <Link to={threadUrl} className="block rounded-lg outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50">
           <div className="flex items-center justify-between gap-3">
             <div className="flex min-w-0 items-center gap-2">
-              <Avatar className="size-8 border-2 border-primary/50 bg-white p-0.5">
-                <AvatarFallback className="text-xs text-primary">{author.slice(0, 1).toUpperCase()}</AvatarFallback>
-              </Avatar>
+              <ForumAuthorAvatar
+                avatar={thread.authorAvatar}
+                handle={authorHandle}
+                onDeliveryRefresh={onAttachmentDeliveryRefresh}
+                className="size-8 border-2 border-primary/50 bg-white p-0.5"
+                fallbackClassName="text-primary"
+              />
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className="truncate text-sm font-bold text-foreground">{author}</span>
+                  <span className="truncate text-sm font-bold text-foreground">{authorName}</span>
+                  {thread.authorDisplayName ? (
+                    <span className="truncate text-xs text-muted-foreground">@{authorHandle}</span>
+                  ) : null}
                 </div>
                 <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                   <span>{formatRelativeTime(thread.lastActivityAt ?? thread.createdAt)}</span>

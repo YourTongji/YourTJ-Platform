@@ -10,6 +10,7 @@ import { useForumDeliveryRefresh } from "@/components/content/forum-delivery-ima
 import { MarkdownContent } from "@/components/content/markdown-content";
 import { MarkdownEditor } from "@/components/content/markdown-editor";
 import { DraftSyncNotice } from "@/components/forum/draft-sync-notice";
+import { ForumAuthorAvatar } from "@/components/forum/forum-author-avatar";
 import {
   CommentAuthorActions,
   ThreadAuthorActions,
@@ -60,16 +61,35 @@ function CommentCard({ comment, threadId }: { comment: Comment; threadId: string
     <Card>
       <CardContent className="p-4">
         <div className="flex items-start justify-between gap-3">
-          <div className="flex flex-wrap items-center gap-2 text-sm">
-            <span className="font-medium">
-              {comment.authorDisplayName ?? `@${comment.authorHandle}`}
-            </span>
-            {comment.authorDisplayName ? (
-              <span className="text-muted-foreground">@{comment.authorHandle}</span>
-            ) : null}
-            <span className="text-muted-foreground">{formatUnixTime(comment.createdAt)}</span>
-            {comment.isHidden ? <Badge variant="outline">已隐藏</Badge> : null}
-            {comment.isDeleted ? <Badge variant="outline">已删除</Badge> : null}
+          <div className="flex min-w-0 items-center gap-2">
+            <Link
+              to={`/profile/${encodeURIComponent(comment.authorHandle)}`}
+              aria-label={`查看 @${comment.authorHandle} 的个人主页`}
+              className="rounded-full outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+            >
+              <ForumAuthorAvatar
+                avatar={comment.authorAvatar}
+                handle={comment.authorHandle}
+                onDeliveryRefresh={() => {
+                  void queryClient.invalidateQueries({ queryKey: ["thread-comments", threadId] });
+                }}
+                className="size-9 border"
+              />
+            </Link>
+            <div className="flex flex-wrap items-center gap-2 text-sm">
+              <Link
+                to={`/profile/${encodeURIComponent(comment.authorHandle)}`}
+                className="font-medium hover:text-primary hover:underline"
+              >
+                {comment.authorDisplayName ?? `@${comment.authorHandle}`}
+              </Link>
+              {comment.authorDisplayName ? (
+                <span className="text-muted-foreground">@{comment.authorHandle}</span>
+              ) : null}
+              <span className="text-muted-foreground">{formatUnixTime(comment.createdAt)}</span>
+              {comment.isHidden ? <Badge variant="outline">已隐藏</Badge> : null}
+              {comment.isDeleted ? <Badge variant="outline">已删除</Badge> : null}
+            </div>
           </div>
           <div className="flex items-center gap-1">
             <Badge variant="secondary">{comment.voteCount ?? 0}</Badge>
@@ -277,11 +297,15 @@ export function ThreadDetailPage() {
     queryFn: () => api.comments(threadId),
     enabled: Boolean(threadId),
   });
-  const deliveryAttachments = [
+  const deliveryResources = [
+    thread.data?.authorAvatar,
     ...(thread.data?.attachments ?? []),
-    ...(comments.data?.items ?? []).flatMap((comment) => comment.attachments ?? []),
+    ...(comments.data?.items ?? []).flatMap((comment) => [
+      comment.authorAvatar,
+      ...(comment.attachments ?? []),
+    ]),
   ];
-  useForumDeliveryRefresh(deliveryAttachments, () => {
+  useForumDeliveryRefresh(deliveryResources, () => {
     void Promise.all([thread.refetch(), comments.refetch()]);
   });
   const vote = useMutation({
@@ -356,7 +380,6 @@ export function ThreadDetailPage() {
       <PageHeader
         eyebrow={board?.name}
         title={item.title ?? "帖子详情"}
-        description={`${item.authorDisplayName ? `${item.authorDisplayName} · @${item.authorHandle}` : `@${item.authorHandle}`} · ${formatUnixTime(item.createdAt)}`}
         actions={
           <>
             <Select value={item.mySubscriptionLevel ?? "none"} onValueChange={(value) => subscribe.mutate(value)}>
@@ -386,6 +409,32 @@ export function ThreadDetailPage() {
 
       <Card>
         <CardContent className="p-5">
+          <div className="mb-4 flex items-center gap-3 border-b pb-4">
+            <Link
+              to={`/profile/${encodeURIComponent(item.authorHandle)}`}
+              aria-label={`查看 @${item.authorHandle} 的个人主页`}
+              className="rounded-full outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+            >
+              <ForumAuthorAvatar
+                avatar={item.authorAvatar}
+                handle={item.authorHandle}
+                onDeliveryRefresh={() => void thread.refetch()}
+                className="size-11 border"
+              />
+            </Link>
+            <div className="min-w-0">
+              <Link
+                to={`/profile/${encodeURIComponent(item.authorHandle)}`}
+                className="block truncate font-semibold hover:text-primary hover:underline"
+              >
+                {item.authorDisplayName ?? `@${item.authorHandle}`}
+              </Link>
+              <p className="truncate text-sm text-muted-foreground">
+                {item.authorDisplayName ? `@${item.authorHandle} · ` : ""}
+                {formatUnixTime(item.createdAt)}
+              </p>
+            </div>
+          </div>
           <div className="mb-3 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
             <Badge variant="secondary">{item.replyCount ?? 0} 回复</Badge>
             <Badge variant="secondary">{item.voteCount ?? 0} 票</Badge>

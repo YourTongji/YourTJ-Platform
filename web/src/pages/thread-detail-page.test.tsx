@@ -51,6 +51,15 @@ describe("ThreadDetailPage Markdown content", () => {
       boardId: "1",
       authorHandle: "alice",
       authorDisplayName: "Alice Chen",
+      authorAvatar: {
+        assetId: "11",
+        variant: "display_1280",
+        url: "https://media.example.test/alice.webp",
+        expiresAt: Math.floor(Date.now() / 1000) + 300,
+        mime: "image/webp",
+        width: 256,
+        height: 256,
+      },
       authorId: "1",
       title: "格式化讨论",
       body: "欢迎阅读 **重要内容**。",
@@ -85,6 +94,15 @@ describe("ThreadDetailPage Markdown content", () => {
         path: "0001",
         authorHandle: "bob",
         authorDisplayName: "Bob Li",
+        authorAvatar: {
+          assetId: "12",
+          variant: "display_1280",
+          url: "https://media.example.test/bob.webp",
+          expiresAt: Math.floor(Date.now() / 1000) + 300,
+          mime: "image/webp",
+          width: 256,
+          height: 256,
+        },
         authorId: "2",
         body: "回复也支持 `code`。",
         contentFormat: "markdown_v1",
@@ -107,7 +125,18 @@ describe("ThreadDetailPage Markdown content", () => {
     const view = renderPage();
 
     expect(await screen.findByRole("strong")).toHaveTextContent("重要内容");
-    expect(screen.getByText(/Alice Chen · @alice/)).toBeVisible();
+    expect(screen.getByRole("link", { name: "Alice Chen" })).toHaveAttribute(
+      "href",
+      "/profile/alice",
+    );
+    expect(screen.getByRole("link", { name: "查看 @alice 的个人主页" })).toHaveAttribute(
+      "href",
+      "/profile/alice",
+    );
+    expect(screen.getByRole("link", { name: "查看 @bob 的个人主页" })).toHaveAttribute(
+      "href",
+      "/profile/bob",
+    );
     expect(screen.getByText("Bob Li")).toBeVisible();
     expect(screen.getByText("@bob")).toBeVisible();
     expect(screen.getByText("code").tagName).toBe("CODE");

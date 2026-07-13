@@ -11,6 +11,7 @@ import {
   useForumDeliveryRefresh,
 } from "@/components/content/forum-delivery-image";
 import { DraftSyncNotice } from "@/components/forum/draft-sync-notice";
+import { ForumAuthorAvatar } from "@/components/forum/forum-author-avatar";
 import { useForumDraft } from "@/components/forum/use-forum-draft";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -51,35 +52,43 @@ function ThreadCard({
       <Card className="transition-shadow hover:shadow-md">
         <CardContent className="p-5">
           <div className="flex items-start justify-between gap-4">
-            <div className="min-w-0">
-              <div className="mb-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                <span className="font-medium text-foreground">
-                  {thread.authorDisplayName ?? `@${thread.authorHandle}`}
-                </span>
-                {thread.authorDisplayName ? <span>@{thread.authorHandle}</span> : null}
-                <span>{formatUnixTime(thread.lastActivityAt ?? thread.createdAt)}</span>
-                {board ? <Badge variant="outline">{board.name}</Badge> : null}
-                {thread.unreadCount ? <Badge>{thread.unreadCount} 未读</Badge> : null}
-              </div>
-              <h2 className="line-clamp-2 text-lg font-semibold">{thread.title}</h2>
-              {thread.bodyExcerpt ? (
-                <p className="mt-2 line-clamp-2 text-sm leading-6 text-muted-foreground">
-                  {thread.bodyExcerpt}
-                </p>
-              ) : null}
-              {thread.attachments?.[0] ? (
-                <ForumDeliveryImage
-                  attachment={thread.attachments[0]}
-                  onDeliveryRefresh={onAttachmentDeliveryRefresh}
-                  loading="lazy"
-                  decoding="async"
-                  className="mt-3 max-h-72 w-full rounded-xl border object-cover"
-                />
-              ) : null}
-              <div className="mt-3 flex flex-wrap gap-1.5">
-                {(thread.tags ?? []).map((tag) => (
-                  <Badge key={tag} variant="secondary">#{tag}</Badge>
-                ))}
+            <div className="flex min-w-0 gap-3">
+              <ForumAuthorAvatar
+                avatar={thread.authorAvatar}
+                handle={thread.authorHandle}
+                onDeliveryRefresh={onAttachmentDeliveryRefresh}
+                className="size-9 border"
+              />
+              <div className="min-w-0">
+                <div className="mb-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                  <span className="font-medium text-foreground">
+                    {thread.authorDisplayName ?? `@${thread.authorHandle}`}
+                  </span>
+                  {thread.authorDisplayName ? <span>@{thread.authorHandle}</span> : null}
+                  <span>{formatUnixTime(thread.lastActivityAt ?? thread.createdAt)}</span>
+                  {board ? <Badge variant="outline">{board.name}</Badge> : null}
+                  {thread.unreadCount ? <Badge>{thread.unreadCount} 未读</Badge> : null}
+                </div>
+                <h2 className="line-clamp-2 text-lg font-semibold">{thread.title}</h2>
+                {thread.bodyExcerpt ? (
+                  <p className="mt-2 line-clamp-2 text-sm leading-6 text-muted-foreground">
+                    {thread.bodyExcerpt}
+                  </p>
+                ) : null}
+                {thread.attachments?.[0] ? (
+                  <ForumDeliveryImage
+                    attachment={thread.attachments[0]}
+                    onDeliveryRefresh={onAttachmentDeliveryRefresh}
+                    loading="lazy"
+                    decoding="async"
+                    className="mt-3 max-h-72 w-full rounded-xl border object-cover"
+                  />
+                ) : null}
+                <div className="mt-3 flex flex-wrap gap-1.5">
+                  {(thread.tags ?? []).map((tag) => (
+                    <Badge key={tag} variant="secondary">#{tag}</Badge>
+                  ))}
+                </div>
               </div>
             </div>
             <div className="hidden shrink-0 grid-cols-2 gap-3 text-center sm:grid">
@@ -335,7 +344,7 @@ export function ForumPage() {
   const boardItems = boards.data ?? [];
   const threadItems = threads.data?.pages.flatMap((page) => page.items ?? []) ?? [];
   useForumDeliveryRefresh(
-    threadItems.map((thread) => thread.attachments?.[0]),
+    threadItems.flatMap((thread) => [thread.authorAvatar, thread.attachments?.[0]]),
     () => void threads.refetch(),
   );
 

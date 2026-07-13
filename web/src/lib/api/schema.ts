@@ -11768,6 +11768,8 @@ export interface components {
             boardId: string;
             authorHandle: string;
             authorDisplayName?: string | null;
+            /** @description Current short-lived clean avatar projection for the active author; null when no publishable avatar is available. */
+            authorAvatar: components["schemas"]["MediaDelivery"] | null;
             title: string;
             bodyExcerpt: string | null;
             /** Format: int64 */
@@ -11800,6 +11802,8 @@ export interface components {
             boardId: string;
             authorHandle: string;
             authorDisplayName?: string | null;
+            /** @description Current short-lived clean avatar projection for the active author; null when no publishable avatar is available. */
+            authorAvatar: components["schemas"]["MediaDelivery"] | null;
             authorId: string;
             title: string;
             body: string | null;
@@ -11895,6 +11899,8 @@ export interface components {
             path: string;
             authorHandle: string;
             authorDisplayName?: string | null;
+            /** @description Current short-lived clean avatar projection for the active author; null when no publishable avatar is available. */
+            authorAvatar: components["schemas"]["MediaDelivery"] | null;
             authorId: string;
             body: string;
             contentFormat: components["schemas"]["ContentFormat"];

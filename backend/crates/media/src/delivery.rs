@@ -51,7 +51,7 @@ pub(crate) struct SignedDeliveryUrl {
 }
 
 /// Storage-opaque image delivery data returned only after an owning domain authorizes disclosure.
-#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ImageDeliveryProjection {
     pub asset_id: String,
@@ -64,7 +64,7 @@ pub struct ImageDeliveryProjection {
 }
 
 /// Stable image variants that owning domains may intentionally disclose.
-#[derive(Debug, Clone, Copy, serde::Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
 pub enum ImageVariant {
     #[serde(rename = "thumb_256")]
     Thumb256,
