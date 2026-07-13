@@ -33,6 +33,15 @@ async fn profile_and_privacy_are_validated_and_persisted() {
     let (token, account_id) = helpers::create_access_token_for(email, &pool).await;
     let app = helpers::create_test_app_with_pool(pool.clone()).await;
 
+    let default_profile_response = app
+        .clone()
+        .oneshot(request(Method::GET, "/api/v2/me/profile", &token, None))
+        .await
+        .expect("default profile response");
+    assert_eq!(default_profile_response.status(), StatusCode::OK);
+    let default_profile = helpers::read_json(default_profile_response).await;
+    assert_eq!(default_profile["school"], "同济大学");
+
     let default_response = app
         .clone()
         .oneshot(request(Method::GET, "/api/v2/me/privacy", &token, None))
