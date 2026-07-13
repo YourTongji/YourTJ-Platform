@@ -19,10 +19,10 @@ function summarizeDeviceLabel(label?: string | null) {
   if (!label?.trim()) return "未命名会话";
   const raw = label.trim();
   const browser =
-    /Edg\//.test(raw) ? "Edge"
-    : /Chrome\//.test(raw) && !/Edg\//.test(raw) ? "Chrome"
-    : /Firefox\//.test(raw) ? "Firefox"
-    : /Safari\//.test(raw) && !/Chrome\//.test(raw) ? "Safari"
+    /Edg\/|EdgiOS\//.test(raw) ? "Edge"
+    : /Chrome\/|CriOS\//.test(raw) && !/Edg\/|EdgiOS\//.test(raw) ? "Chrome"
+    : /Firefox\/|FxiOS\//.test(raw) ? "Firefox"
+    : /Safari\//.test(raw) && !/Chrome\/|CriOS\/|Edg\/|EdgiOS\/|FxiOS\//.test(raw) ? "Safari"
     : null;
   const system =
     /Android/i.test(raw) ? "Android"

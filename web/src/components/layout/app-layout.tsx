@@ -91,10 +91,16 @@ export function AppLayout() {
     refetchInterval: (query) => mediaDeliveryRefetchInterval(query.state.data),
   });
   const navigationAvatarSrc = navigationAvatar.data?.url ?? account?.avatarUrl ?? undefined;
-  // Only delay fallback while delivery is still loading; errors/empty should show initials.
-  const navigationAvatarPending = Boolean(navigationAvatarAssetId)
-    && !navigationAvatarSrc
-    && (navigationAvatar.isPending || navigationAvatar.isFetching);
+  // Keep fallback delayed until the <img> actually loads (or fails). A delivery URL
+  // can resolve before the CDN bytes arrive; treating "src present" as ready still
+  // flashes initials under Radix Avatar.
+  const [navigationAvatarImageReady, setNavigationAvatarImageReady] = React.useState(false);
+  React.useEffect(() => {
+    setNavigationAvatarImageReady(false);
+  }, [navigationAvatarSrc]);
+  const navigationAvatarPending = Boolean(navigationAvatarSrc)
+    ? !navigationAvatarImageReady
+    : Boolean(navigationAvatarAssetId) && (navigationAvatar.isPending || navigationAvatar.isFetching);
   const retriedAvatarUrl = React.useRef<string | null>(null);
 
   React.useEffect(() => {
@@ -230,13 +236,20 @@ export function AppLayout() {
                             width={navigationAvatar.data?.width}
                             height={navigationAvatar.data?.height}
                             referrerPolicy="no-referrer"
-                            onError={() => {
-                              if (
-                                !navigationAvatar.data?.url
-                                || retriedAvatarUrl.current === navigationAvatar.data.url
-                              ) return;
-                              retriedAvatarUrl.current = navigationAvatar.data.url;
-                              void navigationAvatar.refetch();
+                            onLoadingStatusChange={(status) => {
+                              if (status === "loaded") {
+                                setNavigationAvatarImageReady(true);
+                                return;
+                              }
+                              if (status === "error") {
+                                setNavigationAvatarImageReady(true);
+                                if (
+                                  !navigationAvatar.data?.url
+                                  || retriedAvatarUrl.current === navigationAvatar.data.url
+                                ) return;
+                                retriedAvatarUrl.current = navigationAvatar.data.url;
+                                void navigationAvatar.refetch();
+                              }
                             }}
                           />
                         ) : null}
