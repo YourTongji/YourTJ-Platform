@@ -28,6 +28,7 @@ pub struct EmailCodeRow {
     pub purpose: String,
     pub code_hash: String,
     pub attempts: i32,
+    pub credential_version: Option<i64>,
 }
 
 /// A row from `identity.sessions`.
@@ -47,6 +48,7 @@ pub struct SessionRow {
     pub recent_authenticated_at: Option<DateTime<Utc>>,
     pub recent_auth_method: Option<String>,
     pub recent_auth_credential_version: Option<i64>,
+    pub issued_auth_version: Option<i64>,
 }
 
 /// A row from `identity.account_keys`.

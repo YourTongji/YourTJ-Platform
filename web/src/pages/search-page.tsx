@@ -13,6 +13,10 @@ import { Input } from "@/components/ui/input";
 import { api } from "@/lib/api/endpoints";
 import type { SearchResult } from "@/lib/api/types";
 import { formatNumber, formatUnixTime } from "@/lib/format";
+import {
+  COMPATIBILITY_DELIVERY_REFRESH_INTERVAL_MS,
+  useBoundedDeliveryRecovery,
+} from "@/lib/media-delivery";
 import { cn } from "@/lib/utils";
 
 type SearchScope = "all" | "course" | "review" | "thread" | "user" | "board" | "tag";
@@ -56,7 +60,9 @@ export function SearchPage() {
       ? page.nextCursor ?? undefined
       : undefined,
     enabled: query.length >= 2,
+    refetchInterval: COMPATIBILITY_DELIVERY_REFRESH_INTERVAL_MS,
   });
+  const recoverAvatarDelivery = useBoundedDeliveryRecovery(() => result.refetch());
 
   React.useEffect(() => setDraft(query), [query]);
 
@@ -294,7 +300,16 @@ export function SearchPage() {
                       className="flex items-center gap-3 rounded-xl border bg-card p-4 transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
                     >
                       <Avatar className="size-11 border">
-                        {user.avatarUrl ? <AvatarImage src={user.avatarUrl} alt="" /> : null}
+                        {user.avatarUrl ? (
+                          <AvatarImage
+                            src={user.avatarUrl}
+                            alt=""
+                            referrerPolicy="no-referrer"
+                            onLoadingStatusChange={(status) => {
+                              if (status === "error") recoverAvatarDelivery();
+                            }}
+                          />
+                        ) : null}
                         <AvatarFallback>{user.handle.slice(0, 1).toUpperCase()}</AvatarFallback>
                       </Avatar>
                       <div className="min-w-0 flex-1">

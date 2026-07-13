@@ -6,7 +6,7 @@
 >
 > 负责人：Product design、Web maintainers
 >
-> 最近核验：2026-07-12，`codex/x-content-versioning`
+> 最近核验：2026-07-12，Web home activity/check-in components 与 responsive tests
 
 YourTJ Community Web 的 Figma 第三版是当前视觉方向来源：
 [Figma node 106:2](https://www.figma.com/design/dndgylImv8ZuVAXg9uWU3y/YourTJ-Community-Web?node-id=106-2)。
@@ -34,8 +34,14 @@ Figma 说明目标体验，`web/src/styles/index.css` 与实际 component 是运
 | Mobile navigation | 288 px left sheet |
 | Minimum supported width | 320 px |
 
-Home right-rail capability在窄于 1240 px 时必须进入主内容可达位置，例如当前活跃度卡片；不能仅
-`display:none` 丢失信息。新增 sidebar/推广位时验证 1240、1280、1360 与常见 mobile 宽度。
+Home right-rail capability 在窄于 1240 px 时必须进入主内容可达位置；不能仅 `display:none` 丢失信息。
+当前 desktop 右栏成长卡的首个主操作是“每日签到”，活跃度热力图在其下方；等级进度是信息与次级
+链接，不再把“查看等级任务”伪装为每日主操作。窄屏在 feed 之前复用同一签到状态和近 20 周热力图，
+不要求打开 desktop sidebar。新增 sidebar/推广位时验证 1240、1280、1360 与常见 mobile 宽度。
+
+签到按钮必须覆盖匿名登录引导、loading、error/retry、submitting、当日已签到和未签到状态；当日已签到
+显示连续天数且禁用重复提交。Mutation 成功后同时刷新签到、活跃度与等级进度事实，不用仅更新按钮的
+局部动画冒充投影已更新。
 
 ## 当前视觉 token
 
@@ -95,6 +101,8 @@ empty、error、success 和 permission-denied。Mutation：
 - Dialog/sheet 管理初始 focus、focus trap、Escape 和关闭后 focus restoration。
 - 文本/关键 UI 对比度满足 WCAG AA；颜色之外使用文字、icon shape 或 pattern。
 - Heatmap/chart cell 可聚焦并朗读日期、数值和原始构成。
+- 首页活跃度按 20 周 × 7 日 grid 表达；方向键按日期移动，Home/End 到首尾可用格。每格 label 同时朗读
+  日期、总分、发帖/评论/点赞/签到构成和强度；颜色不是唯一信息来源。
 - 动画尊重 `prefers-reduced-motion`；不使用闪烁、强制连续 autoplay 或阻断式装饰动效。
 - Touch target、缩放、横向 scroll、长中文/英文/URL 和 screen-reader reading order 需要移动端验证。
 

@@ -3,13 +3,13 @@
 use base64::Engine;
 use chrono::{DateTime, Utc};
 use sha2::{Digest, Sha256};
-use shared::{AppError, AppResult, AppState, AuthAccount};
+use shared::{AppError, AppResult, AppState};
 use sqlx::FromRow;
 use uuid::Uuid;
 
 use crate::dto::ModerationPreviewGrantDto;
 use crate::error::MediaError;
-use crate::moderation::require_strictly_lower_owner;
+use crate::moderation::authorize_moderation;
 use crate::oss;
 use crate::quarantine::{UploadObjectPreview, UploadObjectStore};
 
@@ -36,6 +36,7 @@ struct PreviewGrantRow {
     mime: String,
     bytes: i64,
     reason: String,
+    self_review: bool,
 }
 
 #[derive(Debug, FromRow)]
@@ -44,6 +45,13 @@ struct FinalizePreviewUploadRow {
     status: String,
     image_width: Option<i32>,
     image_height: Option<i32>,
+}
+
+#[derive(Debug, FromRow)]
+struct OwnedPreviewRow {
+    oss_key: String,
+    mime: String,
+    bytes: i64,
 }
 
 fn new_preview_token() -> String {
@@ -77,12 +85,60 @@ fn validate_previewable_upload(upload: &PreviewableUploadRow) -> AppResult<()> {
     Ok(())
 }
 
+fn validate_preview_dimensions(preview: &UploadObjectPreview) -> AppResult<()> {
+    let preview_pixels =
+        u64::from(preview.image_width).saturating_mul(u64::from(preview.image_height));
+    if preview.image_width == 0
+        || preview.image_height == 0
+        || preview.image_width > PREVIEW_MAX_DIMENSION
+        || preview.image_height > PREVIEW_MAX_DIMENSION
+        || preview_pixels > PREVIEW_MAX_PIXELS
+    {
+        return Err(AppError::BadRequest("image dimensions exceed preview limits".into()));
+    }
+    Ok(())
+}
+
+/// Read one owner's pending image through the same-origin bounded preview boundary.
+pub(crate) async fn read_owner_pending_preview(
+    state: &AppState,
+    account_id: i64,
+    upload_id: i64,
+    object_store: &dyn UploadObjectStore,
+) -> AppResult<UploadObjectPreview> {
+    let upload = sqlx::query_as::<_, OwnedPreviewRow>(
+        "SELECT oss_key, mime, bytes FROM media.uploads \
+         WHERE id = $1 AND account_id = $2 AND kind = 'image' AND status = 'pending' \
+           AND NOT is_cleanup_tombstone AND bytes BETWEEN 1 AND $3",
+    )
+    .bind(upload_id)
+    .bind(account_id)
+    .bind(PREVIEW_MAX_BYTES as i64)
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or(AppError::NotFound)?;
+    if oss::validate_content_type("image", &upload.mime).is_err() {
+        return Err(AppError::NotFound);
+    }
+    let preview = object_store
+        .read_image_for_moderation(
+            &upload.oss_key,
+            &upload.mime,
+            u64::try_from(upload.bytes).map_err(|_| AppError::NotFound)?,
+            PREVIEW_MAX_BYTES,
+        )
+        .await?;
+    validate_preview_dimensions(&preview)?;
+    Ok(preview)
+}
+
 /// Issue a short-lived one-time grant without disclosing a provider URL or object key.
 pub(crate) async fn create_preview_grant(
     state: &AppState,
-    auth: &AuthAccount,
+    auth_context: &identity::auth_middleware::AuthenticatedContext,
     upload_id: i64,
     reason: &str,
+    self_review_confirmed: bool,
 ) -> AppResult<ModerationPreviewGrantDto> {
     let mut transaction = state.db.begin().await?;
     let (owner_id, owner) = crate::locking::lock_upload_owner(&mut transaction, upload_id).await?;
@@ -98,7 +154,11 @@ pub(crate) async fn create_preview_grant(
     if upload.account_id != owner_id {
         return Err(AppError::Internal(anyhow::anyhow!("locked media owner changed")));
     }
-    require_strictly_lower_owner(auth, owner_id, &owner.role)?;
+    let authorization =
+        authorize_moderation(&auth_context.account, owner_id, &owner.role, self_review_confirmed)?;
+    if authorization.is_self_review {
+        identity::auth_middleware::require_recent_auth_tx(auth_context, &mut transaction).await?;
+    }
     validate_previewable_upload(&upload)?;
 
     sqlx::query(
@@ -111,14 +171,15 @@ pub(crate) async fn create_preview_grant(
     let token_hash = preview_token_hash(&token)?;
     let expires_at: DateTime<Utc> = sqlx::query_scalar(
         "INSERT INTO media.moderation_preview_grants \
-         (token_hash, upload_id, moderator_account_id, reason, expires_at) \
-         VALUES ($1, $2, $3, $4, now() + ($5 * interval '1 second')) \
+         (token_hash, upload_id, moderator_account_id, reason, self_review, expires_at) \
+         VALUES ($1, $2, $3, $4, $5, now() + ($6 * interval '1 second')) \
          RETURNING expires_at",
     )
     .bind(token_hash)
     .bind(upload_id)
-    .bind(auth.id)
+    .bind(auth_context.account.id)
     .bind(reason)
+    .bind(authorization.is_self_review)
     .bind(PREVIEW_GRANT_TTL_SECONDS)
     .fetch_one(&mut *transaction)
     .await?;
@@ -130,7 +191,7 @@ pub(crate) async fn create_preview_grant(
 /// Consume a one-time grant, append the evidence-read audit, then open a bounded provider stream.
 pub(crate) async fn consume_preview_grant(
     state: &AppState,
-    auth: &AuthAccount,
+    auth_context: &identity::auth_middleware::AuthenticatedContext,
     upload_id: i64,
     token: &str,
     object_store: &dyn UploadObjectStore,
@@ -140,7 +201,8 @@ pub(crate) async fn consume_preview_grant(
     let (owner_id, owner) = crate::locking::lock_upload_owner(&mut transaction, upload_id).await?;
     let grant = sqlx::query_as::<_, PreviewGrantRow>(
         "SELECT preview_grant.id AS grant_id, upload.account_id, \
-                upload.oss_key, upload.mime, upload.bytes, preview_grant.reason \
+                upload.oss_key, upload.mime, upload.bytes, preview_grant.reason, \
+                preview_grant.self_review \
          FROM media.moderation_preview_grants preview_grant \
          JOIN media.uploads upload ON upload.id = preview_grant.upload_id \
          WHERE preview_grant.token_hash = $1 AND preview_grant.upload_id = $2 \
@@ -151,7 +213,7 @@ pub(crate) async fn consume_preview_grant(
     )
     .bind(token_hash)
     .bind(upload_id)
-    .bind(auth.id)
+    .bind(auth_context.account.id)
     .bind(PREVIEW_MAX_BYTES as i64)
     .fetch_optional(&mut *transaction)
     .await?
@@ -159,7 +221,14 @@ pub(crate) async fn consume_preview_grant(
     if grant.account_id != owner_id {
         return Err(AppError::Internal(anyhow::anyhow!("locked media owner changed")));
     }
-    require_strictly_lower_owner(auth, owner_id, &owner.role)?;
+    let authorization =
+        authorize_moderation(&auth_context.account, owner_id, &owner.role, grant.self_review)?;
+    if authorization.is_self_review != grant.self_review {
+        return Err(AppError::Forbidden);
+    }
+    if grant.self_review {
+        identity::auth_middleware::require_recent_auth_tx(auth_context, &mut transaction).await?;
+    }
     if oss::validate_content_type("image", &grant.mime).is_err() {
         return Err(AppError::NotFound);
     }
@@ -181,20 +250,11 @@ pub(crate) async fn consume_preview_grant(
             tracing::warn!(
                 ?error,
                 upload_id,
-                moderator_id = auth.id,
+                moderator_id = auth_context.account.id,
                 "media preview stream failed"
             );
         })?;
-    let preview_pixels =
-        u64::from(preview.image_width).saturating_mul(u64::from(preview.image_height));
-    if preview.image_width == 0
-        || preview.image_height == 0
-        || preview.image_width > PREVIEW_MAX_DIMENSION
-        || preview.image_height > PREVIEW_MAX_DIMENSION
-        || preview_pixels > PREVIEW_MAX_PIXELS
-    {
-        return Err(AppError::BadRequest("image dimensions exceed preview limits".into()));
-    }
+    validate_preview_dimensions(&preview)?;
     let preview_width = i32::try_from(preview.image_width)
         .map_err(|_| AppError::BadRequest("invalid preview width".into()))?;
     let preview_height = i32::try_from(preview.image_height)
@@ -213,7 +273,14 @@ pub(crate) async fn consume_preview_grant(
     if upload.account_id != owner_id {
         return Err(AppError::Internal(anyhow::anyhow!("locked media owner changed")));
     }
-    require_strictly_lower_owner(auth, owner_id, &owner.role)?;
+    let authorization =
+        authorize_moderation(&auth_context.account, owner_id, &owner.role, grant.self_review)?;
+    if authorization.is_self_review != grant.self_review {
+        return Err(AppError::Forbidden);
+    }
+    if grant.self_review {
+        identity::auth_middleware::require_recent_auth_tx(auth_context, &mut transaction).await?;
+    }
     if upload.status != "pending" {
         return Err(AppError::Conflict("upload left the pending review state".into()));
     }
@@ -241,23 +308,28 @@ pub(crate) async fn consume_preview_grant(
         "declaredBytes": grant.bytes,
         "imageWidth": preview.image_width,
         "imageHeight": preview.image_height,
+        "selfReview": grant.self_review,
     });
     sqlx::query(
         "INSERT INTO media.moderation_evidence \
          (upload_id, evidence_kind, verdict, actor_account_id, observed_mime, \
-          image_width, image_height) \
-         VALUES ($1, 'trusted_image_preview', 'observed', $2, $3, $4, $5)",
+          image_width, image_height, self_review) \
+         VALUES ($1, 'trusted_image_preview', 'observed', $2, $3, $4, $5, $6)",
     )
     .bind(upload_id)
-    .bind(auth.id)
+    .bind(auth_context.account.id)
     .bind(&grant.mime)
     .bind(preview_width)
     .bind(preview_height)
+    .bind(grant.self_review)
     .execute(&mut *transaction)
     .await?;
     governance::record_account_event_tx(
         &mut transaction,
-        governance::AccountActor { account_id: auth.id, role: &auth.role },
+        governance::AccountActor {
+            account_id: auth_context.account.id,
+            role: &auth_context.account.role,
+        },
         "media.upload.previewed",
         "upload",
         &upload_id.to_string(),

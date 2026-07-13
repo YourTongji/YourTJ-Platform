@@ -85,7 +85,13 @@ function PasswordInput({
 export function LoginPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const { requestCode, verifyEmail, loginWithPassword, isAuthenticated } = useAuth();
+  const {
+    requestCode,
+    verifyEmail,
+    loginWithPassword,
+    acceptAuthTokens,
+    isAuthenticated,
+  } = useAuth();
   const [mode, setMode] = React.useState<LoginMode>("password");
   const [captchaAction, setCaptchaAction] = React.useState<CaptchaAction | null>(null);
   const [passwordEmail, setPasswordEmail] = React.useState("");
@@ -159,12 +165,10 @@ export function LoginPage() {
       code: resetCode.trim(),
       newPassword,
     }),
-    onSuccess: () => {
-      toast.success("密码已重置，请重新登录");
-      setPasswordEmail(resetEmail);
-      setPassword("");
-      setResetOpen(false);
-      setMode("password");
+    onSuccess: async (tokens) => {
+      await acceptAuthTokens(tokens);
+      toast.success("密码已重置，其他设备均已退出");
+      navigate(destination);
     },
     onError: (error) => toast.error(error instanceof Error ? error.message : "重置失败"),
   });

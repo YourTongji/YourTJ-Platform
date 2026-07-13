@@ -160,26 +160,14 @@ pub async fn create_comment(
     // Check that the account is not silenced
     crate::sanctions::require_can_post(state.redis.as_ref(), &state.db, auth.id).await?;
 
-    let tl = crate::trust_levels::get_trust_level(&state.db, auth.id).await?;
-    if tl == 0 {
-        shared::ratelimit::check_token_bucket(
-            state.redis.as_ref(),
-            "comment_create_tl0",
-            &auth.id.to_string(),
-            5,
-            86400,
-        )
-        .await?;
-    } else {
-        shared::ratelimit::check_token_bucket(
-            state.redis.as_ref(),
-            "comment_create",
-            &auth.id.to_string(),
-            20,
-            60,
-        )
-        .await?;
-    }
+    shared::ratelimit::check_token_bucket(
+        state.redis.as_ref(),
+        "comment_create",
+        &auth.id.to_string(),
+        20,
+        60,
+    )
+    .await?;
 
     let thread_id: i64 = thread_id_str.parse().map_err(|_| AppError::NotFound)?;
 

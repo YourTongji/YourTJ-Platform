@@ -285,8 +285,9 @@ let account = repo.find(id).await.unwrap().unwrap();
   existing crate headers).
 - Current documents live only in `docs/product`, `docs/architecture`, `docs/development`,
   `docs/operations`, or `docs/security`; colocated READMEs are short tool entry points.
-- Every canonical file under `docs/` has type/status/owner/last-verified metadata and uses only `Current`, `Partial`,
-  `Planned`, or `Decision needed` for implementation state. Never use PR-relative permanent labels.
+- Every canonical file under `docs/` has type/status/owner/last-verified metadata. The metadata `status` describes
+  the document lifecycle and uses only `Active`, `Draft`, or `Deprecated`; capability implementation state in the
+  body uses only `Current`, `Partial`, `Planned`, or `Decision needed`. Never use PR-relative permanent labels.
 - Do not duplicate OpenAPI or DDL in prose. Git history is the archive; absorb useful rules and delete
   stale plans instead of keeping a second source of truth.
 - Follow [`docs/development/documentation.md`](docs/development/documentation.md). Every PR updates

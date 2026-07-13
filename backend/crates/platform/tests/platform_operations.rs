@@ -8,7 +8,29 @@ use tower::ServiceExt;
 static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("../../migrations");
 const JWT_SECRET: &str = "integration-test-secret-32bytes!";
 
+fn configure_media_delivery() {
+    static CONFIGURE: std::sync::Once = std::sync::Once::new();
+    CONFIGURE.call_once(|| {
+        for (name, value) in [
+            ("OSS_REGION", "cn-shanghai"),
+            ("MEDIA_DELIVERY_OSS_BUCKET", "yourtj-media-delivery-test"),
+            ("MEDIA_DELIVERY_OSS_ACCESS_KEY_ID", "testdeliveryaccesskey"),
+            ("MEDIA_DELIVERY_OSS_ACCESS_KEY_SECRET", "testdeliverysecret"),
+            ("MEDIA_CDN_BASE_URL", "https://media-test.yourtj.de"),
+            ("MEDIA_CDN_PRIMARY_KEY", "testprimarykey"),
+            ("MEDIA_CDN_SECONDARY_KEY", "testsecondarykey"),
+            ("MEDIA_CDN_SIGNING_KEY_SLOT", "primary"),
+            ("MEDIA_CDN_URL_TTL_SECONDS", "300"),
+            ("CDN_ACCESS_KEY_ID", "testcdnaccesskey"),
+            ("CDN_ACCESS_KEY_SECRET", "testcdnsecret"),
+        ] {
+            std::env::set_var(name, value);
+        }
+    });
+}
+
 async fn test_pool() -> PgPool {
+    configure_media_delivery();
     let url = std::env::var("DATABASE_URL")
         .unwrap_or_else(|_| "postgres://postgres:postgres@localhost:5432/yourtj_test".into());
     let pool = PgPool::connect(&url).await.expect("connect to platform test database");
@@ -84,6 +106,17 @@ async fn read_json(response: axum::response::Response) -> Value {
     serde_json::from_slice(&bytes).expect("parse response JSON")
 }
 
+fn assert_private_no_store(response: &axum::response::Response) {
+    assert_eq!(
+        response.headers().get(header::CACHE_CONTROL).and_then(|value| value.to_str().ok()),
+        Some("private, no-store")
+    );
+    assert_eq!(
+        response.headers().get(header::PRAGMA).and_then(|value| value.to_str().ok()),
+        Some("no-cache")
+    );
+}
+
 async fn account(pool: &PgPool, suffix: &str, role: &str) -> (i64, String) {
     let account_id: i64 = sqlx::query_scalar(
         "INSERT INTO identity.accounts (email, handle, role) \
@@ -98,6 +131,42 @@ async fn account(pool: &PgPool, suffix: &str, role: &str) -> (i64, String) {
     let token = identity::auth::create_access_token(account_id, JWT_SECRET, 3600)
         .expect("create platform test token");
     (account_id, token)
+}
+
+async fn publish_synthetic_image_variants(pool: &PgPool, asset_id: i64) {
+    for (index, (variant_kind, width, height)) in [
+        ("thumb_256", 256_i32, 144_i32),
+        ("display_1280", 1_280_i32, 720_i32),
+        ("full_2048", 2_048_i32, 1_152_i32),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let digest = format!("{:064x}", asset_id * 10 + index as i64);
+        sqlx::query(
+            "INSERT INTO media.asset_variants \
+             (asset_id, variant_kind, policy_version, object_key, content_sha256, mime, bytes, \
+              width, height, status, published_at) \
+             VALUES ($1, $2, 1, $3, $4, 'image/webp', 128, $5, $6, 'published', now())",
+        )
+        .bind(asset_id)
+        .bind(variant_kind)
+        .bind(format!("assets/{asset_id}/1/{variant_kind}-{digest}.webp"))
+        .bind(digest)
+        .bind(width)
+        .bind(height)
+        .execute(pool)
+        .await
+        .expect("insert synthetic promotion image variant");
+    }
+    sqlx::query(
+        "UPDATE media.asset_publications \
+         SET status = 'published', published_at = now(), updated_at = now() WHERE asset_id = $1",
+    )
+    .bind(asset_id)
+    .execute(pool)
+    .await
+    .expect("publish synthetic promotion image variants");
 }
 
 fn json_request(method: Method, uri: String, token: Option<&str>, body: Value) -> Request<Body> {
@@ -545,6 +614,7 @@ async fn promotions_require_admin_capability_safe_links_and_owned_clean_assets()
     .fetch_one(&pool)
     .await
     .expect("insert clean promotion asset");
+    publish_synthetic_image_variants(&pool, asset_id).await;
     let replacement_asset_id: i64 = sqlx::query_scalar(
         "INSERT INTO media.uploads \
          (account_id, kind, oss_key, url, bytes, mime, sha256, status) \
@@ -557,6 +627,7 @@ async fn promotions_require_admin_capability_safe_links_and_owned_clean_assets()
     .fetch_one(&pool)
     .await
     .expect("insert replacement promotion asset");
+    publish_synthetic_image_variants(&pool, replacement_asset_id).await;
     let app = platform::routes(test_state(pool.clone()));
 
     let denied = app
@@ -630,6 +701,29 @@ async fn promotions_require_admin_capability_safe_links_and_owned_clean_assets()
         created_ids
             .push(read_json(response).await["id"].as_str().expect("promotion id").to_owned());
     }
+    let without_asset = app
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            "/api/v2/admin/promotions".into(),
+            Some(&admin_token),
+            json!({
+                "placement": "home-left-primary",
+                "title": format!("Text-only first-party promotion {suffix}"),
+                "body": "This card deliberately has no media",
+                "ctaLabel": "查看详情",
+                "targetUrl": "/forum",
+                "status": "published",
+                "priority": 997,
+                "audience": "all",
+                "reason": "verify a promotion can intentionally omit media"
+            }),
+        ))
+        .await
+        .expect("create text-only promotion response");
+    assert_eq!(without_asset.status(), StatusCode::CREATED);
+    let without_asset_id =
+        read_json(without_asset).await["id"].as_str().expect("text-only promotion id").to_owned();
     let active_bindings: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM media.asset_bindings \
          WHERE asset_id = $1 AND target_type = 'platform_promotion' AND detached_at IS NULL",
@@ -651,6 +745,7 @@ async fn promotions_require_admin_capability_safe_links_and_owned_clean_assets()
         .await
         .expect("public promotions response");
     assert_eq!(public.status(), StatusCode::OK);
+    assert_private_no_store(&public);
     let items = read_json(public).await;
     let items = items.as_array().expect("promotion array");
     let first_position = items
@@ -665,6 +760,10 @@ async fn promotions_require_admin_capability_safe_links_and_owned_clean_assets()
         .iter()
         .position(|item| item["id"] == created_ids[2])
         .expect("third promotion returned");
+    let without_asset_position = items
+        .iter()
+        .position(|item| item["id"] == without_asset_id)
+        .expect("text-only promotion returned");
     assert!(first_position < second_position);
     let first_token = items[first_position]["trackingToken"]
         .as_str()
@@ -679,6 +778,24 @@ async fn promotions_require_admin_capability_safe_links_and_owned_clean_assets()
         .expect("third anonymous promotion tracking token")
         .to_owned();
     assert!(items[first_position]["metrics"].is_null());
+    let public_delivery = &items[first_position]["assetDelivery"];
+    assert_eq!(public_delivery["assetId"], asset_id.to_string());
+    assert_eq!(public_delivery["mime"], "image/webp");
+    assert_eq!(public_delivery["width"], 1_280);
+    assert_eq!(public_delivery["height"], 720);
+    assert_eq!(public_delivery["variant"], "display_1280");
+    assert!(public_delivery["expiresAt"].as_i64().is_some());
+    assert!(public_delivery["url"]
+        .as_str()
+        .is_some_and(|url| url.starts_with("https://media-test.yourtj.de/assets/")
+            && url.contains("?auth_key=")));
+    assert!(items[without_asset_position]["assetDelivery"].is_null());
+    let serialized_public = serde_json::to_string(&items[first_position])
+        .expect("serialize public promotion projection");
+    assert!(!serialized_public.contains("test/promotions/"));
+    assert!(!serialized_public.contains("controlled.invalid"));
+    assert!(!serialized_public.contains("aliyuncs.com"));
+    assert!(!serialized_public.contains("oss-cn-"));
 
     for event_type in ["impression", "impression", "click", "click"] {
         let event = app
@@ -806,6 +923,7 @@ async fn promotions_require_admin_capability_safe_links_and_owned_clean_assets()
         .await
         .expect("promotion administration list response");
     assert_eq!(admin_list.status(), StatusCode::OK);
+    assert_private_no_store(&admin_list);
     let admin_list = read_json(admin_list).await;
     let administered = admin_list["items"]
         .as_array()
@@ -816,6 +934,74 @@ async fn promotions_require_admin_capability_safe_links_and_owned_clean_assets()
     assert!(administered["trackingToken"].is_null());
     assert_eq!(administered["metrics"]["impressions"], 1);
     assert_eq!(administered["metrics"]["clicks"], 1);
+    assert_eq!(administered["assetDelivery"]["assetId"], asset_id.to_string());
+    assert!(administered["assetDelivery"]["url"]
+        .as_str()
+        .is_some_and(|url| url.starts_with("https://media-test.yourtj.de/assets/")
+            && url.contains("?auth_key=")));
+    let administered_without_asset = admin_list["items"]
+        .as_array()
+        .expect("admin promotion items")
+        .iter()
+        .find(|item| item["id"] == without_asset_id)
+        .expect("text-only promotion in administration list");
+    assert!(administered_without_asset["assetDelivery"].is_null());
+
+    sqlx::query(
+        "UPDATE media.asset_publications \
+         SET status = 'unpublished', published_at = NULL, updated_at = now() WHERE asset_id = $1",
+    )
+    .bind(asset_id)
+    .execute(&pool)
+    .await
+    .expect("withdraw promotion asset publication");
+    let public_after_withdrawal = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v2/promotions?placement=home-left-primary")
+                .body(Body::empty())
+                .expect("build public promotions request after media withdrawal"),
+        )
+        .await
+        .expect("public promotions response after media withdrawal");
+    assert_eq!(public_after_withdrawal.status(), StatusCode::OK);
+    let public_after_withdrawal = read_json(public_after_withdrawal).await;
+    let withdrawn_public = public_after_withdrawal
+        .as_array()
+        .expect("promotion array after media withdrawal")
+        .iter()
+        .find(|item| item["id"] == created_ids[0])
+        .expect("promotion remains visible without withdrawn media");
+    assert!(withdrawn_public["assetDelivery"].is_null());
+
+    let admin_after_withdrawal = app
+        .clone()
+        .oneshot(json_request(
+            Method::GET,
+            "/api/v2/admin/promotions?limit=30".into(),
+            Some(&admin_token),
+            json!({}),
+        ))
+        .await
+        .expect("admin promotions response after media withdrawal");
+    assert_eq!(admin_after_withdrawal.status(), StatusCode::OK);
+    let admin_after_withdrawal = read_json(admin_after_withdrawal).await;
+    let withdrawn_admin = admin_after_withdrawal["items"]
+        .as_array()
+        .expect("admin promotion items after media withdrawal")
+        .iter()
+        .find(|item| item["id"] == created_ids[0])
+        .expect("withdrawn-media promotion remains in administration list");
+    assert!(withdrawn_admin["assetDelivery"].is_null());
+    sqlx::query(
+        "UPDATE media.asset_publications \
+         SET status = 'published', published_at = now(), updated_at = now() WHERE asset_id = $1",
+    )
+    .bind(asset_id)
+    .execute(&pool)
+    .await
+    .expect("restore promotion asset publication for lifecycle assertions");
 
     let denied_metrics = app
         .clone()
@@ -988,5 +1174,5 @@ async fn promotions_require_admin_capability_safe_links_and_owned_clean_assets()
     .fetch_one(&pool)
     .await
     .expect("read promotion audit events");
-    assert_eq!(audit_count, 3);
+    assert_eq!(audit_count, 4);
 }

@@ -6,6 +6,7 @@ import { toast } from "sonner";
 
 import { PageHeader } from "@/components/common/page-header";
 import { EmptyState, ErrorState, LoadingState } from "@/components/common/states";
+import { useForumDeliveryRefresh } from "@/components/content/forum-delivery-image";
 import { MarkdownContent } from "@/components/content/markdown-content";
 import { MarkdownEditor } from "@/components/content/markdown-editor";
 import { DraftSyncNotice } from "@/components/forum/draft-sync-notice";
@@ -80,6 +81,9 @@ function CommentCard({ comment, threadId }: { comment: Comment; threadId: string
           content={comment.body}
           format={comment.contentFormat}
           attachments={comment.attachments}
+          onAttachmentDeliveryRefresh={() => {
+            void queryClient.invalidateQueries({ queryKey: ["thread-comments", threadId] });
+          }}
           className="mt-3 text-sm"
         />
         <div className="mt-3 flex gap-2">
@@ -273,6 +277,13 @@ export function ThreadDetailPage() {
     queryFn: () => api.comments(threadId),
     enabled: Boolean(threadId),
   });
+  const deliveryAttachments = [
+    ...(thread.data?.attachments ?? []),
+    ...(comments.data?.items ?? []).flatMap((comment) => comment.attachments ?? []),
+  ];
+  useForumDeliveryRefresh(deliveryAttachments, () => {
+    void Promise.all([thread.refetch(), comments.refetch()]);
+  });
   const vote = useMutation({
     mutationFn: (value: "up" | "down") =>
       thread.data?.viewerVote === value
@@ -390,6 +401,7 @@ export function ThreadDetailPage() {
               content={item.body}
               format={item.contentFormat}
               attachments={item.attachments}
+              onAttachmentDeliveryRefresh={() => void thread.refetch()}
               className="text-sm"
             />
           ) : (

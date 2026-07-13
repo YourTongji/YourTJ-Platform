@@ -12,10 +12,12 @@ const apiMocks = vi.hoisted(() => ({
   createPreviewGrant: vi.fn(),
   preview: vi.fn(),
   moderate: vi.fn(),
+  retryProcessing: vi.fn(),
   placeRetentionHold: vi.fn(),
   releaseRetentionHold: vi.fn(),
   listRetentionHolds: vi.fn(),
   listDeletionJobs: vi.fn(),
+  reconciliation: vi.fn(),
   retryDeletionJob: vi.fn(),
 }));
 const originalCreateObjectURL = URL.createObjectURL;
@@ -28,10 +30,12 @@ vi.mock("@/lib/api/endpoints", () => ({
     createAdminMediaPreviewGrant: apiMocks.createPreviewGrant,
     adminMediaPreview: apiMocks.preview,
     moderateAdminMediaUpload: apiMocks.moderate,
+    retryAdminMediaProcessing: apiMocks.retryProcessing,
     placeAdminMediaRetentionHold: apiMocks.placeRetentionHold,
     releaseAdminMediaRetentionHold: apiMocks.releaseRetentionHold,
     adminMediaRetentionHolds: apiMocks.listRetentionHolds,
     adminMediaDeletionJobs: apiMocks.listDeletionJobs,
+    adminMediaReconciliation: apiMocks.reconciliation,
     retryAdminMediaDeletionJob: apiMocks.retryDeletionJob,
   },
 }));
@@ -47,9 +51,12 @@ const upload = {
   bytes: 128,
   mime: "image/png",
   status: "pending" as const,
+  deliveryState: "unpublished" as const,
+  deliveryErrorCode: null,
   usage: "forum_thread" as const,
   imageWidth: null,
   imageHeight: null,
+  isSelfReview: false,
   approvalRequirement: "image_preview" as const,
   deletionState: null,
   retentionHeld: false,
@@ -78,10 +85,21 @@ describe("ResourcesPanel media moderation", () => {
       return new Blob(["png"], { type: "image/png" });
     });
     apiMocks.moderate.mockReset().mockResolvedValue({ ok: true });
+    apiMocks.retryProcessing.mockReset().mockResolvedValue(undefined);
     apiMocks.placeRetentionHold.mockReset().mockResolvedValue(undefined);
     apiMocks.releaseRetentionHold.mockReset().mockResolvedValue(undefined);
     apiMocks.listRetentionHolds.mockReset().mockResolvedValue({ items: [], nextCursor: null, hasMore: false });
     apiMocks.listDeletionJobs.mockReset().mockResolvedValue({ items: [], nextCursor: null, hasMore: false });
+    apiMocks.reconciliation.mockReset().mockResolvedValue({
+      dryRun: true,
+      items: [],
+      nextCursor: null,
+      providerInventory: {
+        state: "manual_inventory_required",
+        ingestCandidateCount: 0,
+        deliveryCandidateCount: 0,
+      },
+    });
     apiMocks.retryDeletionJob.mockReset().mockResolvedValue(undefined);
     Object.defineProperty(URL, "createObjectURL", {
       configurable: true,
@@ -120,7 +138,7 @@ describe("ResourcesPanel media moderation", () => {
     await user.click(screen.getByRole("button", { name: "生成并读取预览" }));
 
     await waitFor(() => {
-      expect(apiMocks.createPreviewGrant).toHaveBeenCalledWith("42", "核对待审图片内容");
+      expect(apiMocks.createPreviewGrant).toHaveBeenCalledWith("42", "核对待审图片内容", false);
       expect(apiMocks.preview).toHaveBeenCalledWith("42", "a".repeat(43));
     });
     expect(await screen.findByRole("img", { name: "待审上传 42 的一次性预览" })).toHaveAttribute(
@@ -155,11 +173,94 @@ describe("ResourcesPanel media moderation", () => {
     await user.type(screen.getByLabelText("操作原因"), "图片符合社区内容规范");
     await user.click(screen.getByRole("button", { name: "确认批准" }));
     await waitFor(() => {
-      expect(apiMocks.moderate).toHaveBeenCalledWith("42", "approve", "图片符合社区内容规范");
+      expect(apiMocks.moderate).toHaveBeenCalledWith(
+        "42",
+        "approve",
+        "图片符合社区内容规范",
+        false,
+      );
     });
 
-    await user.click(screen.getByRole("button", { name: "已发布" }));
+    await user.click(screen.getByRole("button", { name: "已审核" }));
     await waitFor(() => expect(apiMocks.listUploads).toHaveBeenCalledWith(null, "clean"));
+  });
+
+  it("requires an explicit warning acknowledgement for the ADMIN own-media exception", async () => {
+    const user = userEvent.setup();
+    apiMocks.listUploads.mockImplementation(async () => ({
+      items: [{
+        ...upload,
+        isSelfReview: true,
+        approvalRequirement: previewEvidenceRecorded ? "satisfied" as const : "image_preview" as const,
+      }],
+      nextCursor: null,
+      hasMore: false,
+    }));
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <ResourcesPanel capabilities={new Set(["moderation.content"])} />
+      </QueryClientProvider>,
+    );
+
+    await user.click(await screen.findByRole("button", { name: "安全预览" }));
+    await user.type(screen.getByLabelText("操作原因"), "唯一超级管理员初始化头像");
+    expect(screen.getByRole("button", { name: "生成并读取预览" })).toBeDisabled();
+    await user.click(screen.getByLabelText("我确认这是本人媒体，并明确使用 ADMIN 自审例外"));
+    await user.click(screen.getByRole("button", { name: "生成并读取预览" }));
+    await waitFor(() => expect(apiMocks.createPreviewGrant).toHaveBeenCalledWith(
+      "42",
+      "唯一超级管理员初始化头像",
+      true,
+    ));
+
+    const approve = await screen.findByRole("button", { name: "批准" });
+    await waitFor(() => expect(approve).toBeEnabled());
+    await user.click(approve);
+    await user.type(screen.getByLabelText("操作原因"), "完成本人媒体受控自审并发布安全版本");
+    await user.click(screen.getByLabelText("我确认这是本人媒体，并明确使用 ADMIN 自审例外"));
+    await user.click(screen.getByRole("button", { name: "确认批准" }));
+    await waitFor(() => expect(apiMocks.moderate).toHaveBeenCalledWith(
+      "42",
+      "approve",
+      "完成本人媒体受控自审并发布安全版本",
+      true,
+    ));
+  });
+
+  it("lets operations requeue only the visible failed Delivery projection", async () => {
+    const user = userEvent.setup();
+    apiMocks.listUploads.mockResolvedValue({
+      items: [{
+        ...upload,
+        status: "clean" as const,
+        deliveryState: "failed" as const,
+        deliveryErrorCode: "delivery_write_failed" as const,
+        approvalRequirement: "none" as const,
+      }],
+      nextCursor: null,
+      hasMore: false,
+    });
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <ResourcesPanel capabilities={new Set(["moderation.content", "operations.jobs"])} />
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByText("处理错误：delivery_write_failed")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "重试安全版本处理" }));
+    await user.type(screen.getByLabelText("操作原因"), "外部存储恢复后重试处理任务");
+    await user.click(screen.getByRole("button", { name: "确认重新排队" }));
+
+    await waitFor(() => expect(apiMocks.retryProcessing).toHaveBeenCalledWith(
+      "42",
+      "外部存储恢复后重试处理任务",
+    ));
   });
 
   it("lets operations staff place a bounded hold without exposing its purpose in the queue", async () => {

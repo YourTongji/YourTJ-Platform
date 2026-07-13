@@ -35,7 +35,7 @@ impl From<MediaError> for AppError {
             MediaError::NotFound => AppError::NotFound,
             MediaError::Forbidden(_) => AppError::Forbidden,
             MediaError::BadRequest(msg) => AppError::BadRequest(msg),
-            MediaError::Unavailable(msg) => AppError::BadRequest(msg),
+            MediaError::Unavailable(_) => AppError::ServiceUnavailable,
             MediaError::Internal(err) => AppError::Internal(err),
         }
     }

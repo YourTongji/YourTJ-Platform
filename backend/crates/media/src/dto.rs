@@ -117,6 +117,8 @@ pub struct UploadDto {
     pub bytes: i64,
     pub mime: String,
     pub status: String,
+    pub delivery_state: String,
+    pub delivery_error_code: Option<String>,
     pub usage: Option<String>,
     pub image_width: Option<i32>,
     pub image_height: Option<i32>,
@@ -126,6 +128,7 @@ pub struct UploadDto {
     pub retention_state: String,
     pub retention_expires_at: Option<i64>,
     pub created_at: i64,
+    pub is_self_review: bool,
 }
 
 /// Place one purpose-bound, time-bounded hold on a media object.
@@ -144,6 +147,13 @@ pub struct RetentionHoldInput {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReleaseRetentionHoldInput {
     pub expected_hold_id: String,
+    pub reason: String,
+}
+
+/// Operations request to requeue one exhausted Delivery processing job.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProcessingRetryInput {
     pub reason: String,
 }
 
@@ -191,16 +201,34 @@ pub struct MyUploadDto {
     pub bytes: i64,
     pub mime: String,
     pub status: String,
+    pub delivery_state: String,
     pub image_width: Option<i32>,
     pub image_height: Option<i32>,
     pub created_at: i64,
 }
 
-/// Signed / CDN URL for an upload.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct UploadUrlDto {
-    pub url: String,
+pub struct ReconciliationFindingDto {
+    pub asset_id: String,
+    pub issue_codes: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderInventoryStatusDto {
+    pub state: String,
+    pub ingest_candidate_count: i64,
+    pub delivery_candidate_count: i64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReconciliationReportDto {
+    pub dry_run: bool,
+    pub items: Vec<ReconciliationFindingDto>,
+    pub next_cursor: Option<String>,
+    pub provider_inventory: ProviderInventoryStatusDto,
 }
 
 /// Short-lived one-time credential for a same-origin moderation preview stream.

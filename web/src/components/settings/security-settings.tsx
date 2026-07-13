@@ -4,11 +4,13 @@ import * as React from "react";
 import { Link } from "react-router";
 import { toast } from "sonner";
 
+import { RecentAuthDialog } from "@/components/auth/recent-auth-dialog";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useAuth } from "@/context/auth-provider";
+import { ApiError } from "@/lib/api/client";
 import { api } from "@/lib/api/endpoints";
 import { formatUnixTime } from "@/lib/format";
 
@@ -38,11 +40,13 @@ function PasswordField({
 
 export function SecuritySettings() {
   const queryClient = useQueryClient();
-  const { logoutAll } = useAuth();
+  const { account, acceptAuthTokens, logoutAll } = useAuth();
   const [currentPassword, setCurrentPassword] = React.useState("");
   const [newPassword, setNewPassword] = React.useState("");
   const [confirmPassword, setConfirmPassword] = React.useState("");
   const [confirmAllDevices, setConfirmAllDevices] = React.useState(false);
+  const [recentAuthOpen, setRecentAuthOpen] = React.useState(false);
+  const hasPassword = account?.hasPassword ?? true;
 
   const sessions = useInfiniteQuery({
     queryKey: ["device-sessions"],
@@ -50,16 +54,25 @@ export function SecuritySettings() {
     initialPageParam: null as string | null,
     getNextPageParam: (page) => page.nextCursor ?? undefined,
   });
-  const changePassword = useMutation({
-    mutationFn: () => api.passwordChange({ currentPassword, newPassword }),
-    onSuccess: async () => {
+  const passwordMutation = useMutation({
+    mutationFn: (mode: "set" | "change") => mode === "set"
+      ? api.passwordSet({ newPassword })
+      : api.passwordChange({ currentPassword, newPassword }),
+    onSuccess: async (tokens, mode) => {
+      await acceptAuthTokens(tokens);
       setCurrentPassword("");
       setNewPassword("");
       setConfirmPassword("");
-      toast.success("密码已更新，其他设备会话已撤销");
+      toast.success(mode === "set" ? "密码已设置，旧会话已替换" : "密码已更新，其他设备会话已撤销");
       await queryClient.invalidateQueries({ queryKey: ["device-sessions"] });
     },
-    onError: (error) => toast.error(error instanceof Error ? error.message : "密码修改失败"),
+    onError: (error, mode) => {
+      if (mode === "set" && error instanceof ApiError && error.status === 428) {
+        setRecentAuthOpen(true);
+        return;
+      }
+      toast.error(error instanceof Error ? error.message : "密码修改失败");
+    },
   });
   const revokeSession = useMutation({
     mutationFn: (id: string) => api.revokeSession(id),
@@ -89,25 +102,31 @@ export function SecuritySettings() {
             <KeyRound className="size-5 text-primary" aria-hidden="true" />
             密码安全
           </CardTitle>
-          <CardDescription>修改密码会保留当前设备，并撤销其他设备的访问权限。</CardDescription>
+          <CardDescription>
+            {hasPassword
+              ? "修改密码会替换当前会话，并撤销其他设备的访问权限。"
+              : "首次设置密码需要重新验证校园邮箱，完成后会替换旧会话。"}
+          </CardDescription>
         </CardHeader>
         <CardContent>
           <form
             className="space-y-4"
             onSubmit={(event) => {
               event.preventDefault();
-              changePassword.mutate();
+              passwordMutation.mutate(hasPassword ? "change" : "set");
             }}
           >
-            <div className="space-y-2">
-              <Label htmlFor="current-password">当前密码</Label>
-              <PasswordField
-                id="current-password"
-                value={currentPassword}
-                onChange={setCurrentPassword}
-                autoComplete="current-password"
-              />
-            </div>
+            {hasPassword ? (
+              <div className="space-y-2">
+                <Label htmlFor="current-password">当前密码</Label>
+                <PasswordField
+                  id="current-password"
+                  value={currentPassword}
+                  onChange={setCurrentPassword}
+                  autoComplete="current-password"
+                />
+              </div>
+            ) : null}
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-2">
                 <Label htmlFor="settings-new-password">新密码</Label>
@@ -130,13 +149,15 @@ export function SecuritySettings() {
             </div>
             <div className="flex flex-wrap items-center justify-between gap-3">
               <p className="text-xs text-muted-foreground">
-                还没有密码？退出后可在<Link className="mx-1 text-primary underline-offset-4 hover:underline" to="/login">验证码登录</Link>中选择“首次设置密码”。
+                {hasPassword
+                  ? <>忘记当前密码？可在<Link className="mx-1 text-primary underline-offset-4 hover:underline" to="/login">登录页</Link>通过邮箱验证码安全重置。</>
+                  : "设置后可以直接使用校园邮箱和密码登录。"}
               </p>
               <Button
                 type="submit"
-                disabled={!currentPassword || !passwordsMatch || changePassword.isPending}
+                disabled={(hasPassword && !currentPassword) || !passwordsMatch || passwordMutation.isPending}
               >
-                {changePassword.isPending ? "正在更新" : "修改密码"}
+                {passwordMutation.isPending ? "正在更新" : hasPassword ? "修改密码" : "设置密码"}
               </Button>
             </div>
           </form>
@@ -232,6 +253,13 @@ export function SecuritySettings() {
           </div>
         </CardContent>
       </Card>
+
+      <RecentAuthDialog
+        open={recentAuthOpen}
+        onOpenChange={setRecentAuthOpen}
+        description="首次设置密码会建立新的长期登录凭据，需要当前设备重新验证校园邮箱。"
+        onVerified={() => passwordMutation.mutate("set")}
+      />
     </>
   );
 }

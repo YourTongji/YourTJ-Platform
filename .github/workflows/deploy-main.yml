@@ -16,7 +16,7 @@ permissions:
 
 concurrency:
   group: deploy-main
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   backend:
@@ -75,7 +75,7 @@ jobs:
     if: github.ref == 'refs/heads/main'
     needs: [backend, frontend]
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     environment: main-staging
     steps:
       - uses: actions/checkout@v4
@@ -103,7 +103,7 @@ jobs:
             UserKnownHostsFile ~/.ssh/preview_known_hosts
           EOF
 
-      - name: validate and stage OSS secrets
+      - name: validate and stage media secrets
         env:
           OSS_REGION: ${{ secrets.OSS_REGION }}
           OSS_BUCKET: ${{ secrets.OSS_BUCKET }}
@@ -111,6 +111,16 @@ jobs:
           OSS_ACCESS_KEY_SECRET: ${{ secrets.OSS_ACCESS_KEY_SECRET }}
           OSS_ROLE_ARN: ${{ secrets.OSS_ROLE_ARN }}
           OSS_CALLBACK_BASE_URL: ${{ secrets.OSS_CALLBACK_BASE_URL }}
+          MEDIA_DELIVERY_OSS_BUCKET: ${{ secrets.MEDIA_DELIVERY_OSS_BUCKET }}
+          MEDIA_DELIVERY_OSS_ACCESS_KEY_ID: ${{ secrets.MEDIA_DELIVERY_OSS_ACCESS_KEY_ID }}
+          MEDIA_DELIVERY_OSS_ACCESS_KEY_SECRET: ${{ secrets.MEDIA_DELIVERY_OSS_ACCESS_KEY_SECRET }}
+          MEDIA_CDN_BASE_URL: ${{ vars.MEDIA_CDN_BASE_URL }}
+          MEDIA_CDN_PRIMARY_KEY: ${{ secrets.MEDIA_CDN_PRIMARY_KEY }}
+          MEDIA_CDN_SECONDARY_KEY: ${{ secrets.MEDIA_CDN_SECONDARY_KEY }}
+          MEDIA_CDN_SIGNING_KEY_SLOT: ${{ vars.MEDIA_CDN_SIGNING_KEY_SLOT }}
+          MEDIA_CDN_URL_TTL_SECONDS: "300"
+          CDN_ACCESS_KEY_ID: ${{ secrets.CDN_ACCESS_KEY_ID }}
+          CDN_ACCESS_KEY_SECRET: ${{ secrets.CDN_ACCESS_KEY_SECRET }}
         run: |
           set -Eeuo pipefail
           umask 077
@@ -122,7 +132,17 @@ jobs:
             OSS_ACCESS_KEY_ID \
             OSS_ACCESS_KEY_SECRET \
             OSS_ROLE_ARN \
-            OSS_CALLBACK_BASE_URL; do
+            OSS_CALLBACK_BASE_URL \
+            MEDIA_DELIVERY_OSS_BUCKET \
+            MEDIA_DELIVERY_OSS_ACCESS_KEY_ID \
+            MEDIA_DELIVERY_OSS_ACCESS_KEY_SECRET \
+            MEDIA_CDN_BASE_URL \
+            MEDIA_CDN_PRIMARY_KEY \
+            MEDIA_CDN_SECONDARY_KEY \
+            MEDIA_CDN_SIGNING_KEY_SLOT \
+            MEDIA_CDN_URL_TTL_SECONDS \
+            CDN_ACCESS_KEY_ID \
+            CDN_ACCESS_KEY_SECRET; do
             value="${!name:-}"
             if [[ -z "$value" || "$value" == *$'\n'* || "$value" == *$'\r'* ]]; then
               echo "${name} is missing or contains a newline" >&2
@@ -134,6 +154,42 @@ jobs:
             echo "OSS_CALLBACK_BASE_URL must use HTTPS" >&2
             exit 64
           fi
+          if [[ "$OSS_BUCKET" == "$MEDIA_DELIVERY_OSS_BUCKET" ]]; then
+            echo "Ingest and Delivery must use separate private buckets" >&2
+            exit 64
+          fi
+          if [[ "$OSS_ACCESS_KEY_ID" == "$MEDIA_DELIVERY_OSS_ACCESS_KEY_ID" \
+             || "$OSS_ACCESS_KEY_ID" == "$CDN_ACCESS_KEY_ID" \
+             || "$MEDIA_DELIVERY_OSS_ACCESS_KEY_ID" == "$CDN_ACCESS_KEY_ID" ]]; then
+            echo "Ingest, Delivery writer, and CDN purge must use distinct principals" >&2
+            exit 64
+          fi
+          if [[ "$MEDIA_CDN_PRIMARY_KEY" == "$MEDIA_CDN_SECONDARY_KEY" ]]; then
+            echo "MEDIA_CDN_PRIMARY_KEY and MEDIA_CDN_SECONDARY_KEY must differ" >&2
+            exit 64
+          fi
+          if [[ "$MEDIA_CDN_SIGNING_KEY_SLOT" != "primary" \
+             && "$MEDIA_CDN_SIGNING_KEY_SLOT" != "secondary" ]]; then
+            echo "MEDIA_CDN_SIGNING_KEY_SLOT must be primary or secondary" >&2
+            exit 64
+          fi
+          python3 - "$MEDIA_CDN_BASE_URL" <<'PY'
+          import sys
+          from urllib.parse import urlsplit
+
+          parsed = urlsplit(sys.argv[1])
+          if (
+              parsed.scheme != "https"
+              or not parsed.hostname
+              or parsed.username is not None
+              or parsed.password is not None
+              or parsed.port is not None
+              or parsed.path not in ("", "/")
+              or parsed.query
+              or parsed.fragment
+          ):
+              raise SystemExit("MEDIA_CDN_BASE_URL must be one exact HTTPS origin")
+          PY
           chmod 600 "$env_file"
 
       - name: transfer backend image
@@ -146,42 +202,174 @@ jobs:
         run: |
           set -Eeuo pipefail
           test -f frontend-dist-main/index.html
-          release_dir="/opt/yourtj-preview/releases/main/${GITHUB_SHA}/frontend"
-          ssh preview "rm -rf '${release_dir}' && install -d -m 755 '${release_dir}'"
+          release="${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          release_dir="/opt/yourtj-preview/releases/main/${release}/frontend"
+          transferred=0
+          cleanup() {
+            if ((transferred == 0)); then
+              ssh preview "rm -rf '${release_dir}'" || true
+            fi
+          }
+          trap cleanup EXIT
+          ssh preview "install -d -m 755 '${release_dir}'"
           scp -r frontend-dist-main/* "preview:${release_dir}/"
+          transferred=1
 
       - name: deploy and verify main staging
         run: |
           set -Eeuo pipefail
           remote_script="/tmp/deploy-main-${GITHUB_RUN_ID}.sh"
           remote_verifier="/tmp/verify-oss-${GITHUB_RUN_ID}.py"
+          remote_frontend_nginx="/tmp/frontend-nginx-main-${GITHUB_RUN_ID}.conf.template"
+          remote_preview_proxy="/tmp/preview-proxy-${GITHUB_RUN_ID}.conf"
           remote_oss_env="/tmp/yourtj-main-oss-${GITHUB_RUN_ID}.env"
           remote_image="/tmp/api-image-main-${GITHUB_RUN_ID}.tar"
-          release_dir="/opt/yourtj-preview/releases/main/${GITHUB_SHA}/frontend"
+          release="${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          release_dir="/opt/yourtj-preview/releases/main/${release}/frontend"
+          deployed=0
 
           cleanup() {
             rm -f "${RUNNER_TEMP}/yourtj-main-oss.env"
-            ssh preview "rm -f '${remote_script}' '${remote_verifier}' '${remote_oss_env}' '${remote_image}'" || true
+            ssh preview "rm -f '${remote_script}' '${remote_verifier}' '${remote_frontend_nginx}' '${remote_preview_proxy}' '${remote_oss_env}' '${remote_image}'" || true
+            if ((deployed == 0)); then
+              ssh preview "rm -rf '${release_dir}'" || true
+            fi
           }
           trap cleanup EXIT
 
           scp ops/deploy/deploy-main.sh "preview:${remote_script}"
           scp ops/deploy/verify_oss.py "preview:${remote_verifier}"
-          ssh preview "chmod 700 '${remote_script}' && chmod 600 '${remote_verifier}' && umask 077 && : > '${remote_oss_env}'"
+          scp ops/deploy/frontend-nginx.conf.template "preview:${remote_frontend_nginx}"
+          scp ops/deploy/preview-proxy.conf "preview:${remote_preview_proxy}"
+          ssh preview "chmod 700 '${remote_script}' && chmod 600 '${remote_verifier}' '${remote_frontend_nginx}' '${remote_preview_proxy}' && umask 077 && : > '${remote_oss_env}'"
           ssh preview "cat > '${remote_oss_env}'" < "${RUNNER_TEMP}/yourtj-main-oss.env"
+          ssh preview bash -s -- "$remote_preview_proxy" <<'EOF'
+            set -Eeuo pipefail
+            source_path="$1"
+            target_path="/etc/nginx/conf.d/yourtj-preview.conf"
+            backup_path="${target_path}.deploy-backup"
+            had_existing=0
+            if sudo test -f "$target_path"; then
+              sudo cp "$target_path" "$backup_path"
+              had_existing=1
+            else
+              sudo rm -f "$backup_path"
+            fi
+            rollback_proxy() {
+              if ((had_existing == 1)); then
+                sudo mv "$backup_path" "$target_path"
+              else
+                sudo rm -f "$target_path"
+              fi
+              sudo nginx -t
+              sudo systemctl reload nginx
+            }
+            sudo install -m 644 "$source_path" "$target_path"
+            if ! sudo nginx -t; then
+              rollback_proxy
+              exit 1
+            fi
+            if ! sudo systemctl reload nginx; then
+              rollback_proxy
+              exit 1
+            fi
+            sudo rm -f "$backup_path"
+          EOF
           ssh preview bash "${remote_script}" \
             "${release_dir}" \
             "${remote_image}" \
             "${remote_oss_env}" \
             "${GITHUB_SHA}" \
-            "${remote_verifier}"
+            "${remote_verifier}" \
+            "${remote_frontend_nginx}"
+          deployed=1
+
+      - name: verify canonical public HTTPS routes
+        id: public_origin
+        env:
+          MAIN_PUBLIC_BASE_URL: ${{ vars.MAIN_PUBLIC_BASE_URL }}
+        run: |
+          set -Eeuo pipefail
+          base="$(python3 - "$MAIN_PUBLIC_BASE_URL" <<'PY'
+          import re
+          import sys
+          from urllib.parse import urlsplit
+
+          raw = sys.argv[1]
+          parsed = urlsplit(raw)
+          valid_host = parsed.hostname and re.fullmatch(r"[A-Za-z0-9.-]+", parsed.hostname)
+          try:
+              port = parsed.port
+          except ValueError:
+              port = -1
+          if (
+              parsed.scheme != "https"
+              or not valid_host
+              or parsed.username is not None
+              or parsed.password is not None
+              or port not in (None, 443)
+              or parsed.path not in ("", "/")
+              or parsed.query
+              or parsed.fragment
+              or any(character in raw for character in "\r\n|")
+          ):
+              raise SystemExit("MAIN_PUBLIC_BASE_URL must be one exact HTTPS origin")
+          print(f"https://{parsed.hostname.lower()}")
+          PY
+          )"
+          echo "base=${base}" >> "$GITHUB_OUTPUT"
+          curl --fail --silent --show-error --retry 12 --retry-delay 5 --retry-all-errors \
+            "${base}/" >/dev/null
+          curl --fail --silent --show-error --retry 12 --retry-delay 5 --retry-all-errors \
+            "${base}/api/v2/health" >/dev/null
+          curl --fail --silent --show-error --retry 12 --retry-delay 5 --retry-all-errors \
+            "${base}/api/v2/ready" >/dev/null
+
+      - name: verify shared-host private ports are not public
+        env:
+          PREVIEW_HOST: ${{ secrets.PREVIEW_HOST }}
+        run: |
+          python3 - "$PREVIEW_HOST" <<'PY'
+          from concurrent.futures import ThreadPoolExecutor
+          import socket
+          import sys
+
+          host = sys.argv[1]
+          reserved_ports = [*range(15000, 17000), 5433, 6380, 7701]
+
+          def is_reachable(port):
+              try:
+                  connection = socket.create_connection((host, port), timeout=0.75)
+              except OSError:
+                  return False
+              else:
+                  connection.close()
+                  return True
+
+          with ThreadPoolExecutor(max_workers=128) as executor:
+              exposed = [
+                  port
+                  for port, reachable in zip(
+                      reserved_ports,
+                      executor.map(is_reachable, reserved_ports),
+                      strict=True,
+                  )
+                  if reachable
+              ]
+          if exposed:
+              raise SystemExit(f"shared-host private ports are publicly reachable: {exposed}")
+          PY
 
       - name: summary
+        env:
+          MAIN_PUBLIC_BASE_URL: ${{ steps.public_origin.outputs.base }}
         run: |
+          base="$MAIN_PUBLIC_BASE_URL"
           echo "### :rocket: Main Deployed" >> "$GITHUB_STEP_SUMMARY"
           echo "| | URL |" >> "$GITHUB_STEP_SUMMARY"
           echo "|---|---|" >> "$GITHUB_STEP_SUMMARY"
           echo "| Revision | \`${GITHUB_SHA}\` |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Frontend | http://${{ secrets.PREVIEW_HOST }}:8080/ |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Backend | http://${{ secrets.PREVIEW_HOST }}:8080/api/v2/health |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| OSS | Bucket, HTTPS callback, STS AssumeRole and runtime injection verified |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Frontend | ${base}/ |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Backend | ${base}/api/v2/health |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Readiness | ${base}/api/v2/ready |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Media | Private Ingest/Delivery, HTTPS callback/CDN, STS, signing-key rotation and runtime injection verified |" >> "$GITHUB_STEP_SUMMARY"

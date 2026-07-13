@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api/endpoints";
 import type { MediaUsage, MyUpload } from "@/lib/api/types";
+import { STATIC_IMAGE_REUPLOAD_MESSAGE } from "@/lib/media-policy";
 
 function defaultAlt(fileName: string) {
   const withoutExtension = fileName.replace(/\.[^.]+$/, "").trim();
@@ -20,6 +21,16 @@ function statusPresentation(status: MyUpload["status"]) {
     return { label: "未通过，请移除", icon: AlertCircle, variant: "destructive" as const };
   }
   return { label: "审核中，暂不可发布", icon: Clock3, variant: "outline" as const };
+}
+
+function uploadPresentation(upload: MyUpload) {
+  if (upload.status === "clean" && upload.deliveryState === "processing") {
+    return { label: "审核通过，正在生成安全版本", icon: Clock3, variant: "outline" as const };
+  }
+  if (upload.status === "clean" && upload.deliveryState === "failed") {
+    return { label: "安全版本生成失败，等待运维重试", icon: AlertCircle, variant: "destructive" as const };
+  }
+  return statusPresentation(upload.status);
 }
 
 export function ForumImageAttachments({
@@ -73,9 +84,15 @@ export function ForumImageAttachments({
     };
   }, [refresh]);
 
-  const hasPending = assetIds.some((assetId) => uploads[assetId]?.status === "pending");
+  const hasPending = assetIds.some((assetId) => {
+    const upload = uploads[assetId];
+    return upload?.status === "pending" || upload?.deliveryState === "processing";
+  });
   const isReady = !error
-    && assetIds.every((assetId) => uploads[assetId]?.status === "clean");
+    && assetIds.every((assetId) => {
+      const upload = uploads[assetId];
+      return upload?.status === "clean" && upload.deliveryState === "published";
+    });
   React.useEffect(() => {
     onReadyChange?.(isReady);
   }, [isReady, onReadyChange]);
@@ -91,7 +108,8 @@ export function ForumImageAttachments({
         <div>
           <h3 id={`forum-images-${usage}`} className="text-sm font-medium">正文图片</h3>
           <p className="text-xs text-muted-foreground">
-            最多 {maxImages} 张；上传后会插入平台引用，只有审核通过才能发布。
+            最多 {maxImages} 张；{STATIC_IMAGE_REUPLOAD_MESSAGE}。上传后会插入平台引用，
+            审核与去元数据安全版本均完成后才能发布。
           </p>
         </div>
         <MediaUploadButton
@@ -120,7 +138,7 @@ export function ForumImageAttachments({
         <ul className="space-y-2">
           {assetIds.map((assetId) => {
             const upload = uploads[assetId];
-            const presentation = upload ? statusPresentation(upload.status) : null;
+            const presentation = upload ? uploadPresentation(upload) : null;
             const StatusIcon = presentation?.icon;
             return (
               <li key={assetId} className="flex flex-wrap items-center justify-between gap-2 rounded-md border bg-background px-3 py-2">

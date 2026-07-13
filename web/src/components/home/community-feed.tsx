@@ -6,6 +6,7 @@ import {
 import { Link } from "react-router";
 
 import { EmptyState, ErrorState } from "@/components/common/states";
+import { ForumDeliveryImage } from "@/components/content/forum-delivery-image";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -47,7 +48,13 @@ function FeedSkeleton() {
   );
 }
 
-function PostCard({ thread }: { thread: ThreadFeed }) {
+function PostCard({
+  thread,
+  onAttachmentDeliveryRefresh,
+}: {
+  thread: ThreadFeed;
+  onAttachmentDeliveryRefresh: () => void;
+}) {
   const threadUrl = thread.id ? `/forum/threads/${thread.id}` : "/forum";
   const author = thread.authorHandle || "YourTJ 用户";
   const tag = thread.tags?.[0];
@@ -86,14 +93,11 @@ function PostCard({ thread }: { thread: ThreadFeed }) {
             </p>
           ) : null}
           {thread.attachments?.[0] ? (
-            <img
-              src={thread.attachments[0].url}
-              alt={thread.attachments[0].alt}
-              width={thread.attachments[0].width ?? undefined}
-              height={thread.attachments[0].height ?? undefined}
+            <ForumDeliveryImage
+              attachment={thread.attachments[0]}
+              onDeliveryRefresh={onAttachmentDeliveryRefresh}
               loading="lazy"
               decoding="async"
-              referrerPolicy="no-referrer"
               className="mt-3 max-h-80 w-full rounded-xl border object-cover"
             />
           ) : null}
@@ -125,6 +129,7 @@ export function CommunityFeed({
   isLoadingMore,
   onLoadMore,
   isAuthenticated,
+  onAttachmentDeliveryRefresh,
 }: {
   mode: CommunityFeedMode;
   onModeChange: (mode: CommunityFeedMode) => void;
@@ -136,6 +141,7 @@ export function CommunityFeed({
   isLoadingMore?: boolean;
   onLoadMore?: () => void;
   isAuthenticated: boolean;
+  onAttachmentDeliveryRefresh: () => void;
 }) {
   return (
     <section aria-label="社区信息流">
@@ -194,7 +200,11 @@ export function CommunityFeed({
             <div className="space-y-4">
               <div className="space-y-4">
                 {items.map((thread, index) => (
-                  <PostCard key={thread.id ?? `${thread.title}-${index}`} thread={thread} />
+                  <PostCard
+                    key={thread.id ?? `${thread.title}-${index}`}
+                    thread={thread}
+                    onAttachmentDeliveryRefresh={onAttachmentDeliveryRefresh}
+                  />
                 ))}
               </div>
               {hasMore && onLoadMore ? (

@@ -48,9 +48,16 @@ async fn validate_asset(
     asset_id: i64,
 ) -> AppResult<()> {
     let valid: Option<bool> = sqlx::query_scalar(
-        "SELECT account_id = $2 AND kind = 'image' AND status = 'clean' \
-                AND ($3::text IS NULL OR usage = $3) \
-         FROM media.uploads WHERE id = $1 FOR SHARE",
+        "SELECT upload.account_id = $2 AND upload.kind = 'image' AND upload.status = 'clean' \
+                AND ($3::text IS NULL OR upload.usage = $3) \
+                AND publication.status = 'published' AND variant.status = 'published' \
+         FROM media.uploads upload \
+         JOIN media.asset_publications publication ON publication.asset_id = upload.id \
+         JOIN media.asset_variants variant \
+           ON variant.asset_id = upload.id \
+          AND variant.policy_version = publication.policy_version \
+          AND variant.variant_kind = 'display_1280' \
+         WHERE upload.id = $1 FOR SHARE OF upload, publication, variant",
     )
     .bind(asset_id)
     .bind(owner_account_id)

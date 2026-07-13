@@ -1,75 +1,50 @@
-//! Integration coverage for deterministic one-step trust transitions.
+//! Integration coverage for forum-level trust-level helpers.
+//!
+//! The activity domain owns trust evaluation; forum only reads and delegates.
+//! This suite verifies flag_weight mapping and that the forum delegation layer
+//! correctly calls activity trusted evaluation.
 
 mod helpers;
 
 use helpers::{create_test_account, create_test_app};
 
 #[tokio::test]
-async fn trust_scan_uses_active_days_and_never_skips_a_level() {
+async fn flag_weight_reads_from_activity_trust_delegate() {
     let (pool, _) = create_test_app().await;
     let (account_id, _) =
-        create_test_account(&pool, "trust-scan@tongji.edu.cn", "trust-scan").await;
-    sqlx::query(
-        "UPDATE identity.accounts SET created_at = now() - interval '100 days' WHERE id = $1",
-    )
-    .bind(account_id)
-    .execute(&pool)
-    .await
-    .expect("age trust account");
-    sqlx::query(
-        "INSERT INTO forum.user_stats (account_id, threads_created, comments_created, \
-                                       votes_received, flags_upheld, flagged_upheld) \
-         VALUES ($1, 3, 0, 50, 3, 0)",
-    )
-    .bind(account_id)
-    .execute(&pool)
-    .await
-    .expect("seed trust metrics");
-    sqlx::query(
-        "INSERT INTO forum.threads (board_id, author_id, title, created_at) \
-         SELECT 1, $1, 'trust topic ' || day::text, now() - make_interval(days => day) \
-         FROM generate_series(1, 20) day",
-    )
-    .bind(account_id)
-    .execute(&pool)
-    .await
-    .expect("seed trust topics");
-    sqlx::query(
-        "INSERT INTO forum.thread_reads (account_id, thread_id, updated_at) \
-         SELECT $1, id, created_at FROM forum.threads WHERE author_id = $1",
-    )
-    .bind(account_id)
-    .execute(&pool)
-    .await
-    .expect("seed active read days");
+        create_test_account(&pool, "flag-weight@tongji.edu.cn", "flag-weight").await;
 
-    assert_eq!(forum::trust_levels::run_daily_tl_promotion(&pool).await, (1, 0));
-    let level: i16 = sqlx::query_scalar("SELECT trust_level FROM identity.accounts WHERE id = $1")
-        .bind(account_id)
-        .fetch_one(&pool)
-        .await
-        .expect("trust level after first scan");
-    assert_eq!(level, 1);
-
-    assert_eq!(forum::trust_levels::run_daily_tl_promotion(&pool).await, (1, 0));
-    assert_eq!(forum::trust_levels::run_daily_tl_promotion(&pool).await, (1, 0));
-    let level: i16 = sqlx::query_scalar("SELECT trust_level FROM identity.accounts WHERE id = $1")
-        .bind(account_id)
-        .fetch_one(&pool)
-        .await
-        .expect("trust level after promotions");
-    assert_eq!(level, 3);
-
-    sqlx::query("UPDATE forum.user_stats SET flagged_upheld = 1 WHERE account_id = $1")
+    // Seed the trust progress row at Lv.3 (governance demotion when flags upheld).
+    sqlx::query(
+        "INSERT INTO activity.account_trust_progress \
+         (account_id, trust_level, qualifying_score, policy_version) \
+         SELECT $1, 3, 130, version \
+         FROM activity.trust_level_policies ORDER BY version DESC LIMIT 1 \
+         ON CONFLICT (account_id) DO UPDATE \
+         SET trust_level = 3, qualifying_score = 130, updated_at = now()",
+    )
+    .bind(account_id)
+    .execute(&pool)
+    .await
+    .expect("seed trust progress to Lv.3");
+    sqlx::query("UPDATE identity.accounts SET trust_level = 3 WHERE id = $1")
         .bind(account_id)
         .execute(&pool)
         .await
-        .expect("seed upheld report");
-    assert_eq!(forum::trust_levels::run_daily_tl_promotion(&pool).await, (0, 1));
-    let level: i16 = sqlx::query_scalar("SELECT trust_level FROM identity.accounts WHERE id = $1")
-        .bind(account_id)
-        .fetch_one(&pool)
+        .expect("project trust level");
+
+    let level = forum::trust_levels::get_trust_level(&pool, account_id)
         .await
-        .expect("trust level after demotion");
-    assert_eq!(level, 2);
+        .expect("read trust level via forum delegate");
+    assert_eq!(level, 3);
+    assert!((forum::trust_levels::flag_weight(level) - 1.5_f32).abs() < f32::EPSILON);
+}
+
+#[tokio::test]
+async fn trust_delegate_returns_zero_for_nonexistent_account() {
+    let (pool, _) = create_test_app().await;
+    let level = forum::trust_levels::get_trust_level(&pool, 999_999_999)
+        .await
+        .expect("read trust for missing account");
+    assert_eq!(level, 0);
 }

@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 
 use axum::body::Body;
-use axum::http::{HeaderMap, Uri};
+use axum::http::{HeaderMap, Method, Uri};
 use base64::Engine;
 use chrono::{DateTime, Duration, Utc};
 use futures::StreamExt;
@@ -30,6 +30,7 @@ const PERCENT_ENCODE_SET: &AsciiSet =
     &NON_ALPHANUMERIC.remove(b'-').remove(b'_').remove(b'.').remove(b'~');
 
 type HmacSha1 = Hmac<Sha1>;
+type HmacSha256 = Hmac<Sha256>;
 
 /// Configuration for OSS and STS access.
 #[derive(Debug, Clone)]
@@ -65,7 +66,7 @@ pub trait StsProvider: Send + Sync {
 
 /// Real Alibaba Cloud STS provider.
 pub struct AliyunStsProvider {
-    client: reqwest::Client,
+    client: Option<reqwest::Client>,
 }
 
 /// Object deletion boundary used by moderation to quarantine rejected uploads.
@@ -81,6 +82,32 @@ pub trait ObjectStore: Send + Sync {
         expected_bytes: u64,
         max_bytes: u64,
     ) -> Result<OssObjectResponse, MediaError>;
+
+    async fn read_object_bytes(
+        &self,
+        config: &OssConfig,
+        oss_key: &str,
+        expected_content_type: &str,
+        expected_bytes: u64,
+        max_bytes: u64,
+    ) -> Result<Vec<u8>, MediaError>;
+
+    async fn put_object(
+        &self,
+        config: &OssConfig,
+        oss_key: &str,
+        content_type: &str,
+        bytes: Vec<u8>,
+    ) -> Result<(), MediaError>;
+
+    async fn head_object(
+        &self,
+        config: &OssConfig,
+        oss_key: &str,
+        expected_content_type: &str,
+        expected_bytes: u64,
+        expected_sha256: &str,
+    ) -> Result<(), MediaError>;
 }
 
 pub(crate) struct OssObjectResponse {
@@ -93,7 +120,7 @@ pub(crate) struct OssObjectResponse {
 
 /// Authenticated Alibaba Cloud OSS client for moderation operations.
 pub struct AliyunOssClient {
-    client: reqwest::Client,
+    client: Option<reqwest::Client>,
 }
 
 impl Default for AliyunOssClient {
@@ -102,30 +129,35 @@ impl Default for AliyunOssClient {
             .timeout(std::time::Duration::from_secs(OSS_HTTP_TIMEOUT_SECONDS))
             .redirect(reqwest::redirect::Policy::none())
             .build()
-            .unwrap_or_else(|_| reqwest::Client::new());
+            .ok();
         Self { client }
+    }
+}
+
+impl AliyunOssClient {
+    fn client(&self) -> Result<&reqwest::Client, MediaError> {
+        self.client
+            .as_ref()
+            .ok_or_else(|| MediaError::Unavailable("bounded OSS HTTP client unavailable".into()))
     }
 }
 
 #[async_trait::async_trait]
 impl ObjectStore for AliyunOssClient {
     async fn delete_object(&self, config: &OssConfig, oss_key: &str) -> Result<(), MediaError> {
-        let signed = build_delete_object_request(config, oss_key, Utc::now())?;
-        let response = self
-            .client
-            .delete(signed.url)
-            .header("Date", signed.date)
-            .header("Authorization", signed.authorization)
-            .send()
-            .await
-            .map_err(|error| {
-                tracing::warn!(
-                    is_timeout = error.is_timeout(),
-                    is_connect = error.is_connect(),
-                    "oss delete request failed"
-                );
-                MediaError::Unavailable("oss delete request failed".into())
-            })?;
+        let signed =
+            build_oss_v4_request(config, Method::DELETE, oss_key, None, None, false, Utc::now())?;
+        let response =
+            self.client()?.delete(signed.url).headers(signed.headers).send().await.map_err(
+                |error| {
+                    tracing::warn!(
+                        is_timeout = error.is_timeout(),
+                        is_connect = error.is_connect(),
+                        "oss delete request failed"
+                    );
+                    MediaError::Unavailable("oss delete request failed".into())
+                },
+            )?;
         if response.status().is_success() || response.status() == reqwest::StatusCode::NOT_FOUND {
             Ok(())
         } else {
@@ -142,22 +174,19 @@ impl ObjectStore for AliyunOssClient {
         expected_bytes: u64,
         max_bytes: u64,
     ) -> Result<OssObjectResponse, MediaError> {
-        let signed = build_get_object_request(config, oss_key, Utc::now())?;
-        let response = self
-            .client
-            .get(signed.url)
-            .header("Date", signed.date)
-            .header("Authorization", signed.authorization)
-            .send()
-            .await
-            .map_err(|error| {
-                tracing::warn!(
-                    is_timeout = error.is_timeout(),
-                    is_connect = error.is_connect(),
-                    "oss read request failed"
-                );
-                MediaError::Unavailable("oss preview request failed".into())
-            })?;
+        let signed =
+            build_oss_v4_request(config, Method::GET, oss_key, None, None, false, Utc::now())?;
+        let response =
+            self.client()?.get(signed.url).headers(signed.headers).send().await.map_err(
+                |error| {
+                    tracing::warn!(
+                        is_timeout = error.is_timeout(),
+                        is_connect = error.is_connect(),
+                        "oss read request failed"
+                    );
+                    MediaError::Unavailable("oss preview request failed".into())
+                },
+            )?;
         if response.status() == reqwest::StatusCode::NOT_FOUND {
             return Err(MediaError::NotFound);
         }
@@ -244,20 +273,154 @@ impl ObjectStore for AliyunOssClient {
             body: Body::from_stream(prefix_stream.chain(remaining_stream)),
         })
     }
+
+    async fn read_object_bytes(
+        &self,
+        config: &OssConfig,
+        oss_key: &str,
+        expected_content_type: &str,
+        expected_bytes: u64,
+        max_bytes: u64,
+    ) -> Result<Vec<u8>, MediaError> {
+        if expected_bytes == 0 || expected_bytes > max_bytes {
+            return Err(MediaError::BadRequest("media processing byte limit exceeded".into()));
+        }
+        let signed =
+            build_oss_v4_request(config, Method::GET, oss_key, None, None, false, Utc::now())?;
+        let response =
+            self.client()?.get(signed.url).headers(signed.headers).send().await.map_err(
+                |error| {
+                    tracing::warn!(
+                        is_timeout = error.is_timeout(),
+                        is_connect = error.is_connect(),
+                        "OSS V4 processing read failed"
+                    );
+                    MediaError::Unavailable("media processing source unavailable".into())
+                },
+            )?;
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Err(MediaError::NotFound);
+        }
+        if !response.status().is_success() {
+            tracing::warn!(status = %response.status(), "OSS V4 processing read was rejected");
+            return Err(MediaError::Unavailable("media processing source unavailable".into()));
+        }
+        let content_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok());
+        let content_length = response.content_length();
+        if content_type != Some(expected_content_type) || content_length != Some(expected_bytes) {
+            return Err(MediaError::BadRequest("media processing source metadata mismatch".into()));
+        }
+        let bytes = response.bytes().await.map_err(|error| {
+            tracing::warn!(
+                is_timeout = error.is_timeout(),
+                is_connect = error.is_connect(),
+                "OSS V4 processing body read failed"
+            );
+            MediaError::Unavailable("media processing source unavailable".into())
+        })?;
+        if bytes.len() as u64 != expected_bytes || bytes.len() as u64 > max_bytes {
+            return Err(MediaError::BadRequest("media processing source length mismatch".into()));
+        }
+        Ok(bytes.to_vec())
+    }
+
+    async fn put_object(
+        &self,
+        config: &OssConfig,
+        oss_key: &str,
+        content_type: &str,
+        bytes: Vec<u8>,
+    ) -> Result<(), MediaError> {
+        let expected_bytes = bytes.len() as u64;
+        let expected_sha256 = hex::encode(Sha256::digest(&bytes));
+        let signed = build_oss_v4_request(
+            config,
+            Method::PUT,
+            oss_key,
+            Some(content_type),
+            Some(&expected_sha256),
+            true,
+            Utc::now(),
+        )?;
+        let response = self
+            .client()?
+            .put(signed.url)
+            .headers(signed.headers)
+            .body(bytes)
+            .send()
+            .await
+            .map_err(|error| {
+                tracing::warn!(
+                    is_timeout = error.is_timeout(),
+                    is_connect = error.is_connect(),
+                    "OSS V4 Delivery write failed"
+                );
+                MediaError::Unavailable("media Delivery write unavailable".into())
+            })?;
+        if response.status().is_success() {
+            return Ok(());
+        }
+        if response.status() == reqwest::StatusCode::CONFLICT {
+            return self
+                .head_object(config, oss_key, content_type, expected_bytes, &expected_sha256)
+                .await;
+        }
+        tracing::warn!(status = %response.status(), "OSS V4 Delivery write was rejected");
+        Err(MediaError::Unavailable("media Delivery write unavailable".into()))
+    }
+
+    async fn head_object(
+        &self,
+        config: &OssConfig,
+        oss_key: &str,
+        expected_content_type: &str,
+        expected_bytes: u64,
+        expected_sha256: &str,
+    ) -> Result<(), MediaError> {
+        let signed =
+            build_oss_v4_request(config, Method::HEAD, oss_key, None, None, false, Utc::now())?;
+        let response =
+            self.client()?.head(signed.url).headers(signed.headers).send().await.map_err(
+                |error| {
+                    tracing::warn!(
+                        is_timeout = error.is_timeout(),
+                        is_connect = error.is_connect(),
+                        "OSS V4 Delivery verification failed"
+                    );
+                    MediaError::Unavailable("media Delivery verification unavailable".into())
+                },
+            )?;
+        let content_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok());
+        let content_sha256 = response
+            .headers()
+            .get("x-oss-meta-content-sha256")
+            .and_then(|value| value.to_str().ok());
+        if !response.status().is_success()
+            || content_type != Some(expected_content_type)
+            || response.content_length() != Some(expected_bytes)
+            || content_sha256 != Some(expected_sha256)
+        {
+            tracing::warn!(status = %response.status(), "OSS V4 Delivery verification mismatch");
+            return Err(MediaError::Unavailable("media Delivery verification failed".into()));
+        }
+        Ok(())
+    }
 }
 
-#[derive(Debug, PartialEq, Eq)]
-struct DeleteObjectRequest {
+#[derive(Debug)]
+struct SignedOssRequest {
     url: String,
-    date: String,
-    authorization: String,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-struct GetObjectRequest {
-    url: String,
-    date: String,
-    authorization: String,
+    headers: reqwest::header::HeaderMap,
+    #[cfg(test)]
+    canonical_request: String,
+    #[cfg(test)]
+    string_to_sign: String,
 }
 
 impl Default for AliyunStsProvider {
@@ -266,8 +429,16 @@ impl Default for AliyunStsProvider {
             .timeout(std::time::Duration::from_secs(OSS_HTTP_TIMEOUT_SECONDS))
             .redirect(reqwest::redirect::Policy::none())
             .build()
-            .unwrap_or_else(|_| reqwest::Client::new());
+            .ok();
         Self { client }
+    }
+}
+
+impl AliyunStsProvider {
+    fn client(&self) -> Result<&reqwest::Client, MediaError> {
+        self.client
+            .as_ref()
+            .ok_or_else(|| MediaError::Unavailable("bounded STS HTTP client unavailable".into()))
     }
 }
 
@@ -281,12 +452,14 @@ impl StsProvider for AliyunStsProvider {
         _expires_at: DateTime<Utc>,
     ) -> Result<StsCredentials, MediaError> {
         let url = build_assume_role_url(config, session_name, policy, Utc::now())?;
-        let response = self
-            .client
-            .get(url)
-            .send()
-            .await
-            .map_err(|error| MediaError::Unavailable(format!("sts request failed: {error}")))?;
+        let response = self.client()?.get(url).send().await.map_err(|error| {
+            tracing::warn!(
+                is_timeout = error.is_timeout(),
+                is_connect = error.is_connect(),
+                "STS AssumeRole request failed"
+            );
+            MediaError::Unavailable("sts unavailable".into())
+        })?;
         if !response.status().is_success() {
             tracing::warn!(status = %response.status(), "sts assume role failed");
             return Err(MediaError::Unavailable("sts unavailable".into()));
@@ -294,9 +467,9 @@ impl StsProvider for AliyunStsProvider {
         let payload: AssumeRoleResponse = response
             .json()
             .await
-            .map_err(|error| MediaError::Unavailable(format!("invalid sts response: {error}")))?;
+            .map_err(|_| MediaError::Unavailable("invalid STS response".into()))?;
         let expiration = DateTime::parse_from_rfc3339(&payload.credentials.expiration)
-            .map_err(|error| MediaError::Unavailable(format!("invalid sts expiration: {error}")))?
+            .map_err(|_| MediaError::Unavailable("invalid STS expiration".into()))?
             .with_timezone(&Utc);
         Ok(StsCredentials {
             access_key_id: payload.credentials.access_key_id,
@@ -364,7 +537,6 @@ pub fn validate_content_type(kind: &str, content_type: &str) -> Result<&'static 
     match (kind, content_type.trim().to_ascii_lowercase().as_str()) {
         ("image", "image/jpeg") => Ok("image/jpeg"),
         ("image", "image/png") => Ok("image/png"),
-        ("image", "image/gif") => Ok("image/gif"),
         ("image", "image/webp") => Ok("image/webp"),
         ("file", "application/pdf") => Ok("application/pdf"),
         _ => Err(MediaError::BadRequest("unsupported upload content type".into())),
@@ -497,53 +669,113 @@ pub fn callback_public_key_url(headers: &HeaderMap) -> Result<String, MediaError
     Ok(url)
 }
 
-/// Generate a direct OSS URL for an object.
-pub fn generate_url(config: &OssConfig, oss_key: &str) -> String {
-    format!("https://{}.oss-{}.aliyuncs.com/{}", config.bucket, config.region, oss_key)
+fn generate_url(config: &OssConfig, oss_key: &str) -> String {
+    format!(
+        "https://{}.oss-{}.aliyuncs.com/{}",
+        config.bucket,
+        config.region,
+        oss_uri_encode(oss_key)
+    )
 }
 
-fn build_delete_object_request(
+fn build_oss_v4_request(
     config: &OssConfig,
+    method: Method,
     oss_key: &str,
+    content_type: Option<&str>,
+    content_sha256_metadata: Option<&str>,
+    forbid_overwrite: bool,
     request_time: DateTime<Utc>,
-) -> Result<DeleteObjectRequest, MediaError> {
+) -> Result<SignedOssRequest, MediaError> {
     if oss_key.is_empty() || oss_key.starts_with('/') || oss_key.contains("..") {
         return Err(MediaError::BadRequest("invalid oss object key".into()));
     }
-    let date = request_time.format("%a, %d %b %Y %H:%M:%S GMT").to_string();
-    let canonical_resource = format!("/{}/{}", config.bucket, oss_key);
-    let string_to_sign = format!("DELETE\n\n\n{date}\n{canonical_resource}");
-    let mut mac = HmacSha1::new_from_slice(config.access_key_secret.as_bytes())
-        .map_err(|error| MediaError::Internal(anyhow::Error::new(error)))?;
-    mac.update(string_to_sign.as_bytes());
-    let signature = base64::engine::general_purpose::STANDARD.encode(mac.finalize().into_bytes());
-    Ok(DeleteObjectRequest {
+    let timestamp = request_time.format("%Y%m%dT%H%M%SZ").to_string();
+    let signing_date = request_time.format("%Y%m%d").to_string();
+    let scope = format!("{signing_date}/{}/oss/aliyun_v4_request", config.region);
+    let mut canonical_headers = BTreeMap::<String, String>::new();
+    if let Some(content_type) = content_type {
+        canonical_headers.insert("content-type".into(), content_type.trim().into());
+    }
+    canonical_headers.insert("x-oss-content-sha256".into(), "UNSIGNED-PAYLOAD".into());
+    canonical_headers.insert("x-oss-date".into(), timestamp.clone());
+    if let Some(content_sha256_metadata) = content_sha256_metadata {
+        if content_sha256_metadata.len() != 64
+            || !content_sha256_metadata.bytes().all(|byte| byte.is_ascii_hexdigit())
+        {
+            return Err(MediaError::BadRequest("invalid Delivery content digest".into()));
+        }
+        canonical_headers.insert(
+            "x-oss-meta-content-sha256".into(),
+            content_sha256_metadata.to_ascii_lowercase(),
+        );
+    }
+    if forbid_overwrite {
+        canonical_headers.insert("x-oss-forbid-overwrite".into(), "true".into());
+    }
+    let canonical_headers_text = canonical_headers
+        .iter()
+        .map(|(name, value)| format!("{name}:{value}\n"))
+        .collect::<String>();
+    let canonical_uri = format!("/{}/{}", config.bucket, oss_uri_encode(oss_key));
+    let canonical_request = format!(
+        "{}\n{canonical_uri}\n\n{canonical_headers_text}\n\nUNSIGNED-PAYLOAD",
+        method.as_str()
+    );
+    let canonical_hash = hex::encode(Sha256::digest(canonical_request.as_bytes()));
+    let string_to_sign = format!("OSS4-HMAC-SHA256\n{timestamp}\n{scope}\n{canonical_hash}");
+    let date_key = hmac_sha256(
+        format!("aliyun_v4{}", config.access_key_secret).as_bytes(),
+        signing_date.as_bytes(),
+    )?;
+    let region_key = hmac_sha256(&date_key, config.region.as_bytes())?;
+    let service_key = hmac_sha256(&region_key, b"oss")?;
+    let signing_key = hmac_sha256(&service_key, b"aliyun_v4_request")?;
+    let signature = hex::encode(hmac_sha256(&signing_key, string_to_sign.as_bytes())?);
+    let authorization = format!(
+        "OSS4-HMAC-SHA256 Credential={}/{scope},Signature={signature}",
+        config.access_key_id
+    );
+    let mut headers = reqwest::header::HeaderMap::new();
+    for (name, value) in canonical_headers {
+        let name = reqwest::header::HeaderName::from_bytes(name.as_bytes())
+            .map_err(|error| MediaError::Internal(anyhow::Error::new(error)))?;
+        let value = reqwest::header::HeaderValue::from_str(&value)
+            .map_err(|error| MediaError::Internal(anyhow::Error::new(error)))?;
+        headers.insert(name, value);
+    }
+    headers.insert(
+        reqwest::header::AUTHORIZATION,
+        reqwest::header::HeaderValue::from_str(&authorization)
+            .map_err(|error| MediaError::Internal(anyhow::Error::new(error)))?,
+    );
+    Ok(SignedOssRequest {
         url: generate_url(config, oss_key),
-        date,
-        authorization: format!("OSS {}:{signature}", config.access_key_id),
+        headers,
+        #[cfg(test)]
+        canonical_request,
+        #[cfg(test)]
+        string_to_sign,
     })
 }
 
-fn build_get_object_request(
-    config: &OssConfig,
-    oss_key: &str,
-    request_time: DateTime<Utc>,
-) -> Result<GetObjectRequest, MediaError> {
-    if oss_key.is_empty() || oss_key.starts_with('/') || oss_key.contains("..") {
-        return Err(MediaError::BadRequest("invalid oss object key".into()));
-    }
-    let date = request_time.format("%a, %d %b %Y %H:%M:%S GMT").to_string();
-    let canonical_resource = format!("/{}/{}", config.bucket, oss_key);
-    let string_to_sign = format!("GET\n\n\n{date}\n{canonical_resource}");
-    let mut mac = HmacSha1::new_from_slice(config.access_key_secret.as_bytes())
+fn hmac_sha256(key: &[u8], value: &[u8]) -> Result<Vec<u8>, MediaError> {
+    let mut mac = HmacSha256::new_from_slice(key)
         .map_err(|error| MediaError::Internal(anyhow::Error::new(error)))?;
-    mac.update(string_to_sign.as_bytes());
-    let signature = base64::engine::general_purpose::STANDARD.encode(mac.finalize().into_bytes());
-    Ok(GetObjectRequest {
-        url: generate_url(config, oss_key),
-        date,
-        authorization: format!("OSS {}:{signature}", config.access_key_id),
-    })
+    mac.update(value);
+    Ok(mac.finalize().into_bytes().to_vec())
+}
+
+fn oss_uri_encode(value: &str) -> String {
+    let mut encoded = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~' | b'/') {
+            encoded.push(char::from(byte));
+        } else {
+            encoded.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    encoded
 }
 
 /// Build the least-privilege STS policy for one object.
@@ -732,7 +964,7 @@ mod tests {
     }
 
     #[test]
-    fn delete_object_request_uses_oss_v1_authorization() {
+    fn delete_object_request_uses_oss_v4_authorization() {
         let config = OssConfig {
             region: "cn-shanghai".into(),
             bucket: "yourtj".into(),
@@ -744,9 +976,13 @@ mod tests {
         let request_time = DateTime::parse_from_rfc3339("2026-07-11T08:09:10Z")
             .expect("request timestamp")
             .with_timezone(&Utc);
-        let request = build_delete_object_request(
+        let request = build_oss_v4_request(
             &config,
+            Method::DELETE,
             "uploads/42/image/00000000-0000-0000-0000-000000000000.png",
+            None,
+            None,
+            false,
             request_time,
         )
         .expect("signed delete request");
@@ -754,12 +990,21 @@ mod tests {
             request.url,
             "https://yourtj.oss-cn-shanghai.aliyuncs.com/uploads/42/image/00000000-0000-0000-0000-000000000000.png"
         );
-        assert_eq!(request.date, "Sat, 11 Jul 2026 08:09:10 GMT");
-        assert_eq!(request.authorization, "OSS test-ak:9fVdWj+aDQKmkJOAI5uUIrVEPwY=");
+        assert_eq!(
+            request.headers[reqwest::header::AUTHORIZATION],
+            "OSS4-HMAC-SHA256 Credential=test-ak/20260711/cn-shanghai/oss/aliyun_v4_request,Signature=bea7f516674b3ec8cf23f99e9a4a148eda7377c2e4ff995b4e57823dc0956b40"
+        );
+        assert_eq!(request.headers["x-oss-content-sha256"], "UNSIGNED-PAYLOAD");
+        assert_eq!(request.headers["x-oss-date"], "20260711T080910Z");
+        assert_eq!(
+            hex::encode(Sha256::digest(request.canonical_request.as_bytes())),
+            "86369ab7d64524b931621c06f2218d8f44a15ce27cec51f63c026b102f248f03"
+        );
+        assert!(request.string_to_sign.starts_with("OSS4-HMAC-SHA256\n"));
     }
 
     #[test]
-    fn preview_get_request_uses_oss_v1_authorization() {
+    fn preview_get_request_uses_oss_v4_authorization() {
         let config = OssConfig {
             region: "cn-shanghai".into(),
             bucket: "yourtj".into(),
@@ -771,9 +1016,13 @@ mod tests {
         let request_time = DateTime::parse_from_rfc3339("2026-07-11T08:09:10Z")
             .expect("request timestamp")
             .with_timezone(&Utc);
-        let request = build_get_object_request(
+        let request = build_oss_v4_request(
             &config,
+            Method::GET,
             "uploads/42/image/00000000-0000-0000-0000-000000000000.png",
+            None,
+            None,
+            false,
             request_time,
         )
         .expect("signed preview request");
@@ -781,8 +1030,48 @@ mod tests {
             request.url,
             "https://yourtj.oss-cn-shanghai.aliyuncs.com/uploads/42/image/00000000-0000-0000-0000-000000000000.png"
         );
-        assert_eq!(request.date, "Sat, 11 Jul 2026 08:09:10 GMT");
-        assert_eq!(request.authorization, "OSS test-ak:qVQaVwWZavFKpSl/+jgXUC5us+w=");
+        assert_eq!(
+            request.headers[reqwest::header::AUTHORIZATION],
+            "OSS4-HMAC-SHA256 Credential=test-ak/20260711/cn-shanghai/oss/aliyun_v4_request,Signature=0f97fb248d3ce07b2a172983b8c7ec1c40fee9b35d3ed332736ab7bba40200bc"
+        );
+    }
+
+    #[test]
+    fn delivery_put_v4_signs_content_type_and_prevent_overwrite() {
+        let config = OssConfig {
+            region: "cn-shanghai".into(),
+            bucket: "yourtj-delivery".into(),
+            access_key_id: "delivery-ak".into(),
+            access_key_secret: "delivery-secret".into(),
+            role_arn: String::new(),
+            callback_base_url: String::new(),
+        };
+        let request_time = DateTime::parse_from_rfc3339("2026-07-11T08:09:10Z")
+            .expect("request timestamp")
+            .with_timezone(&Utc);
+        let request = build_oss_v4_request(
+            &config,
+            Method::PUT,
+            "assets/42/1/display_1280-deadbeef.webp",
+            Some("image/webp"),
+            Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+            true,
+            request_time,
+        )
+        .expect("signed immutable Delivery request");
+        assert_eq!(request.headers["content-type"], "image/webp");
+        assert_eq!(request.headers["x-oss-forbid-overwrite"], "true");
+        assert_eq!(
+            request.headers["x-oss-meta-content-sha256"],
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
+        assert!(request
+            .headers
+            .get(reqwest::header::AUTHORIZATION)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.starts_with("OSS4-HMAC-SHA256 Credential=delivery-ak/")));
+        assert!(request.canonical_request.contains("content-type:image/webp\n"));
+        assert!(request.canonical_request.contains("x-oss-forbid-overwrite:true\n"));
     }
 
     #[test]
@@ -795,7 +1084,16 @@ mod tests {
             role_arn: "acs:ram::1:role/upload".into(),
             callback_base_url: "https://api.example.test".into(),
         };
-        assert!(build_delete_object_request(&config, "../other-object", Utc::now()).is_err());
+        assert!(build_oss_v4_request(
+            &config,
+            Method::DELETE,
+            "../other-object",
+            None,
+            None,
+            false,
+            Utc::now()
+        )
+        .is_err());
     }
 
     #[test]
@@ -818,6 +1116,7 @@ mod tests {
             validate_content_type("file", "application/pdf").expect("pdf"),
             "application/pdf"
         );
+        assert!(validate_content_type("image", "image/gif").is_err());
         assert!(validate_content_type("image", "application/pdf").is_err());
         assert!(validate_content_type("file", "text/html").is_err());
     }

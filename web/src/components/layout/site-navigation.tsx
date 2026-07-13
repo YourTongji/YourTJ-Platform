@@ -101,28 +101,38 @@ function NavigationGroup({
   );
 }
 
-function PromotionAsset({ promotion }: { promotion: Promotion }) {
-  const { isAuthenticated } = useAuth();
-  const asset = useQuery({
-    queryKey: ["promotion-asset", promotion.assetId],
-    queryFn: () => api.mediaUrl(promotion.assetId ?? ""),
-    enabled: isAuthenticated && Boolean(promotion.assetId),
-    staleTime: 5 * 60_000,
-  });
-
-  if (!promotion.assetId || !asset.data?.url) {
+function PromotionAsset({
+  promotion,
+  onDeliveryError,
+}: {
+  promotion: Promotion;
+  onDeliveryError: () => void;
+}) {
+  if (!promotion.assetDelivery?.url) {
     return null;
   }
   return (
     <img
-      src={asset.data.url}
+      src={promotion.assetDelivery.url}
       alt=""
+      width={promotion.assetDelivery.width}
+      height={promotion.assetDelivery.height}
+      referrerPolicy="no-referrer"
+      onError={onDeliveryError}
       className="mb-3 aspect-[16/7] w-full rounded-md object-cover"
     />
   );
 }
 
-function PromotionSlot({ promotion, onNavigate }: { promotion: Promotion; onNavigate?: () => void }) {
+function PromotionSlot({
+  promotion,
+  onNavigate,
+  onDeliveryError,
+}: {
+  promotion: Promotion;
+  onNavigate?: () => void;
+  onDeliveryError: () => void;
+}) {
   const linkRef = React.useRef<HTMLAnchorElement>(null);
   const reportedToken = React.useRef<string | null>(null);
 
@@ -174,7 +184,7 @@ function PromotionSlot({ promotion, onNavigate }: { promotion: Promotion; onNavi
       }}
       className="motion-interactive block rounded-lg border border-primary/25 bg-primary/10 p-3 text-left outline-none hover:border-primary/45 hover:bg-primary/15 focus-visible:ring-[3px] focus-visible:ring-ring/50"
     >
-      <PromotionAsset promotion={promotion} />
+      <PromotionAsset promotion={promotion} onDeliveryError={onDeliveryError} />
       <p className="flex items-center gap-1 text-[10px] font-medium tracking-[0.08em] text-primary">
         <Sparkles className="size-3" aria-hidden="true" />
         社区推广
@@ -196,6 +206,7 @@ export function SiteSidebar({ onNavigate }: { onNavigate?: () => void }) {
     queryKey: ["promotions", account?.id],
     queryFn: () => api.promotions(),
     staleTime: 60_000,
+    refetchInterval: 4 * 60_000,
   });
   const hasStaffCapabilities = capabilitiesForAccount(account).size > 0;
   const secondaryItems =
@@ -222,7 +233,12 @@ export function SiteSidebar({ onNavigate }: { onNavigate?: () => void }) {
           <p className="text-xs text-muted-foreground" role="status">社区推荐暂不可用</p>
         ) : (
           visiblePromotions?.map((promotion) => (
-            <PromotionSlot key={promotion.id} promotion={promotion} onNavigate={onNavigate} />
+            <PromotionSlot
+              key={promotion.id}
+              promotion={promotion}
+              onNavigate={onNavigate}
+              onDeliveryError={() => void promotions.refetch()}
+            />
           ))
         )}
       </div>

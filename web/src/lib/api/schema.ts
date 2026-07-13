@@ -4,6 +4,87 @@
  */
 
 export interface paths {
+    "/health": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Process liveness probe */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description alive */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["HealthStatus"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/ready": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Authoritative database and migration readiness probe */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ready */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["HealthStatus"];
+                    };
+                };
+                /** @description not ready */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/auth/email/request-code": {
         parameters: {
             query?: never;
@@ -78,6 +159,8 @@ export interface paths {
                 };
                 400: components["responses"]["BadRequest"];
                 409: components["responses"]["Conflict"];
+                429: components["responses"]["RateLimited"];
+                503: components["responses"]["ServiceUnavailable"];
             };
         };
         delete?: never;
@@ -173,6 +256,8 @@ export interface paths {
                 };
                 400: components["responses"]["BadRequest"];
                 401: components["responses"]["Unauthorized"];
+                429: components["responses"]["RateLimited"];
+                503: components["responses"]["ServiceUnavailable"];
             };
         };
         delete?: never;
@@ -224,6 +309,7 @@ export interface paths {
                 401: components["responses"]["Unauthorized"];
                 403: components["responses"]["Forbidden"];
                 429: components["responses"]["RateLimited"];
+                503: components["responses"]["ServiceUnavailable"];
             };
         };
         delete?: never;
@@ -1322,6 +1408,108 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/me/check-in": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read today's idempotent daily check-in status */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["CheckInStatus"];
+                    };
+                };
+                401: components["responses"]["Unauthorized"];
+            };
+        };
+        put?: never;
+        /**
+         * Check in once for the current Asia/Shanghai day
+         * @description Idempotent; a repeated request returns the existing check-in without adding activity again.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description current status */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["CheckInStatus"];
+                    };
+                };
+                401: components["responses"]["Unauthorized"];
+                403: components["responses"]["Forbidden"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/me/trust-progress": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Current user's unified trust level progress
+         * @description Returns the authoritative tea trust level, live qualifying score, next threshold, and override state.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["TrustProgress"];
+                    };
+                };
+                401: components["responses"]["Unauthorized"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/me/drafts": {
         parameters: {
             query?: never;
@@ -2380,6 +2568,8 @@ export interface paths {
                 };
                 400: components["responses"]["BadRequest"];
                 401: components["responses"]["Unauthorized"];
+                429: components["responses"]["RateLimited"];
+                503: components["responses"]["ServiceUnavailable"];
             };
         };
         delete?: never;
@@ -2446,7 +2636,7 @@ export interface paths {
         put?: never;
         /**
          * Reset password with code
-         * @description Accepts only a password-reset-purpose code and revokes every access and refresh session on success.
+         * @description Performs a neutral proof preflight, then atomically re-verifies and consumes a credential-version-bound reset code, replaces every prior session with one new session, and returns its token pair. Missing, ineligible, expired, and invalid-code subjects share the same 400 response.
          */
         post: {
             parameters: {
@@ -2457,24 +2647,68 @@ export interface paths {
             };
             requestBody: {
                 content: {
-                    "application/json": {
-                        /** Format: email */
-                        email: string;
-                        code: string;
-                        /** Format: password */
-                        newPassword: string;
-                    };
+                    "application/json": components["schemas"]["PasswordResetInput"];
                 };
             };
             responses: {
-                /** @description ok */
-                204: {
+                /** @description Password reset and replacement session issued */
+                200: {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["AuthTokens"];
+                    };
                 };
                 400: components["responses"]["BadRequest"];
+                429: components["responses"]["RateLimited"];
+                503: components["responses"]["ServiceUnavailable"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/password/set": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Set the authenticated code-only account's first password
+         * @description Requires recent authentication, succeeds only while no password exists, and atomically replaces all prior sessions with one new session.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["PasswordSetInput"];
+                };
+            };
+            responses: {
+                /** @description Password set and replacement session issued */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AuthTokens"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                409: components["responses"]["Conflict"];
+                428: components["responses"]["RecentAuthRequired"];
             };
         };
         delete?: never;
@@ -2494,7 +2728,7 @@ export interface paths {
         put?: never;
         /**
          * Change the authenticated account's password
-         * @description Requires the current password, preserves the current device session, and revokes other sessions.
+         * @description Requires the current password and atomically replaces every prior refresh family, including the current one, with one new session.
          */
         post: {
             parameters: {
@@ -2505,21 +2739,18 @@ export interface paths {
             };
             requestBody: {
                 content: {
-                    "application/json": {
-                        /** Format: password */
-                        currentPassword: string;
-                        /** Format: password */
-                        newPassword: string;
-                    };
+                    "application/json": components["schemas"]["PasswordChangeInput"];
                 };
             };
             responses: {
-                /** @description ok */
-                204: {
+                /** @description Password changed and replacement session issued */
+                200: {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["AuthTokens"];
+                    };
                 };
                 400: components["responses"]["BadRequest"];
                 401: components["responses"]["Unauthorized"];
@@ -5544,8 +5775,8 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Get CDN/object URL for an uploaded object
-         * @description Pending objects are owner-only; staff review must use the audited same-origin preview grant flow. Blocked objects are never returned.
+         * Get the owner's short-lived published CDN delivery projection
+         * @description Owner-only compatibility route. It returns only a clean, atomically published sanitized display variant; pending preview uses the separate same-origin no-store endpoint. Public business surfaces receive Media projections through their owning API rather than calling this route.
          */
         get: {
             parameters: {
@@ -5558,13 +5789,13 @@ export interface paths {
             };
             requestBody?: never;
             responses: {
-                /** @description ok */
+                /** @description short-lived CDN projection */
                 200: {
                     headers: {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": components["schemas"]["UploadUrl"];
+                        "application/json": components["schemas"]["MediaDelivery"];
                     };
                 };
                 401: components["responses"]["Unauthorized"];
@@ -5648,6 +5879,53 @@ export interface paths {
                     };
                     content: {
                         "application/json": components["schemas"]["MyUpload"];
+                    };
+                };
+                401: components["responses"]["Unauthorized"];
+                404: components["responses"]["NotFound"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/me/media/uploads/{id}/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Stream the owner's bounded pending raster preview
+         * @description Owner-only same-origin response. It is MIME/size/pixel bounded, private no-store, never discloses a provider URL, and becomes unavailable after moderation leaves pending.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description bounded pending image stream */
+                200: {
+                    headers: {
+                        "Cache-Control"?: string;
+                        "X-Content-Type-Options"?: string;
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "image/jpeg": string;
+                        "image/png": string;
+                        "image/webp": string;
                     };
                 };
                 401: components["responses"]["Unauthorized"];
@@ -7246,6 +7524,198 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/trust-policy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Current trust threshold policy */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["TrustLevelPolicy"];
+                    };
+                };
+                403: components["responses"]["Forbidden"];
+            };
+        };
+        /** Publish a new trust threshold policy revision */
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["TrustLevelPolicyUpdateInput"];
+                };
+            };
+            responses: {
+                /** @description updated */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["TrustLevelPolicy"];
+                    };
+                };
+                403: components["responses"]["Forbidden"];
+                409: components["responses"]["Conflict"];
+            };
+        };
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/trust-policy/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Trust threshold policy revision history */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description Opaque pagination cursor */
+                    cursor?: components["parameters"]["Cursor"];
+                    limit?: components["parameters"]["Limit"];
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["TrustLevelPolicyPage"];
+                    };
+                };
+                403: components["responses"]["Forbidden"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/users/{id}/trust-level": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Manually set or clear a registered account trust override */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["TrustLevelAdjustInput"];
+                };
+            };
+            responses: {
+                /** @description updated */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["TrustProgress"];
+                    };
+                };
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+            };
+        };
+        trace?: never;
+    };
+    "/admin/users/{id}/trust-events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Append-only trust transition history for one account */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description Opaque pagination cursor */
+                    cursor?: components["parameters"]["Cursor"];
+                    limit?: components["parameters"]["Limit"];
+                };
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["TrustLevelEventPage"];
+                    };
+                };
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/users": {
         parameters: {
             query?: never;
@@ -8504,6 +8974,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/media/reconciliation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Inspect bounded media database-state drift without mutation
+         * @description Requires operations.jobs and a recent-authenticated revocable session. Each read is audited. The report checks PostgreSQL moderation, publication, processing, and cleanup invariants only; OSS Ingest and Delivery object inventory remains an explicit manual provider-side reconciliation step.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description Asset-id cursor returned as nextCursor by the previous page. */
+                    cursor?: string;
+                    limit?: components["parameters"]["Limit"];
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Read-only dry-run report ordered by ascending asset id */
+                200: {
+                    headers: {
+                        /** @description Always private, no-store. */
+                        "Cache-Control"?: string;
+                        /** @description Always no-cache. */
+                        Pragma?: string;
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["MediaReconciliationReport"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
+                403: components["responses"]["Forbidden"];
+                428: components["responses"]["RecentAuthRequired"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/media/deletion-jobs/{id}/retry": {
         parameters: {
             query?: never;
@@ -8564,7 +9085,7 @@ export interface paths {
         put?: never;
         /**
          * Issue a one-time same-origin media preview grant
-         * @description Requires moderation.content. The moderator must be independent from the uploader and provide an evidence-read reason. No provider identifier or URL is returned.
+         * @description Requires moderation.content. The moderator must be independent and higher-role, except that ADMIN may explicitly confirm own-media self-review with recent authentication. No provider identifier or URL is returned.
          */
         post: {
             parameters: {
@@ -8577,7 +9098,7 @@ export interface paths {
             };
             requestBody: {
                 content: {
-                    "application/json": components["schemas"]["AdminReasonInput"];
+                    "application/json": components["schemas"]["MediaModerationInput"];
                 };
             };
             responses: {
@@ -8591,9 +9112,11 @@ export interface paths {
                         "application/json": components["schemas"]["ModerationPreviewGrant"];
                     };
                 };
+                401: components["responses"]["Unauthorized"];
                 403: components["responses"]["Forbidden"];
                 404: components["responses"]["NotFound"];
                 409: components["responses"]["Conflict"];
+                428: components["responses"]["RecentAuthRequired"];
             };
         };
         delete?: never;
@@ -8626,7 +9149,7 @@ export interface paths {
             };
             requestBody?: never;
             responses: {
-                /** @description bounded image stream */
+                /** @description bounded static image stream */
                 200: {
                     headers: {
                         "Cache-Control"?: string;
@@ -8636,7 +9159,6 @@ export interface paths {
                     content: {
                         "image/jpeg": string;
                         "image/png": string;
-                        "image/gif": string;
                         "image/webp": string;
                     };
                 };
@@ -8663,7 +9185,7 @@ export interface paths {
         put?: never;
         /**
          * Approve an evidence-backed pending image
-         * @description Requires strict role hierarchy and a trusted image preview completed by the same moderator. Generic files cannot be approved until malware and sandbox scanner evidence exists.
+         * @description Requires strict role hierarchy and a trusted image preview completed by the same moderator. ADMIN own-media self-review additionally requires explicit confirmation and recent authentication. Approval queues sanitized Delivery processing; it does not make the original public. Generic files cannot be approved until malware and sandbox scanner evidence exists.
          */
         post: {
             parameters: {
@@ -8676,7 +9198,7 @@ export interface paths {
             };
             requestBody: {
                 content: {
-                    "application/json": components["schemas"]["AdminReasonInput"];
+                    "application/json": components["schemas"]["MediaModerationInput"];
                 };
             };
             responses: {
@@ -8687,9 +9209,11 @@ export interface paths {
                     };
                     content?: never;
                 };
+                401: components["responses"]["Unauthorized"];
                 403: components["responses"]["Forbidden"];
                 404: components["responses"]["NotFound"];
                 409: components["responses"]["Conflict"];
+                428: components["responses"]["RecentAuthRequired"];
             };
         };
         delete?: never;
@@ -8709,7 +9233,55 @@ export interface paths {
         put?: never;
         /**
          * Quarantine an upload and enqueue durable provider deletion
-         * @description Supports pending and already-published clean uploads under strict role hierarchy. The database becomes non-public before any provider I/O; deletion is retried from a durable queue and finalizes the blocked state. An active retention hold does not prevent quarantine, but pauses physical provider deletion until release or expiry.
+         * @description Supports pending and already-published clean uploads under strict role hierarchy, plus the explicit recent-authenticated ADMIN own-media exception. The database stops new delivery before provider I/O; durable cleanup purges CDN, deletes every Delivery variant, then deletes the Ingest original unless a retention hold pauses that final step.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["MediaModerationInput"];
+                };
+            };
+            responses: {
+                /** @description quarantined and deletion queued */
+                202: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                401: components["responses"]["Unauthorized"];
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+                409: components["responses"]["Conflict"];
+                428: components["responses"]["RecentAuthRequired"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/media/uploads/{id}/processing/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Requeue one failed sanitized-variant processing job
+         * @description Requires operations.jobs and recent authentication. Only a clean asset whose current policy publication and durable job are failed/dead-lettered may be requeued; the reason and transition are audited atomically.
          */
         post: {
             parameters: {
@@ -8726,16 +9298,19 @@ export interface paths {
                 };
             };
             responses: {
-                /** @description quarantined and deletion queued */
+                /** @description processing requeued */
                 202: {
                     headers: {
                         [name: string]: unknown;
                     };
                     content?: never;
                 };
+                400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
                 403: components["responses"]["Forbidden"];
                 404: components["responses"]["NotFound"];
                 409: components["responses"]["Conflict"];
+                428: components["responses"]["RecentAuthRequired"];
             };
         };
         delete?: never;
@@ -10351,6 +10926,12 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        HealthStatus: {
+            /** @enum {string} */
+            status: "ok";
+            service: string;
+            version: string;
+        };
         Error: {
             error: {
                 code: string;
@@ -10375,7 +10956,10 @@ export interface components {
             /** @enum {string} */
             role: "user" | "mod" | "admin";
             capabilities: string[];
+            /** @description Unified tea trust level. 0 is visitor UI only; registered accounts are 1–6. */
             trustLevel: number;
+            /** @description Owner-only credential state used to choose between first-time password setup and password change. */
+            hasPassword: boolean;
             /** @description True until the current terms version and required profile/privacy choices are accepted. */
             onboardingRequired: boolean;
             createdAt: number;
@@ -10458,7 +11042,8 @@ export interface components {
             reviews: Record<string, never>;
             governance: Record<string, never>;
             credit: Record<string, never>;
-            activity: Record<string, never>[];
+            /** @description Owner-visible daily counts, check-ins, current trust projection, and redacted trust transition history. */
+            activity: Record<string, never>;
             platform: Record<string, never>;
             media: Record<string, never>[];
         };
@@ -10526,6 +11111,23 @@ export interface components {
             accessToken: string;
             refreshToken: string;
             account: components["schemas"]["Account"];
+        };
+        PasswordSetInput: {
+            /** Format: password */
+            newPassword: string;
+        };
+        PasswordResetInput: {
+            /** Format: email */
+            email: string;
+            code: string;
+            /** Format: password */
+            newPassword: string;
+        };
+        PasswordChangeInput: {
+            /** Format: password */
+            currentPassword: string;
+            /** Format: password */
+            newPassword: string;
         };
         /** @enum {string} */
         EmailCodePurpose: "login" | "registration" | "appeal" | "recovery";
@@ -11064,6 +11666,8 @@ export interface components {
              * @description Authorization-derived clean image URL; never persisted in Forum content.
              */
             url: string;
+            /** @description Unix seconds; refetch the owning Forum resource before or after expiry rather than calling an owner-only Media route. */
+            expiresAt: number;
             width: number | null;
             height: number | null;
         };
@@ -11418,7 +12022,7 @@ export interface components {
             position: number;
             /** @default false */
             isLocked: boolean;
-            /** @default 0 */
+            /** @default 1 */
             minTrustToPost: number;
             /** @default false */
             isQa: boolean;
@@ -11559,6 +12163,8 @@ export interface components {
             /** @description Same-origin relative application path. */
             targetUrl: string;
             assetId?: string | null;
+            /** @description Current short-lived sanitized CDN projection; null when no asset is configured or publication is unavailable. */
+            assetDelivery: components["schemas"]["MediaDelivery"] | null;
             /** @enum {string} */
             status: "draft" | "scheduled" | "published" | "paused" | "archived";
             /** @enum {string} */
@@ -11945,6 +12551,7 @@ export interface components {
             thread: number;
             comment: number;
             like: number;
+            checkIn: number;
         };
         ActivityDay: {
             /** Format: date */
@@ -11953,6 +12560,8 @@ export interface components {
             comments: number;
             /** @description Positive likes given by the user. */
             likes: number;
+            /** @description Idempotent daily check-in recorded on the server's Asia/Shanghai calendar. */
+            checkIns: number;
             score: number;
         };
         /** @description A continuous Asia/Shanghai calendar; days without activity are returned with zero counts. */
@@ -11963,8 +12572,13 @@ export interface components {
             from: string;
             /** Format: date */
             to: string;
+            /** @description Activity weight policy version. */
             policyVersion: number;
+            /** @description Trust policy version supplying the daily like cap. */
+            trustPolicyVersion: number;
             weights: components["schemas"]["ActivityWeights"];
+            /** @description Maximum daily score contributed by positive likes. */
+            likeDailyCap: number;
             days: components["schemas"]["ActivityDay"][];
         };
         ActivityPolicy: {
@@ -11980,6 +12594,90 @@ export interface components {
             expectedVersion: number;
             weights: components["schemas"]["ActivityWeights"];
             reason: string;
+        };
+        /** @description Current account's daily check-in state on the canonical Asia/Shanghai calendar. */
+        CheckInStatus: {
+            /** @enum {string} */
+            timezone: "Asia/Shanghai";
+            /** Format: date */
+            date: string;
+            checkedIn: boolean;
+            /** @description True only when this request created today's check-in. Always false on GET. */
+            newlyCheckedIn: boolean;
+            /** @description Unix seconds for today's check-in */
+            checkedInAt: number | null;
+            /** @description Consecutive checked days ending today */
+            currentStreak: number;
+            totalDays: number;
+            /** @description Unix seconds for the next Asia/Shanghai midnight. */
+            nextResetAt: number;
+        };
+        TrustProgress: {
+            trustLevel: number;
+            teaName: string;
+            qualifyingScore: number;
+            nextLevel: number | null;
+            nextThreshold: number | null;
+            remainingScore: number | null;
+            progressPercent: number;
+            policyVersion: number;
+            isMaxLevel: boolean;
+            overrideActive: boolean;
+            promotionBlockedUntil: number | null;
+            promotionRequiresNewActivity: boolean;
+        };
+        TrustLevelPolicy: {
+            version: number;
+            scorePolicyVersion: number;
+            thresholdLevel2: number;
+            thresholdLevel3: number;
+            thresholdLevel4: number;
+            thresholdLevel5: number;
+            thresholdLevel6: number;
+            likeDailyCap: number;
+            demotionCooldownDays: number;
+            reason: string;
+            changedBy: string;
+            createdAt: number;
+        };
+        TrustLevelPolicyUpdateInput: {
+            expectedVersion: number;
+            thresholdLevel2: number;
+            thresholdLevel3: number;
+            thresholdLevel4: number;
+            thresholdLevel5: number;
+            thresholdLevel6: number;
+            likeDailyCap: number;
+            demotionCooldownDays: number;
+            reason: string;
+        };
+        TrustLevelAdjustInput: {
+            trustLevel?: number | null;
+            /** @default false */
+            clearOverride: boolean;
+            reason: string;
+        };
+        TrustLevelEvent: {
+            id: string;
+            accountId: string;
+            /** @enum {string} */
+            eventKind: "upgrade" | "demotion" | "manual_set" | "override_clear" | "backfill_initialized" | "registration";
+            fromLevel: number;
+            toLevel: number;
+            qualifyingScore: number;
+            policyVersion: number;
+            /** @enum {string} */
+            actorKind: "system" | "account";
+            actorAccountId: string | null;
+            reason: string | null;
+            governanceEventId: string | null;
+            createdAt: number;
+        };
+        TrustLevelPolicyPage: components["schemas"]["Page"] & {
+            items?: components["schemas"]["TrustLevelPolicy"][];
+        };
+        TrustLevelEventPage: components["schemas"]["Page"] & {
+            items?: components["schemas"]["TrustLevelEvent"][];
         };
         OneboxResult: {
             /**
@@ -12022,6 +12720,16 @@ export interface components {
             /** @description Unix seconds */
             expiration: number;
         };
+        /**
+         * @description Sanitized Delivery projection state; moderation approval and CDN publication are separate facts.
+         * @enum {string}
+         */
+        MediaDeliveryState: "unpublished" | "processing" | "published" | "failed" | "blocked";
+        /**
+         * @description Server-owned immutable variant profile. Clients cannot request arbitrary dimensions or object paths.
+         * @enum {string}
+         */
+        MediaDeliveryVariant: "thumb_256" | "display_1280" | "full_2048";
         /** @description Moderation-safe metadata. Storage key, object URL, and content hash are deliberately omitted. */
         Upload: {
             id: string;
@@ -12032,9 +12740,17 @@ export interface components {
             mime: string;
             /** @enum {string} */
             status: "pending" | "clean" | "quarantined" | "blocked";
+            deliveryState: components["schemas"]["MediaDeliveryState"];
+            /**
+             * @description Bounded operations-only failure category; it never contains a provider URL, key, response body, or user data.
+             * @enum {string|null}
+             */
+            deliveryErrorCode: "legacy_animated_format_requires_reupload" | "lease_expired_after_max_attempts" | "asset_left_clean_state" | "invalid_source_length" | "ingest_read_failed" | "source_digest_mismatch" | "image_worker_join_failed" | "image_decode_rejected" | "variant_registration_failed" | "delivery_write_failed" | "delivery_verification_failed" | "publication_commit_failed" | null;
             usage: components["schemas"]["MediaUsage"] | null;
             imageWidth: number | null;
             imageHeight: number | null;
+            /** @description True only for the current ADMIN's own upload shown under the explicit self-review exception. */
+            isSelfReview: boolean;
             /**
              * @description Actor-specific evidence gate. Files remain scanner-gated; image approval requires this moderator's trusted preview.
              * @enum {string}
@@ -12067,6 +12783,7 @@ export interface components {
             mime: string;
             /** @enum {string} */
             status: "pending" | "clean" | "quarantined" | "blocked";
+            deliveryState: components["schemas"]["MediaDeliveryState"];
             imageWidth: number | null;
             imageHeight: number | null;
             createdAt: number;
@@ -12077,8 +12794,29 @@ export interface components {
             /** @description Unix seconds; grants expire after 60 seconds and are consumed once. */
             expiresAt: number;
         };
-        UploadUrl: {
+        MediaModerationInput: {
+            reason: string;
+            /**
+             * @description Must be true only when ADMIN intentionally invokes the recent-authenticated own-media exception.
+             * @default false
+             */
+            selfReviewConfirmed: boolean;
+        };
+        /** @description Short-lived CDN capability derived from a currently clean, atomically published asset. It exposes no Ingest bucket/key, Delivery bucket/provider origin/credential, or separate persistent locator; its signed URL may visibly contain an opaque immutable Delivery path. */
+        MediaDelivery: {
+            assetId: string;
+            variant: components["schemas"]["MediaDeliveryVariant"];
+            /**
+             * Format: uri
+             * @description Five-minute CDN URL whose path is an opaque immutable Delivery identifier, not an Ingest key or provider URL.
+             */
             url: string;
+            /** @description Unix seconds; clients should refresh before this time. */
+            expiresAt: number;
+            /** @enum {string} */
+            mime: "image/webp";
+            width: number;
+            height: number;
         };
         UploadPage: components["schemas"]["Page"] & {
             items?: components["schemas"]["Upload"][];
@@ -12184,6 +12922,36 @@ export interface components {
         };
         MediaDeletionJobPage: components["schemas"]["Page"] & {
             items?: components["schemas"]["MediaDeletionJob"][];
+        };
+        /**
+         * @description Stable database-state anomaly category. Provider object inventory is reconciled separately.
+         * @enum {string}
+         */
+        MediaReconciliationIssueCode: "publication_missing" | "published_variant_set_incomplete" | "published_upload_not_clean" | "hidden_asset_has_published_variant" | "processing_lease_stale" | "processing_without_active_job" | "failed_publication_job_mismatch" | "deletion_lease_stale" | "cleanup_lease_stale" | "hidden_without_active_deletion_job" | "cleanup_plan_incomplete" | "deletion_completion_pending" | "deletion_dead_letter" | "processing_dead_letter";
+        MediaReconciliationFinding: {
+            assetId: string;
+            issueCodes: components["schemas"]["MediaReconciliationIssueCode"][];
+        };
+        /** @description Database-side candidate counts only; it never claims that provider ListObjects inventory was inspected. */
+        MediaProviderInventoryStatus: {
+            /** @enum {string} */
+            state: "manual_inventory_required";
+            /** Format: int64 */
+            ingestCandidateCount: number;
+            /** Format: int64 */
+            deliveryCandidateCount: number;
+        };
+        /** @description Bounded, audited and read-only PostgreSQL media-state inspection. It never mutates state or lists provider objects. */
+        MediaReconciliationReport: {
+            /**
+             * @description Always true; this endpoint never repairs findings.
+             * @enum {boolean}
+             */
+            dryRun: true;
+            items: components["schemas"]["MediaReconciliationFinding"][];
+            /** @description Last asset id when another bounded page of findings exists. */
+            nextCursor: string | null;
+            providerInventory: components["schemas"]["MediaProviderInventoryStatus"];
         };
         AdminForumFlag: {
             id: string;

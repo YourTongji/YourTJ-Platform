@@ -28,6 +28,21 @@ impl ActivityKind {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProjectionKind {
+    Contribution(ActivityKind),
+    CheckIn,
+}
+
+impl ProjectionKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Contribution(kind) => kind.as_str(),
+            Self::CheckIn => "check_in",
+        }
+    }
+}
+
 /// Activate a contribution inside the source mutation's transaction.
 ///
 /// Returns `true` only when a new positive transition was projected. Repeating
@@ -39,11 +54,45 @@ pub async fn activate_contribution(
     source_key: &str,
     occurred_at: DateTime<Utc>,
 ) -> AppResult<bool> {
+    activate_projected_contribution(
+        connection,
+        account_id,
+        ProjectionKind::Contribution(kind),
+        source_key,
+        occurred_at,
+    )
+    .await
+}
+
+pub(crate) async fn activate_check_in_contribution(
+    connection: &mut PgConnection,
+    account_id: i64,
+    source_key: &str,
+    occurred_at: DateTime<Utc>,
+) -> AppResult<bool> {
+    activate_projected_contribution(
+        connection,
+        account_id,
+        ProjectionKind::CheckIn,
+        source_key,
+        occurred_at,
+    )
+    .await
+}
+
+async fn activate_projected_contribution(
+    connection: &mut PgConnection,
+    account_id: i64,
+    kind: ProjectionKind,
+    source_key: &str,
+    occurred_at: DateTime<Utc>,
+) -> AppResult<bool> {
     lock_contribution_source(connection, source_key).await?;
 
     if find_active_event(connection, source_key).await?.is_some() {
         return Ok(false);
     }
+    crate::score_projection::lock_projection_shared(connection).await?;
 
     let generation: i32 = sqlx::query_scalar(
         "SELECT COALESCE(MAX(generation), 0)::int + 1 \
@@ -71,6 +120,7 @@ pub async fn activate_contribution(
     .await?;
 
     increment_daily_count(connection, account_id, activity_date, kind).await?;
+    crate::score_projection::refresh_account(connection, account_id, activity_date).await?;
     Ok(true)
 }
 
@@ -89,6 +139,12 @@ pub async fn deactivate_contribution(
         return Ok(false);
     };
     let kind = parse_kind(&active_event.kind)?;
+    if kind == ProjectionKind::CheckIn {
+        return Err(AppError::Internal(anyhow::anyhow!(
+            "daily check-in activity facts are immutable"
+        )));
+    }
+    crate::score_projection::lock_projection_shared(connection).await?;
     let event_key = format!("{source_key}:{}:deactivate", active_event.generation);
 
     sqlx::query(
@@ -110,6 +166,12 @@ pub async fn deactivate_contribution(
 
     decrement_daily_count(connection, active_event.account_id, active_event.activity_date, kind)
         .await?;
+    crate::score_projection::refresh_account(
+        connection,
+        active_event.account_id,
+        active_event.activity_date,
+    )
+    .await?;
     Ok(true)
 }
 
@@ -161,26 +223,32 @@ async fn increment_daily_count(
     connection: &mut PgConnection,
     account_id: i64,
     activity_date: NaiveDate,
-    kind: ActivityKind,
+    kind: ProjectionKind,
 ) -> AppResult<()> {
     let statement = match kind {
-        ActivityKind::Thread => {
+        ProjectionKind::Contribution(ActivityKind::Thread) => {
             "INSERT INTO activity.daily_counts (account_id, activity_date, threads_created) \
              VALUES ($1, $2, 1) \
              ON CONFLICT (account_id, activity_date) DO UPDATE \
              SET threads_created = activity.daily_counts.threads_created + 1, updated_at = now()"
         }
-        ActivityKind::Comment => {
+        ProjectionKind::Contribution(ActivityKind::Comment) => {
             "INSERT INTO activity.daily_counts (account_id, activity_date, comments_created) \
              VALUES ($1, $2, 1) \
              ON CONFLICT (account_id, activity_date) DO UPDATE \
              SET comments_created = activity.daily_counts.comments_created + 1, updated_at = now()"
         }
-        ActivityKind::Like => {
+        ProjectionKind::Contribution(ActivityKind::Like) => {
             "INSERT INTO activity.daily_counts (account_id, activity_date, likes_given) \
              VALUES ($1, $2, 1) \
              ON CONFLICT (account_id, activity_date) DO UPDATE \
              SET likes_given = activity.daily_counts.likes_given + 1, updated_at = now()"
+        }
+        ProjectionKind::CheckIn => {
+            "INSERT INTO activity.daily_counts (account_id, activity_date, check_ins) \
+             VALUES ($1, $2, 1) \
+             ON CONFLICT (account_id, activity_date) DO UPDATE \
+             SET check_ins = activity.daily_counts.check_ins + 1, updated_at = now()"
         }
     };
 
@@ -192,23 +260,28 @@ async fn decrement_daily_count(
     connection: &mut PgConnection,
     account_id: i64,
     activity_date: NaiveDate,
-    kind: ActivityKind,
+    kind: ProjectionKind,
 ) -> AppResult<()> {
     let statement = match kind {
-        ActivityKind::Thread => {
+        ProjectionKind::Contribution(ActivityKind::Thread) => {
             "UPDATE activity.daily_counts \
              SET threads_created = threads_created - 1, updated_at = now() \
              WHERE account_id = $1 AND activity_date = $2 AND threads_created > 0"
         }
-        ActivityKind::Comment => {
+        ProjectionKind::Contribution(ActivityKind::Comment) => {
             "UPDATE activity.daily_counts \
              SET comments_created = comments_created - 1, updated_at = now() \
              WHERE account_id = $1 AND activity_date = $2 AND comments_created > 0"
         }
-        ActivityKind::Like => {
+        ProjectionKind::Contribution(ActivityKind::Like) => {
             "UPDATE activity.daily_counts \
              SET likes_given = likes_given - 1, updated_at = now() \
              WHERE account_id = $1 AND activity_date = $2 AND likes_given > 0"
+        }
+        ProjectionKind::CheckIn => {
+            "UPDATE activity.daily_counts \
+             SET check_ins = check_ins - 1, updated_at = now() \
+             WHERE account_id = $1 AND activity_date = $2 AND check_ins > 0"
         }
     };
 
@@ -227,11 +300,12 @@ async fn decrement_daily_count(
     Ok(())
 }
 
-fn parse_kind(value: &str) -> AppResult<ActivityKind> {
+fn parse_kind(value: &str) -> AppResult<ProjectionKind> {
     match value {
-        "thread" => Ok(ActivityKind::Thread),
-        "comment" => Ok(ActivityKind::Comment),
-        "like" => Ok(ActivityKind::Like),
+        "thread" => Ok(ProjectionKind::Contribution(ActivityKind::Thread)),
+        "comment" => Ok(ProjectionKind::Contribution(ActivityKind::Comment)),
+        "like" => Ok(ProjectionKind::Contribution(ActivityKind::Like)),
+        "check_in" => Ok(ProjectionKind::CheckIn),
         _ => Err(AppError::Internal(anyhow::anyhow!("unknown activity kind in database"))),
     }
 }

@@ -38,7 +38,7 @@ struct AccountDataExportBundle {
     reviews: reviews::data_export::ReviewsExport,
     governance: governance::data_export::GovernanceExport,
     credit: credit::data_export::CreditExport,
-    activity: Vec<activity::data_export::ExportActivityDay>,
+    activity: activity::data_export::ActivityExport,
     platform: platform::data_export::PlatformExport,
     media: Vec<media::data_export::ExportUpload>,
 }
@@ -263,7 +263,7 @@ async fn assemble_export(state: &AppState, account_id: i64) -> AppResult<Account
         media::data_export::snapshot(&state.db, account_id),
     )?;
     Ok(AccountDataExportBundle {
-        schema_version: "yourtj.account-export.v1",
+        schema_version: "yourtj.account-export.v2",
         generated_at: Utc::now().timestamp(),
         included_sections: [
             "identity",
@@ -471,7 +471,7 @@ mod tests {
         let bundle = assemble_export(&state, account_id).await.expect("assemble owner export");
         let artifact = serde_json::to_value(bundle).expect("serialize owner export");
 
-        assert_eq!(artifact["schemaVersion"], "yourtj.account-export.v1");
+        assert_eq!(artifact["schemaVersion"], "yourtj.account-export.v2");
         assert_eq!(artifact["identity"]["account"]["id"], account_id.to_string());
         assert!(artifact["identity"]["account"].get("email").is_none());
         assert_eq!(artifact["includedSections"].as_array().map(Vec::len), Some(8));

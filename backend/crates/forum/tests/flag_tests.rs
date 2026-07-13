@@ -72,12 +72,39 @@ async fn board_thread_count(pool: &sqlx::PgPool) -> i32 {
 }
 
 async fn set_trust_level(pool: &sqlx::PgPool, account_id: i64, trust_level: i16) {
+    let mut transaction = pool.begin().await.expect("begin reporter trust fixture");
+    sqlx::query(
+        "INSERT INTO activity.account_trust_progress \
+         (account_id, trust_level, qualifying_score, policy_version) \
+         SELECT $1, $2, \
+           CASE $2 \
+             WHEN 1 THEN 0 \
+             WHEN 2 THEN policy.threshold_level_2 \
+             WHEN 3 THEN policy.threshold_level_3 \
+             WHEN 4 THEN policy.threshold_level_4 \
+             WHEN 5 THEN policy.threshold_level_5 \
+             ELSE policy.threshold_level_6 \
+           END, \
+           policy.version \
+         FROM activity.trust_level_policies policy \
+         ORDER BY policy.version DESC LIMIT 1 \
+         ON CONFLICT (account_id) DO UPDATE \
+         SET trust_level = EXCLUDED.trust_level, \
+             qualifying_score = EXCLUDED.qualifying_score, \
+             policy_version = EXCLUDED.policy_version, updated_at = now()",
+    )
+    .bind(account_id)
+    .bind(trust_level)
+    .execute(&mut *transaction)
+    .await
+    .expect("set authoritative reporter trust level");
     sqlx::query("UPDATE identity.accounts SET trust_level = $1 WHERE id = $2")
         .bind(trust_level)
         .bind(account_id)
-        .execute(pool)
+        .execute(&mut *transaction)
         .await
-        .expect("set reporter trust level");
+        .expect("set reporter trust projection");
+    transaction.commit().await.expect("commit reporter trust fixture");
 }
 
 #[tokio::test]
@@ -274,8 +301,8 @@ async fn report_auto_hide_is_reversible_without_overriding_manual_moderation() {
         .execute(&pool)
         .await
         .expect("promote moderator");
-    set_trust_level(&pool, first_reporter_id, 2).await;
-    set_trust_level(&pool, second_reporter_id, 2).await;
+    set_trust_level(&pool, first_reporter_id, 3).await;
+    set_trust_level(&pool, second_reporter_id, 3).await;
 
     let thread_id = create_thread(&app, &author_token, "Auto-hide report target").await;
     assert_eq!(thread_activity(&pool, author_id).await, 1);
@@ -468,8 +495,8 @@ async fn repeated_report_preserves_terminal_attempt_and_queue_includes_hidden_ev
         .execute(&pool)
         .await
         .expect("promote moderator");
-    set_trust_level(&pool, first_reporter_id, 2).await;
-    set_trust_level(&pool, second_reporter_id, 2).await;
+    set_trust_level(&pool, first_reporter_id, 3).await;
+    set_trust_level(&pool, second_reporter_id, 3).await;
     let thread_id = create_thread(&app, &author_token, "Flag evidence title").await;
 
     let first_report = request(

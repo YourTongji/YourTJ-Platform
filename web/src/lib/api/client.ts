@@ -4,6 +4,10 @@ import {
   readRefreshToken,
   writeAuth,
 } from "@/lib/auth-storage";
+import {
+  isSupportedStaticImageContentType,
+  STATIC_IMAGE_REUPLOAD_MESSAGE,
+} from "@/lib/media-policy";
 import type { Account, ApiErrorBody } from "./types";
 
 export const API_BASE_URL =
@@ -153,8 +157,8 @@ async function fetchBlobOnce(path: string, headersInput?: HeadersInit) {
   const response = await fetch(buildUrl(path), { headers });
   if (!response.ok) throw await parseError(response);
   const contentType = response.headers.get("content-type")?.split(";", 1)[0] ?? "";
-  if (!["image/jpeg", "image/png", "image/gif", "image/webp"].includes(contentType)) {
-    throw new ApiError(response.status, "媒体预览类型无效");
+  if (!isSupportedStaticImageContentType(contentType)) {
+    throw new ApiError(response.status, STATIC_IMAGE_REUPLOAD_MESSAGE);
   }
   const blob = await response.blob();
   if (blob.size > 20 * 1024 * 1024) {

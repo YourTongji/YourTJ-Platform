@@ -8,7 +8,7 @@ use shared::email_crypto::EmailEncryption;
 use shared::{AppError, AppResult};
 use sqlx::{PgConnection, PgPool};
 
-use crate::email_code::{verify_code, CodePurpose};
+use crate::email_code::{hash_code, verify_code, CodePurpose};
 use crate::models::{AccountRow, EmailCodeRow, SessionRow};
 
 #[derive(sqlx::FromRow)]
@@ -23,6 +23,21 @@ struct StoredAccountRow {
     trust_level: i16,
     #[sqlx(default)]
     password_hash: Option<String>,
+    created_at: DateTime<Utc>,
+}
+
+#[derive(sqlx::FromRow)]
+struct CredentialAccountRow {
+    id: i64,
+    email: Option<String>,
+    email_ciphertext: Option<String>,
+    handle: String,
+    avatar_url: Option<String>,
+    role: String,
+    status: String,
+    trust_level: i16,
+    password_hash: Option<String>,
+    credential_version: i64,
     created_at: DateTime<Utc>,
 }
 
@@ -49,6 +64,12 @@ pub(crate) struct DeviceSessionRow {
 
 pub(crate) struct RotatedSession {
     pub account_id: i64,
+    pub session_id: i64,
+    pub auth_version: i64,
+}
+
+pub(crate) struct CredentialMutation {
+    pub account: AccountRow,
     pub session_id: i64,
     pub auth_version: i64,
 }
@@ -85,6 +106,24 @@ impl StoredAccountRow {
     }
 }
 
+impl CredentialAccountRow {
+    fn decrypt(self, encryption: Option<&EmailEncryption>) -> AppResult<AccountRow> {
+        StoredAccountRow {
+            id: self.id,
+            email: self.email,
+            email_ciphertext: self.email_ciphertext,
+            handle: self.handle,
+            avatar_url: self.avatar_url,
+            role: self.role,
+            status: self.status,
+            trust_level: self.trust_level,
+            password_hash: self.password_hash,
+            created_at: self.created_at,
+        }
+        .decrypt(encryption)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // email_codes
 // ---------------------------------------------------------------------------
@@ -97,7 +136,13 @@ pub async fn insert_email_code(
     purpose: CodePurpose,
     code_hash: &str,
     expires_at: DateTime<Utc>,
+    credential_version: Option<i64>,
 ) -> AppResult<uuid::Uuid> {
+    if (purpose == CodePurpose::PasswordReset) != credential_version.is_some() {
+        return Err(AppError::Internal(anyhow::anyhow!(
+            "password-reset code credential binding is invalid"
+        )));
+    }
     let blind_index = encryption.map(|encryption| encryption.blind_index(email));
     let request_id = uuid::Uuid::new_v4();
     let mut tx = pool.begin().await?;
@@ -114,8 +159,8 @@ pub async fn insert_email_code(
 
     sqlx::query(
         "INSERT INTO identity.email_codes \
-         (email, email_blind_index, email_key_version, purpose, request_id, code_hash, expires_at) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7)",
+         (email, email_blind_index, email_key_version, purpose, request_id, code_hash, expires_at, \
+          credential_version) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
     )
     .bind(encryption.is_none().then_some(email))
     .bind(&blind_index)
@@ -124,6 +169,7 @@ pub async fn insert_email_code(
     .bind(request_id)
     .bind(code_hash)
     .bind(expires_at)
+    .bind(credential_version)
     .execute(&mut *tx)
     .await?;
 
@@ -165,7 +211,7 @@ async fn lock_email_code_tx(
     let blind_index = encryption.map(|encryption| encryption.blind_index(email));
     let purpose_filter = purpose.map(CodePurpose::as_str);
     sqlx::query_as::<_, EmailCodeRow>(
-        "SELECT id, purpose, code_hash, attempts \
+        "SELECT id, purpose, code_hash, attempts, credential_version \
          FROM identity.email_codes \
          WHERE (email = $1 OR email_blind_index = $2) \
            AND expires_at > now() AND used_at IS NULL \
@@ -213,6 +259,99 @@ pub async fn consume_email_code(
         .ok_or_else(|| AppError::Internal(anyhow::anyhow!("invalid persisted email code purpose")))
 }
 
+/// Verify a live code before expensive credential work without consuming it.
+///
+/// The final credential transaction must lock, verify, and consume the same purpose again. Invalid
+/// attempts are still counted here, while a successful preflight only releases the row lock.
+pub async fn preflight_email_code(
+    pool: &PgPool,
+    encryption: Option<&EmailEncryption>,
+    email: &str,
+    purpose: Option<CodePurpose>,
+    attempted_code: &str,
+) -> AppResult<CodePurpose> {
+    let mut tx = pool.begin().await?;
+    let row = lock_email_code_tx(&mut tx, encryption, email, purpose).await?;
+    if row.attempts >= 5 {
+        return Err(crate::error::IdentityError::CodeExhausted.into());
+    }
+    if !verify_code(attempted_code, &row.code_hash) {
+        sqlx::query("UPDATE identity.email_codes SET attempts = attempts + 1 WHERE id = $1")
+            .bind(row.id)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        return Err(crate::error::IdentityError::InvalidCode.into());
+    }
+    let code_purpose = CodePurpose::from_stored(&row.purpose).ok_or_else(|| {
+        AppError::Internal(anyhow::anyhow!("invalid persisted email code purpose"))
+    })?;
+    tx.commit().await?;
+    Ok(code_purpose)
+}
+
+/// Perform a non-consuming, version-bound reset-code preflight with a neutral failure surface.
+pub async fn preflight_password_reset_code(
+    pool: &PgPool,
+    encryption: Option<&EmailEncryption>,
+    email: &str,
+    attempted_code: &str,
+) -> AppResult<()> {
+    let blind_index = encryption.map(|encryption| encryption.blind_index(email));
+    let mut tx = pool.begin().await?;
+    let code = sqlx::query_as::<_, EmailCodeRow>(
+        "SELECT id, purpose, code_hash, attempts, credential_version \
+         FROM identity.email_codes \
+         WHERE (email = $1 OR email_blind_index = $2) AND purpose = 'password_reset' \
+           AND expires_at > now() AND used_at IS NULL AND delivery_accepted_at IS NOT NULL \
+         ORDER BY created_at DESC, id DESC LIMIT 1 FOR UPDATE",
+    )
+    .bind(email)
+    .bind(&blind_index)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let account: Option<(i64, bool)> = sqlx::query_as(
+        "SELECT credential_version, password_hash IS NOT NULL AND status = 'active' AS eligible \
+         FROM identity.accounts WHERE email = $1 OR password_email_blind = $2 FOR SHARE",
+    )
+    .bind(email)
+    .bind(&blind_index)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let dummy_hash = hash_code("000000");
+    let code_matches = verify_code(
+        attempted_code,
+        code.as_ref().map_or(dummy_hash.as_str(), |row| row.code_hash.as_str()),
+    );
+    let is_eligible = match (code.as_ref(), account) {
+        (Some(code), Some((credential_version, true))) => {
+            code.attempts < 5 && code_matches && code.credential_version == Some(credential_version)
+        }
+        _ => false,
+    };
+    if is_eligible {
+        tx.commit().await?;
+        return Ok(());
+    }
+    if let Some(code) = code {
+        if code_matches {
+            sqlx::query(
+                "UPDATE identity.email_codes SET used_at = now(), attempts = 99 WHERE id = $1",
+            )
+            .bind(code.id)
+            .execute(&mut *tx)
+            .await?;
+        } else if code.attempts < 5 {
+            sqlx::query("UPDATE identity.email_codes SET attempts = attempts + 1 WHERE id = $1")
+                .bind(code.id)
+                .execute(&mut *tx)
+                .await?;
+        }
+    }
+    tx.commit().await?;
+    Err(crate::error::IdentityError::InvalidCode.into())
+}
+
 /// Consume a recent-auth code and mark the same active session in one transaction.
 pub async fn consume_recent_auth_code(
     pool: &PgPool,
@@ -237,7 +376,8 @@ pub async fn consume_recent_auth_code(
         return Err(AppError::RecentAuthRequired);
     }
     let row = sqlx::query_as::<_, EmailCodeRow>(
-        "SELECT id, purpose, code_hash, attempts FROM identity.email_codes \
+        "SELECT id, purpose, code_hash, attempts, credential_version \
+         FROM identity.email_codes \
          WHERE (email = $1 OR email_blind_index = $2) AND purpose = 'recent_auth' \
            AND expires_at > now() AND used_at IS NULL \
            AND delivery_accepted_at IS NOT NULL \
@@ -280,6 +420,39 @@ pub async fn consume_recent_auth_code(
 // ---------------------------------------------------------------------------
 // accounts
 // ---------------------------------------------------------------------------
+
+async fn lock_credential_account_by_id_tx(
+    connection: &mut PgConnection,
+    account_id: i64,
+) -> AppResult<CredentialAccountRow> {
+    sqlx::query_as::<_, CredentialAccountRow>(
+        "SELECT id, email::text AS email, email_ciphertext, handle, avatar_url, role::text, \
+                status::text, trust_level, password_hash, credential_version, created_at \
+         FROM identity.accounts WHERE id = $1 FOR UPDATE",
+    )
+    .bind(account_id)
+    .fetch_optional(connection)
+    .await?
+    .ok_or(AppError::NotFound)
+}
+
+async fn lock_credential_account_by_email_tx(
+    connection: &mut PgConnection,
+    encryption: Option<&EmailEncryption>,
+    email: &str,
+) -> AppResult<Option<CredentialAccountRow>> {
+    let blind_index = encryption.map(|encryption| encryption.blind_index(email));
+    sqlx::query_as::<_, CredentialAccountRow>(
+        "SELECT id, email::text AS email, email_ciphertext, handle, avatar_url, role::text, \
+                status::text, trust_level, password_hash, credential_version, created_at \
+         FROM identity.accounts WHERE email = $1 OR email_blind_index = $2 FOR UPDATE",
+    )
+    .bind(email)
+    .bind(blind_index)
+    .fetch_optional(connection)
+    .await
+    .map_err(Into::into)
+}
 
 /// Atomically consume a registration code and persist exactly the selected public handle.
 #[allow(clippy::too_many_arguments)] // reason: registration binds proof, encrypted identity fields, chosen handle, and optional password in one transaction
@@ -370,8 +543,117 @@ pub async fn register_account_with_code(
     .bind(row.id)
     .execute(&mut *tx)
     .await?;
+    if password_hash.is_some() {
+        crate::security_events::record_tx(
+            &mut tx,
+            row.id,
+            crate::security_events::SecurityEventKind::PasswordSet,
+            None,
+        )
+        .await?;
+        crate::email_delivery::enqueue_tx(
+            &mut tx,
+            row.id,
+            crate::email_delivery::EmailDeliveryKind::PasswordSet,
+        )
+        .await?;
+    }
+    let row = row.decrypt(encryption)?;
     tx.commit().await?;
-    row.decrypt(encryption)
+    Ok(row)
+}
+
+/// Consume a login code and set a code-only account's first password in the same transaction.
+#[allow(clippy::too_many_arguments)] // reason: mailbox proof, credential mutation, and replacement session must share one transaction
+pub(crate) async fn set_password_with_login_code(
+    pool: &PgPool,
+    encryption: Option<&EmailEncryption>,
+    account_id: i64,
+    email: &str,
+    attempted_code: &str,
+    password_hash: &str,
+    refresh_hash: &str,
+    expires_at: DateTime<Utc>,
+    user_agent: Option<&str>,
+) -> AppResult<CredentialMutation> {
+    let mut tx = pool.begin().await?;
+    let mut account = lock_credential_account_by_id_tx(&mut tx, account_id).await?;
+    if account.status != "active" {
+        return Err(AppError::Forbidden);
+    }
+    if account.password_hash.is_some() {
+        return Err(crate::error::IdentityError::AlreadyHasPassword.into());
+    }
+    let invitation_valid: bool = sqlx::query_scalar(
+        "SELECT invited_at IS NULL OR email_verified_at IS NOT NULL \
+                OR invitation_expires_at > now() \
+         FROM identity.accounts WHERE id = $1",
+    )
+    .bind(account_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    if !invitation_valid {
+        return Err(crate::error::IdentityError::InvitationExpired.into());
+    }
+    let code = lock_email_code_tx(&mut tx, encryption, email, Some(CodePurpose::Login)).await?;
+    if code.attempts >= 5 {
+        return Err(crate::error::IdentityError::CodeExhausted.into());
+    }
+    if !verify_code(attempted_code, &code.code_hash) {
+        sqlx::query("UPDATE identity.email_codes SET attempts = attempts + 1 WHERE id = $1")
+            .bind(code.id)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        return Err(crate::error::IdentityError::InvalidCode.into());
+    }
+    sqlx::query(
+        "UPDATE identity.email_codes SET attempts = attempts + 1, used_at = now() WHERE id = $1",
+    )
+    .bind(code.id)
+    .execute(&mut *tx)
+    .await?;
+    let auth_version: i64 = sqlx::query_scalar(
+        "UPDATE identity.accounts SET password_hash = $1, email_verified_at = now(), \
+                invitation_accepted_at = CASE WHEN invited_at IS NOT NULL \
+                                             THEN COALESCE(invitation_accepted_at, now()) \
+                                             ELSE invitation_accepted_at END, \
+                credential_version = credential_version + 1, auth_version = auth_version + 1, \
+                legacy_access_revoked_before = now(), updated_at = now() \
+         WHERE id = $2 AND password_hash IS NULL RETURNING auth_version",
+    )
+    .bind(password_hash)
+    .bind(account_id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or(crate::error::IdentityError::AlreadyHasPassword)?;
+    invalidate_password_reset_codes_tx(&mut tx, account_id).await?;
+    let replacement_session_id = replace_all_sessions_tx(
+        &mut tx,
+        account_id,
+        refresh_hash,
+        expires_at,
+        user_agent,
+        auth_version,
+    )
+    .await?;
+    crate::security_events::record_tx(
+        &mut tx,
+        account_id,
+        crate::security_events::SecurityEventKind::PasswordSet,
+        Some(replacement_session_id),
+    )
+    .await?;
+    crate::email_delivery::enqueue_tx(
+        &mut tx,
+        account_id,
+        crate::email_delivery::EmailDeliveryKind::PasswordSet,
+    )
+    .await?;
+    account.password_hash = Some(password_hash.to_owned());
+    let account = account.decrypt(encryption)?;
+    tx.commit().await?;
+    Ok(CredentialMutation { account, session_id: replacement_session_id, auth_version })
 }
 
 /// Provision an unverified account that must still prove campus mailbox ownership.
@@ -592,14 +874,15 @@ pub async fn insert_session(
     let family_id = uuid::Uuid::new_v4();
     let session_id: i64 = sqlx::query_scalar(
         "INSERT INTO identity.sessions \
-         (account_id, refresh_hash, family_id, user_agent, expires_at) \
-         VALUES ($1, $2, $3, $4, $5) RETURNING id",
+         (account_id, refresh_hash, family_id, user_agent, expires_at, issued_auth_version) \
+         VALUES ($1, $2, $3, $4, $5, $6) RETURNING id",
     )
     .bind(account_id)
     .bind(refresh_hash)
     .bind(family_id)
     .bind(user_agent)
     .bind(expires_at)
+    .bind(auth_version)
     .fetch_one(&mut *tx)
     .await?;
     tx.commit().await?;
@@ -642,7 +925,8 @@ pub async fn rotate_session(
     let row = sqlx::query_as::<_, SessionRow>(
         "SELECT id, account_id, refresh_hash, expires_at, revoked_at, family_id, \
                 replaced_by_id, user_agent, created_at, last_used_at, \
-                recent_authenticated_at, recent_auth_method, recent_auth_credential_version \
+                recent_authenticated_at, recent_auth_method, recent_auth_credential_version, \
+                issued_auth_version \
          FROM identity.sessions WHERE id = $1 FOR UPDATE",
     )
     .bind(session_id)
@@ -661,7 +945,23 @@ pub async fn rotate_session(
         .bind(row.family_id)
         .execute(&mut *tx)
         .await?;
-        invalidate_account_access(&mut tx, row.account_id).await?;
+        let current_auth_version: i64 =
+            sqlx::query_scalar("SELECT auth_version FROM identity.accounts WHERE id = $1")
+                .bind(row.account_id)
+                .fetch_one(&mut *tx)
+                .await?;
+        if row.issued_auth_version.is_none()
+            || row.issued_auth_version == Some(current_auth_version)
+        {
+            invalidate_account_access(&mut tx, row.account_id).await?;
+        }
+        crate::security_events::record_tx(
+            &mut tx,
+            row.account_id,
+            crate::security_events::SecurityEventKind::RefreshReplayDetected,
+            Some(row.id),
+        )
+        .await?;
         tx.commit().await?;
         return Err(AppError::Unauthorized);
     }
@@ -677,8 +977,9 @@ pub async fn rotate_session(
     let successor_id: i64 = sqlx::query_scalar(
         "INSERT INTO identity.sessions \
          (account_id, refresh_hash, family_id, rotated_from_id, user_agent, expires_at, \
-          recent_authenticated_at, recent_auth_method, recent_auth_credential_version) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id",
+          recent_authenticated_at, recent_auth_method, recent_auth_credential_version, \
+          issued_auth_version) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id",
     )
     .bind(row.account_id)
     .bind(successor_hash)
@@ -689,6 +990,7 @@ pub async fn rotate_session(
     .bind(row.recent_authenticated_at)
     .bind(row.recent_auth_method)
     .bind(row.recent_auth_credential_version)
+    .bind(row.issued_auth_version)
     .fetch_one(&mut *tx)
     .await?;
     sqlx::query(
@@ -840,110 +1142,285 @@ pub async fn list_sessions(
     Ok(rows)
 }
 
-/// Atomically update a password and revoke all access, including legacy JWTs.
-pub async fn reset_password_and_revoke_all(
-    pool: &PgPool,
+async fn invalidate_password_reset_codes_tx(
+    connection: &mut PgConnection,
     account_id: i64,
-    password_hash: &str,
 ) -> AppResult<()> {
-    let mut tx = pool.begin().await?;
     sqlx::query(
-        "UPDATE identity.accounts SET password_hash = $1, \
-                credential_version = credential_version + 1, auth_version = auth_version + 1, \
-                legacy_access_revoked_before = now() WHERE id = $2",
+        "UPDATE identity.email_codes code \
+         SET used_at = COALESCE(code.used_at, now()), attempts = GREATEST(code.attempts, 99) \
+         FROM identity.accounts account \
+         WHERE account.id = $1 AND code.purpose = 'password_reset' AND code.used_at IS NULL \
+           AND (code.email = account.email \
+                OR code.email_blind_index = account.email_blind_index)",
     )
-    .bind(password_hash)
     .bind(account_id)
-    .execute(&mut *tx)
+    .execute(connection)
     .await?;
+    Ok(())
+}
+
+async fn replace_all_sessions_tx(
+    connection: &mut PgConnection,
+    account_id: i64,
+    refresh_hash: &str,
+    expires_at: DateTime<Utc>,
+    user_agent: Option<&str>,
+    auth_version: i64,
+) -> AppResult<i64> {
     sqlx::query(
         "UPDATE identity.sessions SET revoked_at = COALESCE(revoked_at, now()) \
          WHERE account_id = $1",
     )
     .bind(account_id)
-    .execute(&mut *tx)
+    .execute(&mut *connection)
     .await?;
-    tx.commit().await?;
-    Ok(())
-}
-
-/// Update a password and preserve only the identified current session.
-pub async fn change_password_preserving_session(
-    pool: &PgPool,
-    account_id: i64,
-    current_session_id: Option<i64>,
-    expected_credential_version: i64,
-    password_hash: &str,
-) -> AppResult<()> {
-    let mut tx = pool.begin().await?;
-    let current_credential_version: Option<i64> = sqlx::query_scalar(
-        "SELECT credential_version FROM identity.accounts WHERE id = $1 FOR UPDATE",
+    let session_id = sqlx::query_scalar(
+        "INSERT INTO identity.sessions \
+         (account_id, refresh_hash, family_id, user_agent, expires_at, issued_auth_version) \
+         VALUES ($1, $2, $3, $4, $5, $6) RETURNING id",
     )
     .bind(account_id)
-    .fetch_optional(&mut *tx)
+    .bind(refresh_hash)
+    .bind(uuid::Uuid::new_v4())
+    .bind(user_agent)
+    .bind(expires_at)
+    .bind(auth_version)
+    .fetch_one(connection)
     .await?;
-    if current_credential_version != Some(expected_credential_version) {
+    Ok(session_id)
+}
+
+/// Set the first password under an account lock and replace every prior session.
+#[allow(clippy::too_many_arguments)] // reason: the credential mutation and replacement session are committed as one security boundary
+pub(crate) async fn set_password_and_replace_sessions(
+    pool: &PgPool,
+    context: &crate::auth_middleware::AuthenticatedContext,
+    password_hash: &str,
+    refresh_hash: &str,
+    expires_at: DateTime<Utc>,
+    user_agent: Option<&str>,
+    encryption: Option<&EmailEncryption>,
+) -> AppResult<CredentialMutation> {
+    let mut tx = pool.begin().await?;
+    let mut account = lock_credential_account_by_id_tx(&mut tx, context.account.id).await?;
+    if account.status != "active" {
+        return Err(AppError::Forbidden);
+    }
+    if account.password_hash.is_some() {
+        return Err(crate::error::IdentityError::AlreadyHasPassword.into());
+    }
+    crate::auth_middleware::require_recent_auth_tx(context, &mut tx).await?;
+    let session_id = context.session_id.ok_or(AppError::RecentAuthRequired)?;
+    let auth_version: i64 = sqlx::query_scalar(
+        "UPDATE identity.accounts SET password_hash = $1, \
+                credential_version = credential_version + 1, auth_version = auth_version + 1, \
+                legacy_access_revoked_before = now(), updated_at = now() \
+         WHERE id = $2 AND password_hash IS NULL RETURNING auth_version",
+    )
+    .bind(password_hash)
+    .bind(account.id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or(crate::error::IdentityError::AlreadyHasPassword)?;
+    invalidate_password_reset_codes_tx(&mut tx, account.id).await?;
+    let replacement_session_id = replace_all_sessions_tx(
+        &mut tx,
+        account.id,
+        refresh_hash,
+        expires_at,
+        user_agent,
+        auth_version,
+    )
+    .await?;
+    crate::security_events::record_tx(
+        &mut tx,
+        account.id,
+        crate::security_events::SecurityEventKind::PasswordSet,
+        Some(replacement_session_id),
+    )
+    .await?;
+    crate::email_delivery::enqueue_tx(
+        &mut tx,
+        account.id,
+        crate::email_delivery::EmailDeliveryKind::PasswordSet,
+    )
+    .await?;
+    account.password_hash = Some(password_hash.to_owned());
+    let account = account.decrypt(encryption)?;
+    tx.commit().await?;
+    tracing::info!(
+        account_id = account.id,
+        prior_session_id = session_id,
+        "password was set and prior sessions were replaced"
+    );
+    Ok(CredentialMutation { account, session_id: replacement_session_id, auth_version })
+}
+
+/// Change a password only if the proof's credential epoch is still current.
+#[allow(clippy::too_many_arguments)] // reason: the credential mutation and replacement session are committed as one security boundary
+pub(crate) async fn change_password_and_replace_sessions(
+    pool: &PgPool,
+    account_id: i64,
+    current_session_id: i64,
+    expected_credential_version: i64,
+    password_hash: &str,
+    refresh_hash: &str,
+    expires_at: DateTime<Utc>,
+    user_agent: Option<&str>,
+    encryption: Option<&EmailEncryption>,
+) -> AppResult<CredentialMutation> {
+    let mut tx = pool.begin().await?;
+    let mut account = lock_credential_account_by_id_tx(&mut tx, account_id).await?;
+    if account.status != "active" {
+        return Err(AppError::Forbidden);
+    }
+    if account.credential_version != expected_credential_version {
         return Err(AppError::Conflict(
             "credentials changed; verify the current password again".into(),
         ));
     }
-    if let Some(session_id) = current_session_id {
-        let current_family_id: uuid::Uuid = sqlx::query_scalar(
-            "SELECT family_id FROM identity.sessions \
-             WHERE id = $1 AND account_id = $2 FOR UPDATE",
-        )
-        .bind(session_id)
-        .bind(account_id)
-        .fetch_optional(&mut *tx)
-        .await?
-        .ok_or(AppError::Unauthorized)?;
-        sqlx::query(
-            "UPDATE identity.accounts SET password_hash = $1, \
-                    credential_version = credential_version + 1, \
-                    legacy_access_revoked_before = now() WHERE id = $2",
-        )
-        .bind(password_hash)
-        .bind(account_id)
-        .execute(&mut *tx)
-        .await?;
-        sqlx::query(
-            "UPDATE identity.sessions SET recent_authenticated_at = NULL, \
-                 recent_auth_method = NULL, recent_auth_credential_version = NULL \
-             WHERE account_id = $1 AND family_id = $2",
-        )
-        .bind(account_id)
-        .bind(current_family_id)
-        .execute(&mut *tx)
-        .await?;
-        sqlx::query(
-            "UPDATE identity.sessions SET revoked_at = COALESCE(revoked_at, now()) \
-             WHERE account_id = $1 AND family_id <> $2",
-        )
-        .bind(account_id)
-        .bind(current_family_id)
-        .execute(&mut *tx)
-        .await?;
-    } else {
-        sqlx::query(
-            "UPDATE identity.accounts SET password_hash = $1, \
-                    credential_version = credential_version + 1, \
-                    auth_version = auth_version + 1, legacy_access_revoked_before = now() \
-             WHERE id = $2",
-        )
-        .bind(password_hash)
-        .bind(account_id)
-        .execute(&mut *tx)
-        .await?;
-        sqlx::query(
-            "UPDATE identity.sessions SET revoked_at = COALESCE(revoked_at, now()) \
-             WHERE account_id = $1",
-        )
-        .bind(account_id)
-        .execute(&mut *tx)
-        .await?;
+    if account.password_hash.is_none() {
+        return Err(crate::error::IdentityError::NoPasswordSet.into());
     }
+    let current_session_exists: Option<i64> = sqlx::query_scalar(
+        "SELECT id FROM identity.sessions \
+         WHERE id = $1 AND account_id = $2 AND revoked_at IS NULL AND expires_at > now() \
+         FOR UPDATE",
+    )
+    .bind(current_session_id)
+    .bind(account_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    if current_session_exists.is_none() {
+        return Err(AppError::Unauthorized);
+    }
+    let auth_version: i64 = sqlx::query_scalar(
+        "UPDATE identity.accounts SET password_hash = $1, \
+                credential_version = credential_version + 1, auth_version = auth_version + 1, \
+                legacy_access_revoked_before = now(), updated_at = now() \
+         WHERE id = $2 AND credential_version = $3 RETURNING auth_version",
+    )
+    .bind(password_hash)
+    .bind(account_id)
+    .bind(expected_credential_version)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or_else(|| AppError::Conflict("credentials changed; verify again".into()))?;
+    invalidate_password_reset_codes_tx(&mut tx, account_id).await?;
+    let replacement_session_id = replace_all_sessions_tx(
+        &mut tx,
+        account_id,
+        refresh_hash,
+        expires_at,
+        user_agent,
+        auth_version,
+    )
+    .await?;
+    crate::security_events::record_tx(
+        &mut tx,
+        account_id,
+        crate::security_events::SecurityEventKind::PasswordChanged,
+        Some(replacement_session_id),
+    )
+    .await?;
+    crate::email_delivery::enqueue_tx(
+        &mut tx,
+        account_id,
+        crate::email_delivery::EmailDeliveryKind::PasswordChanged,
+    )
+    .await?;
+    account.password_hash = Some(password_hash.to_owned());
+    let account = account.decrypt(encryption)?;
     tx.commit().await?;
-    Ok(())
+    Ok(CredentialMutation { account, session_id: replacement_session_id, auth_version })
+}
+
+/// Consume a version-bound reset code and replace the password and all sessions atomically.
+#[allow(clippy::too_many_arguments)] // reason: code proof, encrypted identity lookup, credential mutation, and replacement session form one transaction
+pub(crate) async fn reset_password_with_code(
+    pool: &PgPool,
+    encryption: Option<&EmailEncryption>,
+    email: &str,
+    attempted_code: &str,
+    password_hash: &str,
+    refresh_hash: &str,
+    expires_at: DateTime<Utc>,
+    user_agent: Option<&str>,
+) -> AppResult<CredentialMutation> {
+    let mut tx = pool.begin().await?;
+    let mut account = lock_credential_account_by_email_tx(&mut tx, encryption, email)
+        .await?
+        .ok_or(crate::error::IdentityError::InvalidCode)?;
+    if account.status != "active" || account.password_hash.is_none() {
+        return Err(crate::error::IdentityError::InvalidCode.into());
+    }
+    let code =
+        lock_email_code_tx(&mut tx, encryption, email, Some(CodePurpose::PasswordReset)).await?;
+    if code.attempts >= 5 {
+        return Err(crate::error::IdentityError::CodeExhausted.into());
+    }
+    if code.credential_version != Some(account.credential_version) {
+        sqlx::query("UPDATE identity.email_codes SET used_at = now(), attempts = 99 WHERE id = $1")
+            .bind(code.id)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        return Err(crate::error::IdentityError::InvalidCode.into());
+    }
+    if !verify_code(attempted_code, &code.code_hash) {
+        sqlx::query("UPDATE identity.email_codes SET attempts = attempts + 1 WHERE id = $1")
+            .bind(code.id)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        return Err(crate::error::IdentityError::InvalidCode.into());
+    }
+    sqlx::query(
+        "UPDATE identity.email_codes SET attempts = attempts + 1, used_at = now() WHERE id = $1",
+    )
+    .bind(code.id)
+    .execute(&mut *tx)
+    .await?;
+    let auth_version: i64 = sqlx::query_scalar(
+        "UPDATE identity.accounts SET password_hash = $1, \
+                credential_version = credential_version + 1, auth_version = auth_version + 1, \
+                legacy_access_revoked_before = now(), updated_at = now() \
+         WHERE id = $2 AND credential_version = $3 RETURNING auth_version",
+    )
+    .bind(password_hash)
+    .bind(account.id)
+    .bind(account.credential_version)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or_else(|| AppError::Conflict("credentials changed; request a new reset code".into()))?;
+    invalidate_password_reset_codes_tx(&mut tx, account.id).await?;
+    let replacement_session_id = replace_all_sessions_tx(
+        &mut tx,
+        account.id,
+        refresh_hash,
+        expires_at,
+        user_agent,
+        auth_version,
+    )
+    .await?;
+    crate::security_events::record_tx(
+        &mut tx,
+        account.id,
+        crate::security_events::SecurityEventKind::PasswordReset,
+        Some(replacement_session_id),
+    )
+    .await?;
+    crate::email_delivery::enqueue_tx(
+        &mut tx,
+        account.id,
+        crate::email_delivery::EmailDeliveryKind::PasswordReset,
+    )
+    .await?;
+    account.password_hash = Some(password_hash.to_owned());
+    let account = account.decrypt(encryption)?;
+    tx.commit().await?;
+    Ok(CredentialMutation { account, session_id: replacement_session_id, auth_version })
 }
 
 // ---------------------------------------------------------------------------
@@ -982,37 +1459,23 @@ pub async fn insert_account_key(pool: &PgPool, account_id: i64, public_key: &str
 // password_hash
 // ---------------------------------------------------------------------------
 
-/// Update (or set) the password hash for an account.
-pub async fn update_password_hash(pool: &PgPool, account_id: i64, hash: &str) -> AppResult<()> {
-    sqlx::query(
-        "UPDATE identity.accounts SET password_hash = $1, \
-             credential_version = credential_version + 1 WHERE id = $2",
-    )
-    .bind(hash)
-    .bind(account_id)
-    .execute(pool)
-    .await?;
-    Ok(())
-}
-
-/// Look up the password hash for an account by email, returning None if the
-/// account has no password set (email-code-only user).
-pub async fn find_password_hash(
+/// Return the credential epoch that a newly-issued reset code must bind to.
+pub async fn find_password_reset_version(
     pool: &PgPool,
     encryption: Option<&EmailEncryption>,
     email: &str,
-) -> AppResult<Option<String>> {
+) -> AppResult<Option<i64>> {
     let blind_index = encryption.map(|encryption| encryption.blind_index(email));
-    let hash: Option<String> = sqlx::query_scalar(
-        "SELECT password_hash FROM identity.accounts \
-         WHERE email = $1 OR password_email_blind = $2",
+    let credential_version = sqlx::query_scalar(
+        "SELECT credential_version FROM identity.accounts \
+         WHERE (email = $1 OR password_email_blind = $2) \
+           AND password_hash IS NOT NULL AND status = 'active'",
     )
     .bind(email)
     .bind(blind_index)
     .fetch_optional(pool)
-    .await?
-    .flatten();
-    Ok(hash)
+    .await?;
+    Ok(credential_version)
 }
 
 /// Look up the password hash by authenticated account id.

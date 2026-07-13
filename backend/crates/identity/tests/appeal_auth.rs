@@ -73,7 +73,18 @@ async fn suspended_account_receives_only_a_scoped_non_refreshable_appeal_credent
         None,
     )
     .await;
-    assert_eq!(ordinary_login.status(), StatusCode::FORBIDDEN);
+    assert_eq!(ordinary_login.status(), StatusCode::UNAUTHORIZED);
+    let ordinary_login_body = helpers::read_json(ordinary_login).await;
+    let incorrect_login = request(
+        &app,
+        Method::POST,
+        "/api/v2/auth/password/login",
+        json!({ "email": email, "password": "incorrect-password" }),
+        None,
+    )
+    .await;
+    assert_eq!(incorrect_login.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(helpers::read_json(incorrect_login).await, ordinary_login_body);
 
     let appeal_login = request(
         &app,

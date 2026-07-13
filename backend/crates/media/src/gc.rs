@@ -165,6 +165,7 @@ async fn enqueue_candidates(
         .bind(&candidate.status)
         .execute(&mut *connection)
         .await?;
+        crate::deletion::enqueue_variant_cleanup_steps(connection, candidate.id).await?;
         governance::record_system_event_tx(
             connection,
             "media.upload.gc_queued",

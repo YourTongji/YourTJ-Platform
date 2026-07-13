@@ -3,7 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
 import { api } from "@/lib/api/endpoints";
-import type { Account, EmailCodePurpose } from "@/lib/api/types";
+import type { Account, AuthTokens, EmailCodePurpose } from "@/lib/api/types";
 import {
   AUTH_CLEARED_EVENT,
   clearAuth,
@@ -30,6 +30,7 @@ interface AuthContextValue {
     password?: string;
   }) => Promise<void>;
   loginWithPassword: (input: { email: string; password: string }) => Promise<void>;
+  acceptAuthTokens: (tokens: AuthTokens) => Promise<void>;
   refreshMe: () => Promise<void>;
   updateProfile: (input: { handle?: string; avatarUrl?: string }) => Promise<void>;
   clearSession: () => void;
@@ -83,6 +84,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     void refreshMe();
   }, [refreshMe]);
 
+  const acceptAuthTokens = React.useCallback(async (tokens: AuthTokens) => {
+    await clearPrincipalQueries();
+    writeAuth(tokens);
+    activeAccountId.current = tokens.account.id;
+    setAccount(tokens.account);
+  }, [clearPrincipalQueries]);
+
   React.useEffect(() => {
     const clearAfterLocalCredentialLoss = () => {
       activeAccountId.current = undefined;
@@ -115,20 +123,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       },
       verifyEmail: async (input) => {
         const tokens = await api.verifyEmail(input);
-        await clearPrincipalQueries();
-        writeAuth(tokens);
-        activeAccountId.current = tokens.account.id;
-        setAccount(tokens.account);
+        await acceptAuthTokens(tokens);
         toast.success("已登录 YourTJ");
       },
       loginWithPassword: async (input) => {
         const tokens = await api.passwordLogin(input);
-        await clearPrincipalQueries();
-        writeAuth(tokens);
-        activeAccountId.current = tokens.account.id;
-        setAccount(tokens.account);
+        await acceptAuthTokens(tokens);
         toast.success("已登录 YourTJ");
       },
+      acceptAuthTokens,
       refreshMe,
       updateProfile: async (input) => {
         const updated = await api.updateMe(input);
@@ -164,7 +167,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
       },
     }),
-    [account, clearPrincipalQueries, isLoading, refreshMe],
+    [acceptAuthTokens, account, clearPrincipalQueries, isLoading, refreshMe],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

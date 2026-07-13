@@ -15,6 +15,8 @@ pub(crate) struct ActivityDayRow {
     pub threads_created: i32,
     pub comments_created: i32,
     pub likes_given: i32,
+    pub check_ins: i32,
+    pub score: i64,
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -23,7 +25,78 @@ pub(crate) struct ScorePolicyRow {
     pub thread_weight: i32,
     pub comment_weight: i32,
     pub like_weight: i32,
+    pub check_in_weight: i32,
     pub reason: String,
     pub changed_by: Option<i64>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, sqlx::FromRow)]
+pub(crate) struct ActivityScoringSnapshotRow {
+    pub version: i64,
+    pub trust_policy_version: i64,
+    pub thread_weight: i32,
+    pub comment_weight: i32,
+    pub like_weight: i32,
+    pub check_in_weight: i32,
+    pub like_daily_cap: i32,
+}
+
+#[derive(Debug, sqlx::FromRow)]
+pub(crate) struct CheckInStatusRow {
+    pub activity_date: NaiveDate,
+    pub checked_in_at: Option<DateTime<Utc>>,
+    pub current_streak: i64,
+    pub total_days: i64,
+    pub next_reset_at: DateTime<Utc>,
+}
+
+#[derive(Debug, sqlx::FromRow)]
+pub(crate) struct TrustLevelPolicyRow {
+    pub version: i64,
+    pub score_policy_version: i64,
+    pub threshold_level_2: i32,
+    pub threshold_level_3: i32,
+    pub threshold_level_4: i32,
+    pub threshold_level_5: i32,
+    pub threshold_level_6: i32,
+    pub like_daily_cap: i32,
+    pub demotion_cooldown_days: i32,
+    pub reason: String,
+    pub changed_by: Option<i64>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, sqlx::FromRow)]
+#[allow(dead_code)] // reason: sqlx maps the full progress row; only a subset is read in evaluation paths
+pub(crate) struct TrustProgressRow {
+    pub account_id: i64,
+    pub trust_level: i16,
+    pub qualifying_score: i64,
+    pub policy_version: i64,
+    pub override_level: Option<i16>,
+    pub override_reason: Option<String>,
+    pub override_by: Option<i64>,
+    pub override_at: Option<DateTime<Utc>>,
+    pub promotion_blocked_until: Option<DateTime<Utc>>,
+    pub promotion_score_floor: Option<i64>,
+    pub last_evaluated_at: DateTime<Utc>,
+    pub last_scheduled_evaluation_date: Option<NaiveDate>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, sqlx::FromRow)]
+pub(crate) struct TrustLevelEventRow {
+    pub id: i64,
+    pub account_id: i64,
+    pub event_kind: String,
+    pub from_level: i16,
+    pub to_level: i16,
+    pub qualifying_score: i64,
+    pub policy_version: i64,
+    pub actor_kind: String,
+    pub actor_account_id: Option<i64>,
+    pub reason: Option<String>,
+    pub governance_event_id: Option<i64>,
     pub created_at: DateTime<Utc>,
 }

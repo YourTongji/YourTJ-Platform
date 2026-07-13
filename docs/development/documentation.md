@@ -30,8 +30,10 @@
 - 文件名使用 lowercase kebab-case；`docs/README.md` 是唯一例外。
 - 每个 `docs/` 下的 canonical 文档只有一个 H1，开头包含：`文档类型`、`状态`、`负责人`、`最近核验`。
 - `最近核验` 写日期和 commit/ref；不要写“本 PR”或随合并失效的相对描述。
-- 文档生命周期只用 `Active`、`Draft`、`Deprecated`。Deprecated 必须链接替代文档并尽快删除。
-- 产品实现状态只用 `Current`、`Partial`、`Planned`、`Decision needed`。
+- 元数据中的 `状态` 只描述文档生命周期，使用 `Active`、`Draft`、`Deprecated`；Deprecated 必须链接
+  替代文档并尽快删除。不要把功能是否上线写进这项元数据。
+- 文档正文中的能力实现状态只用 `Current`、`Partial`、`Planned`、`Decision needed`；不要用这些词
+  替代文档生命周期。
 - 命令、字段和状态使用 code formatting；产品/运维 prose 默认中文，代码标识保持原语言。
 
 ## 一份领域文档应回答什么

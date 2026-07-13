@@ -13,6 +13,7 @@ import * as React from "react";
 import { toast } from "sonner";
 
 import { PaginationControls, ReasonDialog } from "@/components/admin/admin-primitives";
+import { MediaReconciliation } from "@/components/admin/media-reconciliation";
 import { RecentAuthDialog } from "@/components/auth/recent-auth-dialog";
 import { EmptyState, ErrorState, LoadingState } from "@/components/common/states";
 import { Badge } from "@/components/ui/badge";
@@ -71,6 +72,9 @@ function expiryBadge(hold: MediaRetentionHold) {
 
 export function MediaOperations() {
   const queryClient = useQueryClient();
+  const [reconciliationCursorStack, setReconciliationCursorStack] = React.useState<
+    Array<string | null>
+  >([null]);
   const [holdState, setHoldState] = React.useState<HoldState>("active");
   const [holdCursorStack, setHoldCursorStack] = React.useState<Array<string | null>>([null]);
   const [jobStatus, setJobStatus] = React.useState<JobStatus>("dead_letter");
@@ -84,9 +88,16 @@ export function MediaOperations() {
   const [recentAuthRetry, setRecentAuthRetry] = React.useState<(() => void) | null>(null);
   const handledHoldInventoryError = React.useRef<unknown>(null);
   const handledJobInventoryError = React.useRef<unknown>(null);
+  const handledReconciliationError = React.useRef<unknown>(null);
+  const reconciliationCursor = reconciliationCursorStack.at(-1);
   const holdCursor = holdCursorStack.at(-1);
   const jobCursor = jobCursorStack.at(-1);
 
+  const reconciliation = useQuery({
+    queryKey: ["admin", "media", "reconciliation", reconciliationCursor],
+    queryFn: () => api.adminMediaReconciliation(reconciliationCursor),
+    gcTime: 0,
+  });
   const holds = useQuery({
     queryKey: ["admin", "media", "retention-holds", holdState, holdCursor],
     queryFn: () => api.adminMediaRetentionHolds(holdCursor, holdState),
@@ -99,8 +110,24 @@ export function MediaOperations() {
   });
   const holdsError = holds.error;
   const jobsError = jobs.error;
+  const reconciliationError = reconciliation.error;
   const refetchHolds = holds.refetch;
   const refetchJobs = jobs.refetch;
+  const refetchReconciliation = reconciliation.refetch;
+  const refetchOperationsInventories = React.useCallback(() => {
+    void Promise.all([refetchReconciliation(), refetchHolds(), refetchJobs()]);
+  }, [refetchHolds, refetchJobs, refetchReconciliation]);
+
+  React.useEffect(() => {
+    if (
+      reconciliationError
+      && reconciliationError !== handledReconciliationError.current
+      && isRecentAuthRequired(reconciliationError)
+    ) {
+      handledReconciliationError.current = reconciliationError;
+      setRecentAuthRetry(() => refetchOperationsInventories);
+    }
+  }, [reconciliationError, refetchOperationsInventories]);
 
   React.useEffect(() => {
     if (
@@ -109,9 +136,9 @@ export function MediaOperations() {
       && isRecentAuthRequired(holdsError)
     ) {
       handledHoldInventoryError.current = holdsError;
-      setRecentAuthRetry(() => () => { void Promise.all([refetchHolds(), refetchJobs()]); });
+      setRecentAuthRetry(() => refetchOperationsInventories);
     }
-  }, [holdsError, refetchHolds, refetchJobs]);
+  }, [holdsError, refetchOperationsInventories]);
 
   React.useEffect(() => {
     if (
@@ -120,9 +147,9 @@ export function MediaOperations() {
       && isRecentAuthRequired(jobsError)
     ) {
       handledJobInventoryError.current = jobsError;
-      setRecentAuthRetry(() => () => { void Promise.all([refetchHolds(), refetchJobs()]); });
+      setRecentAuthRetry(() => refetchOperationsInventories);
     }
-  }, [jobsError, refetchHolds, refetchJobs]);
+  }, [jobsError, refetchOperationsInventories]);
 
   const holdMutation = useMutation({
     mutationFn: async ({ decision, reason, kind, expiresAt }: {
@@ -241,6 +268,7 @@ export function MediaOperations() {
     setIsCreateHoldOpen(true);
   }
 
+  const reconciliationErrorNeedsRecentAuth = isRecentAuthRequired(reconciliation.error);
   const holdErrorNeedsRecentAuth = isRecentAuthRequired(holds.error);
   const jobErrorNeedsRecentAuth = isRecentAuthRequired(jobs.error);
 
@@ -255,7 +283,29 @@ export function MediaOperations() {
         </CardContent>
       </Card>
 
-      <section className="space-y-3" aria-labelledby="retention-inventory-title">
+      <MediaReconciliation
+        report={reconciliation.data}
+        isLoading={reconciliation.isLoading}
+        isFetching={reconciliation.isFetching}
+        hasError={reconciliation.isError}
+        error={reconciliation.error}
+        requiresRecentAuth={reconciliationErrorNeedsRecentAuth}
+        hasPrevious={reconciliationCursorStack.length > 1}
+        onRefresh={() => {
+          if (reconciliationCursorStack.length > 1) {
+            setReconciliationCursorStack([null]);
+          } else {
+            void reconciliation.refetch();
+          }
+        }}
+        onPrevious={() => setReconciliationCursorStack((items) => (
+          items.length > 1 ? items.slice(0, -1) : items
+        ))}
+        onNext={(cursor) => setReconciliationCursorStack((items) => [...items, cursor])}
+        onRequestRecentAuth={() => setRecentAuthRetry(() => refetchOperationsInventories)}
+      />
+
+      <section className="space-y-3 border-t pt-6" aria-labelledby="retention-inventory-title">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
           <div>
             <h3 id="retention-inventory-title" className="flex items-center gap-2 font-semibold">

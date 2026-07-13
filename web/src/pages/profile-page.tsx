@@ -44,6 +44,7 @@ export function ProfilePage() {
     queryKey: ["profile", name, "viewer", viewerCacheKey],
     queryFn: () => api.publicUser(name),
     enabled: Boolean(name),
+    refetchInterval: 4 * 60_000,
   });
   const threads = useInfiniteQuery({
     queryKey: ["profile", name, "threads", viewerCacheKey],
@@ -183,6 +184,7 @@ export function ProfilePage() {
           onToggleMute={() => muteRelationship.mutate()}
           onToggleBlock={() => blockRelationship.mutate()}
           onOpenRelationshipList={setRelationshipList}
+          onMediaDeliveryRefresh={() => void profile.refetch()}
         />
 
         <div className="min-[1240px]:hidden">

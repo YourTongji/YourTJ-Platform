@@ -130,7 +130,12 @@ async fn persisted_registration_purpose_survives_account_state_change() {
         .oneshot(json_request(
             Method::POST,
             "/api/v2/auth/email/verify",
-            json!({ "email": email, "code": "333333" }),
+            json!({
+                "email": email,
+                "code": "333333",
+                "purpose": "registration",
+                "password": "correct-horse-battery-staple!"
+            }),
         ))
         .await
         .expect("verification response");
@@ -142,6 +147,14 @@ async fn persisted_registration_purpose_survives_account_state_change() {
             .await
             .expect("code state");
     assert!(was_consumed);
+    let password_was_set: bool = sqlx::query_scalar(
+        "SELECT password_hash IS NOT NULL FROM identity.accounts WHERE email = $1",
+    )
+    .bind(&email)
+    .fetch_one(&pool)
+    .await
+    .expect("password state");
+    assert!(!password_was_set);
 }
 
 #[tokio::test]
@@ -190,21 +203,39 @@ async fn fifty_concurrent_verifications_consume_code_once() {
 }
 
 #[tokio::test]
-async fn password_login_is_neutral_for_missing_password_and_missing_account() {
+async fn password_login_is_neutral_for_missing_password_account_and_unavailable_state() {
     const DUMMY_HASH: &str = "$argon2id$v=19$m=19456,t=2,p=1$lMsuCNrM/Jk4lpdAY/Gk9w$NkmJDYSq0o5US61ZPai1ajtpZWKmn7Rvn4wqQn3DR7Y";
+    const DUMMY_PASSWORD: &str = "yourtj-constant-dummy-password";
     let (pool, app) = helpers::create_test_app().await;
     let suffix = uuid::Uuid::new_v4().simple().to_string();
     let wrong_email = format!("wrong-{suffix}@tongji.edu.cn");
     let no_password_email = format!("no-password-{suffix}@tongji.edu.cn");
     let missing_email = format!("missing-{suffix}@tongji.edu.cn");
+    let suspended_email = format!("suspended-{suffix}@tongji.edu.cn");
     let wrong_id = insert_account(&pool, &wrong_email, &format!("wrong-{suffix}")).await;
     insert_account(&pool, &no_password_email, &format!("none-{suffix}")).await;
+    let suspended_id =
+        insert_account(&pool, &suspended_email, &format!("suspended-{suffix}")).await;
     sqlx::query("UPDATE identity.accounts SET password_hash = $1 WHERE id = $2")
         .bind(DUMMY_HASH)
         .bind(wrong_id)
         .execute(&pool)
         .await
         .expect("set password hash");
+    sqlx::query("UPDATE identity.accounts SET password_hash = $1 WHERE id = $2")
+        .bind(DUMMY_HASH)
+        .bind(suspended_id)
+        .execute(&pool)
+        .await
+        .expect("set suspended password account");
+    sqlx::query(
+        "INSERT INTO identity.sanctions (account_id, kind, reason, ends_at) \
+         VALUES ($1, 'suspend', 'password response neutrality test', now() + interval '1 day')",
+    )
+    .bind(suspended_id)
+    .execute(&pool)
+    .await
+    .expect("suspend password account");
 
     let mut bodies = Vec::new();
     for email in [wrong_email, no_password_email, missing_email] {
@@ -222,6 +253,17 @@ async fn password_login_is_neutral_for_missing_password_and_missing_account() {
     }
     assert_eq!(bodies[0], bodies[1]);
     assert_eq!(bodies[1], bodies[2]);
+
+    let suspended_response = app
+        .oneshot(json_request(
+            Method::POST,
+            "/api/v2/auth/password/login",
+            json!({ "email": suspended_email, "password": DUMMY_PASSWORD }),
+        ))
+        .await
+        .expect("suspended password login response");
+    assert_eq!(suspended_response.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(helpers::read_json(suspended_response).await, bodies[0]);
 }
 
 #[tokio::test]
@@ -257,6 +299,46 @@ async fn password_forgot_is_neutral_when_account_or_delivery_is_missing() {
             .expect("forgot response");
         assert_eq!(response.status(), StatusCode::NO_CONTENT);
     }
+}
+
+#[tokio::test]
+async fn password_reset_is_neutral_for_missing_ineligible_and_code_missing_accounts() {
+    const PASSWORD_HASH: &str = "$argon2id$v=19$m=19456,t=2,p=1$lMsuCNrM/Jk4lpdAY/Gk9w$NkmJDYSq0o5US61ZPai1ajtpZWKmn7Rvn4wqQn3DR7Y";
+    let (pool, app) = helpers::create_test_app().await;
+    let suffix = uuid::Uuid::new_v4().simple().to_string();
+    let existing_email = format!("reset-neutral-existing-{suffix}@tongji.edu.cn");
+    let code_only_email = format!("reset-neutral-code-only-{suffix}@tongji.edu.cn");
+    let missing_email = format!("reset-neutral-missing-{suffix}@tongji.edu.cn");
+    let account_id =
+        insert_account(&pool, &existing_email, &format!("reset-neutral-{suffix}")).await;
+    insert_account(&pool, &code_only_email, &format!("code-only-{suffix}")).await;
+    sqlx::query("UPDATE identity.accounts SET password_hash = $1 WHERE id = $2")
+        .bind(PASSWORD_HASH)
+        .bind(account_id)
+        .execute(&pool)
+        .await
+        .expect("set password");
+
+    let mut bodies = Vec::new();
+    for email in [existing_email, code_only_email, missing_email] {
+        let response = app
+            .clone()
+            .oneshot(json_request(
+                Method::POST,
+                "/api/v2/auth/password/reset",
+                json!({
+                    "email": email,
+                    "code": "123456",
+                    "newPassword": "neutral-reset-correct-horse-battery-staple!"
+                }),
+            ))
+            .await
+            .expect("neutral reset response");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        bodies.push(helpers::read_json(response).await);
+    }
+    assert_eq!(bodies[0], bodies[1]);
+    assert_eq!(bodies[1], bodies[2]);
 }
 
 #[tokio::test]
@@ -379,7 +461,7 @@ async fn device_session_controls_preserve_only_the_current_session() {
 }
 
 #[tokio::test]
-async fn password_reset_revokes_every_access_and_refresh_session() {
+async fn password_reset_replaces_every_access_and_refresh_session() {
     const PASSWORD: &str = "yourtj-constant-dummy-password";
     const PASSWORD_HASH: &str = "$argon2id$v=19$m=19456,t=2,p=1$lMsuCNrM/Jk4lpdAY/Gk9w$NkmJDYSq0o5US61ZPai1ajtpZWKmn7Rvn4wqQn3DR7Y";
     let (pool, app) = helpers::create_test_app().await;
@@ -411,14 +493,22 @@ async fn password_reset_revokes_every_access_and_refresh_session() {
         ))
         .await
         .expect("password reset response");
-    assert_eq!(reset.status(), StatusCode::NO_CONTENT);
+    assert_eq!(reset.status(), StatusCode::OK);
+    let reset_body = helpers::read_json(reset).await;
+    let replacement_access =
+        reset_body["accessToken"].as_str().expect("replacement access token").to_owned();
     assert_eq!(
         authenticated_status(app.clone(), Method::GET, "/api/v2/me", &first_access, None).await,
         StatusCode::UNAUTHORIZED
     );
     assert_eq!(
-        authenticated_status(app, Method::GET, "/api/v2/me", &second_access, None).await,
+        authenticated_status(app.clone(), Method::GET, "/api/v2/me", &second_access, None).await,
         StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        authenticated_status(app.clone(), Method::GET, "/api/v2/me", &replacement_access, None,)
+            .await,
+        StatusCode::OK
     );
     let active_sessions: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM identity.sessions WHERE account_id = $1 AND revoked_at IS NULL",
@@ -427,11 +517,11 @@ async fn password_reset_revokes_every_access_and_refresh_session() {
     .fetch_one(&pool)
     .await
     .expect("active session count");
-    assert_eq!(active_sessions, 0);
+    assert_eq!(active_sessions, 1);
 }
 
 #[tokio::test]
-async fn password_change_preserves_current_session_and_revokes_others() {
+async fn password_change_replaces_current_session_and_revokes_others() {
     const PASSWORD: &str = "yourtj-constant-dummy-password";
     const PASSWORD_HASH: &str = "$argon2id$v=19$m=19456,t=2,p=1$lMsuCNrM/Jk4lpdAY/Gk9w$NkmJDYSq0o5US61ZPai1ajtpZWKmn7Rvn4wqQn3DR7Y";
     let (pool, app) = helpers::create_test_app().await;
@@ -449,27 +539,40 @@ async fn password_change_preserves_current_session_and_revokes_others() {
     let current_access = current["accessToken"].as_str().expect("current access token").to_owned();
     let other_access = other["accessToken"].as_str().expect("other access token").to_owned();
 
-    assert_eq!(
-        authenticated_status(
-            app.clone(),
-            Method::POST,
-            "/api/v2/auth/password/change",
-            &current_access,
-            Some(json!({
-                "currentPassword": PASSWORD,
-                "newPassword": "changed-correct-horse-battery-staple!"
-            })),
+    let change = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/v2/auth/password/change")
+                .header(header::AUTHORIZATION, format!("Bearer {current_access}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({
+                        "currentPassword": PASSWORD,
+                        "newPassword": "changed-correct-horse-battery-staple!"
+                    })
+                    .to_string(),
+                ))
+                .expect("password change request"),
         )
-        .await,
-        StatusCode::NO_CONTENT
-    );
+        .await
+        .expect("password change response");
+    assert_eq!(change.status(), StatusCode::OK);
+    let change_body = helpers::read_json(change).await;
+    let replacement_access =
+        change_body["accessToken"].as_str().expect("replacement access token").to_owned();
     assert_eq!(
         authenticated_status(app.clone(), Method::GET, "/api/v2/me", &current_access, None).await,
-        StatusCode::OK
+        StatusCode::UNAUTHORIZED
     );
     assert_eq!(
-        authenticated_status(app, Method::GET, "/api/v2/me", &other_access, None).await,
+        authenticated_status(app.clone(), Method::GET, "/api/v2/me", &other_access, None).await,
         StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        authenticated_status(app, Method::GET, "/api/v2/me", &replacement_access, None).await,
+        StatusCode::OK
     );
 }
 

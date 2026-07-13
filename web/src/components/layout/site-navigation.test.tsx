@@ -16,7 +16,6 @@ vi.mock("@/context/auth-provider", () => ({
 
 vi.mock("@/lib/api/endpoints", () => ({
   api: {
-    mediaUrl: vi.fn(),
     promotions: apiMocks.promotions,
     recordPromotionEvent: apiMocks.recordPromotionEvent,
   },
@@ -61,7 +60,16 @@ describe("SiteSidebar promotions", () => {
         body: "从校内资源开始认识社区。",
         ctaLabel: "查看指南",
         targetUrl: "/forum/threads/8",
-        assetId: null,
+        assetId: "17",
+        assetDelivery: {
+          assetId: "17",
+          variant: "display_1280",
+          url: "https://media.example.test/assets/17/display.webp?auth_key=test",
+          expiresAt: Math.floor(Date.now() / 1000) + 300,
+          mime: "image/webp",
+          width: 1280,
+          height: 560,
+        },
         status: "published",
         effectiveState: "active",
         priority: 10,
@@ -83,6 +91,7 @@ describe("SiteSidebar promotions", () => {
         ctaLabel: null,
         targetUrl: "/forum",
         assetId: null,
+        assetDelivery: null,
         status: "published",
         effectiveState: "active",
         priority: 1,
@@ -109,6 +118,10 @@ describe("SiteSidebar promotions", () => {
     expect(screen.queryByText("ADVERTISEMENT")).not.toBeInTheDocument();
     expect(screen.queryByText("同位置低优先级内容")).not.toBeInTheDocument();
     expect(screen.getByText("社区推广")).toBeVisible();
+    expect(view.container.querySelector("img[src*='media.example.test']")).toHaveAttribute(
+      "referrerpolicy",
+      "no-referrer",
+    );
     await waitFor(() => {
       expect(apiMocks.recordPromotionEvent).toHaveBeenCalledWith(
         "5",

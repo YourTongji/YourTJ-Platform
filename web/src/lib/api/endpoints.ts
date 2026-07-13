@@ -41,6 +41,7 @@ import type {
   Bookmark,
   Calendar,
   Campus,
+  CheckInStatus,
   Comment,
   ContentFormat,
   Course,
@@ -68,6 +69,8 @@ import type {
   LedgerVerify,
   Major,
   MediaDeletionJob,
+  MediaDelivery,
+  MediaReconciliationReport,
   MediaRetentionHold,
   MediaRetentionHoldInput,
   MediaUsage,
@@ -94,12 +97,16 @@ import type {
   SettingUpdateInput,
   Tag,
   Task,
+  TrustProgress,
+  TrustLevelPolicy,
+  TrustLevelPolicyUpdateInput,
+  TrustLevelAdjustInput,
+  TrustLevelEvent,
   ThreadDetailWithPoll,
   ThreadFeed,
   TimeSlot,
   Upload,
   UploadCredentials,
-  UploadUrl,
   VerificationGrant,
   VerificationGrantInput,
   VerificationType,
@@ -226,15 +233,19 @@ export const api = {
   },
 
   passwordReset(input: { email: string; code: string; newPassword: string }) {
-    return apiRequest<void>("/auth/password/reset", {
+    return apiRequest<AuthTokens>("/auth/password/reset", {
       method: "POST",
       body: input,
       auth: false,
     });
   },
 
+  passwordSet(input: { newPassword: string }) {
+    return apiRequest<AuthTokens>("/auth/password/set", { method: "POST", body: input });
+  },
+
   passwordChange(input: { currentPassword: string; newPassword: string }) {
-    return apiRequest<void>("/auth/password/change", { method: "POST", body: input });
+    return apiRequest<AuthTokens>("/auth/password/change", { method: "POST", body: input });
   },
 
   recentAuthStatus() {
@@ -355,6 +366,14 @@ export const api = {
 
   myActivity(from?: string, to?: string) {
     return apiRequest<ActivityCalendar>("/me/activity", { query: { from, to } });
+  },
+
+  myCheckInStatus() {
+    return apiRequest<CheckInStatus>("/me/check-in");
+  },
+
+  checkIn() {
+    return apiRequest<CheckInStatus>("/me/check-in", { method: "POST" });
   },
 
   drafts() {
@@ -481,7 +500,7 @@ export const api = {
   },
 
   mediaUrl(id: string) {
-    return apiRequest<UploadUrl>(`/media/${encodeURIComponent(id)}/url`);
+    return apiRequest<MediaDelivery>(`/media/${encodeURIComponent(id)}/url`);
   },
 
   myMediaUploads(usage?: MediaUsage, cursor?: string | null) {
@@ -492,6 +511,10 @@ export const api = {
 
   myMediaUpload(id: string) {
     return apiRequest<MyUpload>(`/me/media/uploads/${encodeURIComponent(id)}`);
+  },
+
+  myMediaPreview(id: string) {
+    return apiBlobRequest(`/me/media/uploads/${encodeURIComponent(id)}/preview`);
   },
 
   bindMyProfileMedia(slot: "avatar" | "banner", assetId: string) {
@@ -1273,6 +1296,37 @@ export const api = {
     });
   },
 
+  myTrustProgress() {
+    return apiRequest<TrustProgress>("/me/trust-progress");
+  },
+
+  adminTrustPolicy() {
+    return apiRequest<TrustLevelPolicy>("/admin/trust-policy");
+  },
+
+  updateAdminTrustPolicy(body: TrustLevelPolicyUpdateInput) {
+    return apiRequest<TrustLevelPolicy>("/admin/trust-policy", { method: "PUT", body });
+  },
+
+  adminTrustPolicyHistory(cursor?: string | null) {
+    return apiRequest<Page<TrustLevelPolicy>>("/admin/trust-policy/history", {
+      query: { cursor, limit: 30 },
+    });
+  },
+
+  adjustAdminUserTrustLevel(id: string, body: TrustLevelAdjustInput) {
+    return apiRequest<TrustProgress>(`/admin/users/${encodeURIComponent(id)}/trust-level`, {
+      method: "PATCH",
+      body,
+    });
+  },
+
+  adminUserTrustEvents(id: string, cursor?: string | null) {
+    return apiRequest<Page<TrustLevelEvent>>(`/admin/users/${encodeURIComponent(id)}/trust-events`, {
+      query: { cursor, limit: 30 },
+    });
+  },
+
   adminUsers(query: {
     q?: string;
     role?: "user" | "mod" | "admin";
@@ -1567,10 +1621,10 @@ export const api = {
     });
   },
 
-  createAdminMediaPreviewGrant(id: string, reason: string) {
+  createAdminMediaPreviewGrant(id: string, reason: string, selfReviewConfirmed = false) {
     return apiRequest<ModerationPreviewGrant>(
       `/admin/media/uploads/${encodeURIComponent(id)}/preview-grants`,
-      { method: "POST", body: { reason } },
+      { method: "POST", body: { reason, selfReviewConfirmed } },
     );
   },
 
@@ -1580,11 +1634,23 @@ export const api = {
     });
   },
 
-  moderateAdminMediaUpload(id: string, action: "approve" | "block", reason: string) {
+  moderateAdminMediaUpload(
+    id: string,
+    action: "approve" | "block",
+    reason: string,
+    selfReviewConfirmed = false,
+  ) {
     return apiRequest<{ ok: boolean }>(`/admin/media/uploads/${encodeURIComponent(id)}/${action}`, {
       method: "POST",
-      body: { reason },
+      body: { reason, selfReviewConfirmed },
     });
+  },
+
+  retryAdminMediaProcessing(id: string, reason: string) {
+    return apiRequest<void>(
+      `/admin/media/uploads/${encodeURIComponent(id)}/processing/retry`,
+      { method: "POST", body: { reason } },
+    );
   },
 
   placeAdminMediaRetentionHold(
@@ -1619,6 +1685,12 @@ export const api = {
   ) {
     return apiRequest<Page<MediaDeletionJob>>("/admin/media/deletion-jobs", {
       query: { cursor, limit: 30, status },
+    });
+  },
+
+  adminMediaReconciliation(cursor?: string | null) {
+    return apiRequest<MediaReconciliationReport>("/admin/media/reconciliation", {
+      query: { cursor, limit: 20 },
     });
   },
 

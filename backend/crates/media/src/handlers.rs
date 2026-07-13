@@ -17,14 +17,16 @@ use shared::{AppError, AppResult, AppState};
 use crate::bindings::{sync_asset_binding, AssetBindingType};
 use crate::deletion::schedule_upload_deletion;
 use crate::dto::{
-    MediaUsage, MyUploadDto, ProfileAssetInput, ReleaseRetentionHoldInput, RetentionHoldInput,
-    UploadCredentialsDto, UploadDto, UploadIntentInput, UploadUrlDto,
+    MediaUsage, MyUploadDto, ProcessingRetryInput, ProfileAssetInput, ReleaseRetentionHoldInput,
+    RetentionHoldInput, UploadCredentialsDto, UploadDto, UploadIntentInput,
 };
 use crate::error::MediaError;
 use crate::models::{ModerationUploadRow, UploadRow};
-use crate::moderation::require_strictly_lower_owner;
+use crate::moderation::authorize_moderation;
 use crate::oss::{self, AliyunStsProvider, OssConfig};
-use crate::preview::{consume_preview_grant, create_preview_grant, PREVIEW_TOKEN_HEADER};
+use crate::preview::{
+    consume_preview_grant, create_preview_grant, read_owner_pending_preview, PREVIEW_TOKEN_HEADER,
+};
 use crate::quarantine::UploadObjectStore;
 use crate::repo;
 
@@ -76,8 +78,18 @@ pub struct DeletionJobListQuery {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ReconciliationQuery {
+    cursor: Option<String>,
+    #[serde(default = "default_limit")]
+    limit: i64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ModerateUploadInput {
     reason: String,
+    #[serde(default)]
+    self_review_confirmed: bool,
 }
 
 fn default_limit() -> i64 {
@@ -105,6 +117,8 @@ fn upload_to_dto(row: &ModerationUploadRow) -> UploadDto {
         bytes: row.bytes,
         mime: row.mime.clone(),
         status: row.status.clone(),
+        delivery_state: row.delivery_state.clone(),
+        delivery_error_code: row.delivery_error_code.clone(),
         usage: row.usage.clone(),
         image_width: row.image_width,
         image_height: row.image_height,
@@ -114,6 +128,7 @@ fn upload_to_dto(row: &ModerationUploadRow) -> UploadDto {
         retention_state: row.retention_state.clone(),
         retention_expires_at: row.retention_expires_at.map(|value| value.timestamp()),
         created_at: row.created_at.timestamp(),
+        is_self_review: row.is_self_review,
     }
 }
 
@@ -125,6 +140,7 @@ fn upload_to_owner_dto(row: &UploadRow) -> MyUploadDto {
         bytes: row.bytes,
         mime: row.mime.clone(),
         status: row.status.clone(),
+        delivery_state: row.delivery_state.clone(),
         image_width: row.image_width,
         image_height: row.image_height,
         created_at: row.created_at.timestamp(),
@@ -179,11 +195,30 @@ fn validate_moderation_reason(reason: &str) -> AppResult<&str> {
     Ok(reason)
 }
 
+fn same_origin_preview_response(
+    preview: crate::quarantine::UploadObjectPreview,
+) -> AppResult<Response> {
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, preview.content_type)
+        .header(header::CONTENT_LENGTH, preview.content_length)
+        .header(header::CACHE_CONTROL, "private, no-store, max-age=0")
+        .header(header::PRAGMA, "no-cache")
+        .header(header::EXPIRES, "0")
+        .header(header::CONTENT_DISPOSITION, "inline")
+        .header("x-content-type-options", "nosniff")
+        .header("cross-origin-resource-policy", "same-origin")
+        .header("content-security-policy", "default-src 'none'; sandbox")
+        .body(preview.body)
+        .map_err(|error| AppError::Internal(anyhow::Error::new(error)))
+}
+
 async fn moderate_upload(
     state: &AppState,
-    auth: &shared::AuthAccount,
+    auth_context: &identity::auth_middleware::AuthenticatedContext,
     upload_id: i64,
     reason: &str,
+    self_review_confirmed: bool,
 ) -> AppResult<()> {
     let mut tx = state.db.begin().await?;
     let (owner_id, owner) = crate::locking::lock_upload_owner(&mut tx, upload_id).await?;
@@ -194,11 +229,12 @@ async fn moderate_upload(
                   WHERE evidence.upload_id = upload.id \
                     AND evidence.evidence_kind = 'trusted_image_preview' \
                     AND evidence.actor_account_id = $2 \
+                    AND evidence.self_review = (upload.account_id = $2) \
                 ) \
          FROM media.uploads upload WHERE upload.id = $1",
     )
     .bind(upload_id)
-    .bind(auth.id)
+    .bind(auth_context.account.id)
     .fetch_optional(&mut *tx)
     .await?;
     let (current_status, locked_owner_id, kind, has_reviewer_evidence) =
@@ -206,7 +242,11 @@ async fn moderate_upload(
     if locked_owner_id != owner_id {
         return Err(AppError::Internal(anyhow::anyhow!("locked media owner changed")));
     }
-    require_strictly_lower_owner(auth, owner_id, &owner.role)?;
+    let authorization =
+        authorize_moderation(&auth_context.account, owner_id, &owner.role, self_review_confirmed)?;
+    if authorization.is_self_review {
+        identity::auth_middleware::require_recent_auth_tx(auth_context, &mut tx).await?;
+    }
     if current_status != "pending" {
         return Err(AppError::Conflict(format!("upload is already {current_status}")));
     }
@@ -224,14 +264,19 @@ async fn moderate_upload(
         .bind(upload_id)
         .execute(&mut *tx)
         .await?;
+    crate::processing::enqueue_variant_processing(&mut tx, upload_id).await?;
     let metadata = serde_json::json!({
         "oldStatus": current_status,
         "newStatus": "clean",
         "evidence": "trusted_image_preview",
+        "selfReview": authorization.is_self_review,
     });
     governance::record_account_event_tx(
         &mut tx,
-        governance::AccountActor { account_id: auth.id, role: &auth.role },
+        governance::AccountActor {
+            account_id: auth_context.account.id,
+            role: &auth_context.account.role,
+        },
         "media.upload.approved",
         "upload",
         &upload_id.to_string(),
@@ -241,15 +286,6 @@ async fn moderate_upload(
     .await?;
     tx.commit().await?;
     Ok(())
-}
-
-fn can_read_upload_url(auth: &shared::AuthAccount, upload: &UploadRow) -> bool {
-    match upload.status.as_str() {
-        "clean" => true,
-        "pending" => upload.account_id == auth.id,
-        "blocked" => false,
-        _ => false,
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -322,7 +358,7 @@ pub async fn callback(
     headers: HeaderMap,
     body_bytes: axum::body::Bytes,
 ) -> AppResult<Json<serde_json::Value>> {
-    let oss_config = require_oss_config(&state)?;
+    require_oss_config(&state)?;
     let public_key_url = oss::callback_public_key_url(&headers)?;
     let callback_client = reqwest::Client::builder()
         .timeout(oss::callback_http_timeout())
@@ -331,7 +367,11 @@ pub async fn callback(
         .map_err(|error| MediaError::Internal(anyhow::Error::new(error)))?;
     let public_key_response =
         callback_client.get(public_key_url).send().await.map_err(|error| {
-            tracing::warn!(?error, "oss callback public key fetch failed");
+            tracing::warn!(
+                is_timeout = error.is_timeout(),
+                is_connect = error.is_connect(),
+                "oss callback public key fetch failed"
+            );
             MediaError::Unavailable("callback public key unavailable".into())
         })?;
     if !public_key_response.status().is_success()
@@ -341,7 +381,11 @@ pub async fn callback(
         return Err(MediaError::Unavailable("callback public key unavailable".into()).into());
     }
     let public_key_bytes = public_key_response.bytes().await.map_err(|error| {
-        tracing::warn!(?error, "oss callback public key read failed");
+        tracing::warn!(
+            is_timeout = error.is_timeout(),
+            is_connect = error.is_connect(),
+            "oss callback public key read failed"
+        );
         MediaError::Unavailable("callback public key unavailable".into())
     })?;
     if public_key_bytes.len() > oss::callback_public_key_max_bytes() {
@@ -379,14 +423,11 @@ pub async fn callback(
         &input.mime,
         &input.sha256,
     )?;
-    let trusted_url = oss::generate_url(&oss_config, &intent.oss_key);
-
     let row = repo::insert_upload_in_tx(
         &mut tx,
         intent.account_id,
         &intent.kind,
         &intent.oss_key,
-        &trusted_url,
         input.bytes,
         &intent.content_type,
         &input.sha256,
@@ -415,7 +456,7 @@ pub async fn get_url(
     State(state): State<AppState>,
     Path(id_str): Path<String>,
     headers: HeaderMap,
-) -> AppResult<Json<UploadUrlDto>> {
+) -> AppResult<Response> {
     let auth = identity::auth_middleware::authenticate(
         &headers,
         &state.db,
@@ -426,15 +467,22 @@ pub async fn get_url(
     .map_err(|_r| AppError::Unauthorized)?;
 
     let id: i64 = id_str.parse().map_err(|_| AppError::NotFound)?;
-    let row = repo::find_upload(&state.db, id).await?.ok_or(MediaError::NotFound)?;
-    if !can_read_upload_url(&auth, &row) {
-        return Err(MediaError::NotFound.into());
-    }
+    let delivery = crate::delivery::resolve_owned_published_variant(
+        &state.db,
+        &state.config,
+        id,
+        auth.id,
+        crate::delivery::DISPLAY_VARIANT,
+    )
+    .await?
+    .ok_or(MediaError::NotFound)?;
 
-    let oss_config = require_oss_config(&state)?;
-    let url = oss::generate_url(&oss_config, &row.oss_key);
-
-    Ok(Json(UploadUrlDto { url }))
+    let mut response = Json(delivery).into_response();
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, header::HeaderValue::from_static("private, no-store"));
+    response.headers_mut().insert(header::PRAGMA, header::HeaderValue::from_static("no-cache"));
+    Ok(response)
 }
 
 /// GET /api/v2/me/media/uploads — list the current account's resumable upload states.
@@ -477,6 +525,27 @@ pub async fn get_my_upload(
         .await?
         .ok_or(MediaError::NotFound)?;
     Ok(Json(upload_to_owner_dto(&upload)))
+}
+
+/// GET /api/v2/me/media/uploads/{id}/preview — stream the owner's pending raster safely.
+pub async fn preview_my_upload(
+    State(state): State<AppState>,
+    Extension(object_store): Extension<Arc<dyn UploadObjectStore>>,
+    Path(id_str): Path<String>,
+    headers: HeaderMap,
+) -> AppResult<Response> {
+    let auth = identity::auth_middleware::authenticate(
+        &headers,
+        &state.db,
+        &state.jwt_secret,
+        state.redis.as_ref(),
+    )
+    .await
+    .map_err(|_| AppError::Unauthorized)?;
+    let upload_id = id_str.parse::<i64>().map_err(|_| AppError::NotFound)?;
+    let preview =
+        read_owner_pending_preview(&state, auth.id, upload_id, object_store.as_ref()).await?;
+    same_origin_preview_response(preview)
 }
 
 async fn bind_profile_asset(
@@ -696,6 +765,56 @@ pub async fn list_deletion_jobs(
     Ok(response)
 }
 
+/// GET /api/v2/admin/media/reconciliation — inspect bounded media state drift without mutation.
+pub async fn reconciliation_report(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<ReconciliationQuery>,
+) -> AppResult<Response> {
+    let auth_context = identity::auth_middleware::authenticate_context(
+        &headers,
+        &state.db,
+        &state.jwt_secret,
+        state.redis.as_ref(),
+    )
+    .await
+    .map_err(|_response| AppError::Unauthorized)?;
+    auth_context
+        .account
+        .require_capability(shared::auth::Capability::RunOperations)
+        .map_err(|_| AppError::Forbidden)?;
+    let limit = validate_page_limit(query.limit)?;
+    let cursor = query
+        .cursor
+        .as_deref()
+        .map(str::parse::<i64>)
+        .transpose()
+        .map_err(|_| AppError::BadRequest("invalid media reconciliation cursor".into()))?;
+    let mut transaction = state.db.begin().await?;
+    identity::auth_middleware::require_recent_auth_tx(&auth_context, &mut transaction).await?;
+    let report = crate::reconciliation::inspect(&mut transaction, cursor, limit).await?;
+    governance::record_account_event_tx(
+        &mut transaction,
+        governance::AccountActor {
+            account_id: auth_context.account.id,
+            role: &auth_context.account.role,
+        },
+        "media.reconciliation.viewed",
+        "media_reconciliation",
+        "dry_run",
+        "authorized bounded media reconciliation viewed",
+        Some(&serde_json::json!({ "resultCount": report.items.len() })),
+    )
+    .await?;
+    transaction.commit().await?;
+    let mut response = Json(report).into_response();
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, header::HeaderValue::from_static("private, no-store"));
+    response.headers_mut().insert(header::PRAGMA, header::HeaderValue::from_static("no-cache"));
+    Ok(response)
+}
+
 /// POST /api/v2/admin/media/deletion-jobs/{id}/retry — requeue one exhausted system job.
 pub async fn retry_deletion_job(
     State(state): State<AppState>,
@@ -721,14 +840,14 @@ pub async fn retry_deletion_job(
     Ok(StatusCode::ACCEPTED)
 }
 
-/// POST /api/v2/admin/media/uploads/{id}/preview-grants — issue one short-lived read grant.
-pub async fn create_upload_preview_grant(
+/// POST /api/v2/admin/media/uploads/{id}/processing/retry — requeue failed Delivery work.
+pub async fn retry_upload_processing(
     State(state): State<AppState>,
     Path(id_str): Path<String>,
     headers: HeaderMap,
-    Json(body): Json<ModerateUploadInput>,
-) -> AppResult<Response> {
-    let auth = identity::auth_middleware::authenticate(
+    Json(body): Json<ProcessingRetryInput>,
+) -> AppResult<StatusCode> {
+    let auth_context = identity::auth_middleware::authenticate_context(
         &headers,
         &state.db,
         &state.jwt_secret,
@@ -736,12 +855,41 @@ pub async fn create_upload_preview_grant(
     )
     .await
     .map_err(|_response| AppError::Unauthorized)?;
-    auth.require_capability(shared::auth::Capability::ModerateContent)
+    auth_context
+        .account
+        .require_capability(shared::auth::Capability::RunOperations)
+        .map_err(|_| AppError::Forbidden)?;
+    let upload_id = id_str.parse::<i64>().map_err(|_| AppError::NotFound)?;
+    let reason = validate_moderation_reason(&body.reason)?;
+    crate::processing::retry_failed_processing(&state.db, &auth_context, upload_id, reason).await?;
+    Ok(StatusCode::ACCEPTED)
+}
+
+/// POST /api/v2/admin/media/uploads/{id}/preview-grants — issue one short-lived read grant.
+pub async fn create_upload_preview_grant(
+    State(state): State<AppState>,
+    Path(id_str): Path<String>,
+    headers: HeaderMap,
+    Json(body): Json<ModerateUploadInput>,
+) -> AppResult<Response> {
+    let auth_context = identity::auth_middleware::authenticate_context(
+        &headers,
+        &state.db,
+        &state.jwt_secret,
+        state.redis.as_ref(),
+    )
+    .await
+    .map_err(|_response| AppError::Unauthorized)?;
+    auth_context
+        .account
+        .require_capability(shared::auth::Capability::ModerateContent)
         .map_err(|_| AppError::Forbidden)?;
 
     let upload_id: i64 = id_str.parse().map_err(|_| AppError::NotFound)?;
     let reason = validate_moderation_reason(&body.reason)?;
-    let grant = create_preview_grant(&state, &auth, upload_id, reason).await?;
+    let grant =
+        create_preview_grant(&state, &auth_context, upload_id, reason, body.self_review_confirmed)
+            .await?;
     let mut response = Json(grant).into_response();
     response
         .headers_mut()
@@ -757,7 +905,7 @@ pub async fn preview_upload(
     Path(id_str): Path<String>,
     headers: HeaderMap,
 ) -> AppResult<Response> {
-    let auth = identity::auth_middleware::authenticate(
+    let auth_context = identity::auth_middleware::authenticate_context(
         &headers,
         &state.db,
         &state.jwt_secret,
@@ -765,7 +913,9 @@ pub async fn preview_upload(
     )
     .await
     .map_err(|_response| AppError::Unauthorized)?;
-    auth.require_capability(shared::auth::Capability::ModerateContent)
+    auth_context
+        .account
+        .require_capability(shared::auth::Capability::ModerateContent)
         .map_err(|_| AppError::Forbidden)?;
 
     let upload_id: i64 = id_str.parse().map_err(|_| AppError::NotFound)?;
@@ -774,22 +924,10 @@ pub async fn preview_upload(
         .and_then(|value| value.to_str().ok())
         .ok_or(AppError::NotFound)?;
     let preview =
-        consume_preview_grant(&state, &auth, upload_id, token, object_store.as_ref()).await?;
-    tracing::info!(upload_id, moderator_id = auth.id, "media preview authorized");
-
-    Response::builder()
-        .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, preview.content_type)
-        .header(header::CONTENT_LENGTH, preview.content_length)
-        .header(header::CACHE_CONTROL, "private, no-store, max-age=0")
-        .header(header::PRAGMA, "no-cache")
-        .header(header::EXPIRES, "0")
-        .header(header::CONTENT_DISPOSITION, "inline")
-        .header("x-content-type-options", "nosniff")
-        .header("cross-origin-resource-policy", "same-origin")
-        .header("content-security-policy", "default-src 'none'; sandbox")
-        .body(preview.body)
-        .map_err(|error| AppError::Internal(anyhow::Error::new(error)))
+        consume_preview_grant(&state, &auth_context, upload_id, token, object_store.as_ref())
+            .await?;
+    tracing::info!(upload_id, moderator_id = auth_context.account.id, "media preview authorized");
+    same_origin_preview_response(preview)
 }
 
 /// POST /api/v2/admin/media/uploads/{id}/approve — approve a pending upload
@@ -799,7 +937,7 @@ pub async fn approve_upload(
     headers: HeaderMap,
     Json(body): Json<ModerateUploadInput>,
 ) -> AppResult<Json<serde_json::Value>> {
-    let auth = identity::auth_middleware::authenticate(
+    let auth_context = identity::auth_middleware::authenticate_context(
         &headers,
         &state.db,
         &state.jwt_secret,
@@ -807,13 +945,15 @@ pub async fn approve_upload(
     )
     .await
     .map_err(|_r| AppError::Unauthorized)?;
-    auth.require_capability(shared::auth::Capability::ModerateContent)
+    auth_context
+        .account
+        .require_capability(shared::auth::Capability::ModerateContent)
         .map_err(|_| AppError::Forbidden)?;
 
     let id: i64 = id_str.parse().map_err(|_| AppError::NotFound)?;
     let reason = validate_moderation_reason(&body.reason)?;
-    moderate_upload(&state, &auth, id, reason).await?;
-    tracing::info!(upload_id = id, moderator_id = auth.id, "upload approved");
+    moderate_upload(&state, &auth_context, id, reason, body.self_review_confirmed).await?;
+    tracing::info!(upload_id = id, moderator_id = auth_context.account.id, "upload approved");
 
     Ok(Json(serde_json::json!({ "ok": true })))
 }
@@ -825,7 +965,7 @@ pub async fn block_upload(
     headers: HeaderMap,
     Json(body): Json<ModerateUploadInput>,
 ) -> AppResult<StatusCode> {
-    let auth = identity::auth_middleware::authenticate(
+    let auth_context = identity::auth_middleware::authenticate_context(
         &headers,
         &state.db,
         &state.jwt_secret,
@@ -833,14 +973,20 @@ pub async fn block_upload(
     )
     .await
     .map_err(|_r| AppError::Unauthorized)?;
-    auth.require_capability(shared::auth::Capability::ModerateContent)
+    auth_context
+        .account
+        .require_capability(shared::auth::Capability::ModerateContent)
         .map_err(|_| AppError::Forbidden)?;
 
     let id: i64 = id_str.parse().map_err(|_| AppError::NotFound)?;
     let reason = validate_moderation_reason(&body.reason)?;
-    schedule_upload_deletion(&state, &auth, id, reason).await?;
+    schedule_upload_deletion(&state, &auth_context, id, reason, body.self_review_confirmed).await?;
 
-    tracing::info!(upload_id = id, moderator_id = auth.id, "upload quarantined for deletion");
+    tracing::info!(
+        upload_id = id,
+        moderator_id = auth_context.account.id,
+        "upload quarantined for deletion"
+    );
     Ok(StatusCode::ACCEPTED)
 }
 
@@ -901,51 +1047,13 @@ pub async fn release_retention_hold(
 
 #[cfg(test)]
 mod tests {
-    use chrono::Utc;
     use shared::AuthAccount;
 
-    use super::{can_read_upload_url, validate_upload_usage, MediaUsage, UploadRow};
-    use crate::moderation::require_strictly_lower_owner;
+    use super::{validate_upload_usage, MediaUsage};
+    use crate::moderation::authorize_moderation;
 
     fn account(id: i64, role: &str) -> AuthAccount {
         AuthAccount { id, role: role.into(), status: "active".into() }
-    }
-
-    fn upload(account_id: i64, status: &str) -> UploadRow {
-        UploadRow {
-            id: 1,
-            account_id,
-            kind: "image".into(),
-            oss_key: "uploads/1/image/file.png".into(),
-            bytes: 10,
-            mime: "image/png".into(),
-            status: status.into(),
-            usage: None,
-            image_width: None,
-            image_height: None,
-            created_at: Utc::now(),
-        }
-    }
-
-    #[test]
-    fn pending_url_is_limited_to_owner_and_staff_must_use_audited_preview() {
-        let pending = upload(10, "pending");
-        assert!(can_read_upload_url(&account(10, "user"), &pending));
-        assert!(!can_read_upload_url(&account(11, "user"), &pending));
-        assert!(!can_read_upload_url(&account(11, "mod"), &pending));
-    }
-
-    #[test]
-    fn blocked_url_is_never_returned_even_to_staff() {
-        let blocked = upload(10, "blocked");
-        assert!(!can_read_upload_url(&account(10, "user"), &blocked));
-        assert!(!can_read_upload_url(&account(11, "admin"), &blocked));
-    }
-
-    #[test]
-    fn clean_url_is_available_to_authenticated_accounts() {
-        let clean = upload(10, "clean");
-        assert!(can_read_upload_url(&account(11, "user"), &clean));
     }
 
     #[test]
@@ -957,13 +1065,11 @@ mod tests {
     }
 
     #[test]
-    fn staff_cannot_moderate_their_own_upload() {
-        assert!(matches!(
-            require_strictly_lower_owner(&account(10, "admin"), 10, "user"),
-            Err(shared::AppError::Forbidden)
-        ));
-        assert!(require_strictly_lower_owner(&account(11, "mod"), 10, "user").is_ok());
-        assert!(require_strictly_lower_owner(&account(11, "mod"), 12, "mod").is_err());
-        assert!(require_strictly_lower_owner(&account(13, "admin"), 12, "mod").is_ok());
+    fn admin_self_review_requires_matching_admin_owner_and_confirmation() {
+        assert!(authorize_moderation(&account(10, "admin"), 10, "admin", false).is_err());
+        assert!(authorize_moderation(&account(10, "admin"), 10, "admin", true).is_ok());
+        assert!(authorize_moderation(&account(11, "mod"), 10, "user", false).is_ok());
+        assert!(authorize_moderation(&account(11, "mod"), 12, "mod", false).is_err());
+        assert!(authorize_moderation(&account(13, "admin"), 12, "mod", false).is_ok());
     }
 }

@@ -12,6 +12,7 @@ import {
   Volume2,
   VolumeX,
 } from "lucide-react";
+import * as React from "react";
 import { Link } from "react-router";
 
 import { TeaBadge } from "@/components/common/tea-badge";
@@ -58,6 +59,7 @@ interface ProfileSummaryProps {
   onToggleMute: () => void;
   onToggleBlock: () => void;
   onOpenRelationshipList: (kind: ProfileRelationshipListKind) => void;
+  onMediaDeliveryRefresh: () => void;
 }
 
 function InlineStat({
@@ -109,31 +111,53 @@ export function ProfileSummary({
   onToggleMute,
   onToggleBlock,
   onOpenRelationshipList,
+  onMediaDeliveryRefresh,
 }: ProfileSummaryProps) {
   const roleLabel = roleLabels[profile.role];
   const isBlocked = Boolean(relationship?.blockedByMe);
   const controlsPending = relationshipLoading || relationshipPending;
   const displayName = profile.displayName || profile.handle;
   const websiteLabel = profile.website?.replace(/^https?:\/\//, "").replace(/\/$/, "");
+  const lastMediaRecoveryAt = React.useRef(0);
+  const recoverMediaDelivery = () => {
+    const now = Date.now();
+    if (now - lastMediaRecoveryAt.current < 15_000) return;
+    lastMediaRecoveryAt.current = now;
+    onMediaDeliveryRefresh();
+  };
 
   return (
     <>
       <Card className="overflow-hidden rounded-2xl border-border/60 shadow-none">
-        {/* Banner — Figma: tall night-sky cover with rounded top only via card clip */}
         <div
           className={cn(
-            "h-[148px] bg-cover bg-center sm:h-[160px]",
+            "relative h-[148px] overflow-hidden sm:h-[160px]",
             !profile.bannerUrl && "bg-gradient-to-br from-[#0b1220] via-[#1a2744] to-[#0f172a]",
           )}
-          style={profile.bannerUrl ? { backgroundImage: `url(${profile.bannerUrl})` } : undefined}
           aria-hidden="true"
-        />
+        >
+          {profile.bannerUrl ? (
+            <img
+              src={profile.bannerUrl}
+              alt=""
+              aria-hidden="true"
+              referrerPolicy="no-referrer"
+              onError={recoverMediaDelivery}
+              className="absolute inset-0 size-full object-cover"
+            />
+          ) : null}
+        </div>
 
         <CardContent className="relative space-y-3 px-5 pb-5 pt-0">
           {/* Avatar + primary actions row */}
           <div className="flex items-end justify-between gap-3">
             <Avatar className="-mt-[52px] size-[104px] border-[3px] border-card bg-card shadow-sm ring-2 ring-primary/70">
-              <AvatarImage src={profile.avatarUrl ?? undefined} alt={`${profile.handle} 的头像`} />
+              <AvatarImage
+                src={profile.avatarUrl ?? undefined}
+                alt={`${profile.handle} 的头像`}
+                referrerPolicy="no-referrer"
+                onError={recoverMediaDelivery}
+              />
               <AvatarFallback className="bg-primary/10 text-3xl font-semibold text-primary">
                 {profile.handle.slice(0, 1).toUpperCase()}
               </AvatarFallback>
