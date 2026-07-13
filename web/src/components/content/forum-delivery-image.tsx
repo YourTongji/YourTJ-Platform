@@ -1,5 +1,6 @@
 import * as React from "react";
 
+import { LightboxableImage } from "@/components/ui/image-lightbox";
 import type { ForumAttachment } from "@/lib/api/types";
 
 const RECOVERY_COOLDOWN_MS = 15_000;
@@ -7,13 +8,35 @@ const RECOVERY_COOLDOWN_MS = 15_000;
 export function ForumDeliveryImage({
   attachment,
   onDeliveryRefresh,
+  enableLightbox = true,
   ...imageProps
 }: Omit<React.ImgHTMLAttributes<HTMLImageElement>, "src" | "alt" | "width" | "height" | "onError">
   & {
     attachment: ForumAttachment;
     onDeliveryRefresh?: () => void;
+    enableLightbox?: boolean;
   }) {
   const lastRecoveryAt = React.useRef(0);
+  const handleError = () => {
+    const now = Date.now();
+    if (!onDeliveryRefresh || now - lastRecoveryAt.current < RECOVERY_COOLDOWN_MS) return;
+    lastRecoveryAt.current = now;
+    onDeliveryRefresh();
+  };
+
+  if (enableLightbox) {
+    return (
+      <LightboxableImage
+        {...imageProps}
+        src={attachment.url}
+        alt={attachment.alt}
+        width={attachment.width}
+        height={attachment.height}
+        referrerPolicy="no-referrer"
+        onError={handleError}
+      />
+    );
+  }
 
   return (
     <img
@@ -23,12 +46,7 @@ export function ForumDeliveryImage({
       width={attachment.width ?? undefined}
       height={attachment.height ?? undefined}
       referrerPolicy="no-referrer"
-      onError={() => {
-        const now = Date.now();
-        if (!onDeliveryRefresh || now - lastRecoveryAt.current < RECOVERY_COOLDOWN_MS) return;
-        lastRecoveryAt.current = now;
-        onDeliveryRefresh();
-      }}
+      onError={handleError}
     />
   );
 }

@@ -50,6 +50,7 @@ export function HomePage() {
     queryKey: ["home", "check-in", account?.id],
     queryFn: api.myCheckInStatus,
     enabled: Boolean(account),
+    staleTime: 5 * 60 * 1000,
   });
   React.useEffect(() => {
     const accountId = account?.id;

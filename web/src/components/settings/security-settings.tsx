@@ -14,6 +14,29 @@ import { ApiError } from "@/lib/api/client";
 import { api } from "@/lib/api/endpoints";
 import { formatUnixTime } from "@/lib/format";
 
+
+function summarizeDeviceLabel(label?: string | null) {
+  if (!label?.trim()) return "未命名会话";
+  const raw = label.trim();
+  const browser =
+    /Edg\//.test(raw) ? "Edge"
+    : /Chrome\//.test(raw) && !/Edg\//.test(raw) ? "Chrome"
+    : /Firefox\//.test(raw) ? "Firefox"
+    : /Safari\//.test(raw) && !/Chrome\//.test(raw) ? "Safari"
+    : null;
+  const system =
+    /Android/i.test(raw) ? "Android"
+    : /iPhone|iPad|iPod/i.test(raw) ? "iOS"
+    : /Windows/i.test(raw) ? "Windows"
+    : /Mac OS X|Macintosh/i.test(raw) ? "macOS"
+    : /Linux/i.test(raw) ? "Linux"
+    : null;
+  if (browser && system) return `${browser} · ${system}`;
+  if (browser) return browser;
+  if (system) return system;
+  return raw.length > 48 ? `${raw.slice(0, 45)}…` : raw;
+}
+
 function PasswordField({
   id,
   value,
@@ -63,7 +86,7 @@ export function SecuritySettings() {
       setCurrentPassword("");
       setNewPassword("");
       setConfirmPassword("");
-      toast.success(mode === "set" ? "密码已设置，旧会话已替换" : "密码已更新，其他设备会话已撤销");
+      toast.success(mode === "set" ? "密码已设置，旧会话已替换" : "密码已更新，其他登录会话已撤销");
       await queryClient.invalidateQueries({ queryKey: ["device-sessions"] });
     },
     onError: (error, mode) => {
@@ -77,7 +100,7 @@ export function SecuritySettings() {
   const revokeSession = useMutation({
     mutationFn: (id: string) => api.revokeSession(id),
     onSuccess: async () => {
-      toast.success("设备会话已撤销");
+      toast.success("登录会话已撤销");
       await queryClient.invalidateQueries({ queryKey: ["device-sessions"] });
     },
     onError: (error) => toast.error(error instanceof Error ? error.message : "撤销失败"),
@@ -85,7 +108,7 @@ export function SecuritySettings() {
   const revokeOthers = useMutation({
     mutationFn: () => api.revokeOtherSessions(),
     onSuccess: async () => {
-      toast.success("其他设备均已退出登录");
+      toast.success("其他会话均已退出登录");
       await queryClient.invalidateQueries({ queryKey: ["device-sessions"] });
     },
     onError: (error) => toast.error(error instanceof Error ? error.message : "撤销失败"),
@@ -104,7 +127,7 @@ export function SecuritySettings() {
           </CardTitle>
           <CardDescription>
             {hasPassword
-              ? "修改密码会替换当前会话，并撤销其他设备的访问权限。"
+              ? "修改密码会替换当前会话，并撤销其他会话的访问权限。"
               : "首次设置密码需要重新验证校园邮箱，完成后会替换旧会话。"}
           </CardDescription>
         </CardHeader>
@@ -168,22 +191,22 @@ export function SecuritySettings() {
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Laptop className="size-5 text-primary" aria-hidden="true" />
-            登录设备
+            登录会话
           </CardTitle>
-          <CardDescription>只展示设备标签和有限时间信息，不保存可见的精确 IP 历史。</CardDescription>
+          <CardDescription>按登录会话展示；同一浏览器再次登录会替换旧会话。只展示可读标签和有限时间信息，不保存可见的精确 IP 历史。</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           {sessions.isLoading ? (
-            <p className="text-sm text-muted-foreground" role="status">正在加载设备会话</p>
+            <p className="text-sm text-muted-foreground" role="status">正在加载登录会话</p>
           ) : sessions.isError ? (
             <div className="flex flex-wrap items-center justify-between gap-3" role="alert">
-              <p className="text-sm text-destructive">设备列表加载失败。</p>
+              <p className="text-sm text-destructive">会话列表加载失败。</p>
               <Button type="button" variant="outline" size="sm" onClick={() => void sessions.refetch()}>重试</Button>
             </div>
           ) : deviceSessions.length === 0 ? (
-            <p className="text-sm text-muted-foreground">当前没有可管理的设备会话。</p>
+            <p className="text-sm text-muted-foreground">当前没有可管理的登录会话。</p>
           ) : (
-            <ul className="divide-y rounded-lg border" aria-label="登录设备列表">
+            <ul className="divide-y rounded-lg border" aria-label="登录会话列表">
               {deviceSessions.map((session) => (
                 <li key={session.id} className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
                   <div className="flex min-w-0 gap-3">
@@ -194,8 +217,8 @@ export function SecuritySettings() {
                     </span>
                     <div className="min-w-0">
                       <p className="truncate text-sm font-medium">
-                        {session.deviceLabel || "未命名设备"}
-                        {session.isCurrent ? <span className="ml-2 text-xs text-primary">当前设备</span> : null}
+                        {summarizeDeviceLabel(session.deviceLabel)}
+                        {session.isCurrent ? <span className="ml-2 text-xs text-primary">当前会话</span> : null}
                       </p>
                       <p className="mt-1 text-xs text-muted-foreground">
                         最近使用 {formatUnixTime(session.lastUsedAt)} · 到期 {formatUnixTime(session.expiresAt)}
@@ -225,7 +248,7 @@ export function SecuritySettings() {
               onClick={() => void sessions.fetchNextPage()}
               disabled={sessions.isFetchingNextPage}
             >
-              {sessions.isFetchingNextPage ? "正在加载" : "加载更多设备"}
+              {sessions.isFetchingNextPage ? "正在加载" : "加载更多会话"}
             </Button>
           ) : null}
           <div className="flex flex-col gap-2 border-t pt-4 sm:flex-row sm:justify-between">
@@ -236,16 +259,16 @@ export function SecuritySettings() {
               disabled={revokeOthers.isPending}
             >
               <LogOut className="size-4" />
-              撤销其他设备
+              撤销其他会话
             </Button>
             {!confirmAllDevices ? (
               <Button type="button" variant="destructive" onClick={() => setConfirmAllDevices(true)}>
                 <ShieldAlert className="size-4" />
-                退出所有设备
+                退出所有会话
               </Button>
             ) : (
               <div className="flex flex-wrap items-center justify-end gap-2">
-                <span className="text-sm text-destructive">包括当前设备，确定吗？</span>
+                <span className="text-sm text-destructive">包括当前会话，确定吗？</span>
                 <Button type="button" variant="ghost" onClick={() => setConfirmAllDevices(false)}>取消</Button>
                 <Button type="button" variant="destructive" onClick={() => void logoutAll()}>确定退出</Button>
               </div>
@@ -257,7 +280,7 @@ export function SecuritySettings() {
       <RecentAuthDialog
         open={recentAuthOpen}
         onOpenChange={setRecentAuthOpen}
-        description="首次设置密码会建立新的长期登录凭据，需要当前设备重新验证校园邮箱。"
+        description="首次设置密码会建立新的长期登录凭据，需要当前会话重新验证校园邮箱。"
         onVerified={() => passwordMutation.mutate("set")}
       />
     </>

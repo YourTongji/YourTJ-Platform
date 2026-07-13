@@ -6,6 +6,7 @@ import rehypeSanitize from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
 
 import { ForumDeliveryImage } from "@/components/content/forum-delivery-image";
+import { LightboxableImage } from "@/components/ui/image-lightbox";
 import { api } from "@/lib/api/endpoints";
 import { cn } from "@/lib/utils";
 import type { ForumAttachment } from "@/lib/api/types";
@@ -127,7 +128,7 @@ function OwnerMediaPreview({ assetId, alt }: { assetId: string; alt?: string }) 
   }
   if (upload.data?.status === "pending") {
     return pendingUrl ? (
-      <img
+      <LightboxableImage
         src={pendingUrl}
         alt={`${label}（待审核预览）`}
         referrerPolicy="no-referrer"
@@ -144,7 +145,7 @@ function OwnerMediaPreview({ assetId, alt }: { assetId: string; alt?: string }) 
   }
   if (delivery.data?.url) {
     return (
-      <img
+      <LightboxableImage
         src={delivery.data.url}
         alt={label}
         width={delivery.data.width}
