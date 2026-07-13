@@ -14,6 +14,7 @@ class WorkflowBoundaryTests(unittest.TestCase):
         self.assertIn("ops/deploy/deploy-main.sh", workflow)
         self.assertIn("github.ref == 'refs/heads/main'", workflow)
         self.assertNotIn("/opt/yourtj-preview/deploy-main.sh", workflow)
+        self.assertIn("cancel-in-progress: false", workflow)
         self.assertIn("MAIN_PUBLIC_BASE_URL", workflow)
         self.assertIn("verify canonical public HTTPS routes", workflow)
         self.assertIn("verify shared-host private ports are not public", workflow)
