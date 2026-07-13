@@ -48,6 +48,7 @@ pub async fn replace_password_if_current(
         successor_expires_at,
         None,
         None,
+        None,
     )
     .await?;
     Ok(ReplacedCredentialSession {

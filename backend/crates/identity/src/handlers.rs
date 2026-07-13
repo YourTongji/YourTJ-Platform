@@ -270,6 +270,19 @@ fn device_label(headers: &HeaderMap) -> Option<String> {
         .map(|value| value.chars().take(200).collect())
 }
 
+fn parse_client_installation_id(value: Option<&str>) -> AppResult<Option<uuid::Uuid>> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let installation_id = uuid::Uuid::parse_str(value).map_err(|_| {
+        shared::AppError::BadRequest("clientInstallationId must be a UUID v4".into())
+    })?;
+    if installation_id.get_version() != Some(uuid::Version::Random) {
+        return Err(shared::AppError::BadRequest("clientInstallationId must be a UUID v4".into()));
+    }
+    Ok(Some(installation_id))
+}
+
 fn forwarded_client_address(headers: &HeaderMap) -> &str {
     headers
         .get("x-forwarded-for")
@@ -317,12 +330,19 @@ async fn issue_tokens(
     state: &AppState,
     account: &crate::models::AccountRow,
     user_agent: Option<&str>,
+    client_installation_id: Option<uuid::Uuid>,
 ) -> AppResult<AuthTokensOutput> {
     let (refresh_plain, refresh_hash) = generate_refresh_token();
     let refresh_expires = Utc::now() + chrono::Duration::seconds(state.refresh_ttl as i64);
-    let (session_id, auth_version) =
-        repo::insert_session(&state.db, account.id, &refresh_hash, refresh_expires, user_agent)
-            .await?;
+    let (session_id, auth_version) = repo::insert_session(
+        &state.db,
+        account.id,
+        &refresh_hash,
+        refresh_expires,
+        user_agent,
+        client_installation_id,
+    )
+    .await?;
     let access_token = create_session_access_token(
         account.id,
         session_id,
@@ -471,6 +491,8 @@ pub async fn verify_email(
     Json(body): Json<VerifyEmailInput>,
 ) -> AppResult<Json<AuthTokensOutput>> {
     let email = normalize_campus_email(&body.email)?;
+    let client_installation_id =
+        parse_client_installation_id(body.client_installation_id.as_deref())?;
     validate_email_code(&body.code)?;
     check_unauthenticated_credential_limits(&state, &headers, "email_verify", 30, 1_000).await?;
 
@@ -519,6 +541,7 @@ pub async fn verify_email(
                     &refresh_hash,
                     refresh_expires,
                     device_label(&headers).as_deref(),
+                    client_installation_id,
                 )
                 .await?;
                 ensure_login_allowed(&state, &mutation.account).await?;
@@ -589,7 +612,10 @@ pub async fn verify_email(
     ensure_login_allowed(&state, &account).await?;
     crate::public_search::reconcile_user_in_background(&state, account.id);
 
-    Ok(Json(issue_tokens(&state, &account, device_label(&headers).as_deref()).await?))
+    Ok(Json(
+        issue_tokens(&state, &account, device_label(&headers).as_deref(), client_installation_id)
+            .await?,
+    ))
 }
 
 /// POST /auth/refresh
@@ -1440,6 +1466,8 @@ pub async fn password_login(
     Json(body): Json<PasswordLoginInput>,
 ) -> AppResult<Json<AuthTokensOutput>> {
     let email = normalize_campus_email(&body.email)?;
+    let client_installation_id =
+        parse_client_installation_id(body.client_installation_id.as_deref())?;
     check_unauthenticated_credential_limits(&state, &headers, "password_login", 30, 1_000).await?;
 
     // Rate-limit: 5 login attempts per email per 5 minutes.
@@ -1482,7 +1510,10 @@ pub async fn password_login(
         Err(error) => return Err(error),
     }
 
-    Ok(Json(issue_tokens(&state, &account, device_label(&headers).as_deref()).await?))
+    Ok(Json(
+        issue_tokens(&state, &account, device_label(&headers).as_deref(), client_installation_id)
+            .await?,
+    ))
 }
 
 /// POST /auth/appeal/password — issue a short-lived credential usable only for appeals.
@@ -1716,6 +1747,8 @@ pub async fn password_reset(
     Json(body): Json<PasswordResetInput>,
 ) -> AppResult<Json<AuthTokensOutput>> {
     let email = normalize_campus_email(&body.email)?;
+    let client_installation_id =
+        parse_client_installation_id(body.client_installation_id.as_deref())?;
     validate_email_code(&body.code)?;
     check_unauthenticated_credential_limits(&state, &headers, "password_reset", 10, 300).await?;
 
@@ -1739,6 +1772,7 @@ pub async fn password_reset(
         &refresh_hash,
         refresh_expires,
         device_label(&headers).as_deref(),
+        client_installation_id,
     )
     .await?;
     if let Err(error) = ensure_login_allowed(&state, &mutation.account).await {
@@ -1756,6 +1790,8 @@ pub async fn password_set(
     Json(body): Json<PasswordSetInput>,
 ) -> AppResult<Json<AuthTokensOutput>> {
     let auth = authenticated_context(&state, &headers).await?;
+    let client_installation_id =
+        parse_client_installation_id(body.client_installation_id.as_deref())?;
     let account =
         repo::find_account_by_id(&state.db, state.email_encryption.as_ref(), auth.account.id)
             .await?
@@ -1771,6 +1807,7 @@ pub async fn password_set(
         &refresh_hash,
         refresh_expires,
         device_label(&headers).as_deref(),
+        client_installation_id,
         state.email_encryption.as_ref(),
     )
     .await?;
@@ -1788,6 +1825,8 @@ pub async fn password_change(
     Json(body): Json<PasswordChangeInput>,
 ) -> AppResult<Json<AuthTokensOutput>> {
     let auth = authenticated_context(&state, &headers).await?;
+    let client_installation_id =
+        parse_client_installation_id(body.client_installation_id.as_deref())?;
 
     // Rate-limit: 3 changes per account per minute.
     shared::ratelimit::check_token_bucket(
@@ -1827,6 +1866,7 @@ pub async fn password_change(
         &refresh_hash,
         refresh_expires,
         device_label(&headers).as_deref(),
+        client_installation_id,
         state.email_encryption.as_ref(),
     )
     .await?;

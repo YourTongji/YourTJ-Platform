@@ -4,12 +4,15 @@
 //! (typically a handler) can use `?` and let Axum render errors.
 
 use chrono::{DateTime, Utc};
+use sha2::Digest as _;
 use shared::email_crypto::EmailEncryption;
 use shared::{AppError, AppResult};
 use sqlx::{PgConnection, PgPool};
 
 use crate::email_code::{hash_code, verify_code, CodePurpose};
 use crate::models::{AccountRow, EmailCodeRow, SessionRow};
+
+const MAX_ACTIVE_SESSIONS: i64 = 30;
 
 #[derive(sqlx::FromRow)]
 struct StoredAccountRow {
@@ -575,6 +578,7 @@ pub(crate) async fn set_password_with_login_code(
     refresh_hash: &str,
     expires_at: DateTime<Utc>,
     user_agent: Option<&str>,
+    client_installation_id: Option<uuid::Uuid>,
 ) -> AppResult<CredentialMutation> {
     let mut tx = pool.begin().await?;
     let mut account = lock_credential_account_by_id_tx(&mut tx, account_id).await?;
@@ -634,6 +638,7 @@ pub(crate) async fn set_password_with_login_code(
         refresh_hash,
         expires_at,
         user_agent,
+        client_installation_id,
         auth_version,
     )
     .await?;
@@ -864,6 +869,7 @@ pub async fn insert_session(
     refresh_hash: &str,
     expires_at: DateTime<Utc>,
     user_agent: Option<&str>,
+    client_installation_id: Option<uuid::Uuid>,
 ) -> AppResult<(i64, i64)> {
     let mut tx = pool.begin().await?;
     let auth_version: i64 =
@@ -871,16 +877,24 @@ pub async fn insert_session(
             .bind(account_id)
             .fetch_one(&mut *tx)
             .await?;
-    // Keep concurrent sessions independent. User-Agent is only a display label
-    // (browser/OS string), not a stable device id — revoking by UA would drop
-    // valid multi-device logins that share the same browser fingerprint and can
-    // turn a later refresh on the old device into a false replay that bumps
-    // auth_version for the whole account.
+    let client_installation_hash = client_installation_id
+        .map(|installation_id| hash_client_installation(account_id, installation_id));
+    if let Some(client_installation_hash) = client_installation_hash.as_deref() {
+        sqlx::query(
+            "UPDATE identity.sessions SET revoked_at = COALESCE(revoked_at, now()) \
+             WHERE account_id = $1 AND client_installation_hash = $2 AND revoked_at IS NULL",
+        )
+        .bind(account_id)
+        .bind(client_installation_hash)
+        .execute(&mut *tx)
+        .await?;
+    }
     let family_id = uuid::Uuid::new_v4();
     let session_id: i64 = sqlx::query_scalar(
         "INSERT INTO identity.sessions \
-         (account_id, refresh_hash, family_id, user_agent, expires_at, issued_auth_version) \
-         VALUES ($1, $2, $3, $4, $5, $6) RETURNING id",
+         (account_id, refresh_hash, family_id, user_agent, expires_at, issued_auth_version, \
+          client_installation_hash) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id",
     )
     .bind(account_id)
     .bind(refresh_hash)
@@ -888,10 +902,32 @@ pub async fn insert_session(
     .bind(user_agent)
     .bind(expires_at)
     .bind(auth_version)
+    .bind(client_installation_hash)
     .fetch_one(&mut *tx)
+    .await?;
+    sqlx::query(
+        "WITH excess AS ( \
+           SELECT id FROM identity.sessions \
+           WHERE account_id = $1 AND revoked_at IS NULL AND expires_at > now() \
+           ORDER BY last_used_at DESC, id DESC OFFSET $2 \
+         ) \
+         UPDATE identity.sessions session \
+         SET revoked_at = now() FROM excess WHERE session.id = excess.id",
+    )
+    .bind(account_id)
+    .bind(MAX_ACTIVE_SESSIONS)
+    .execute(&mut *tx)
     .await?;
     tx.commit().await?;
     Ok((session_id, auth_version))
+}
+
+fn hash_client_installation(account_id: i64, installation_id: uuid::Uuid) -> Vec<u8> {
+    let mut hasher = sha2::Sha256::new();
+    hasher.update(b"yourtj.identity.session-installation.v1\0");
+    hasher.update(account_id.to_be_bytes());
+    hasher.update(installation_id.as_bytes());
+    hasher.finalize().to_vec()
 }
 
 fn constant_time_equal(left: &[u8], right: &[u8]) -> bool {
@@ -931,7 +967,7 @@ pub async fn rotate_session(
         "SELECT id, account_id, refresh_hash, expires_at, revoked_at, family_id, \
                 replaced_by_id, user_agent, created_at, last_used_at, \
                 recent_authenticated_at, recent_auth_method, recent_auth_credential_version, \
-                issued_auth_version \
+                issued_auth_version, client_installation_hash \
          FROM identity.sessions WHERE id = $1 FOR UPDATE",
     )
     .bind(session_id)
@@ -942,7 +978,7 @@ pub async fn rotate_session(
     if !constant_time_equal(row.refresh_hash.as_bytes(), presented_hash.as_bytes()) {
         return Err(AppError::Unauthorized);
     }
-    if row.revoked_at.is_some() || row.replaced_by_id.is_some() {
+    if row.replaced_by_id.is_some() {
         sqlx::query(
             "UPDATE identity.sessions SET revoked_at = COALESCE(revoked_at, now()) \
              WHERE family_id = $1",
@@ -970,6 +1006,9 @@ pub async fn rotate_session(
         tx.commit().await?;
         return Err(AppError::Unauthorized);
     }
+    if row.revoked_at.is_some() {
+        return Err(AppError::Unauthorized);
+    }
     if row.expires_at <= Utc::now() {
         sqlx::query("UPDATE identity.sessions SET revoked_at = now() WHERE id = $1")
             .bind(row.id)
@@ -979,12 +1018,18 @@ pub async fn rotate_session(
         return Err(AppError::Unauthorized);
     }
 
+    sqlx::query(
+        "UPDATE identity.sessions SET revoked_at = now(), last_used_at = now() WHERE id = $1",
+    )
+    .bind(row.id)
+    .execute(&mut *tx)
+    .await?;
     let successor_id: i64 = sqlx::query_scalar(
         "INSERT INTO identity.sessions \
          (account_id, refresh_hash, family_id, rotated_from_id, user_agent, expires_at, \
           recent_authenticated_at, recent_auth_method, recent_auth_credential_version, \
-          issued_auth_version) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id",
+          issued_auth_version, client_installation_hash) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id",
     )
     .bind(row.account_id)
     .bind(successor_hash)
@@ -996,11 +1041,12 @@ pub async fn rotate_session(
     .bind(row.recent_auth_method)
     .bind(row.recent_auth_credential_version)
     .bind(row.issued_auth_version)
+    .bind(row.client_installation_hash)
     .fetch_one(&mut *tx)
     .await?;
     sqlx::query(
         "UPDATE identity.sessions \
-         SET revoked_at = now(), replaced_by_id = $2, last_used_at = now() WHERE id = $1",
+         SET replaced_by_id = $2 WHERE id = $1",
     )
     .bind(row.id)
     .bind(successor_id)
@@ -1171,6 +1217,7 @@ async fn replace_all_sessions_tx(
     refresh_hash: &str,
     expires_at: DateTime<Utc>,
     user_agent: Option<&str>,
+    client_installation_id: Option<uuid::Uuid>,
     auth_version: i64,
 ) -> AppResult<i64> {
     sqlx::query(
@@ -1180,10 +1227,13 @@ async fn replace_all_sessions_tx(
     .bind(account_id)
     .execute(&mut *connection)
     .await?;
+    let client_installation_hash = client_installation_id
+        .map(|installation_id| hash_client_installation(account_id, installation_id));
     let session_id = sqlx::query_scalar(
         "INSERT INTO identity.sessions \
-         (account_id, refresh_hash, family_id, user_agent, expires_at, issued_auth_version) \
-         VALUES ($1, $2, $3, $4, $5, $6) RETURNING id",
+         (account_id, refresh_hash, family_id, user_agent, expires_at, issued_auth_version, \
+          client_installation_hash) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id",
     )
     .bind(account_id)
     .bind(refresh_hash)
@@ -1191,6 +1241,7 @@ async fn replace_all_sessions_tx(
     .bind(user_agent)
     .bind(expires_at)
     .bind(auth_version)
+    .bind(client_installation_hash)
     .fetch_one(connection)
     .await?;
     Ok(session_id)
@@ -1205,6 +1256,7 @@ pub(crate) async fn set_password_and_replace_sessions(
     refresh_hash: &str,
     expires_at: DateTime<Utc>,
     user_agent: Option<&str>,
+    client_installation_id: Option<uuid::Uuid>,
     encryption: Option<&EmailEncryption>,
 ) -> AppResult<CredentialMutation> {
     let mut tx = pool.begin().await?;
@@ -1235,6 +1287,7 @@ pub(crate) async fn set_password_and_replace_sessions(
         refresh_hash,
         expires_at,
         user_agent,
+        client_installation_id,
         auth_version,
     )
     .await?;
@@ -1273,6 +1326,7 @@ pub(crate) async fn change_password_and_replace_sessions(
     refresh_hash: &str,
     expires_at: DateTime<Utc>,
     user_agent: Option<&str>,
+    client_installation_id: Option<uuid::Uuid>,
     encryption: Option<&EmailEncryption>,
 ) -> AppResult<CredentialMutation> {
     let mut tx = pool.begin().await?;
@@ -1319,6 +1373,7 @@ pub(crate) async fn change_password_and_replace_sessions(
         refresh_hash,
         expires_at,
         user_agent,
+        client_installation_id,
         auth_version,
     )
     .await?;
@@ -1352,6 +1407,7 @@ pub(crate) async fn reset_password_with_code(
     refresh_hash: &str,
     expires_at: DateTime<Utc>,
     user_agent: Option<&str>,
+    client_installation_id: Option<uuid::Uuid>,
 ) -> AppResult<CredentialMutation> {
     let mut tx = pool.begin().await?;
     let mut account = lock_credential_account_by_email_tx(&mut tx, encryption, email)
@@ -1406,6 +1462,7 @@ pub(crate) async fn reset_password_with_code(
         refresh_hash,
         expires_at,
         user_agent,
+        client_installation_id,
         auth_version,
     )
     .await?;

@@ -27,16 +27,230 @@ async fn insert_account(pool: &sqlx::PgPool, email: &str, handle: &str) -> i64 {
 }
 
 async fn password_login(app: axum::Router, email: &str, password: &str, user_agent: &str) -> Value {
+    password_login_with_installation(app, email, password, user_agent, None).await
+}
+
+async fn password_login_with_installation(
+    app: axum::Router,
+    email: &str,
+    password: &str,
+    user_agent: &str,
+    client_installation_id: Option<uuid::Uuid>,
+) -> Value {
     let request = Request::builder()
         .method(Method::POST)
         .uri("/api/v2/auth/password/login")
         .header(header::CONTENT_TYPE, "application/json")
         .header(header::USER_AGENT, user_agent)
-        .body(Body::from(json!({ "email": email, "password": password }).to_string()))
+        .body(Body::from(
+            json!({
+                "email": email,
+                "password": password,
+                "clientInstallationId": client_installation_id.map(|installation_id| installation_id.to_string()),
+            })
+            .to_string(),
+        ))
         .expect("password login request");
     let response = app.oneshot(request).await.expect("password login response");
     assert_eq!(response.status(), StatusCode::OK);
     helpers::read_json(response).await
+}
+
+#[tokio::test]
+async fn full_login_rejects_non_v4_installation_identifiers() {
+    let (_pool, app) = helpers::create_test_app().await;
+    let response = app
+        .oneshot(json_request(
+            Method::POST,
+            "/api/v2/auth/password/login",
+            json!({
+                "email": "invalid-installation@tongji.edu.cn",
+                "password": "irrelevant-password",
+                "clientInstallationId": "00000000-0000-1000-8000-000000000000"
+            }),
+        ))
+        .await
+        .expect("invalid installation response");
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        helpers::read_json(response).await["error"]["message"],
+        "clientInstallationId must be a UUID v4"
+    );
+}
+
+#[tokio::test]
+async fn repeated_full_login_replaces_only_the_same_installation_session() {
+    const PASSWORD: &str = "yourtj-constant-dummy-password";
+    const PASSWORD_HASH: &str = "$argon2id$v=19$m=19456,t=2,p=1$lMsuCNrM/Jk4lpdAY/Gk9w$NkmJDYSq0o5US61ZPai1ajtpZWKmn7Rvn4wqQn3DR7Y";
+    let (pool, app) = helpers::create_test_app().await;
+    let suffix = uuid::Uuid::new_v4().simple().to_string();
+    let email = format!("installation-{suffix}@tongji.edu.cn");
+    let account_id = insert_account(&pool, &email, &format!("installation-{suffix}")).await;
+    sqlx::query("UPDATE identity.accounts SET password_hash = $1 WHERE id = $2")
+        .bind(PASSWORD_HASH)
+        .bind(account_id)
+        .execute(&pool)
+        .await
+        .expect("set password");
+    let first_installation = uuid::Uuid::new_v4();
+    let second_installation = uuid::Uuid::new_v4();
+
+    let first = password_login_with_installation(
+        app.clone(),
+        &email,
+        PASSWORD,
+        "Shared browser label",
+        Some(first_installation),
+    )
+    .await;
+    let first_access = first["accessToken"].as_str().expect("first access token").to_owned();
+    let first_refresh = first["refreshToken"].as_str().expect("first refresh token").to_owned();
+    let replacement = password_login_with_installation(
+        app.clone(),
+        &email,
+        PASSWORD,
+        "Shared browser label",
+        Some(first_installation),
+    )
+    .await;
+    let replacement_access =
+        replacement["accessToken"].as_str().expect("replacement access token").to_owned();
+
+    assert_eq!(
+        authenticated_status(app.clone(), Method::GET, "/api/v2/me", &first_access, None).await,
+        StatusCode::UNAUTHORIZED
+    );
+    let stale_refresh = app
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            "/api/v2/auth/refresh",
+            json!({ "refreshToken": first_refresh }),
+        ))
+        .await
+        .expect("stale refresh response");
+    assert_eq!(stale_refresh.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        authenticated_status(app.clone(), Method::GET, "/api/v2/me", &replacement_access, None,)
+            .await,
+        StatusCode::OK
+    );
+
+    let other = password_login_with_installation(
+        app.clone(),
+        &email,
+        PASSWORD,
+        "Shared browser label",
+        Some(second_installation),
+    )
+    .await;
+    let other_access = other["accessToken"].as_str().expect("other access token");
+    let active_sessions: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM identity.sessions \
+         WHERE account_id = $1 AND revoked_at IS NULL AND expires_at > now()",
+    )
+    .bind(account_id)
+    .fetch_one(&pool)
+    .await
+    .expect("active session count");
+    assert_eq!(active_sessions, 2);
+    assert_eq!(
+        authenticated_status(app, Method::GET, "/api/v2/me", other_access, None).await,
+        StatusCode::OK
+    );
+}
+
+#[tokio::test]
+async fn full_login_bounds_active_sessions_for_legacy_clients() {
+    const PASSWORD: &str = "yourtj-constant-dummy-password";
+    const PASSWORD_HASH: &str = "$argon2id$v=19$m=19456,t=2,p=1$lMsuCNrM/Jk4lpdAY/Gk9w$NkmJDYSq0o5US61ZPai1ajtpZWKmn7Rvn4wqQn3DR7Y";
+    let (pool, app) = helpers::create_test_app().await;
+    let suffix = uuid::Uuid::new_v4().simple().to_string();
+    let email = format!("session-limit-{suffix}@tongji.edu.cn");
+    let account_id = insert_account(&pool, &email, &format!("session-limit-{suffix}")).await;
+    sqlx::query("UPDATE identity.accounts SET password_hash = $1 WHERE id = $2")
+        .bind(PASSWORD_HASH)
+        .bind(account_id)
+        .execute(&pool)
+        .await
+        .expect("set password");
+    let oldest_session_id: i64 = sqlx::query_scalar(
+        "INSERT INTO identity.sessions (account_id, refresh_hash, expires_at, last_used_at) \
+         VALUES ($1, 'oldest', now() + interval '30 days', now() - interval '30 days') \
+         RETURNING id",
+    )
+    .bind(account_id)
+    .fetch_one(&pool)
+    .await
+    .expect("insert oldest session");
+    for session_number in 1..30 {
+        sqlx::query(
+            "INSERT INTO identity.sessions (account_id, refresh_hash, expires_at, last_used_at) \
+             VALUES ($1, $2, now() + interval '30 days', now() - ($3 * interval '1 minute'))",
+        )
+        .bind(account_id)
+        .bind(format!("legacy-{session_number}"))
+        .bind(session_number)
+        .execute(&pool)
+        .await
+        .expect("insert legacy session");
+    }
+
+    let login = password_login(app, &email, PASSWORD, "Legacy client").await;
+    assert!(login["accessToken"].is_string());
+    let active_sessions: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM identity.sessions \
+         WHERE account_id = $1 AND revoked_at IS NULL AND expires_at > now()",
+    )
+    .bind(account_id)
+    .fetch_one(&pool)
+    .await
+    .expect("active session count");
+    let oldest_was_revoked: bool =
+        sqlx::query_scalar("SELECT revoked_at IS NOT NULL FROM identity.sessions WHERE id = $1")
+            .bind(oldest_session_id)
+            .fetch_one(&pool)
+            .await
+            .expect("oldest session state");
+    assert_eq!(active_sessions, 30);
+    assert!(oldest_was_revoked);
+}
+
+#[tokio::test]
+async fn legacy_refresh_writer_inherits_the_installation_digest() {
+    let (pool, _app) = helpers::create_test_app().await;
+    let suffix = uuid::Uuid::new_v4().simple().to_string();
+    let account_id = insert_account(
+        &pool,
+        &format!("digest-rollout-{suffix}@tongji.edu.cn"),
+        &format!("digest-rollout-{suffix}"),
+    )
+    .await;
+    let installation_hash = vec![7u8; 32];
+    let predecessor_id: i64 = sqlx::query_scalar(
+        "INSERT INTO identity.sessions \
+         (account_id, refresh_hash, expires_at, client_installation_hash) \
+         VALUES ($1, 'predecessor', now() + interval '30 days', $2) RETURNING id",
+    )
+    .bind(account_id)
+    .bind(&installation_hash)
+    .fetch_one(&pool)
+    .await
+    .expect("insert predecessor");
+    let successor_hash: Option<Vec<u8>> = sqlx::query_scalar(
+        "INSERT INTO identity.sessions \
+         (account_id, refresh_hash, rotated_from_id, expires_at) \
+         VALUES ($1, 'successor', $2, now() + interval '30 days') \
+         RETURNING client_installation_hash",
+    )
+    .bind(account_id)
+    .bind(predecessor_id)
+    .fetch_one(&pool)
+    .await
+    .expect("insert rolling successor");
+
+    assert_eq!(successor_hash.as_deref(), Some(installation_hash.as_slice()));
 }
 
 async fn authenticated_status(

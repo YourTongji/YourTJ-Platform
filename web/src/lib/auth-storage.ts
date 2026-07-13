@@ -1,10 +1,15 @@
 import type { Account } from "@/lib/api/types";
 import { clearMediaDeliveryUrlCache } from "@/lib/media-delivery-cache";
+import { randomUuid } from "@/lib/random";
 
 const ACCESS_TOKEN_KEY = "yourtj.accessToken";
 const REFRESH_TOKEN_KEY = "yourtj.refreshToken";
 const ACCOUNT_KEY = "yourtj.account";
+const CLIENT_INSTALLATION_ID_KEY = "yourtj.clientInstallationId";
+const UUID_V4_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 export const AUTH_CLEARED_EVENT = "yourtj:auth-cleared";
+
+let inMemoryClientInstallationId: string | null = null;
 
 export interface StoredAuth {
   accessToken: string;
@@ -30,6 +35,28 @@ export function readStoredAccount(): Account | null {
   } catch {
     return null;
   }
+}
+
+export function readOrCreateClientInstallationId() {
+  try {
+    const stored = localStorage.getItem(CLIENT_INSTALLATION_ID_KEY);
+    if (stored && UUID_V4_PATTERN.test(stored)) {
+      inMemoryClientInstallationId = stored;
+      return stored;
+    }
+  } catch {
+    if (inMemoryClientInstallationId) return inMemoryClientInstallationId;
+  }
+
+  if (!inMemoryClientInstallationId) {
+    inMemoryClientInstallationId = randomUuid();
+  }
+  try {
+    localStorage.setItem(CLIENT_INSTALLATION_ID_KEY, inMemoryClientInstallationId);
+  } catch {
+    // The in-memory identifier still bounds sessions for this page lifetime when storage is denied.
+  }
+  return inMemoryClientInstallationId;
 }
 
 export function writeAuth(auth: StoredAuth) {
