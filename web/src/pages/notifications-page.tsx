@@ -21,10 +21,10 @@ const NOTIFICATION_LABELS: Record<string, string> = {
   dm: "私信",
   dm_request: "消息请求",
   dm_request_accepted: "请求已接受",
-  flag_auto_hide: "内容治理",
+  flag_auto_hide: "内容处理",
   follow: "新关注",
   mention: "提及",
-  mod_action: "治理通知",
+  mod_action: "管理通知",
   quote: "引用回复",
   reply: "回复",
   vote: "点赞",
@@ -113,9 +113,8 @@ export function NotificationsPage() {
   return (
     <div>
       <PageHeader
-        eyebrow="Notifications"
         title="通知"
-        description="回复、提及、点赞、私信与治理消息会集中在这里。"
+        description="回复、提及、点赞、私信与平台消息会集中在这里。"
         actions={(
           <Button
             variant="outline"
@@ -152,14 +151,14 @@ export function NotificationsPage() {
       </div>
 
       {governanceNotices.isLoading ? (
-        <LoadingState label="加载治理通知" />
+        <LoadingState label="加载平台通知" />
       ) : governanceNotices.isError ? (
         <ErrorState error={governanceNotices.error} onRetry={() => void governanceNotices.refetch()} />
       ) : governanceItems.length > 0 ? (
         <section className="mb-5 space-y-3" aria-labelledby="governance-notices-title">
           <div>
-            <h2 id="governance-notices-title" className="font-semibold">治理通知</h2>
-            <p className="text-sm text-muted-foreground">安全与处置消息不会被互动通知偏好关闭。</p>
+            <h2 id="governance-notices-title" className="font-semibold">平台通知</h2>
+            <p className="text-sm text-muted-foreground">账号安全与违规处理相关消息不会被关闭。</p>
           </div>
           {governanceItems.map((item) => (
             <Card key={`governance-${item.id}`} className={!item.read ? "border-primary/50 bg-primary/[0.03]" : undefined}>
@@ -172,14 +171,14 @@ export function NotificationsPage() {
                     <p className="font-medium">{item.summary}</p>
                     {!item.read ? <Badge>未读</Badge> : null}
                   </div>
-                  <p className="mt-1 text-xs text-muted-foreground">治理通知 · {formatUnixTime(item.createdAt)}</p>
+                  <p className="mt-1 text-xs text-muted-foreground">平台通知 · {formatUnixTime(item.createdAt)}</p>
                 </div>
                 <div className="flex shrink-0 items-center gap-1">
                   {!item.read ? (
                     <Button
                       variant="ghost"
                       size="icon"
-                      aria-label="标记治理通知为已读"
+                      aria-label="标记平台通知为已读"
                       disabled={markGovernanceRead.isPending}
                       onClick={() => markGovernanceRead.mutate([item.id])}
                     >
@@ -189,7 +188,7 @@ export function NotificationsPage() {
                   <Button asChild variant="ghost" size="icon">
                     <Link
                       to={item.targetUrl}
-                      aria-label="查看治理通知详情"
+                      aria-label="查看平台通知详情"
                       onClick={() => !item.read && markGovernanceRead.mutate([item.id])}
                     >
                       <ChevronRight className="size-4" />
@@ -206,7 +205,7 @@ export function NotificationsPage() {
                 disabled={governanceNotices.isFetchingNextPage}
                 onClick={() => void governanceNotices.fetchNextPage()}
               >
-                {governanceNotices.isFetchingNextPage ? "加载中…" : "加载更多治理通知"}
+                {governanceNotices.isFetchingNextPage ? "加载中…" : "加载更多平台通知"}
               </Button>
             </div>
           ) : null}

@@ -1,5 +1,5 @@
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { MessageCircle, MessageSquare, ThumbsUp } from "lucide-react";
+import { ChevronLeft, Loader2 } from "lucide-react";
 import * as React from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { toast } from "sonner";
@@ -9,19 +9,122 @@ import {
   capabilitiesForAccount,
   hasCapability,
 } from "@/components/admin/capabilities";
-import { PageHeader } from "@/components/common/page-header";
+import { getTwentyWeekActivityRange } from "@/components/activity/calendar-range";
 import { EmptyState, ErrorState, LoadingState } from "@/components/common/states";
-import { ProfileActivitySection } from "@/components/profile/profile-activity-section";
 import {
   ProfileRelationshipListDialog,
   type ProfileRelationshipListKind,
 } from "@/components/profile/profile-relationship-list-dialog";
+import { ProfilePostCard } from "@/components/profile/profile-post-card";
+import { ProfileSidebar } from "@/components/profile/profile-sidebar";
 import { ProfileSummary } from "@/components/profile/profile-summary";
-import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useAuth } from "@/context/auth-provider";
 import { accountQueryKeys } from "@/lib/account-query-keys";
 import { api } from "@/lib/api/endpoints";
-import { formatUnixTime } from "@/lib/format";
+import type { ProfileContent } from "@/lib/api/types";
+import { formatRelativeTime } from "@/lib/format";
+
+type ProfileActivityTab = "threads" | "comments" | "bookmarks" | "media" | "likes";
+
+interface ProfileContentListProps {
+  items: Array<{ content: ProfileContent; createdAtLabel?: string }>;
+  isLoading: boolean;
+  error: unknown;
+  emptyTitle: string;
+  emptyDescription: string;
+  hasNextPage: boolean;
+  isFetchingNextPage: boolean;
+  loadMoreLabel: string;
+  bookmarkTarget?: { id: string; targetType: "thread" | "comment" };
+  onRetry: () => void;
+  onLoadMore: () => void;
+  onToggleBookmark: (content: ProfileContent) => void;
+  onAttachmentDeliveryRefresh: () => void;
+}
+
+function ProfileContentList({
+  items,
+  isLoading,
+  error,
+  emptyTitle,
+  emptyDescription,
+  hasNextPage,
+  isFetchingNextPage,
+  loadMoreLabel,
+  bookmarkTarget,
+  onRetry,
+  onLoadMore,
+  onToggleBookmark,
+  onAttachmentDeliveryRefresh,
+}: ProfileContentListProps) {
+  if (isLoading) return <LoadingState label="加载个人动态" />;
+  if (error) return <ErrorState error={error} onRetry={onRetry} />;
+  if (items.length === 0) {
+    return (
+      <>
+        <EmptyState
+          title={emptyTitle}
+          description={emptyDescription}
+          className="border-0 bg-muted/20 shadow-none"
+        />
+        {hasNextPage ? (
+          <Button
+            type="button"
+            variant="outline"
+            className="w-full"
+            onClick={onLoadMore}
+            disabled={isFetchingNextPage}
+          >
+            {isFetchingNextPage ? <Loader2 className="size-4 animate-spin" /> : null}
+            {isFetchingNextPage ? "加载中" : loadMoreLabel}
+          </Button>
+        ) : null}
+      </>
+    );
+  }
+
+  return (
+    <>
+      {items.map(({ content, createdAtLabel }) => (
+        <ProfilePostCard
+          key={`${content.targetType}-${content.id}`}
+          authorName={content.authorDisplayName || content.authorHandle}
+          authorHandle={content.authorHandle}
+          post={{
+            id: content.id,
+            title: content.title,
+            body: content.body,
+            boardSlug: content.boardSlug,
+            createdAtLabel: createdAtLabel ?? formatRelativeTime(content.activityAt),
+            replyCount: content.replyCount,
+            voteCount: content.voteCount,
+            attachment: content.attachments[0],
+            href: `/forum/threads/${content.threadId}`,
+            isBookmarked: content.isBookmarked,
+          }}
+          bookmarkPending={bookmarkTarget?.id === content.id
+            && bookmarkTarget.targetType === content.targetType}
+          onToggleBookmark={() => onToggleBookmark(content)}
+          onAttachmentDeliveryRefresh={onAttachmentDeliveryRefresh}
+        />
+      ))}
+      {hasNextPage ? (
+        <Button
+          type="button"
+          variant="outline"
+          className="w-full"
+          onClick={onLoadMore}
+          disabled={isFetchingNextPage}
+        >
+          {isFetchingNextPage ? <Loader2 className="size-4 animate-spin" /> : null}
+          {isFetchingNextPage ? "加载中" : loadMoreLabel}
+        </Button>
+      ) : null}
+    </>
+  );
+}
 
 export function ProfilePage() {
   const { handle } = useParams();
@@ -31,8 +134,10 @@ export function ProfilePage() {
   const { account, isAuthenticated } = useAuth();
   const [confirmBlockOpen, setConfirmBlockOpen] = React.useState(false);
   const [relationshipList, setRelationshipList] = React.useState<ProfileRelationshipListKind | null>(null);
+  const [activityTab, setActivityTab] = React.useState<ProfileActivityTab>("threads");
   const capabilities = React.useMemo(() => capabilitiesForAccount(account), [account]);
   const viewerCacheKey = account?.id ?? "anonymous";
+  const activityRange = React.useMemo(() => getTwentyWeekActivityRange(), []);
 
   const profile = useQuery({
     queryKey: ["profile", name, "viewer", viewerCacheKey],
@@ -60,10 +165,41 @@ export function ProfilePage() {
       || profile.data.handle.toLowerCase() === account.handle?.toLowerCase()
     ),
   );
+  const media = useInfiniteQuery({
+    queryKey: ["profile", name, "media", viewerCacheKey],
+    queryFn: ({ pageParam }) => api.userMedia(name, pageParam),
+    initialPageParam: null as string | null,
+    getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
+    enabled: Boolean(name) && profile.data?.canViewActivity === true && activityTab === "media",
+  });
+  const likes = useInfiniteQuery({
+    queryKey: ["profile", name, "likes", viewerCacheKey],
+    queryFn: ({ pageParam }) => api.userLikes(name, pageParam),
+    initialPageParam: null as string | null,
+    getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
+    enabled: Boolean(name) && profile.data?.canViewActivity === true && activityTab === "likes",
+  });
+  const bookmarks = useInfiniteQuery({
+    queryKey: ["profile", name, "bookmarks", viewerCacheKey],
+    queryFn: ({ pageParam }) => api.bookmarks(pageParam),
+    initialPageParam: null as string | null,
+    getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
+    enabled: isSelf && activityTab === "bookmarks",
+  });
   const socialRelationship = useQuery({
     queryKey: ["profile", name, "relationship", viewerCacheKey],
     queryFn: () => api.userRelationship(profile.data?.handle ?? name),
     enabled: isAuthenticated && Boolean(profile.data) && !isSelf,
+  });
+  const activity = useQuery({
+    queryKey: ["profile", name, "activity", account?.id, activityRange.from, activityRange.to],
+    queryFn: () => api.myActivity(activityRange.from, activityRange.to),
+    enabled: Boolean(account) && isSelf,
+  });
+  const wallet = useQuery({
+    queryKey: ["profile", name, "wallet", account?.id],
+    queryFn: () => api.wallet(),
+    enabled: Boolean(account) && isSelf,
   });
 
   const followRelationship = useMutation({
@@ -111,6 +247,42 @@ export function ProfilePage() {
     },
     onError: (error) => toast.error(error instanceof Error ? error.message : "屏蔽设置失败"),
   });
+  const bookmark = useMutation({
+    mutationFn: async (input: {
+      id: string;
+      targetType: "thread" | "comment";
+      isBookmarked: boolean;
+    }) => {
+      if (input.isBookmarked) {
+        await api.removeBookmark(input.id, input.targetType);
+      } else {
+        await api.bookmarkPost(input.id, input.targetType);
+      }
+      return input;
+    },
+    onSuccess: async (input) => {
+      toast.success(input.isBookmarked ? "已取消收藏" : "已收藏");
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["profile", name] }),
+        queryClient.invalidateQueries({ queryKey: ["forum", "bookmarks"] }),
+      ]);
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : "收藏设置失败"),
+  });
+
+  const toggleBookmark = React.useCallback((content: {
+    id: string;
+    targetType: "thread" | "comment";
+    isBookmarked: boolean;
+  }) => {
+    if (!isAuthenticated) {
+      toast.error("登录后才能收藏");
+      navigate("/login");
+      return;
+    }
+    bookmark.mutate(content);
+  }, [bookmark, isAuthenticated, navigate]);
+
   if (profile.isLoading) {
     return <LoadingState label="加载用户主页" />;
   }
@@ -120,6 +292,13 @@ export function ProfilePage() {
 
   const threadItems = threads.data?.pages.flatMap((page) => page.items ?? []) ?? [];
   const commentItems = comments.data?.pages.flatMap((page) => page.items ?? []) ?? [];
+  const mediaItems = media.data?.pages.flatMap((page) => page.items ?? []) ?? [];
+  const likedItems = likes.data?.pages.flatMap((page) => page.items ?? []) ?? [];
+  const bookmarkItems = bookmarks.data?.pages.flatMap((page) => page.items ?? []) ?? [];
+  const bookmarkTarget = bookmark.isPending ? bookmark.variables : undefined;
+  const refreshProfileContent = () => {
+    void queryClient.invalidateQueries({ queryKey: ["profile", name] });
+  };
   const canManageUser = hasCapability(capabilities, ADMIN_CAPABILITIES.searchUsers)
     || hasCapability(capabilities, ADMIN_CAPABILITIES.changeRoles)
     || hasCapability(capabilities, ADMIN_CAPABILITIES.silenceUsers)
@@ -134,104 +313,290 @@ export function ProfilePage() {
     capabilities,
     ADMIN_CAPABILITIES.manageVerifications,
   ) && account?.role === "admin" && profile.data.role !== "admin";
+  const authorLabel = profile.data.displayName || profile.data.handle;
 
   return (
-    <div className="space-y-5">
-      <PageHeader
-        eyebrow="Community Profile"
-        title={profile.data.displayName || profile.data.handle}
-        description="公开社区身份、贡献与最近参与；校园邮箱等身份信息始终不会显示在这里。"
-      />
+    <div className="min-[1240px]:grid min-[1240px]:grid-cols-[minmax(0,640px)_320px]">
+      <div className="space-y-4 px-4 py-5 sm:px-6 sm:py-6 min-[1360px]:!px-8">
+        <Link
+          to="/"
+          className="inline-flex items-center gap-1 text-[13px] text-muted-foreground transition-colors hover:text-primary"
+        >
+          <ChevronLeft className="size-4" aria-hidden="true" />
+          返回首页
+        </Link>
 
-      <ProfileSummary
-        profile={profile.data}
-        relationship={socialRelationship.data}
-        isAuthenticated={isAuthenticated}
-        isSelf={isSelf}
-        relationshipLoading={socialRelationship.isLoading}
-        relationshipPending={relationshipPending}
-        messagePending={false}
-        canStartConversation={(account?.trustLevel ?? 0) >= 1 && Boolean(socialRelationship.data?.canStartConversation)}
-        canManageUser={canManageUser}
-        canManageVerifications={canManageVerifications}
-        confirmBlockOpen={confirmBlockOpen}
-        onConfirmBlockOpenChange={setConfirmBlockOpen}
-        onStartConversation={() => {
-          navigate(`/messages?recipient=${encodeURIComponent(profile.data.handle)}`);
-        }}
-        onToggleFollow={() => followRelationship.mutate()}
-        onToggleMute={() => muteRelationship.mutate()}
-        onToggleBlock={() => blockRelationship.mutate()}
-        onOpenRelationshipList={setRelationshipList}
-        onMediaDeliveryRefresh={() => void profile.refetch()}
-      />
+        <ProfileSummary
+          profile={profile.data}
+          relationship={socialRelationship.data}
+          isAuthenticated={isAuthenticated}
+          isSelf={isSelf}
+          relationshipLoading={socialRelationship.isLoading}
+          relationshipPending={relationshipPending}
+          messagePending={false}
+          canStartConversation={(account?.trustLevel ?? 0) >= 1 && Boolean(socialRelationship.data?.canStartConversation)}
+          canManageUser={canManageUser}
+          canManageVerifications={canManageVerifications}
+          confirmBlockOpen={confirmBlockOpen}
+          onConfirmBlockOpenChange={setConfirmBlockOpen}
+          onStartConversation={() => {
+            navigate(`/messages?recipient=${encodeURIComponent(profile.data.handle)}`);
+          }}
+          onToggleFollow={() => followRelationship.mutate()}
+          onToggleMute={() => muteRelationship.mutate()}
+          onToggleBlock={() => blockRelationship.mutate()}
+          onOpenRelationshipList={setRelationshipList}
+          onMediaDeliveryRefresh={() => void profile.refetch()}
+        />
 
-      {!contentHidden && profile.data.canViewActivity ? <div className="grid items-start gap-5 lg:grid-cols-2">
-        <ProfileActivitySection
-          title="主题"
-          icon={MessageSquare}
-          isLoading={threads.isLoading}
-          error={threads.error}
-          items={threadItems.flatMap((thread) => thread.id ? [(
-            <Link
-              key={thread.id}
-              to={`/forum/threads/${thread.id}`}
-              className="block rounded-lg border p-3 outline-none transition-colors hover:bg-accent focus-visible:ring-[3px] focus-visible:ring-ring/50"
+        <div className="min-[1240px]:hidden">
+          <ProfileSidebar
+            profile={profile.data}
+            isSelf={isSelf}
+            ariaLabel="个人主页侧栏（窄屏）"
+            walletBalance={wallet.data?.balance ?? null}
+            walletLoading={wallet.isLoading}
+            walletError={wallet.error}
+            onWalletRetry={() => void wallet.refetch()}
+            activity={isSelf ? {
+              calendar: activity.data,
+              isLoading: activity.isLoading,
+              error: activity.error,
+              onRetry: () => void activity.refetch(),
+            } : undefined}
+          />
+        </div>
+
+        {!contentHidden && profile.data.canViewActivity ? (
+          <section aria-label="用户动态">
+            <Tabs
+              value={activityTab}
+              onValueChange={(value) => setActivityTab(value as ProfileActivityTab)}
+              className="gap-0"
             >
-              <div className="flex items-start justify-between gap-3">
-                <p className="min-w-0 font-medium leading-6">{thread.title || "未命名主题"}</p>
-                {thread.boardSlug ? <Badge variant="outline">{thread.boardSlug}</Badge> : null}
+              <div className="mb-4 flex h-10 items-center border-b border-border/50">
+                <TabsList className="h-auto min-w-0 flex-1 justify-start gap-0 rounded-none bg-transparent p-0">
+                  {([
+                    ["threads", "帖子"],
+                    ["comments", "回复"],
+                    ...(isSelf ? [["bookmarks", "收藏"]] : []),
+                    ["media", "媒体"],
+                    ["likes", "喜欢"],
+                  ] as Array<[ProfileActivityTab, string]>).map(([value, label]) => (
+                    <TabsTrigger
+                      key={value}
+                      value={value}
+                      className="h-10 flex-1 rounded-none border-b-2 border-transparent px-1 pb-3 pt-0 text-sm font-medium text-muted-foreground shadow-none data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:shadow-none sm:px-2"
+                    >
+                      {label}
+                    </TabsTrigger>
+                  ))}
+                </TabsList>
               </div>
-              <div className="mt-2 flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
-                <span>{formatUnixTime(thread.createdAt)}</span>
-                <span className="flex items-center gap-1"><MessageCircle className="size-3" />{thread.replyCount ?? 0}</span>
-                <span className="flex items-center gap-1"><ThumbsUp className="size-3" />{thread.voteCount ?? 0}</span>
-              </div>
-            </Link>
-          )] : [])}
-          emptyTitle="暂无公开主题"
-          emptyDescription="该用户还没有发布可见主题。"
-          hasMore={Boolean(threads.hasNextPage)}
-          isLoadingMore={threads.isFetchingNextPage}
-          onRetry={() => void threads.refetch()}
-          onLoadMore={() => void threads.fetchNextPage()}
-        />
 
-        <ProfileActivitySection
-          title="回复"
-          icon={MessageCircle}
-          isLoading={comments.isLoading}
-          error={comments.error}
-          items={commentItems.flatMap((comment) => comment.id && comment.threadId ? [(
-            <Link
-              key={comment.id}
-              to={`/forum/threads/${comment.threadId}`}
-              className="block rounded-lg border p-3 outline-none transition-colors hover:bg-accent focus-visible:ring-[3px] focus-visible:ring-ring/50"
-            >
-              <p className="text-xs font-medium text-primary">
-                {comment.threadTitle || "查看所在主题"}
-              </p>
-              <p className="mt-1 line-clamp-3 whitespace-pre-wrap text-sm leading-6">
-                {comment.body || "该回复没有可展示内容"}
-              </p>
-              <p className="mt-2 text-xs text-muted-foreground">{formatUnixTime(comment.createdAt)}</p>
-            </Link>
-          )] : [])}
-          emptyTitle="暂无公开回复"
-          emptyDescription="该用户还没有发布可见回复。"
-          hasMore={Boolean(comments.hasNextPage)}
-          isLoadingMore={comments.isFetchingNextPage}
-          onRetry={() => void comments.refetch()}
-          onLoadMore={() => void comments.fetchNextPage()}
-        />
-      </div> : null}
+              <TabsContent value="threads" className="space-y-3">
+                {threads.isLoading ? (
+                  <LoadingState label="加载主题" />
+                ) : threads.error ? (
+                  <ErrorState error={threads.error} onRetry={() => void threads.refetch()} />
+                ) : threadItems.length === 0 ? (
+                  <EmptyState
+                    title="暂无公开主题"
+                    description="该用户还没有发布可见主题。"
+                    className="border-0 bg-muted/20 shadow-none"
+                  />
+                ) : (
+                  <>
+                    {threadItems.flatMap((thread) => thread.id ? [(
+                      <ProfilePostCard
+                        key={thread.id}
+                        authorName={authorLabel}
+                        authorHandle={profile.data.handle}
+                        authorAvatarUrl={profile.data.avatarUrl}
+                        trustLevel={profile.data.trustLevel}
+                        post={{
+                          id: thread.id,
+                          title: thread.title || "未命名主题",
+                          body: thread.bodyExcerpt,
+                          boardSlug: thread.boardSlug,
+                          createdAtLabel: formatRelativeTime(thread.createdAt),
+                          replyCount: thread.replyCount,
+                          voteCount: thread.voteCount,
+                          attachment: thread.attachments[0],
+                          href: `/forum/threads/${thread.id}`,
+                          isBookmarked: thread.isBookmarked,
+                        }}
+                        bookmarkPending={bookmarkTarget?.id === thread.id
+                          && bookmarkTarget.targetType === "thread"}
+                        onToggleBookmark={() => toggleBookmark({
+                          id: thread.id,
+                          targetType: "thread",
+                          isBookmarked: thread.isBookmarked,
+                        })}
+                        onAttachmentDeliveryRefresh={refreshProfileContent}
+                      />
+                    )] : [])}
+                    {threads.hasNextPage ? (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="w-full"
+                        onClick={() => void threads.fetchNextPage()}
+                        disabled={threads.isFetchingNextPage}
+                      >
+                        {threads.isFetchingNextPage ? <Loader2 className="size-4 animate-spin" /> : null}
+                        {threads.isFetchingNextPage ? "加载中" : "加载更多主题"}
+                      </Button>
+                    ) : null}
+                  </>
+                )}
+              </TabsContent>
 
-      {!contentHidden && !profile.data.canViewActivity ? (
-        <EmptyState
-          title="活动列表未公开"
-          description="该用户限制了个人主页上的主题与回复列表；公开内容仍可在对应板块和主题中查看。"
+              <TabsContent value="comments" className="space-y-3">
+                {comments.isLoading ? (
+                  <LoadingState label="加载回复" />
+                ) : comments.error ? (
+                  <ErrorState error={comments.error} onRetry={() => void comments.refetch()} />
+                ) : commentItems.length === 0 ? (
+                  <EmptyState
+                    title="暂无公开回复"
+                    description="该用户还没有发布可见回复。"
+                    className="border-0 bg-muted/20 shadow-none"
+                  />
+                ) : (
+                  <>
+                    {commentItems.flatMap((comment) => comment.id && comment.threadId ? [(
+                      <ProfilePostCard
+                        key={comment.id}
+                        authorName={authorLabel}
+                        authorHandle={profile.data.handle}
+                        authorAvatarUrl={profile.data.avatarUrl}
+                        trustLevel={profile.data.trustLevel}
+                        post={{
+                          id: comment.id,
+                          title: comment.threadTitle || "查看所在主题",
+                          body: comment.body || "该回复没有可展示内容",
+                          createdAtLabel: formatRelativeTime(comment.createdAt),
+                          replyCount: comment.replyCount,
+                          voteCount: comment.voteCount,
+                          attachment: comment.attachments[0],
+                          href: `/forum/threads/${comment.threadId}`,
+                          isBookmarked: comment.isBookmarked,
+                        }}
+                        bookmarkPending={bookmarkTarget?.id === comment.id
+                          && bookmarkTarget.targetType === "comment"}
+                        onToggleBookmark={() => toggleBookmark({
+                          id: comment.id,
+                          targetType: "comment",
+                          isBookmarked: comment.isBookmarked,
+                        })}
+                        onAttachmentDeliveryRefresh={refreshProfileContent}
+                      />
+                    )] : [])}
+                    {comments.hasNextPage ? (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="w-full"
+                        onClick={() => void comments.fetchNextPage()}
+                        disabled={comments.isFetchingNextPage}
+                      >
+                        {comments.isFetchingNextPage ? <Loader2 className="size-4 animate-spin" /> : null}
+                        {comments.isFetchingNextPage ? "加载中" : "加载更多回复"}
+                      </Button>
+                    ) : null}
+                  </>
+                )}
+              </TabsContent>
+
+              <TabsContent value="bookmarks" className="space-y-3">
+                <ProfileContentList
+                  items={bookmarkItems.map((item) => ({
+                    content: item.content,
+                    createdAtLabel: `收藏于 ${formatRelativeTime(item.createdAt)}`,
+                  }))}
+                  isLoading={bookmarks.isLoading}
+                  error={bookmarks.error}
+                  emptyTitle="暂无收藏"
+                  emptyDescription="你收藏的主题和回复会集中展示在这里。"
+                  hasNextPage={Boolean(bookmarks.hasNextPage)}
+                  isFetchingNextPage={bookmarks.isFetchingNextPage}
+                  loadMoreLabel="加载更多收藏"
+                  bookmarkTarget={bookmarkTarget}
+                  onRetry={() => void bookmarks.refetch()}
+                  onLoadMore={() => void bookmarks.fetchNextPage()}
+                  onToggleBookmark={toggleBookmark}
+                  onAttachmentDeliveryRefresh={refreshProfileContent}
+                />
+              </TabsContent>
+
+              <TabsContent value="media" className="space-y-3">
+                <ProfileContentList
+                  items={mediaItems.map((content) => ({ content }))}
+                  isLoading={media.isLoading}
+                  error={media.error}
+                  emptyTitle="暂无公开媒体"
+                  emptyDescription="该用户还没有发布带有可见图片的主题或回复。"
+                  hasNextPage={Boolean(media.hasNextPage)}
+                  isFetchingNextPage={media.isFetchingNextPage}
+                  loadMoreLabel="加载更多媒体"
+                  bookmarkTarget={bookmarkTarget}
+                  onRetry={() => void media.refetch()}
+                  onLoadMore={() => void media.fetchNextPage()}
+                  onToggleBookmark={toggleBookmark}
+                  onAttachmentDeliveryRefresh={refreshProfileContent}
+                />
+              </TabsContent>
+
+              <TabsContent value="likes" className="space-y-3">
+                <ProfileContentList
+                  items={likedItems.map((content) => ({
+                    content,
+                    createdAtLabel: `喜欢于 ${formatRelativeTime(content.activityAt)}`,
+                  }))}
+                  isLoading={likes.isLoading}
+                  error={likes.error}
+                  emptyTitle="暂无公开喜欢"
+                  emptyDescription="该用户还没有点赞可见的主题或回复。"
+                  hasNextPage={Boolean(likes.hasNextPage)}
+                  isFetchingNextPage={likes.isFetchingNextPage}
+                  loadMoreLabel="加载更多喜欢"
+                  bookmarkTarget={bookmarkTarget}
+                  onRetry={() => void likes.refetch()}
+                  onLoadMore={() => void likes.fetchNextPage()}
+                  onToggleBookmark={toggleBookmark}
+                  onAttachmentDeliveryRefresh={refreshProfileContent}
+                />
+              </TabsContent>
+            </Tabs>
+          </section>
+        ) : null}
+
+        {!contentHidden && !profile.data.canViewActivity ? (
+          <EmptyState
+            title="活动列表未公开"
+            description="该用户限制了个人主页上的主题与回复列表；公开内容仍可在对应板块和主题中查看。"
+          />
+        ) : null}
+      </div>
+
+      <div className="hidden pb-16 pl-6 pt-6 min-[1240px]:block">
+        <ProfileSidebar
+          profile={profile.data}
+          isSelf={isSelf}
+          ariaLabel="个人主页侧栏（宽屏）"
+          walletBalance={wallet.data?.balance ?? null}
+          walletLoading={wallet.isLoading}
+          walletError={wallet.error}
+          onWalletRetry={() => void wallet.refetch()}
+          activity={isSelf ? {
+            calendar: activity.data,
+            isLoading: activity.isLoading,
+            error: activity.error,
+            onRetry: () => void activity.refetch(),
+          } : undefined}
         />
-      ) : null}
+      </div>
 
       <ProfileRelationshipListDialog
         handle={profile.data.handle}

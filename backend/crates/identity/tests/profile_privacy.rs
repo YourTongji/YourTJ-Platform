@@ -33,6 +33,15 @@ async fn profile_and_privacy_are_validated_and_persisted() {
     let (token, account_id) = helpers::create_access_token_for(email, &pool).await;
     let app = helpers::create_test_app_with_pool(pool.clone()).await;
 
+    let default_profile_response = app
+        .clone()
+        .oneshot(request(Method::GET, "/api/v2/me/profile", &token, None))
+        .await
+        .expect("default profile response");
+    assert_eq!(default_profile_response.status(), StatusCode::OK);
+    let default_profile = helpers::read_json(default_profile_response).await;
+    assert_eq!(default_profile["school"], "同济大学");
+
     let default_response = app
         .clone()
         .oneshot(request(Method::GET, "/api/v2/me/privacy", &token, None))
@@ -56,6 +65,7 @@ async fn profile_and_privacy_are_validated_and_persisted() {
             &token,
             Some(json!({
                 "displayName": "  Campus Builder  ",
+                "school": "  同济大学嘉定校区  ",
                 "bio": "Shipping a safer community.",
                 "website": "https://example.test/about"
             })),
@@ -66,6 +76,7 @@ async fn profile_and_privacy_are_validated_and_persisted() {
     let profile = helpers::read_json(profile_response).await;
     assert_eq!(profile["accountId"], account_id.to_string());
     assert_eq!(profile["displayName"], "Campus Builder");
+    assert_eq!(profile["school"], "同济大学嘉定校区");
     assert_eq!(profile["website"], "https://example.test/about");
     assert!(profile.get("email").is_none());
 
@@ -91,6 +102,41 @@ async fn profile_and_privacy_are_validated_and_persisted() {
             .await
             .expect("stored profile website");
     assert_eq!(stored_website.as_deref(), Some("https://example.test/about"));
+
+    let rolling_profile_response = app
+        .clone()
+        .oneshot(request(
+            Method::PUT,
+            "/api/v2/me/profile",
+            &token,
+            Some(json!({
+                "displayName": "Campus Builder",
+                "bio": "Updated without the additive school field.",
+                "website": "https://example.test/about"
+            })),
+        ))
+        .await
+        .expect("rolling profile update response");
+    assert_eq!(rolling_profile_response.status(), StatusCode::OK);
+    let rolling_profile = helpers::read_json(rolling_profile_response).await;
+    assert_eq!(rolling_profile["school"], "同济大学嘉定校区");
+
+    let empty_school_response = app
+        .clone()
+        .oneshot(request(
+            Method::PUT,
+            "/api/v2/me/profile",
+            &token,
+            Some(json!({
+                "displayName": "Campus Builder",
+                "school": "   ",
+                "bio": null,
+                "website": null
+            })),
+        ))
+        .await
+        .expect("empty school response");
+    assert_eq!(empty_school_response.status(), StatusCode::BAD_REQUEST);
 
     let privacy_response = app
         .clone()

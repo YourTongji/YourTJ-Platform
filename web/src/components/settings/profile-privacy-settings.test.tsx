@@ -49,6 +49,7 @@ describe("ProfilePrivacySettings", () => {
     apiMocks.profile.mockReset().mockResolvedValue({
       accountId: "1",
       displayName: "Alice",
+      school: "同济大学",
       bio: "Hello campus",
       website: "https://alice.example.test",
       avatarAssetId: null,
@@ -77,9 +78,13 @@ describe("ProfilePrivacySettings", () => {
     await waitFor(() => expect(displayName).toHaveValue("Alice"));
     await user.clear(displayName);
     await user.type(displayName, "Alice Chen");
+    const school = screen.getByRole("textbox", { name: "院校" });
+    await user.clear(school);
+    await user.type(school, "Tongji University");
     await user.click(screen.getByRole("button", { name: "保存公开资料" }));
     await waitFor(() => expect(apiMocks.updateProfile).toHaveBeenCalledWith({
       displayName: "Alice Chen",
+      school: "Tongji University",
       bio: "Hello campus",
       website: "https://alice.example.test",
     }));

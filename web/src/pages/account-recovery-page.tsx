@@ -97,7 +97,7 @@ export function AccountRecoveryPage() {
   return (
     <div className="mx-auto max-w-2xl py-4 sm:py-10">
       <div className="mb-7">
-        <p className="text-xs font-semibold uppercase tracking-[0.2em] text-primary">Account recovery</p>
+        <p className="text-xs font-semibold uppercase tracking-[0.2em] text-primary">账号恢复</p>
         <h1 className="mt-2 text-3xl font-bold tracking-tight">恢复已关闭的账号</h1>
         <p className="mt-3 leading-7 text-muted-foreground">
           此流程只适用于主动停用或仍在 30 天恢复期内的删除申请。验证不会直接登录，也不会恢复任何旧会话。

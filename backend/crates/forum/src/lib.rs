@@ -36,6 +36,8 @@ pub fn routes(state: AppState) -> Router {
         .route("/api/v2/users/{handle}", get(handlers::get_user_profile))
         .route("/api/v2/users/{handle}/threads", get(handlers::list_user_threads))
         .route("/api/v2/users/{handle}/comments", get(handlers::list_user_comments))
+        .route("/api/v2/users/{handle}/media", get(handlers::list_user_media))
+        .route("/api/v2/users/{handle}/likes", get(handlers::list_user_likes))
         .route("/api/v2/users/{handle}/relationship", get(handlers::get_relationship_handler))
         .route(
             "/api/v2/users/{handle}/follow",

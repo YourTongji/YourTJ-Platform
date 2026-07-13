@@ -88,9 +88,8 @@ export function AnnouncementsPage() {
   return (
     <div>
       <PageHeader
-        eyebrow="Platform announcements"
         title="社区公告"
-        description="这里展示当前对你生效的平台公告、版本、有效期与确认状态。"
+        description="查看当前生效的平台公告。"
       />
       {announcements.isLoading ? (
         <LoadingState label="加载社区公告" />

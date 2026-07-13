@@ -74,6 +74,8 @@ async fn activity_visibility_gates_authored_lists_without_hiding_public_content_
     assert_eq!(anonymous_profile["threadCount"], 4);
     assert_eq!(anonymous_profile["commentCount"], 7);
     assert_eq!(get(&app, "/api/v2/users/activity-owner/threads").await.0, StatusCode::NOT_FOUND);
+    assert_eq!(get(&app, "/api/v2/users/activity-owner/media").await.0, StatusCode::NOT_FOUND);
+    assert_eq!(get(&app, "/api/v2/users/activity-owner/likes").await.0, StatusCode::NOT_FOUND);
     assert_eq!(
         get_as(&app, "/api/v2/users/activity-owner/comments", Some(&viewer_token),).await.0,
         StatusCode::NOT_FOUND
@@ -85,6 +87,10 @@ async fn activity_visibility_gates_authored_lists_without_hiding_public_content_
     assert_eq!(self_profile["canViewActivity"], true);
     assert_eq!(
         get_as(&app, "/api/v2/users/activity-owner/threads", Some(&owner_token),).await.0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        get_as(&app, "/api/v2/users/activity-owner/likes", Some(&owner_token),).await.0,
         StatusCode::OK
     );
 
@@ -205,10 +211,73 @@ async fn insert_comment(
     comment_id
 }
 
+async fn seed_published_profile_image(pool: &sqlx::PgPool, account_id: i64) -> i64 {
+    for (key, value) in [
+        ("OSS_REGION", "cn-shanghai"),
+        ("MEDIA_DELIVERY_OSS_BUCKET", "yourtj-test-delivery"),
+        ("MEDIA_DELIVERY_OSS_ACCESS_KEY_ID", "test-delivery-writer"),
+        ("MEDIA_DELIVERY_OSS_ACCESS_KEY_SECRET", "test-delivery-secret"),
+        ("MEDIA_CDN_BASE_URL", "https://media.example.test"),
+        ("MEDIA_CDN_PRIMARY_KEY", "testprimarysigningkey"),
+        ("MEDIA_CDN_SECONDARY_KEY", "testsecondarysigningkey"),
+        ("MEDIA_CDN_SIGNING_KEY_SLOT", "primary"),
+        ("MEDIA_CDN_URL_TTL_SECONDS", "300"),
+        ("CDN_ACCESS_KEY_ID", "test-cdn-purge-writer"),
+        ("CDN_ACCESS_KEY_SECRET", "test-cdn-purge-secret"),
+    ] {
+        std::env::set_var(key, value);
+    }
+    let suffix = uuid::Uuid::new_v4().simple().to_string();
+    let asset_id: i64 = sqlx::query_scalar(
+        "INSERT INTO media.uploads \
+         (account_id, kind, oss_key, url, bytes, mime, sha256, status, usage, \
+          image_width, image_height) \
+         VALUES ($1, 'image', $2, $3, 1024, 'image/png', $4, 'clean', \
+                 'forum_thread', 1200, 800) RETURNING id",
+    )
+    .bind(account_id)
+    .bind(format!("uploads/{account_id}/image/{suffix}.png"))
+    .bind(format!("https://cdn.example.test/{suffix}.png"))
+    .bind("a".repeat(64))
+    .fetch_one(pool)
+    .await
+    .expect("seed profile media upload");
+    for (index, (variant_kind, dimension)) in
+        [("thumb_256", 256), ("display_1280", 1200), ("full_2048", 1600)].into_iter().enumerate()
+    {
+        let content_hash = format!("{:064x}", index + 11);
+        sqlx::query(
+            "INSERT INTO media.asset_variants \
+             (asset_id, variant_kind, policy_version, object_key, content_sha256, mime, \
+              bytes, width, height, status, published_at) \
+             VALUES ($1, $2, 1, $3, $4, 'image/webp', 512, $5, $5, \
+                     'published', now())",
+        )
+        .bind(asset_id)
+        .bind(variant_kind)
+        .bind(format!("assets/{asset_id}/1/{variant_kind}-{content_hash}.webp"))
+        .bind(content_hash)
+        .bind(dimension)
+        .execute(pool)
+        .await
+        .expect("seed profile media variant");
+    }
+    sqlx::query(
+        "UPDATE media.asset_publications \
+         SET policy_version = 1, status = 'published', published_at = now(), updated_at = now() \
+         WHERE asset_id = $1",
+    )
+    .bind(asset_id)
+    .execute(pool)
+    .await
+    .expect("publish profile media");
+    asset_id
+}
+
 #[tokio::test]
 async fn profile_routes_preserve_contract_and_exclude_unavailable_content() {
     let (pool, app) = create_test_app().await;
-    let (account_id, _) =
+    let (account_id, owner_token) =
         create_test_account(&pool, "profile-boundary@tongji.edu.cn", "profile-boundary").await;
     sqlx::query(
         "INSERT INTO identity.profile_privacy \
@@ -220,6 +289,14 @@ async fn profile_routes_preserve_contract_and_exclude_unavailable_content() {
     .execute(&pool)
     .await
     .expect("make profile public");
+    sqlx::query(
+        "INSERT INTO identity.profiles (account_id, school) VALUES ($1, '同济大学嘉定校区') \
+         ON CONFLICT (account_id) DO UPDATE SET school = EXCLUDED.school",
+    )
+    .bind(account_id)
+    .execute(&pool)
+    .await
+    .expect("set profile school");
     sqlx::query(
         "INSERT INTO forum.user_stats \
          (account_id, threads_created, comments_created, votes_received) \
@@ -315,19 +392,98 @@ async fn profile_routes_preserve_contract_and_exclude_unavailable_content() {
     let non_visible =
         insert_thread(&pool, account_id, "Pending", ThreadVisibility::NonVisible).await;
 
-    insert_comment(&pool, account_id, visible_one, "visible comment one", false).await;
+    let visible_comment_one =
+        insert_comment(&pool, account_id, visible_one, "visible comment one", false).await;
     insert_comment(&pool, account_id, visible_two, "visible comment two", false).await;
-    insert_comment(&pool, account_id, visible_three, "visible comment three", false).await;
+    let visible_comment_three =
+        insert_comment(&pool, account_id, visible_three, "visible comment three", false).await;
     insert_comment(&pool, account_id, visible_three, "hidden comment", true).await;
     insert_comment(&pool, account_id, hidden, "comment under hidden thread", false).await;
     insert_comment(&pool, account_id, deleted, "comment under deleted thread", false).await;
     insert_comment(&pool, account_id, archived, "comment under archived thread", false).await;
     insert_comment(&pool, account_id, non_visible, "comment under pending thread", false).await;
+    let (reply_author_id, _) =
+        create_test_account(&pool, "profile-reply@tongji.edu.cn", "profile-reply").await;
+    let direct_reply_id: i64 = sqlx::query_scalar(
+        "INSERT INTO forum.comments (thread_id, parent_id, author_id, body) \
+         VALUES ($1, $2, $3, 'direct reply') RETURNING id",
+    )
+    .bind(visible_three)
+    .bind(visible_comment_three)
+    .bind(reply_author_id)
+    .fetch_one(&pool)
+    .await
+    .expect("insert direct profile reply");
+    sqlx::query("UPDATE forum.comments SET hidden_at = now() WHERE id = $1")
+        .bind(direct_reply_id)
+        .execute(&pool)
+        .await
+        .expect("hide direct profile reply");
+    let reply_count_while_hidden: i32 =
+        sqlx::query_scalar("SELECT reply_count FROM forum.comments WHERE id = $1")
+            .bind(visible_comment_three)
+            .fetch_one(&pool)
+            .await
+            .expect("reply count while hidden");
+    assert_eq!(reply_count_while_hidden, 0);
+    sqlx::query("UPDATE forum.comments SET hidden_at = NULL WHERE id = $1")
+        .bind(direct_reply_id)
+        .execute(&pool)
+        .await
+        .expect("restore direct profile reply");
+    sqlx::query("UPDATE forum.comments SET vote_count = 5 WHERE id = $1")
+        .bind(visible_comment_three)
+        .execute(&pool)
+        .await
+        .expect("set profile comment vote count");
+    sqlx::query(
+        "INSERT INTO forum.votes (post_type, post_id, account_id, value) \
+         VALUES ('thread', $1, $2, 1), ('comment', $3, $2, 1)",
+    )
+    .bind(visible_three)
+    .bind(account_id)
+    .bind(visible_comment_one)
+    .execute(&pool)
+    .await
+    .expect("seed profile likes");
+    sqlx::query(
+        "INSERT INTO forum.bookmarks (account_id, target_type, target_id, note) \
+         VALUES ($1, 'thread', $2, '稍后阅读')",
+    )
+    .bind(account_id)
+    .bind(visible_two)
+    .execute(&pool)
+    .await
+    .expect("seed profile bookmark");
+
+    let media_asset_id = seed_published_profile_image(&pool, account_id).await;
+    let media_thread_id: i64 = sqlx::query_scalar(
+        "INSERT INTO forum.threads \
+         (board_id, author_id, title, body, content_format, content_version) \
+         VALUES (1, $1, 'Visible media', $2, 'markdown_v1', 1) RETURNING id",
+    )
+    .bind(account_id)
+    .bind(format!("![校园风景](yourtj-asset:{media_asset_id})"))
+    .fetch_one(&pool)
+    .await
+    .expect("insert profile media thread");
+    sqlx::query(
+        "INSERT INTO media.asset_usages \
+         (asset_id, owner_account_id, target_type, target_id, position, alt_text, \
+          bound_content_version) VALUES ($1, $2, 'forum_thread', $3, 0, '校园风景', 1)",
+    )
+    .bind(media_asset_id)
+    .bind(account_id)
+    .bind(media_thread_id)
+    .execute(&pool)
+    .await
+    .expect("bind profile media thread");
 
     let (profile_status, profile) = get(&app, "/api/v2/users/PROFILE-BOUNDARY").await;
     assert_eq!(profile_status, StatusCode::OK);
     assert_eq!(profile["id"], account_id.to_string());
     assert_eq!(profile["handle"], "profile-boundary");
+    assert_eq!(profile["school"], "同济大学嘉定校区");
     assert_eq!(profile["threadCount"], 8);
     assert_eq!(profile["commentCount"], 13);
     assert_eq!(profile["votesReceived"], 21);
@@ -344,8 +500,8 @@ async fn profile_routes_preserve_contract_and_exclude_unavailable_content() {
         get(&app, "/api/v2/users/profile-boundary/threads?limit=2").await;
     assert_eq!(thread_page_status, StatusCode::OK);
     assert_eq!(thread_page["items"].as_array().expect("thread items").len(), 2);
-    assert_eq!(thread_page["items"][0]["id"], visible_three.to_string());
-    assert_eq!(thread_page["items"][1]["id"], visible_two.to_string());
+    assert_eq!(thread_page["items"][0]["id"], media_thread_id.to_string());
+    assert_eq!(thread_page["items"][1]["id"], visible_three.to_string());
     let thread_cursor = thread_page["nextCursor"].as_str().expect("thread cursor");
     let (thread_page_two_status, thread_page_two) = get(
         &app,
@@ -353,8 +509,9 @@ async fn profile_routes_preserve_contract_and_exclude_unavailable_content() {
     )
     .await;
     assert_eq!(thread_page_two_status, StatusCode::OK);
-    assert_eq!(thread_page_two["items"].as_array().expect("second thread items").len(), 1);
-    assert_eq!(thread_page_two["items"][0]["id"], visible_one.to_string());
+    assert_eq!(thread_page_two["items"].as_array().expect("second thread items").len(), 2);
+    assert_eq!(thread_page_two["items"][0]["id"], visible_two.to_string());
+    assert_eq!(thread_page_two["items"][1]["id"], visible_one.to_string());
     assert!(thread_page_two["nextCursor"].is_null());
 
     let (comment_page_status, comment_page) =
@@ -377,6 +534,37 @@ async fn profile_routes_preserve_contract_and_exclude_unavailable_content() {
     assert_eq!(comment_page_two["items"].as_array().expect("second comment items").len(), 1);
     assert_eq!(comment_page_two["items"][0]["body"], "visible comment one");
     assert!(comment_page_two["nextCursor"].is_null());
+
+    let comment_items = comment_page["items"].as_array().expect("comment metric items");
+    let visible_comment_three_id = visible_comment_three.to_string();
+    let nested_comment = comment_items
+        .iter()
+        .find(|item| item["id"].as_str() == Some(visible_comment_three_id.as_str()))
+        .expect("comment with nested reply");
+    assert_eq!(nested_comment["replyCount"], 1);
+    assert_eq!(nested_comment["voteCount"], 5);
+
+    let (likes_status, likes) = get(&app, "/api/v2/users/profile-boundary/likes").await;
+    assert_eq!(likes_status, StatusCode::OK);
+    assert_eq!(likes["items"].as_array().expect("liked items").len(), 2);
+    assert!(likes["items"]
+        .as_array()
+        .expect("liked items")
+        .iter()
+        .all(|item| item["viewerVote"].is_null()));
+
+    let (media_status, media) = get(&app, "/api/v2/users/profile-boundary/media").await;
+    assert_eq!(media_status, StatusCode::OK);
+    assert_eq!(media["items"].as_array().expect("media items").len(), 1);
+    assert_eq!(media["items"][0]["id"], media_thread_id.to_string());
+    assert_eq!(media["items"][0]["attachments"][0]["assetId"], media_asset_id.to_string());
+    assert!(media["items"][0]["attachments"][0].get("ossKey").is_none());
+
+    let (bookmarks_status, bookmarks) =
+        get_as(&app, "/api/v2/forum/bookmarks", Some(&owner_token)).await;
+    assert_eq!(bookmarks_status, StatusCode::OK);
+    assert_eq!(bookmarks["items"][0]["note"], "稍后阅读");
+    assert_eq!(bookmarks["items"][0]["content"]["title"], "Visible two");
 
     let (missing_status, _) = get(&app, "/api/v2/users/profile-does-not-exist").await;
     assert_eq!(missing_status, StatusCode::NOT_FOUND);

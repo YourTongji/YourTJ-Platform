@@ -20,7 +20,7 @@ export function SettingsPage() {
   if (account?.onboardingRequired) {
     return (
       <div className="mx-auto max-w-2xl">
-        <PageHeader eyebrow="Account security" title="账号与安全" description="即使尚未完成入门设置，你仍然可以管理设备、修改密码、导出或关闭账号。" />
+        <PageHeader title="账号与安全" description="即使尚未完成入门设置，你仍然可以管理设备、修改密码、导出或关闭账号。" />
         <div className="space-y-4">
           <Button asChild variant="outline"><Link to="/onboarding">返回完成入门设置</Link></Button>
           <SecuritySettings />
@@ -32,7 +32,7 @@ export function SettingsPage() {
 
   return (
     <div className="max-w-2xl">
-      <PageHeader eyebrow="Settings" title="设置" description="管理公开资料、隐私、通知与账号安全。" />
+      <PageHeader title="设置" description="管理公开资料、隐私、通知与账号安全。" />
       <div className="space-y-4">
         <ProfileMediaSettings />
         <ProfilePrivacySettings />

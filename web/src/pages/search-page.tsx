@@ -101,9 +101,8 @@ export function SearchPage() {
   return (
     <div className="mx-auto max-w-4xl">
       <PageHeader
-        eyebrow="Search"
         title="全站搜索"
-        description="聚合课程、课评、帖子、用户、板块与标签；每条结果都会按当前权限重新验证。"
+        description="搜索课程、课评、帖子、用户、板块与标签。"
       />
       <form
         className="relative"
@@ -158,7 +157,7 @@ export function SearchPage() {
             <CardContent className="flex min-h-56 flex-col items-center justify-center gap-3 text-center">
               <SearchX className="size-8 text-destructive" aria-hidden="true" />
               <p className="font-medium">搜索暂时不可用</p>
-              <p className="text-sm text-muted-foreground">没有显示缓存或未经权限复核的结果。</p>
+              <p className="text-sm text-muted-foreground">请稍后重试。</p>
               <Button type="button" variant="outline" onClick={() => void result.refetch()}>重试</Button>
             </CardContent>
           </Card>
@@ -167,7 +166,7 @@ export function SearchPage() {
             <CardContent className="flex min-h-56 flex-col items-center justify-center gap-3 text-center">
               <AlertTriangle className="size-8 text-amber-600" aria-hidden="true" />
               <p className="font-medium">相关搜索分类暂时不可用</p>
-              <p className="text-sm text-muted-foreground">没有用缓存或未经权限复核的数据代替实时结果。</p>
+              <p className="text-sm text-muted-foreground">请稍后重试。</p>
               <Button type="button" variant="outline" onClick={() => void result.refetch()}>重试</Button>
             </CardContent>
           </Card>
@@ -187,7 +186,7 @@ export function SearchPage() {
                   <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-600" aria-hidden="true" />
                   <p>
                     {failedScopes.map((item) => scopeLabels[item as Exclude<SearchScope, "all">]).join("、")}
-                    暂时不可用；其余结果仍已按当前权限复核。
+                    暂时不可用，其余结果仍可查看。
                   </p>
                 </CardContent>
               </Card>
@@ -207,7 +206,7 @@ export function SearchPage() {
                 ？
               </p>
             ) : null}
-            <p className="text-sm text-muted-foreground">当前返回 {total} 条经可见性复核的结果</p>
+            <p className="text-sm text-muted-foreground">共找到 {total} 条结果</p>
 
             {(scope === "all" || scope === "course") && courses.length > 0 ? (
               <section aria-labelledby="course-results-title">

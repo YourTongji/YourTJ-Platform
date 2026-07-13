@@ -261,6 +261,7 @@ pub struct UpdateMeInput {
 pub struct MyProfileDto {
     pub account_id: String,
     pub display_name: Option<String>,
+    pub school: String,
     pub bio: Option<String>,
     pub website: Option<String>,
     pub avatar_asset_id: Option<String>,
@@ -272,6 +273,7 @@ pub struct MyProfileDto {
 #[serde(rename_all = "camelCase")]
 pub struct ProfileUpdateInput {
     pub display_name: Option<String>,
+    pub school: Option<String>,
     pub bio: Option<String>,
     pub website: Option<String>,
 }

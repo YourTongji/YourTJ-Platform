@@ -106,12 +106,12 @@ describe("NotificationsPage", () => {
       "/forum/threads/2",
     );
     expect(screen.getByText("主题已被隐藏：违反社区规则")).toBeVisible();
-    expect(screen.getByRole("link", { name: "查看治理通知详情" })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: "查看平台通知详情" })).toHaveAttribute(
       "href",
       "/appeals?event=41",
     );
 
-    await user.click(screen.getByRole("button", { name: "标记治理通知为已读" }));
+    await user.click(screen.getByRole("button", { name: "标记平台通知为已读" }));
     await waitFor(() => expect(apiMocks.governanceMarkRead).toHaveBeenCalledWith(["19"]));
 
     await user.click(screen.getByRole("button", { name: "标记为已读" }));

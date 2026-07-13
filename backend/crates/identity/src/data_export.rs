@@ -63,6 +63,7 @@ struct IdentityAccountExport {
 #[serde(rename_all = "camelCase")]
 struct IdentityProfileExport {
     display_name: Option<String>,
+    school: String,
     bio: Option<String>,
     website: Option<String>,
     avatar_asset_id: Option<i64>,
@@ -405,7 +406,7 @@ pub async fn snapshot(
             .fetch_one(pool)
             .await?;
     let profile = sqlx::query_as::<_, IdentityProfileExport>(
-        "SELECT display_name, bio, website, avatar_asset_id, banner_asset_id \
+        "SELECT display_name, school, bio, website, avatar_asset_id, banner_asset_id \
          FROM identity.profiles WHERE account_id = $1",
     )
     .bind(account_id)
@@ -413,6 +414,7 @@ pub async fn snapshot(
     .await?
     .unwrap_or(IdentityProfileExport {
         display_name: None,
+        school: "同济大学".to_string(),
         bio: None,
         website: None,
         avatar_asset_id: None,

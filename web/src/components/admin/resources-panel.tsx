@@ -1197,7 +1197,7 @@ export function ResourcesPanel({ capabilities }: { capabilities: Set<string> }) 
     <div className="space-y-5">
       <AdminSectionHeader
         title="内容与资源"
-        description="集中处理待审媒体、媒体运维、课程目录和社区结构。每个标签页只在服务端签发对应能力时出现。"
+        description="集中处理待审媒体、媒体维护、课程目录和社区结构。不同权限会显示不同标签页。"
       />
       <Tabs defaultValue={defaultTab}>
         <TabsList className="scrollbar-none h-auto max-w-full justify-start overflow-x-auto">

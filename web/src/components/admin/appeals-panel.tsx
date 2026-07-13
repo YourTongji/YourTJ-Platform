@@ -68,7 +68,7 @@ function DecisionDialog({
         <DialogHeader>
           <DialogTitle>
             {decision?.outcome === "upheld"
-              ? "维持原处置"
+              ? "维持原处理"
               : decision?.outcome === "overturned"
                 ? "撤销原处置"
                 : "缩短账号制裁"}

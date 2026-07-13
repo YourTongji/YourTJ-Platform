@@ -105,9 +105,9 @@ function JobsPanel() {
   });
   const jobs = [
     { kind: "selection" as const, title: "选课数据同步", description: "从一系统镜像选课目录。", icon: DatabaseZap },
-    { kind: "courses" as const, title: "课程索引重建", description: "重建 Meilisearch course documents。", icon: RefreshCcw },
-    { kind: "reviews" as const, title: "点评索引重建", description: "重建 Meilisearch reviews 索引。", icon: RefreshCcw },
-    { kind: "forum" as const, title: "论坛索引重建", description: "重建 Meilisearch forum 索引。", icon: RefreshCcw },
+    { kind: "courses" as const, title: "课程索引重建", description: "重建课程搜索索引。", icon: RefreshCcw },
+    { kind: "reviews" as const, title: "点评索引重建", description: "重建点评搜索索引。", icon: RefreshCcw },
+    { kind: "forum" as const, title: "论坛索引重建", description: "重建论坛搜索索引。", icon: RefreshCcw },
   ];
   const selectedJob = jobs.find((item) => item.kind === selected);
 

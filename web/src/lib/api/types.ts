@@ -137,6 +137,8 @@ export type ThreadFeed = Schema["ThreadFeed"];
 export type UserProfile = Schema["UserProfile"] & { id: string };
 export type UserThread = Schema["UserThread"];
 export type UserComment = Schema["UserComment"];
+export type ProfileContent = Schema["ProfileContent"];
+export type Bookmark = Schema["Bookmark"];
 export type UserSummary = Schema["UserSummary"];
 export type UserRelationship = Schema["UserRelationship"];
 export type MyProfile = Schema["MyProfile"];
@@ -199,13 +201,6 @@ export type DmCounts = Schema["DmCounts"];
 export type DmMessage = Schema["DmMessage"];
 export type IgnoreUser = Schema["IgnoreUser"];
 export type DmReportReason = Schema["DmReportInput"]["reason"];
-
-export interface Bookmark {
-  targetType?: string;
-  targetId?: string;
-  note?: string | null;
-  createdAt?: number;
-}
 
 export interface AdminForumFlag {
   id: string;

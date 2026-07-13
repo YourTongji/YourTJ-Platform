@@ -124,6 +124,7 @@ import type {
   RecoveryCredential,
   UserComment,
   UserProfile,
+  ProfileContent,
   UserRelationship,
   UserSummary,
   UserThread,
@@ -407,6 +408,20 @@ export const api = {
 
   userComments(handle: string, cursor?: string | null) {
     return apiRequest<Page<UserComment>>(`/users/${encodeURIComponent(handle)}/comments`, {
+      query: { cursor, limit: 20 },
+      auth: "optional",
+    });
+  },
+
+  userMedia(handle: string, cursor?: string | null) {
+    return apiRequest<Page<ProfileContent>>(`/users/${encodeURIComponent(handle)}/media`, {
+      query: { cursor, limit: 20 },
+      auth: "optional",
+    });
+  },
+
+  userLikes(handle: string, cursor?: string | null) {
+    return apiRequest<Page<ProfileContent>>(`/users/${encodeURIComponent(handle)}/likes`, {
       query: { cursor, limit: 20 },
       auth: "optional",
     });

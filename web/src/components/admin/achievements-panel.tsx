@@ -432,7 +432,7 @@ export function AchievementsPanel({ initialAccountId = "" }: { initialAccountId?
                     ...form,
                     reason: event.target.value,
                   }))}
-                  placeholder="原因将写入不可变治理审计"
+                  placeholder="原因将写入操作记录"
                   maxLength={500}
                 />
               </div>

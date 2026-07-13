@@ -80,6 +80,7 @@ export function ProfilePrivacySettings() {
   const profile = useQuery({ queryKey: ["my-profile"], queryFn: api.myProfile });
   const privacy = useQuery({ queryKey: ["my-privacy"], queryFn: api.myPrivacy });
   const [displayName, setDisplayName] = React.useState("");
+  const [school, setSchool] = React.useState("同济大学");
   const [handle, setHandle] = React.useState(account?.handle ?? "");
   const [bio, setBio] = React.useState("");
   const [website, setWebsite] = React.useState("");
@@ -88,6 +89,7 @@ export function ProfilePrivacySettings() {
   React.useEffect(() => {
     if (!profile.data) return;
     setDisplayName(profile.data.displayName ?? "");
+    setSchool(profile.data.school);
     setBio(profile.data.bio ?? "");
     setWebsite(profile.data.website ?? "");
   }, [profile.data]);
@@ -109,6 +111,7 @@ export function ProfilePrivacySettings() {
       const nextHandle = handle.trim();
       const result = await api.updateMyProfile({
         displayName: displayName.trim() || null,
+        school: school.trim(),
         bio: bio.trim() || null,
         website: website.trim() || null,
       });
@@ -175,6 +178,19 @@ export function ProfilePrivacySettings() {
             />
           </div>
           <div className="space-y-2">
+            <Label htmlFor="profile-school">院校</Label>
+            <Input
+              id="profile-school"
+              required
+              minLength={1}
+              maxLength={100}
+              value={school}
+              onChange={(event) => setSchool(event.target.value)}
+              placeholder="同济大学"
+            />
+            <p className="text-xs text-muted-foreground">院校会显示在公开个人主页。</p>
+          </div>
+          <div className="space-y-2">
             <div className="flex items-center justify-between gap-3">
               <Label htmlFor="profile-bio">简介</Label>
               <span className="text-xs text-muted-foreground">{bio.length}/500</span>
@@ -202,7 +218,7 @@ export function ProfilePrivacySettings() {
           <Button
             type="button"
             onClick={() => saveProfile.mutate()}
-            disabled={profile.isLoading || profile.isError || saveProfile.isPending}
+            disabled={profile.isLoading || profile.isError || !school.trim() || saveProfile.isPending}
           >
             保存公开资料
           </Button>

@@ -15,6 +15,7 @@ pub enum ProfileAssetKind {
 pub struct ProfileRecord {
     pub account_id: i64,
     pub display_name: Option<String>,
+    pub school: String,
     pub bio: Option<String>,
     pub website: Option<String>,
     pub avatar_asset_id: Option<i64>,
@@ -43,7 +44,7 @@ pub async fn get_or_create_profile(pool: &PgPool, account_id: i64) -> AppResult<
     .execute(pool)
     .await?;
     let profile = sqlx::query_as::<_, ProfileRecord>(
-        "SELECT account_id, display_name, bio, website, avatar_asset_id, banner_asset_id \
+        "SELECT account_id, display_name, school, bio, website, avatar_asset_id, banner_asset_id \
          FROM identity.profiles WHERE account_id = $1",
     )
     .bind(account_id)
@@ -57,19 +58,22 @@ pub async fn replace_profile_text(
     pool: &PgPool,
     account_id: i64,
     display_name: Option<&str>,
+    school: Option<&str>,
     bio: Option<&str>,
     website: Option<&str>,
 ) -> AppResult<ProfileRecord> {
     let profile = sqlx::query_as::<_, ProfileRecord>(
-        "INSERT INTO identity.profiles (account_id, display_name, bio, website) \
-         VALUES ($1, $2, $3, $4) \
+        "INSERT INTO identity.profiles (account_id, display_name, school, bio, website) \
+         VALUES ($1, $2, COALESCE($3, '同济大学'), $4, $5) \
          ON CONFLICT (account_id) DO UPDATE \
-         SET display_name = EXCLUDED.display_name, bio = EXCLUDED.bio, \
+         SET display_name = EXCLUDED.display_name, \
+             school = COALESCE($3, identity.profiles.school), bio = EXCLUDED.bio, \
              website = EXCLUDED.website, updated_at = now() \
-         RETURNING account_id, display_name, bio, website, avatar_asset_id, banner_asset_id",
+         RETURNING account_id, display_name, school, bio, website, avatar_asset_id, banner_asset_id",
     )
     .bind(account_id)
     .bind(display_name)
+    .bind(school)
     .bind(bio)
     .bind(website)
     .fetch_one(pool)
