@@ -559,8 +559,28 @@ async fn concurrent_session_revocation_wins_before_a_high_risk_mutation_commits(
         .await
         .expect("concurrent role response")
     });
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    assert!(!mutation.is_finished(), "mutation must wait on the session revocation lock");
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            let is_waiting_on_session_lock: bool = sqlx::query_scalar(
+                "SELECT EXISTS( \
+                   SELECT 1 FROM pg_stat_activity \
+                   WHERE datname = current_database() AND pid <> pg_backend_pid() \
+                     AND cardinality(pg_blocking_pids(pid)) > 0 \
+                     AND query LIKE '%FROM identity.sessions%' \
+                 )",
+            )
+            .fetch_one(&pool)
+            .await
+            .expect("inspect blocked session query");
+            if is_waiting_on_session_lock {
+                break;
+            }
+            assert!(!mutation.is_finished(), "mutation finished before reaching the session lock");
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("mutation must wait on the session revocation lock");
     revocation.commit().await.expect("commit concurrent revocation");
 
     let response = mutation.await.expect("join concurrent mutation");

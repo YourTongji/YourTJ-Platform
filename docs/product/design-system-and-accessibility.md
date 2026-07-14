@@ -6,7 +6,7 @@
 >
 > 负责人：Product design、Web maintainers
 >
-> 最近核验：2026-07-12，Web home activity/check-in components 与 responsive tests
+> 最近核验：2026-07-14，Web home/check-in、导航头像与共享图片灯箱 component tests
 
 YourTJ Community Web 的 Figma 第三版是当前视觉方向来源：
 [Figma node 106:2](https://www.figma.com/design/dndgylImv8ZuVAXg9uWU3y/YourTJ-Community-Web?node-id=106-2)。
@@ -99,6 +99,10 @@ empty、error、success 和 permission-denied。Mutation：
 - 所有功能可键盘完成，focus order 与视觉顺序一致，focus-visible 清晰。
 - Icon-only button 有可理解 accessible name；form control 有 label、description 和关联 error。
 - Dialog/sheet 管理初始 focus、focus trap、Escape 和关闭后 focus restoration。
+- 图片灯箱的缩略图必须是 Dialog trigger；支持关闭按钮、空白区、Escape 与多图左右方向键，关闭后焦点
+  返回原缩略图。处于导航链接内的 Markdown 图片保留链接语义，不嵌套第二个 button。
+- 导航头像在 profile/delivery 尚未确定时使用中性 skeleton，不短暂泄露或闪烁账号首字母；URL 更新时
+  保留已成功加载的旧图直到新图加载成功。
 - 文本/关键 UI 对比度满足 WCAG AA；颜色之外使用文字、icon shape 或 pattern。
 - Heatmap/chart cell 可聚焦并朗读日期、数值和原始构成。
 - 首页活跃度按 20 周 × 7 日 grid 表达；方向键按日期移动，Home/End 到首尾可用格。每格 label 同时朗读

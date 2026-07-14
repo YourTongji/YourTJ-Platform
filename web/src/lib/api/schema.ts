@@ -2639,6 +2639,7 @@ export interface paths {
                         email: string;
                         /** Format: password */
                         password: string;
+                        clientInstallationId?: components["schemas"]["ClientInstallationId"];
                     };
                 };
             };
@@ -11208,9 +11209,15 @@ export interface components {
             refreshToken: string;
             account: components["schemas"]["Account"];
         };
+        /**
+         * Format: uuid
+         * @description Optional first-party UUID v4. The raw value remains in the browser; the server stores only an account-scoped digest and replaces the prior active session for the same installation.
+         */
+        ClientInstallationId: string;
         PasswordSetInput: {
             /** Format: password */
             newPassword: string;
+            clientInstallationId?: components["schemas"]["ClientInstallationId"];
         };
         PasswordResetInput: {
             /** Format: email */
@@ -11218,12 +11225,14 @@ export interface components {
             code: string;
             /** Format: password */
             newPassword: string;
+            clientInstallationId?: components["schemas"]["ClientInstallationId"];
         };
         PasswordChangeInput: {
             /** Format: password */
             currentPassword: string;
             /** Format: password */
             newPassword: string;
+            clientInstallationId?: components["schemas"]["ClientInstallationId"];
         };
         /** @enum {string} */
         EmailCodePurpose: "login" | "registration" | "appeal" | "recovery";
@@ -11243,6 +11252,7 @@ export interface components {
             handle?: string;
             /** Format: password */
             password?: string;
+            clientInstallationId?: components["schemas"]["ClientInstallationId"];
         };
         RefreshInput: {
             refreshToken: string;

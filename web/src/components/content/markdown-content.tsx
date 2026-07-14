@@ -6,6 +6,7 @@ import rehypeSanitize from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
 
 import { ForumDeliveryImage } from "@/components/content/forum-delivery-image";
+import { LightboxableImage } from "@/components/ui/image-lightbox";
 import { api } from "@/lib/api/endpoints";
 import { cn } from "@/lib/utils";
 import type { ForumAttachment } from "@/lib/api/types";
@@ -13,6 +14,9 @@ import { mediaDeliveryRefetchInterval } from "@/lib/media-delivery";
 import { invalidateMediaDeliveryUrl } from "@/lib/media-delivery-cache";
 
 export type ContentFormat = "plain_v1" | "markdown_v1";
+
+/** Tracks whether markdown image renderers sit inside an <a> (linked image). */
+const MarkdownInsideLinkContext = React.createContext(false);
 
 function safeMarkdownUrl(url: string, key: string) {
   if (key === "src") {
@@ -58,7 +62,9 @@ const baseComponents: Components = {
         rel={isExternal ? "noopener noreferrer nofollow ugc" : undefined}
         className="font-medium text-primary underline decoration-primary/35 underline-offset-4 hover:decoration-primary"
       >
-        {children}
+        <MarkdownInsideLinkContext.Provider value={true}>
+          {children}
+        </MarkdownInsideLinkContext.Provider>
       </a>
     );
   },
@@ -87,6 +93,63 @@ const baseComponents: Components = {
   th: ({ children }) => <th className="border bg-muted px-3 py-2 text-left font-semibold">{children}</th>,
   td: ({ children }) => <td className="border px-3 py-2 align-top">{children}</td>,
 };
+
+function MarkdownForumImage(
+  props: React.ComponentProps<typeof ForumDeliveryImage>,
+) {
+  const insideLink = React.useContext(MarkdownInsideLinkContext);
+  return <ForumDeliveryImage {...props} enableLightbox={!insideLink} />;
+}
+
+function MarkdownPreviewImage({
+  src,
+  alt,
+  width,
+  height,
+  className,
+  onError,
+  loading = "lazy",
+  decoding = "async",
+}: {
+  src: string;
+  alt?: string;
+  width?: number | null;
+  height?: number | null;
+  className?: string;
+  onError?: React.ReactEventHandler<HTMLImageElement>;
+  loading?: React.ImgHTMLAttributes<HTMLImageElement>["loading"];
+  decoding?: React.ImgHTMLAttributes<HTMLImageElement>["decoding"];
+}) {
+  const insideLink = React.useContext(MarkdownInsideLinkContext);
+  if (insideLink) {
+    return (
+      <img
+        src={src}
+        alt={alt}
+        width={width ?? undefined}
+        height={height ?? undefined}
+        loading={loading}
+        decoding={decoding}
+        referrerPolicy="no-referrer"
+        className={className}
+        onError={onError}
+      />
+    );
+  }
+  return (
+    <LightboxableImage
+      src={src}
+      alt={alt}
+      width={width}
+      height={height}
+      loading={loading}
+      decoding={decoding}
+      referrerPolicy="no-referrer"
+      className={className}
+      onError={onError}
+    />
+  );
+}
 
 function OwnerMediaPreview({ assetId, alt }: { assetId: string; alt?: string }) {
   const upload = useQuery({
@@ -128,12 +191,11 @@ function OwnerMediaPreview({ assetId, alt }: { assetId: string; alt?: string }) 
   }
   if (upload.data?.status === "pending") {
     return pendingUrl ? (
-      <img
+      <MarkdownPreviewImage
         src={pendingUrl}
         alt={`${label}（待审核预览）`}
         loading="lazy"
         decoding="async"
-        referrerPolicy="no-referrer"
         className="my-4 max-h-[36rem] max-w-full rounded-xl border object-contain opacity-80"
       />
     ) : (
@@ -148,14 +210,13 @@ function OwnerMediaPreview({ assetId, alt }: { assetId: string; alt?: string }) 
   const deliveryData = delivery.data;
   if (deliveryData?.url) {
     return (
-      <img
+      <MarkdownPreviewImage
         src={deliveryData.url}
         alt={label}
         width={deliveryData.width}
         height={deliveryData.height}
         loading="lazy"
         decoding="async"
-        referrerPolicy="no-referrer"
         className="my-4 max-h-[36rem] max-w-full rounded-xl border object-contain"
         onError={() => {
           if (retriedDeliveryUrl.current === deliveryData.url) return;
@@ -179,6 +240,12 @@ function markdownComponents(
   onAttachmentDeliveryRefresh?: () => void,
 ): Components {
   const byReference = new Map(attachments.map((attachment) => [attachment.reference, attachment]));
+  const lightboxImages = attachments.map((attachment) => ({
+    src: attachment.url,
+    alt: attachment.alt,
+    width: attachment.width,
+    height: attachment.height,
+  }));
   const ownerPreviewIds = new Set(ownerPreviewAssetIds);
   return {
     ...baseComponents,
@@ -200,9 +267,11 @@ function markdownComponents(
         );
       }
       return (
-        <ForumDeliveryImage
+        <MarkdownForumImage
           attachment={attachment}
           onDeliveryRefresh={onAttachmentDeliveryRefresh}
+          lightboxImages={lightboxImages}
+          lightboxIndex={attachments.findIndex((item) => item.reference === attachment.reference)}
           loading="lazy"
           decoding="async"
           className="my-4 max-h-[36rem] max-w-full rounded-xl border object-contain"

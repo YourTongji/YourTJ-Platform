@@ -48,9 +48,12 @@ function ThreadCard({
 }) {
   const board = boards.find((item) => item.id === thread.boardId);
   return (
-    <Link to={`/forum/threads/${thread.id}`} className="block">
-      <Card className="transition-shadow hover:shadow-md">
-        <CardContent className="p-5">
+    <Card className="transition-shadow hover:shadow-md">
+      <CardContent className="p-5">
+        <Link
+          to={`/forum/threads/${thread.id}`}
+          className="block rounded-lg outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+        >
           <div className="flex items-start justify-between gap-4">
             <div className="flex min-w-0 gap-3">
               <ForumAuthorAvatar
@@ -75,15 +78,6 @@ function ThreadCard({
                     {thread.bodyExcerpt}
                   </p>
                 ) : null}
-                {thread.attachments?.[0] ? (
-                  <ForumDeliveryImage
-                    attachment={thread.attachments[0]}
-                    onDeliveryRefresh={onAttachmentDeliveryRefresh}
-                    loading="lazy"
-                    decoding="async"
-                    className="mt-3 max-h-72 w-full rounded-xl border object-cover"
-                  />
-                ) : null}
                 <div className="mt-3 flex flex-wrap gap-1.5">
                   {(thread.tags ?? []).map((tag) => (
                     <Badge key={tag} variant="secondary">#{tag}</Badge>
@@ -102,9 +96,19 @@ function ThreadCard({
               </div>
             </div>
           </div>
-        </CardContent>
-      </Card>
-    </Link>
+        </Link>
+        {thread.attachments?.[0] ? (
+          <ForumDeliveryImage
+            attachment={thread.attachments[0]}
+            onDeliveryRefresh={onAttachmentDeliveryRefresh}
+            enableLightbox
+            loading="lazy"
+            decoding="async"
+            className="mt-3 max-h-72 w-full rounded-xl border object-cover"
+          />
+        ) : null}
+      </CardContent>
+    </Card>
   );
 }
 

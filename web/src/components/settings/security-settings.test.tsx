@@ -80,7 +80,7 @@ describe("SecuritySettings", () => {
     const view = renderSettings();
 
     expect(await screen.findByText("Chrome on macOS")).toBeVisible();
-    expect(screen.getByText("当前设备")).toBeVisible();
+    expect(screen.getByText("当前会话")).toBeVisible();
     expect(screen.getByText("Mobile Safari")).toBeVisible();
 
     await user.click(screen.getByRole("button", { name: "撤销" }));

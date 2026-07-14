@@ -44,6 +44,7 @@ pub struct VerifyEmailInput {
     pub handle: Option<String>,
     pub password: Option<String>,
     pub purpose: Option<EmailCodePurpose>,
+    pub client_installation_id: Option<String>,
 }
 
 /// POST /auth/password/login
@@ -52,6 +53,7 @@ pub struct VerifyEmailInput {
 pub struct PasswordLoginInput {
     pub email: String,
     pub password: String,
+    pub client_installation_id: Option<String>,
 }
 
 /// POST /auth/appeal/email/verify
@@ -85,6 +87,7 @@ pub struct PasswordResetInput {
     pub email: String,
     pub code: String,
     pub new_password: String,
+    pub client_installation_id: Option<String>,
 }
 
 /// POST /auth/password/set
@@ -92,6 +95,7 @@ pub struct PasswordResetInput {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PasswordSetInput {
     pub new_password: String,
+    pub client_installation_id: Option<String>,
 }
 
 /// POST /auth/password/change
@@ -100,6 +104,7 @@ pub struct PasswordSetInput {
 pub struct PasswordChangeInput {
     pub current_password: String,
     pub new_password: String,
+    pub client_installation_id: Option<String>,
 }
 
 /// Returned on successful verification / refresh.

@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -62,8 +63,30 @@ describe("ThreadDetailPage Markdown content", () => {
       },
       authorId: "1",
       title: "格式化讨论",
-      body: "欢迎阅读 **重要内容**。",
+      body: "欢迎阅读 **重要内容**。\n\n![校园日景](yourtj-asset:21)\n\n![校园夜景](yourtj-asset:22)",
       contentFormat: "markdown_v1",
+      attachments: [
+        {
+          assetId: "21",
+          reference: "yourtj-asset:21",
+          position: 0,
+          alt: "校园日景",
+          url: "https://media.example.test/day.webp",
+          expiresAt: Math.floor(Date.now() / 1000) + 300,
+          width: 1280,
+          height: 720,
+        },
+        {
+          assetId: "22",
+          reference: "yourtj-asset:22",
+          position: 1,
+          alt: "校园夜景",
+          url: "https://media.example.test/night.webp",
+          expiresAt: Math.floor(Date.now() / 1000) + 300,
+          width: 1280,
+          height: 720,
+        },
+      ],
       replyCount: 1,
       voteCount: 2,
       hotScore: 1,
@@ -142,5 +165,16 @@ describe("ThreadDetailPage Markdown content", () => {
     expect(screen.getByText("code").tagName).toBe("CODE");
     expect(screen.queryByText(/\*\*重要内容\*\*/)).not.toBeInTheDocument();
     await expectNoAccessibilityViolations(view.container);
+  });
+
+  it("navigates all clean thread attachments in one lightbox gallery", async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(await screen.findByRole("button", { name: "查看大图：校园日景" }));
+    const dialog = screen.getByRole("dialog", { name: /校园日景/ });
+    expect(dialog).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "下一张图片" }));
+    expect(within(dialog).getByRole("img", { name: "校园夜景" })).toBeVisible();
   });
 });

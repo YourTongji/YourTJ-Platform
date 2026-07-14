@@ -100,4 +100,32 @@ describe("ForumPage", () => {
     }));
     await expectNoAccessibilityViolations(view.container);
   });
+
+  it("opens a forum-list attachment independently from the thread link", async () => {
+    apiMocks.threads.mockResolvedValue({
+      items: [{
+        ...firstThread,
+        attachments: [{
+          assetId: "8",
+          reference: "yourtj-asset:8",
+          position: 0,
+          alt: "教学楼",
+          url: "https://media.example.test/building.webp",
+          expiresAt: Math.floor(Date.now() / 1000) + 300,
+          width: 1280,
+          height: 720,
+        }],
+      }],
+      nextCursor: null,
+      hasMore: false,
+    });
+    const user = userEvent.setup();
+    renderPage();
+
+    await screen.findByText("第一页帖子");
+    const threadLink = screen.getByRole("link", { name: /第一页帖子/ });
+    expect(threadLink.querySelector("button")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "查看大图：教学楼" }));
+    expect(screen.getByRole("dialog", { name: "教学楼" })).toBeVisible();
+  });
 });

@@ -6,7 +6,7 @@
 >
 > 负责人：Privacy owner、Security owner、Domain maintainers
 >
-> 最近核验：2026-07-13，migrations `0064`–`0065`、隐私/生命周期实现与 ADMIN 媒体自审边界
+> 最近核验：2026-07-14，migrations `0064`–`0066`、会话 installation 数据最小化与 ADMIN 媒体自审边界
 
 本规范将数据最小化、可见性、导出、删除和保留作为产品前置条件。它不是法律意见；涉及 PIPL、
 未成年人、广告或跨境处理的最终政策需要合格法律与隐私负责人确认。
@@ -21,6 +21,9 @@
   时完成兼容行 backfill，并在仍有 plaintext email 时 fail closed。PR preview 只允许合成邮箱且不复用
   main key。
 - 设备 session 只向账号本人展示 bounded user-agent label 和必要时间；新认证流程不持久化精确 IP。
+  Web 的同源 installation UUID 只存在浏览器站点存储，用户清除站点数据即可重置；Identity 仅保存加入
+  account id 域隔离后的 32-byte SHA-256 摘要，用于替换同一 installation 的旧 session，不公开、不进入
+  owner export，也不得复用于跨账号关联、分析、推荐或广告。
 - recent-auth 只在当前 session 保存服务端验证时间和受控方法标签，不保存密码、code、
   email 或第二份账号级凭据；session 撤销/保留即是其撤销/保留边界。
 - Password recent-auth 额外保存当时的账号 credential version；密码改变后旧验证即使并发返回也不能
@@ -115,7 +118,7 @@
 |---|---|---|---|
 | 资格 PII | 校园邮箱、邮箱验证状态 | identity purpose only | 加密/盲索引、绝不公开、限制保留 |
 | 安全凭据 | password hash、code hash、refresh hash、keys/tokens | security code only | 不记录明文、最短保留、可撤销 |
-| 会话元数据 | bounded user-agent、创建/最近使用/到期时间、recent-auth 时间/方法 | 账号本人、安全代码 | 不收集精确 IP，不存 credential，随 session retention 删除 |
+| 会话元数据 | bounded user-agent、创建/最近使用/到期时间、recent-auth 时间/方法、账号隔离的 installation 摘要 | 账号本人可见 label/时间；摘要仅安全代码 | 不收集精确 IP/原始 installation，不作画像；摘要不导出并随 session retention/账号 purge 删除 |
 | 公开身份 | handle、公开头像、display name、院校、bio | 资料按 profile visibility；公共内容保留最小作者署名 | 用户可控、handle history 防冒用；内容署名不携带资料正文或 PII |
 | 公共内容 | thread、comment、review、reaction | 按 board/content policy | revision、治理、导出/删除规则 |
 | 社交关系 | follow、block、mute、subscription | 本人及 policy 允许对象 | block/mute 默认私密、最小暴露 |

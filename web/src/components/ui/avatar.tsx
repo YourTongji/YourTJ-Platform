@@ -30,11 +30,19 @@ function AvatarImage({
 
 function AvatarFallback({
   className,
+  delayMs = 0,
   ...props
-}: React.ComponentProps<typeof AvatarPrimitive.Fallback>) {
+}: React.ComponentProps<typeof AvatarPrimitive.Fallback> & {
+  /** Delay letter/fallback until image has had a chance to load (ms). */
+  delayMs?: number;
+}) {
   return (
     <AvatarPrimitive.Fallback
-      className={cn("flex h-full w-full items-center justify-center rounded-full bg-secondary text-sm font-semibold text-secondary-foreground", className)}
+      delayMs={delayMs}
+      className={cn(
+        "flex h-full w-full items-center justify-center rounded-full bg-secondary text-sm font-semibold text-secondary-foreground",
+        className,
+      )}
       {...props}
     />
   );

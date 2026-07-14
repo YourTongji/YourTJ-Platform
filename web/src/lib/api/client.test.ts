@@ -52,4 +52,27 @@ describe("API media boundary", () => {
 
     expect(second.url).toBe("https://media.example.test/first");
   });
+
+  it("does not erase a newer cross-tab login when an older refresh request fails", async () => {
+    localStorage.setItem("yourtj.accessToken", "old-access");
+    localStorage.setItem("yourtj.refreshToken", "old-refresh");
+    localStorage.setItem("yourtj.account", JSON.stringify({ id: "1", handle: "alice" }));
+    const unauthorized = () => new Response(
+      JSON.stringify({ error: { code: "UNAUTHORIZED", message: "unauthorized" } }),
+      { status: 401, headers: { "Content-Type": "application/json" } },
+    );
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(unauthorized())
+      .mockImplementationOnce(() => {
+        localStorage.setItem("yourtj.accessToken", "new-access");
+        localStorage.setItem("yourtj.refreshToken", "new-refresh");
+        return Promise.resolve(unauthorized());
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(apiRequest("/me")).rejects.toMatchObject({ status: 401 });
+
+    expect(localStorage.getItem("yourtj.accessToken")).toBe("new-access");
+    expect(localStorage.getItem("yourtj.refreshToken")).toBe("new-refresh");
+  });
 });

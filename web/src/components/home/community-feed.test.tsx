@@ -149,4 +149,38 @@ describe("CommunityFeed", () => {
     await user.click(screen.getByRole("button", { name: "加载更多动态" }));
     expect(onLoadMore).toHaveBeenCalledOnce();
   });
+
+  it("opens a feed attachment without nesting the lightbox trigger in navigation", async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <CommunityFeed
+          mode="hot"
+          onModeChange={vi.fn()}
+          items={[{
+            ...thread,
+            attachments: [{
+              assetId: "9",
+              reference: "yourtj-asset:9",
+              position: 0,
+              alt: "樱花大道",
+              url: "https://media.example.test/campus.webp",
+              expiresAt: Math.floor(Date.now() / 1000) + 300,
+              width: 1280,
+              height: 720,
+            }],
+          }]}
+          isLoading={false}
+          onRetry={vi.fn()}
+          isAuthenticated
+          onAttachmentDeliveryRefresh={vi.fn()}
+        />
+      </MemoryRouter>,
+    );
+
+    const threadLink = screen.getByRole("link", { name: /关注动态/ });
+    expect(threadLink.querySelector("button")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "查看大图：樱花大道" }));
+    expect(screen.getByRole("dialog", { name: "樱花大道" })).toBeVisible();
+  });
 });

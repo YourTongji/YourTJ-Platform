@@ -1,5 +1,9 @@
 import * as React from "react";
 
+import {
+  LightboxableImage,
+  type LightboxImage,
+} from "@/components/ui/image-lightbox";
 import type { ForumAttachment } from "@/lib/api/types";
 import { invalidateMediaDeliveryUrl } from "@/lib/media-delivery-cache";
 
@@ -8,6 +12,11 @@ const RECOVERY_COOLDOWN_MS = 15_000;
 export function ForumDeliveryImage({
   attachment,
   onDeliveryRefresh,
+  // Off by default: list/feed cards often wrap this image in a Link; a nested
+  // button trigger would create invalid a>button markup and break navigation.
+  enableLightbox = false,
+  lightboxImages,
+  lightboxIndex,
   loading = "lazy",
   decoding = "async",
   ...imageProps
@@ -15,8 +24,36 @@ export function ForumDeliveryImage({
   & {
     attachment: ForumAttachment;
     onDeliveryRefresh?: () => void;
+    enableLightbox?: boolean;
+    lightboxImages?: LightboxImage[];
+    lightboxIndex?: number;
   }) {
   const lastRecoveryAt = React.useRef(0);
+  const handleError = () => {
+    invalidateMediaDeliveryUrl(attachment);
+    const now = Date.now();
+    if (!onDeliveryRefresh || now - lastRecoveryAt.current < RECOVERY_COOLDOWN_MS) return;
+    lastRecoveryAt.current = now;
+    onDeliveryRefresh();
+  };
+
+  if (enableLightbox) {
+    return (
+      <LightboxableImage
+        {...imageProps}
+        src={attachment.url}
+        alt={attachment.alt}
+        width={attachment.width}
+        height={attachment.height}
+        images={lightboxImages}
+        imageIndex={lightboxIndex}
+        loading={loading}
+        decoding={decoding}
+        referrerPolicy="no-referrer"
+        onError={handleError}
+      />
+    );
+  }
 
   return (
     <img
@@ -28,13 +65,7 @@ export function ForumDeliveryImage({
       width={attachment.width ?? undefined}
       height={attachment.height ?? undefined}
       referrerPolicy="no-referrer"
-      onError={() => {
-        invalidateMediaDeliveryUrl(attachment);
-        const now = Date.now();
-        if (!onDeliveryRefresh || now - lastRecoveryAt.current < RECOVERY_COOLDOWN_MS) return;
-        lastRecoveryAt.current = now;
-        onDeliveryRefresh();
-      }}
+      onError={handleError}
     />
   );
 }

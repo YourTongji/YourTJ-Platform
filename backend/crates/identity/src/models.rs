@@ -49,6 +49,7 @@ pub struct SessionRow {
     pub recent_auth_method: Option<String>,
     pub recent_auth_credential_version: Option<i64>,
     pub issued_auth_version: Option<i64>,
+    pub client_installation_hash: Option<Vec<u8>>,
 }
 
 /// A row from `identity.account_keys`.

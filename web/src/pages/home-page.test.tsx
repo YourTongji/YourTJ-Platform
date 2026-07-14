@@ -53,10 +53,9 @@ const firstThread = {
   canModerate: false,
 };
 
-function renderPage() {
-  const queryClient = new QueryClient({
+function renderPage(queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-  });
+  })) {
   return render(
     <QueryClientProvider client={queryClient}>
       <MemoryRouter>
@@ -149,6 +148,21 @@ describe("HomePage", () => {
       "href",
       "/profile/alice",
     );
+  });
+
+  it("reuses fresh check-in state when the home route remounts", async () => {
+    authState.account = { id: "7", handle: "alice", trustLevel: 2 };
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    const firstView = renderPage(queryClient);
+    await waitFor(() => expect(apiMocks.myCheckInStatus).toHaveBeenCalledTimes(1));
+
+    firstView.unmount();
+    renderPage(queryClient);
+    await screen.findAllByRole("button", { name: /每日签到/ });
+
+    expect(apiMocks.myCheckInStatus).toHaveBeenCalledTimes(1);
   });
 
   it("refreshes check-in, activity range, and trust progress after Shanghai midnight", async () => {

@@ -4,12 +4,12 @@ import * as React from "react";
 import { Link, Outlet, useLocation, useNavigate } from "react-router";
 
 import { SearchDialog } from "@/components/layout/search-dialog";
+import { NavigationAvatar } from "@/components/layout/navigation-avatar";
 import { RealtimeRefresh } from "@/components/notifications/realtime-refresh";
 import { Brand, SiteSidebar } from "@/components/layout/site-navigation";
 import { AnnouncementModalQueue } from "@/components/announcements/announcement-modal-queue";
 import { PageTransition } from "@/components/common/page-transition";
 import { RouteLoadingState } from "@/components/common/route-loading-state";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -82,10 +82,13 @@ export function AppLayout() {
     enabled: canUseCommunity,
     staleTime: 60_000,
   });
+  const navigationAvatarAssetId = ownProfile.data?.avatarAssetId ?? null;
   const navigationAvatar = useQuery({
-    queryKey: ["navigation-avatar-delivery", ownProfile.data?.avatarAssetId],
-    queryFn: () => api.mediaUrl(ownProfile.data?.avatarAssetId ?? "", "thumb_256"),
-    enabled: canUseCommunity && Boolean(ownProfile.data?.avatarAssetId),
+    queryKey: ["navigation-avatar-delivery", navigationAvatarAssetId, "thumb_256"],
+    queryFn: () => api.mediaUrl(navigationAvatarAssetId ?? "", "thumb_256"),
+    enabled: canUseCommunity && Boolean(navigationAvatarAssetId),
+    staleTime: 60_000,
+    gcTime: 30 * 60_000,
     refetchInterval: (query) => mediaDeliveryRefetchInterval(query.state.data),
   });
   const retriedAvatarUrl = React.useRef<string | null>(null);
@@ -215,27 +218,25 @@ export function AppLayout() {
               {isAuthenticated ? (
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
-                    <button className="motion-interactive rounded-full border bg-card p-1 focus-visible:ring-[3px] focus-visible:ring-ring/50">
-                      <Avatar className="size-8">
-                        <AvatarImage
-                          src={navigationAvatar.data?.url ?? account?.avatarUrl ?? undefined}
-                          width={navigationAvatar.data?.width}
-                          height={navigationAvatar.data?.height}
-                          loading="eager"
-                          decoding="async"
-                          referrerPolicy="no-referrer"
-                          onError={() => {
-                            if (
-                              !navigationAvatar.data?.url
-                              || retriedAvatarUrl.current === navigationAvatar.data.url
-                            ) return;
-                            invalidateMediaDeliveryUrl(navigationAvatar.data);
-                            retriedAvatarUrl.current = navigationAvatar.data.url;
-                            void navigationAvatar.refetch();
-                          }}
-                        />
-                        <AvatarFallback>{account?.handle?.slice(0, 1).toUpperCase() ?? "我"}</AvatarFallback>
-                      </Avatar>
+                    <button
+                      aria-label="打开账户菜单"
+                      className="motion-interactive rounded-full border bg-card p-1 focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                    >
+                      <NavigationAvatar
+                        delivery={navigationAvatar.data}
+                        legacyUrl={account?.avatarUrl}
+                        handle={account?.handle}
+                        isResolving={canUseCommunity && (
+                          ownProfile.isPending
+                          || (Boolean(navigationAvatarAssetId) && !navigationAvatar.data)
+                        )}
+                        onDeliveryError={(delivery) => {
+                          if (retriedAvatarUrl.current === delivery.url) return;
+                          invalidateMediaDeliveryUrl(delivery);
+                          retriedAvatarUrl.current = delivery.url;
+                          void navigationAvatar.refetch();
+                        }}
+                      />
                     </button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end" className="w-52">

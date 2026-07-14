@@ -1,4 +1,5 @@
 import { apiBlobRequest, apiRequest } from "./client";
+import { readOrCreateClientInstallationId } from "@/lib/auth-storage";
 import type {
   Account,
   AccountDataExport,
@@ -166,7 +167,7 @@ export const api = {
   }) {
     return apiRequest<AuthTokens>("/auth/email/verify", {
       method: "POST",
-      body: input,
+      body: { ...input, clientInstallationId: readOrCreateClientInstallationId() },
       auth: false,
     });
   },
@@ -174,7 +175,7 @@ export const api = {
   passwordLogin(input: { email: string; password: string }) {
     return apiRequest<AuthTokens>("/auth/password/login", {
       method: "POST",
-      body: input,
+      body: { ...input, clientInstallationId: readOrCreateClientInstallationId() },
       auth: false,
     });
   },
@@ -237,17 +238,23 @@ export const api = {
   passwordReset(input: { email: string; code: string; newPassword: string }) {
     return apiRequest<AuthTokens>("/auth/password/reset", {
       method: "POST",
-      body: input,
+      body: { ...input, clientInstallationId: readOrCreateClientInstallationId() },
       auth: false,
     });
   },
 
   passwordSet(input: { newPassword: string }) {
-    return apiRequest<AuthTokens>("/auth/password/set", { method: "POST", body: input });
+    return apiRequest<AuthTokens>("/auth/password/set", {
+      method: "POST",
+      body: { ...input, clientInstallationId: readOrCreateClientInstallationId() },
+    });
   },
 
   passwordChange(input: { currentPassword: string; newPassword: string }) {
-    return apiRequest<AuthTokens>("/auth/password/change", { method: "POST", body: input });
+    return apiRequest<AuthTokens>("/auth/password/change", {
+      method: "POST",
+      body: { ...input, clientInstallationId: readOrCreateClientInstallationId() },
+    });
   },
 
   recentAuthStatus() {

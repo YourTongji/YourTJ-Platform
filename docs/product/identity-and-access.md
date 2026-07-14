@@ -6,7 +6,7 @@
 >
 > 负责人：Identity maintainers、Security owner、Product owner
 >
-> 最近核验：2026-07-13，migration `0062`、identity credential/delivery tests 与 Web account journeys
+> 最近核验：2026-07-14，migrations `0062`/`0066`、identity auth hardening tests 与 Web account journeys
 
 身份域证明“谁在使用平台”和“是否具备校园资格”，但不把校园邮箱变成公开身份。本规范定义
 登录、注册、密码、会话、onboarding、handle 与账号生命周期的目标语义。
@@ -24,6 +24,10 @@
   登录响应，并且 missing/invalid hash 分支仍执行一次受同一 semaphore 约束的 dummy Argon2。
 - 新 access JWT 绑定 server-side session 与账号 auth version；refresh rotation 只创建一个 successor，
   consumed token 重放会撤销整个 token family。
+- Web 完整登录携带同源随机 installation UUID；Identity 只保存按 account 做域隔离的 SHA-256 摘要，
+  不保存原值，也不把 User-Agent 当设备身份。同一 installation 再登录会撤销其旧 session 并签发新 session，
+  其他 installation 不受影响；未携带该值的旧客户端保持兼容，账号同时有效 session 最多 30 个，超出时
+  撤销最久未使用项。显式撤销/替换后的旧 refresh 只返回未认证，不误报为 consumed-token replay 并撤销新会话。
 - 后端支持当前设备、其他设备和全部设备撤销，以及本人设备 session 列表。首次设密、密码
   change 和 reset 都在凭据事务中推进 credential/auth version，撤销所有旧 refresh family，
   建立唯一替代 session 并向客户端返回新 token pair；旧 access/refresh 不能再操作新 session。
@@ -68,8 +72,9 @@
 - Web 已提供 focused onboarding、明确条款勾选、profile/activity privacy 默认值，以及 recent-auth
   保护的数据导出、停用和删除确认。关闭响应中的 recovery credential 只放 sessionStorage。
 - access 与 refresh token 都保存在 localStorage；富文本上线前必须重新评估 XSS 后果。
-- Web 尚无跨标签页 refresh 协调；条款内容仍由应用常量版本驱动，尚无 policy publish/历史阅读界面，
-  onboarding 也还没有兴趣板块、头像上传和通知偏好的可恢复分步体验。
+- Web 尚无完整的跨标签页 refresh single-flight 协调，但旧 refresh 失败不会清除另一标签页刚写入的新
+  token；条款内容仍由应用常量版本驱动，尚无 policy publish/历史阅读界面，onboarding 也还没有兴趣
+  板块、头像上传和通知偏好的可恢复分步体验。
 
 ## 登录与注册体验
 
@@ -110,6 +115,8 @@ code 不可使用。
 - 已认证 password change、首次 set 和 reset 都替换当前 refresh，而不是让旧 refresh 继续有效；
   它们同时撤销其他设备和旧 access token。角色变化和 suspend 仍撤销全部设备且不签发替代 session。
 - refresh token rotation 必须识别重放；设备中心显示有限的设备/时间信息，不暴露精确历史 IP。
+- User-Agent 仅是本人设备中心的可读 label。Web installation UUID 是用户清除站点数据即可重置的同源
+  随机值，不得用于跨账号画像、推荐、广告或第三方追踪；服务端只用账号隔离摘要完成 session replacement。
 - 支持撤销单设备、撤销其他设备和全设备注销。
 - Web refresh credential 的长期目标是 `HttpOnly + Secure + SameSite` cookie；在迁移决策完成前，
   任何富文本和第三方脚本变更都必须把 localStorage token 风险列入安全评审。
@@ -210,6 +217,8 @@ Credit、Activity、Platform 与 Media 各自公开 owner export/purge API；gat
 - 后端持久化 exactly the selected handle；已占用时在消费 registration code 前返回冲突，不能自动追加
   随机后缀或静默替换公开身份。
 - 设备中心区分当前设备，支持撤销单个其他设备、其他全部设备和包括当前设备在内的全部会话。
+- 同一 Web installation 重复密码/验证码登录后只有最新 session 有效，旧 access/refresh 均失败且不会
+  撤销新 session；不同 installation 可并存，legacy 客户端也不能让 active session 无界增长。
 - code 跨 purpose、并发重放、过期、超尝试次数均失败且无状态竞争。
 - 外部响应不能可靠区分不存在账号、无密码和错误密码。
 - 密码重置、角色变化、session revoke 和 suspend 后对应旧 access/refresh token 都不可继续使用。

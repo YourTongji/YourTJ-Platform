@@ -82,7 +82,9 @@ async function refreshTokens() {
       body: JSON.stringify({ refreshToken }),
     });
     if (!response.ok) {
-      clearAuth();
+      if (readRefreshToken() === refreshToken) {
+        clearAuth();
+      }
       return false;
     }
     const data = (await response.json()) as {
