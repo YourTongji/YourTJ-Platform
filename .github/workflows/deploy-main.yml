@@ -216,6 +216,8 @@ jobs:
           transferred=1
 
       - name: deploy and verify main staging
+        env:
+          WALLET_KEY_CUTOVER_APPROVED_REVISION: ${{ vars.WALLET_KEY_CUTOVER_APPROVED_REVISION }}
         run: |
           set -Eeuo pipefail
           remote_script="/tmp/deploy-main-${GITHUB_RUN_ID}.sh"
@@ -281,7 +283,8 @@ jobs:
             "${remote_oss_env}" \
             "${GITHUB_SHA}" \
             "${remote_verifier}" \
-            "${remote_frontend_nginx}"
+            "${remote_frontend_nginx}" \
+            "${WALLET_KEY_CUTOVER_APPROVED_REVISION:-}"
           deployed=1
 
       - name: verify canonical public HTTPS routes

@@ -26,6 +26,10 @@ class WorkflowBoundaryTests(unittest.TestCase):
         self.assertIn("immutable main release", deploy)
         self.assertIn('BIND_ADDRESS=127.0.0.1', deploy)
         self.assertIn('-p "127.0.0.1:${FRONTEND_PORT}:80"', deploy)
+        self.assertIn("--enforce-controlled-wallet-migration", deploy)
+        self.assertIn("--wallet-key-cutover-drained", deploy)
+        self.assertIn("WALLET_KEY_CUTOVER_DRAIN_SECONDS=360", deploy)
+        self.assertIn("WALLET_KEY_CUTOVER_APPROVED_REVISION", workflow)
 
     def test_preview_never_references_production_oss_secrets(self):
         workflow = (ROOT / ".github/workflows/pr-preview.yml").read_text()

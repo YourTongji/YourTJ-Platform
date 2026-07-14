@@ -6,7 +6,7 @@
 >
 > 负责人：Platform maintainers
 >
-> 最近核验：2026-07-13，deploy workflows、`ops/deploy/` versioned scripts 与 migrations `0060`–`0062`
+> 最近核验：2026-07-14，server deploy workflows、wallet-key migration、Flutter debug/release compile gates 与 verified-link release gaps
 
 本文件描述仓库当前 GitHub Actions 行为，不把目标 Aliyun 架构写成已上线生产事实。Workflow
 或服务器脚本变化时必须在同一 PR 更新本 runbook。
@@ -24,12 +24,51 @@ Preview/main host 不是已经完成 SLO、备份、域名和 secret manager 的
 
 ## CI 与部署是两条独立流水线
 
-- `.github/workflows/ci.yml` 对 PR 和 main 运行 backend lint/tests 与 Web generated types/lint/build。
+- `.github/workflows/ci.yml` 对 PR 和 main 运行 docs、backend lint/tests、Web generated types/tests/lint/build
+  与 Flutter Dart drift/format/analyze/test、Android debug/release 以及 iOS debug/release `--no-codesign`
+  build。
 - `.github/workflows/pr-preview.yml` 构建并部署 PR preview。
 - `.github/workflows/deploy-main.yml` 在 main 的运行代码路径变化时部署 main staging。
 
 当前 deploy workflow 没有显式依赖 CI。交付人必须同时确认 CI 和 deploy jobs 真实成功，不能只看
 GitHub summary 文案或可打开的旧页面。
+
+## Flutter build、发布与 verified links
+
+Flutter 目前只有 CI 构建，不属于 PR/main server preview：Linux job 执行 Dart client drift、format、
+analyze、unit/widget 和 Android debug/release build，macOS job 执行 iOS debug/release
+`--no-codesign` build。release build 在此只是编译门禁；仓库没有 Android release keystore、Apple
+distribution profile、store credential、APK/IPA 发布 job、rollout 或 mobile rollback。任何一次本地
+debug key 或无签名 build 成功都不能写成 App 已发布。
+
+客户端当前 application/bundle id 为 `de.yourtj.mobile`。Android manifest 声明 `yourtj://app` 以及对
+`https://yourtj.de` 的 `autoVerify` intent filter；iOS 声明相同 custom scheme 和
+`applinks:yourtj.de` entitlement。它们只是客户端侧声明。HTTPS link 要成为系统 verified/universal link，
+还必须完成以下 hosted association：
+
+- `https://yourtj.de/.well-known/assetlinks.json` 精确列出 `de.yourtj.mobile` 和最终 release certificate
+  SHA-256 fingerprint；debug certificate 不得写成 production association。
+- `https://yourtj.de/.well-known/apple-app-site-association`（或 Apple 允许的根路径）精确列出最终 Apple
+  Team ID + bundle id 和受控 route components，并与 release entitlement 一致。
+- 两个文件由 canonical HTTPS origin 无 credential、无跨域 redirect 地返回正确 JSON content type；
+  CDN/cache 更新后分别用已签名 Android/iOS 真机安装验证内部 route、未知 route、未登录→登录返回和
+  association 失效时的安全 browser fallback。
+
+当前仓库没有这两个 hosted 文件，也没有可写入它们的 release certificate fingerprint/Apple Team ID，
+并且没有目标域名部署或真机验证证据。因此 HTTPS deep link 为 `Partial`；custom scheme 可用于受控 route，
+但不具备域名验证能力，不能携带 token、email、signature、reason 或 object key，也不能被当作 verified
+link 的安全等价物。PR preview 不得借用 production association 或 release credential；若未来需要 preview
+links，应使用独立 application id/domain/credential 和合成数据。
+
+首次受控移动发布前还必须固定 version/build number、签名与 rotation owner、商店 listing/privacy 文案、
+依赖许可证/secret scan、crash/analytics 决策、分批 rollout/停止条件和上一可安装版本的 forward-compatible
+API 窗口。证书和 store token 只进入受保护 CI environment，不提交仓库或写入 Actions 输出。
+
+移动安全存储也必须在最终签名构建做产物与真机验收：Android cloud/device-transfer backup 不得恢复
+installation、session 或钱包 namespace；iOS installation no-backup 文件不得进入 backup/D2D，钱包
+seed 的 `WhenPasscodeSetThisDeviceOnly` key 不得被 backup 恢复；pending 的
+`WhenUnlockedThisDeviceOnly` key 必须在移除设备密码后仍保留且不能迁移到另一设备。session ThisDeviceOnly
+key 在同设备 restore 后仍须验证服务端撤销生效。仅检查 manifest/plist 或 simulator build 不算完成。
 
 ## PR preview 触发与构建
 
@@ -328,11 +367,46 @@ Operator 按以下顺序处置：
 container 启动后可能已执行 migration，因此 deploy 不再恢复旧 backend；失败时保留现场并部署理解新
 schema/状态的修复 revision。Frontend 可独立恢复，不改变 backend 的 forward-only 边界。
 
+### Migration `0067` 钱包公钥收紧
+
+`0067` 不是普通 rolling migration。旧 backend 在 migration 后仍能为“尚无 key”的账号执行不带
+recent-auth 的首次登记，而新 backend 在 migration 前也不能假设每个账号只有一把 active key，因此必须
+在 maintenance/batch cutover 中执行：
+
+1. 迁移前只盘点 `account_id` 与 active-key count；不把 public key、签名或 signing payload 写入日志。
+   对异常多 key 账号完成安全审查并留存批准记录。批准后把 main-staging Environment variable
+   `WALLET_KEY_CUTOVER_APPROVED_REVISION` 精确设置为待部署的 40 位 commit SHA，再 rerun 同一 revision；
+   marker 尚不存在且批准值不匹配时，版本化脚本会在停止旧 backend 之前失败。
+2. 版本化脚本停止整个旧 API container，因此 `/wallet/bind`、`/credit/signing-intents` 和全部
+   tip/task/purchase value-moving writer 一起关闭；从停止完成起固定等待 300 秒 TTL 加 60 秒 buffer。
+   只隐藏客户端按钮或只停 frontend 不构成 drain。
+3. 新 backend 始终带 `--enforce-controlled-wallet-migration`。它直接查询数据库 migration ledger；若
+   `0067` 尚未执行而进程没有版本化脚本在 drain 后添加的 `--wallet-key-cutover-drained`，会在 migration
+   前 fail closed。带 drain proof 的首次启动执行 `0067`，并在绑定端口前跑完整 ledger verify；失败时
+   不提供 API。`0067` 冻结最新 key、revoke 其余 key且不删除历史。
+4. backend ready 后脚本原子写 mode-`0600` 的
+   `/opt/yourtj-preview/shared/migration-0067-wallet-key-cutover.complete`；该 marker 只避免后续正常 deploy
+   重复停机，不替代数据库检查。成功后清空一次性的 Environment approval variable。数据库
+   restore/替换后必须删除 marker；即使遗漏，backend 的 migration guard 也会拒绝在未 drain 状态执行
+   `0067`。
+5. 恢复入口后再运行只读 credit reconcile smoke，并用合成账号验证：无 recent-auth 首绑为 428、同 key
+   为 204、不同 key 为 409、signing intent 使用唯一 active key；确认不存在
+   `HAVING count(*) > 1` 的 active 账号且 partial unique index 存在。
+
+已过期未消费 intent 可以保留；consume 会按 expiry 和当前 active key fail closed。若 cutover 失败，edge
+继续关闭 bind/value-moving 路由并部署 forward-fix；不得启动旧 backend、删除 unique index、重新激活旧
+key 或记录 raw key 来“恢复”。未来 key rotation/recovery 必须另有 old-key proof、通知、冷却和审计 runbook。
+
 ## PostgreSQL migration owner 与 runtime role
 
 正式环境必须使用两个不同角色：migration/table owner 只在受控 rollout 中执行 sqlx migration；应用
 runtime DSN 使用非 owner login。不要因为当前 shared test server 可能复用一个账号，就把该做法复制到
 PolarDB production。
+
+当前 main-staging 脚本仍把 `main-runtime.env` 的单一 `DATABASE_URL` 交给启动时 sqlx migrator；`0067`
+通过停写、精确 revision approval、进程参数 guard 和 pre-serve ledger verify 收紧时序，但没有把 staging
+credential 分成 migration owner/runtime 两个角色。该差距必须在 production IaC/credential rollout 前关闭，
+不能把本次受控 staging cutover 描述成目标最小权限模型已经实现。
 
 - Runtime 只获得数据库 `CONNECT`、所需 schema `USAGE`、业务表最小 DML 和 sequence 权限；不授予
   schema/table ownership、`CREATE`、`ALTER`、`DROP`、`TRUNCATE`、replication-role 或 disable-trigger。
