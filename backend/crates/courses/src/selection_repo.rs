@@ -146,10 +146,10 @@ pub async fn list_timeslots(
 
 /// The most recent fetch timestamp from selection.fetchlog, or None.
 pub async fn find_latest_update(pool: &PgPool) -> Result<Option<String>, CoursesError> {
-    let row: Option<(chrono::NaiveDateTime,)> = sqlx::query_as(
+    let row: Option<(chrono::DateTime<chrono::Utc>,)> = sqlx::query_as(
         "SELECT fetched_at FROM selection.fetchlog ORDER BY fetched_at DESC LIMIT 1",
     )
     .fetch_optional(pool)
     .await?;
-    Ok(row.map(|(dt,)| dt.and_utc().to_rfc3339()))
+    Ok(row.map(|(fetched_at,)| fetched_at.to_rfc3339()))
 }
