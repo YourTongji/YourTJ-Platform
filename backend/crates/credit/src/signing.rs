@@ -60,7 +60,7 @@ pub async fn create_intent(
     validate_action(&input.action)?;
     let public_key: String = sqlx::query_scalar(
         "SELECT public_key FROM identity.account_keys \
-         WHERE account_id = $1 AND revoked_at IS NULL ORDER BY created_at DESC LIMIT 1",
+         WHERE account_id = $1 AND revoked_at IS NULL",
     )
     .bind(account_id)
     .fetch_optional(pool)
@@ -180,15 +180,14 @@ pub async fn consume_intent(
     }
     let current_key: Option<String> = sqlx::query_scalar(
         "SELECT public_key FROM identity.account_keys \
-         WHERE account_id = $1 AND public_key = $2 AND revoked_at IS NULL",
+         WHERE account_id = $1 AND revoked_at IS NULL",
     )
     .bind(account_id)
-    .bind(&intent.public_key)
     .fetch_optional(&mut *conn)
     .await?;
     let current_snapshot =
         build_snapshot_tx(conn, account_id, action, &normalized_request, true).await?;
-    if current_key.is_none()
+    if current_key.as_deref() != Some(intent.public_key.as_str())
         || !crate::ledger::verify_signature(&intent.signing_bytes, signature, &intent.public_key)
         || current_snapshot != intent.snapshot
     {

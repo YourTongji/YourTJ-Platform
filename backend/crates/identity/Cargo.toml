@@ -33,3 +33,4 @@ governance.workspace = true
 
 [dev-dependencies]
 tower.workspace = true
+reviews.workspace = true

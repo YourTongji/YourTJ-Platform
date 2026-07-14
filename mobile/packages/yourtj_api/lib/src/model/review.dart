@@ -60,6 +60,7 @@ class Review {
   @JsonKey(name: r'authorHandle', required: false, includeIfNull: false)
   final String? authorHandle;
 
+  /// Reserved for a current platform-owned avatar projection. Legacy reviewer-provided remote URLs are never returned; null until Reviews integrates a typed Media projection.
   @JsonKey(name: r'authorAvatar', required: false, includeIfNull: false)
   final String? authorAvatar;
 

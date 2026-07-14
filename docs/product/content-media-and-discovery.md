@@ -44,7 +44,9 @@
   parent/visible-state 变更 trigger 增量校正，读路径不临时聚合整棵回复树。
 - 阅读位置验证 comment 必须属于同一公开主题且只向前推进；传 null 会读到当前最后一条可见评论，
   unread count 从可见评论事实计算，不依赖可漂移的 reply counter。
-- 课评有发布、编辑、点赞/取消、举报和审核基础。
+- 课评有发布、编辑、点赞/取消、举报和审核基础；历史导入的 `reviewer_avatar` 是不可信远程地址，
+  不进入公开或管理 DTO。Reviews 尚未接入 Media owner 的 typed avatar projection 时统一返回 null，
+  客户端使用作者 handle fallback，不能直接请求 legacy URL。
 - Media 后端已有 account-bound upload intent、短期 OSS STS、回调验签、MIME/大小限制和
   `pending/clean/quarantined/blocked` 审核状态；交付另有
   `unpublished/processing/published/failed/blocked` publication 状态。当前默认策略只对已验证 callback 的
@@ -114,8 +116,9 @@
 
 ### Partial
 
-- Markdown 已在主题/评论上线、接通 versioned autosave 和 clean Forum 图片 binding；仍缺跨
-  Web/iOS/Flutter conformance corpus，以及课评/公告各自更细的 syntax profile。
+- Markdown 已在主题/评论上线、接通 versioned autosave 和 clean Forum 图片 binding；共享恶意样例
+  corpus 已由 backend、Web 与当前 Flutter renderer 消费，仍缺历史 iOS consumer，以及课评/公告各自
+  更细的 syntax profile 和跨端真实 journey。
 - queued 内容目前复用 hidden 状态，没有独立 pending 状态/审核任务；通知已经迁移到 durable outbox，
   搜索索引等事务外副作用仍没有统一可靠投递。
 - drafts 的 OpenAPI、Rust response 和 Web 已统一为 bounded typed payload、完整对象响应、owner scope、
@@ -126,8 +129,12 @@
   或复制 canonical URL，“更多”只展示可执行动作；请求失败保持错误态和重试入口，不显示伪造计数。
 - Avatar/banner、主题/评论与推广素材已完成 owner 上传或 clean + published reference、业务事务内
   binding、Forum draft reference、私有 Delivery 变体、短期 signed CDN projection 和解绑 grace。
+  Flutter 上传在文件选择前捕获 account id + session generation，并在文件读取、凭据、OSS callback 与
+  `onUploaded` 交付边界重验；账号切换测试证明旧上传结果不会进入新 session 的编辑器。
   Retention-aware GC 已有实现与测试但默认 rollout flag 关闭；课评/私信仍没有 binding，file/PDF scanner
   未完成，且目标环境双 bucket/CDN/provider reconciliation 仍需按 runbook 验收。
+- 课评 `authorAvatar` 已停止从 legacy `reviewer_avatar` 回退，当前保守为 null；恢复课评头像必须由
+  Reviews 通过 Identity/Media owner API 投影当前 clean `thumb_256`，不能重新开放任意远程 URL。
 - Forum attachment、Forum content author avatar 与 Promotion 已保留 Delivery expiry/刷新语义；Web 对这些
   typed projection 按 asset/variant 有界复用 URL，并在临近过期、图片错误或登录主体变化时失效。
   Public profile/relationship/search/DM avatar 已统一投影 `thumb_256`，但与 account legacy field 一样，兼容
@@ -141,6 +148,9 @@
 - 推广使用 media-owned 非版本化 binding，并在替换/归档时进入 30 天 grace；公开列表通过 owning-domain
   授权后的 typed Delivery projection 支持匿名 clean 图片交付，不再借用 owner-only URL endpoint。
   短期 URL 到期由列表定时刷新/错误重取；效果数据已按日聚合，但不等于商业广告归因或跨域画像。
+- Flutter 首页已消费同一 promotion DTO，明确标记“YourTJ 站内推广”，只允许 allowlist 内部 route，
+  typed Delivery 临期/失败会回源，曝光/点击继续使用服务端票据。当前移动实现把首次成功布局当曝光，
+  尚未证明 Web 的 50% 可见 500ms 门槛，也没有 Android/iOS device evidence，因此该 surface 仍为 `Partial`。
 
 ## 内容类型与格式
 
@@ -177,8 +187,9 @@
 第一阶段使用 CodeMirror 6 源码编辑、react-markdown/unified + remark-gfm 渲染和 rehype-sanitize
 二次约束；不启用 raw HTML。服务端用 pulldown-cmark 独立解析 canonical source；图片 destination
 仅允许 `yourtj-asset:<正整数>`，并在同一事务验证引用集合、owner、usage 与 clean 状态。相关前端依赖
-进入独立 `markdown-vendor` chunk；跨客户端
-conformance corpus 仍是下一步，不能让任一客户端自行扩展语法。
+进入独立 `markdown-vendor` chunk。Backend、Web 与 Flutter 已读取同一个 versioned conformance corpus；
+新增 profile/case 必须同时更新三者，历史 iOS consumer 未接入前仍不能宣称所有客户端完成，也不能让
+任一客户端自行扩展语法。
 
 Web、iOS 和 Flutter 可以使用不同 renderer，但 `markdown_v1` 的 allowed syntax、URL/image policy、
 plain-text projection 与恶意样例必须由共享 protocol profile 和 conformance corpus 约束。任何客户端

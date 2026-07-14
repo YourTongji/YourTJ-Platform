@@ -2335,7 +2335,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Bind a client-generated Ed25519 public key */
+        /**
+         * Enroll the first client-generated Ed25519 public key
+         * @description Requires fresh session-bound authentication. Repeating the canonical active key is idempotent; enrolling a different key while one is active is rejected because key rotation requires a separately designed old-key proof or audited recovery flow.
+         */
         post: {
             parameters: {
                 query?: never;
@@ -2346,18 +2349,23 @@ export interface paths {
             requestBody: {
                 content: {
                     "application/json": {
+                        /** @description Standard base64 encoding of a 32-byte Ed25519 public key */
                         publicKey: string;
                     };
                 };
             };
             responses: {
-                /** @description ok */
+                /** @description enrolled or already the canonical active key */
                 204: {
                     headers: {
                         [name: string]: unknown;
                     };
                     content?: never;
                 };
+                400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
+                409: components["responses"]["Conflict"];
+                428: components["responses"]["RecentAuthRequired"];
             };
         };
         delete?: never;
@@ -11395,6 +11403,7 @@ export interface components {
             score?: string | null;
             semester?: string | null;
             authorHandle?: string;
+            /** @description Reserved for a current platform-owned avatar projection. Legacy reviewer-provided remote URLs are never returned; null until Reviews integrates a typed Media projection. */
             authorAvatar?: string | null;
             approveCount?: number;
             /** @enum {string} */

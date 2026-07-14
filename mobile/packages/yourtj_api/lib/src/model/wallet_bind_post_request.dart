@@ -17,6 +17,7 @@ class WalletBindPostRequest {
   /// Returns a new [WalletBindPostRequest] instance.
   WalletBindPostRequest({required this.publicKey});
 
+  /// Standard base64 encoding of a 32-byte Ed25519 public key
   @JsonKey(name: r'publicKey', required: true, includeIfNull: false)
   final String publicKey;
 

@@ -100,6 +100,38 @@ async fn test_create_and_list_review() {
 }
 
 #[tokio::test]
+async fn legacy_reviewer_avatar_is_never_projected_to_public_clients() {
+    let (pool, app) = create_test_app().await;
+    let course_id = seed_course(&pool, "LEGACY-AVATAR", "Legacy avatar privacy").await;
+    sqlx::query(
+        "INSERT INTO reviews.reviews \
+         (course_id, rating, reviewer_name, reviewer_avatar) VALUES ($1, 5, $2, $3)",
+    )
+    .bind(course_id)
+    .bind("legacy-reviewer")
+    .bind("https://tracker.example/collect/avatar.png?review=secret")
+    .execute(&pool)
+    .await
+    .expect("seed legacy review with arbitrary remote avatar");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!("/api/v2/courses/{course_id}/reviews"))
+                .body(Body::empty())
+                .expect("build legacy review list request"),
+        )
+        .await
+        .expect("list legacy reviews");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value = read_json(response).await;
+    assert_eq!(body["items"][0]["authorHandle"], "legacy-reviewer");
+    assert!(body["items"][0]["authorAvatar"].is_null());
+}
+
+#[tokio::test]
 async fn test_edit_own_review() {
     let (pool, app) = create_test_app().await;
     let course_id = seed_course(&pool, "CS104", "OS").await;

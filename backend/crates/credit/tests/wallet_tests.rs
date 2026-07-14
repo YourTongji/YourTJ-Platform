@@ -4,7 +4,12 @@ mod helpers;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use helpers::{create_test_account, create_test_app, create_token, mint_to_account, read_json};
+use base64::Engine as _;
+use helpers::{
+    create_test_account, create_test_app, create_tip_thread, create_token, mint_to_account,
+    read_json,
+};
+use serde_json::json;
 use tower::ServiceExt;
 
 #[tokio::test]
@@ -123,6 +128,66 @@ async fn wallet_requires_auth() {
         .unwrap();
 
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn signing_intent_uses_the_only_active_wallet_key() {
+    let (pool, app) = create_test_app().await;
+    let sender_id =
+        create_test_account(&pool, "canonical-key@tongji.edu.cn", "canonical-key").await;
+    let recipient_id =
+        create_test_account(&pool, "canonical-target@tongji.edu.cn", "canonical-target").await;
+    mint_to_account(&pool, sender_id, 20).await;
+    let thread_id = create_tip_thread(&pool, recipient_id).await;
+
+    let historical_public_key = base64::engine::general_purpose::STANDARD
+        .encode(credit::ledger::derive_public_key(&[8u8; 32]));
+    let canonical_public_key = base64::engine::general_purpose::STANDARD
+        .encode(credit::ledger::derive_public_key(&[9u8; 32]));
+    sqlx::query(
+        "INSERT INTO identity.account_keys (account_id, public_key, created_at, revoked_at) \
+         VALUES ($1, $2, now() - interval '1 day', now()), ($1, $3, now(), NULL)",
+    )
+    .bind(sender_id)
+    .bind(&historical_public_key)
+    .bind(&canonical_public_key)
+    .execute(&pool)
+    .await
+    .expect("insert canonical and later wallet keys");
+
+    let token = create_token(&pool, "canonical-key@tongji.edu.cn").await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v2/credit/signing-intents")
+                .method("POST")
+                .header("Authorization", format!("Bearer {token}"))
+                .header("Idempotency-Key", uuid::Uuid::new_v4().to_string())
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "action": "credit.tip",
+                        "request": {
+                            "toAccountId": recipient_id.to_string(),
+                            "amount": 1,
+                            "targetType": "thread",
+                            "targetId": thread_id.to_string()
+                        }
+                    })
+                    .to_string(),
+                ))
+                .expect("build signing-intent request"),
+        )
+        .await
+        .expect("signing-intent response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = read_json(response).await;
+    let signing_bytes: serde_json::Value =
+        serde_json::from_str(body["signingBytes"].as_str().expect("signing bytes"))
+            .expect("parse signing bytes");
+    assert_eq!(signing_bytes["publicKey"], canonical_public_key);
+    assert_ne!(signing_bytes["publicKey"], historical_public_key);
 }
 
 #[tokio::test]

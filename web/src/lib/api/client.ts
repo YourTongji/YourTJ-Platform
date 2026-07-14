@@ -135,11 +135,14 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}) 
   try {
     return await fetchOnce<T>(path, options);
   } catch (error) {
+    const method = (options.method ?? "GET").toUpperCase();
+    const canReplayAfterRefresh = method === "GET" || method === "HEAD" || method === "OPTIONS";
     if (
       error instanceof ApiError
       && error.status === 401
       && options.auth !== false
       && !options.authToken
+      && canReplayAfterRefresh
     ) {
       const refreshed = await refreshTokens();
       if (refreshed) {

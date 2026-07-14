@@ -3,6 +3,7 @@ import { CheckCircle2, Gift, KeyRound, Plus, ShieldCheck, ShoppingBag, Trash2, W
 import * as React from "react";
 import { toast } from "sonner";
 
+import { RecentAuthDialog } from "@/components/auth/recent-auth-dialog";
 import { PageHeader } from "@/components/common/page-header";
 import { EmptyState, ErrorState, LoadingState } from "@/components/common/states";
 import { Badge } from "@/components/ui/badge";
@@ -48,9 +49,13 @@ async function authorizeWallet(action: CreditSigningAction, request: Record<stri
 function WalletSetup() {
   const queryClient = useQueryClient();
   const [wallet, setWallet] = React.useState(() => getLocalWallet());
+  const [recentAuthOpen, setRecentAuthOpen] = React.useState(false);
+  const [clearWalletOpen, setClearWalletOpen] = React.useState(false);
+  const [pendingPublicKey, setPendingPublicKey] = React.useState<string | null>(null);
   const bind = useMutation({
     mutationFn: (publicKey: string) => api.bindWallet(publicKey),
     onSuccess: async () => {
+      setPendingPublicKey(null);
       toast.success("钱包公钥已绑定");
       await queryClient.invalidateQueries({ queryKey: ["wallet"] });
     },
@@ -58,7 +63,8 @@ function WalletSetup() {
   });
 
   return (
-    <Card>
+    <>
+      <Card>
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
           <KeyRound className="h-4 w-4 text-primary" />
@@ -78,28 +84,31 @@ function WalletSetup() {
           <p className="rounded-md border border-dashed p-3 text-sm text-muted-foreground">本机还没有钱包密钥。</p>
         )}
         <div className="flex flex-wrap gap-2">
+          {!wallet ? (
+            <Button
+              variant="secondary"
+              onClick={() => {
+                const next = createLocalWallet();
+                setWallet(next);
+                toast.success("已生成本地钱包");
+              }}
+            >
+              生成本地钱包
+            </Button>
+          ) : null}
           <Button
-            variant="secondary"
             onClick={() => {
-              const next = createLocalWallet();
-              setWallet(next);
-              toast.success("已生成本地钱包");
+              if (!wallet) return;
+              setPendingPublicKey(wallet.publicKey);
+              setRecentAuthOpen(true);
             }}
-          >
-            生成/重置本地钱包
-          </Button>
-          <Button
-            onClick={() => wallet && bind.mutate(wallet.publicKey)}
             disabled={!wallet || bind.isPending}
           >
             绑定公钥
           </Button>
           <Button
             variant="outline"
-            onClick={() => {
-              clearLocalWallet();
-              setWallet(null);
-            }}
+            onClick={() => setClearWalletOpen(true)}
             disabled={!wallet}
           >
             <Trash2 className="h-4 w-4" />
@@ -107,7 +116,40 @@ function WalletSetup() {
           </Button>
         </div>
       </CardContent>
-    </Card>
+      </Card>
+      <RecentAuthDialog
+        open={recentAuthOpen}
+        onOpenChange={setRecentAuthOpen}
+        description="首次绑定钱包公钥会授权本机签署积分操作，需要当前会话在最近 10 分钟内重新验证。已有公钥不能仅凭登录态轮换。"
+        onVerified={() => {
+          if (pendingPublicKey) bind.mutate(pendingPublicKey);
+        }}
+      />
+      <Dialog open={clearWalletOpen} onOpenChange={setClearWalletOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>清除本机钱包私钥？</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm leading-6 text-muted-foreground">
+            服务端绑定的公钥不会随本机数据清除。清除后，本机将不能再签署积分操作；当前尚没有仅凭登录态恢复或轮换钱包密钥的入口。
+          </p>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setClearWalletOpen(false)}>取消</Button>
+            <Button
+              variant="destructive"
+              onClick={() => {
+                clearLocalWallet();
+                setWallet(null);
+                setClearWalletOpen(false);
+                toast.success("已清除本机钱包私钥");
+              }}
+            >
+              确认清除
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
 

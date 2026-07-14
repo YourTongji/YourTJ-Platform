@@ -75,4 +75,22 @@ describe("API media boundary", () => {
     expect(localStorage.getItem("yourtj.accessToken")).toBe("new-access");
     expect(localStorage.getItem("yourtj.refreshToken")).toBe("new-refresh");
   });
+
+  it("does not refresh and replay a mutation after a 401", async () => {
+    localStorage.setItem("yourtj.accessToken", "old-access");
+    localStorage.setItem("yourtj.refreshToken", "old-refresh");
+    const unauthorized = new Response(
+      JSON.stringify({ error: { code: "UNAUTHORIZED", message: "unauthorized" } }),
+      { status: 401, headers: { "Content-Type": "application/json" } },
+    );
+    const fetchMock = vi.fn().mockResolvedValue(unauthorized);
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      apiRequest("/forum/threads", { method: "POST", body: { title: "once" } }),
+    ).rejects.toMatchObject({ status: 401 });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(localStorage.getItem("yourtj.refreshToken")).toBe("old-refresh");
+  });
 });

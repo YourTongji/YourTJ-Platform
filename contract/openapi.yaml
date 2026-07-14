@@ -591,7 +591,7 @@ components:
         score: { type: string, nullable: true }
         semester: { type: string, nullable: true }
         authorHandle: { type: string }
-        authorAvatar: { type: string, nullable: true }
+        authorAvatar: { type: string, nullable: true, description: Reserved for a current platform-owned avatar projection. Legacy reviewer-provided remote URLs are never returned; null until Reviews integrates a typed Media projection. }
         approveCount: { type: integer }
         status: { type: string, enum: [visible, hidden, pending] }
         createdAt: { type: integer }
@@ -3429,11 +3429,17 @@ paths:
   /wallet/bind:
     post:
       tags: [wallet]
-      summary: Bind a client-generated Ed25519 public key
+      summary: Enroll the first client-generated Ed25519 public key
+      description: Requires fresh session-bound authentication. Repeating the canonical active key is idempotent; enrolling a different key while one is active is rejected because key rotation requires a separately designed old-key proof or audited recovery flow.
       requestBody:
         required: true
-        content: { application/json: { schema: { type: object, required: [publicKey], properties: { publicKey: { type: string } } } } }
-      responses: { "204": { description: ok } }
+        content: { application/json: { schema: { type: object, required: [publicKey], properties: { publicKey: { type: string, description: Standard base64 encoding of a 32-byte Ed25519 public key } } } } }
+      responses:
+        "204": { description: enrolled or already the canonical active key }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "428": { $ref: "#/components/responses/RecentAuthRequired" }
   /wallet/claim-challenge:
     get:
       tags: [wallet]

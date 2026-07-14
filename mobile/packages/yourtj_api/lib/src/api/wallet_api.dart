@@ -21,8 +21,8 @@ class WalletApi {
 
   const WalletApi(this._dio);
 
-  /// Bind a client-generated Ed25519 public key
-  ///
+  /// Enroll the first client-generated Ed25519 public key
+  /// Requires fresh session-bound authentication. Repeating the canonical active key is idempotent; enrolling a different key while one is active is rejected because key rotation requires a separately designed old-key proof or audited recovery flow.
   ///
   /// Parameters:
   /// * [walletBindPostRequest]

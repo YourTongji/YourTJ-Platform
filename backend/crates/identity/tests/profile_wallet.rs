@@ -9,7 +9,42 @@ use base64::Engine;
 use helpers::{create_test_app, create_test_app_with_pool};
 use ring::signature::KeyPair;
 use serde_json::{json, Value};
+use sqlx::PgPool;
 use tower::ServiceExt;
+
+async fn create_session_token(pool: &PgPool, account_id: i64, is_recent: bool) -> String {
+    let session_id: i64 = sqlx::query_scalar(
+        "INSERT INTO identity.sessions \
+         (account_id, refresh_hash, family_id, expires_at, recent_authenticated_at, \
+          recent_auth_method, recent_auth_credential_version) \
+         VALUES ($1, $2, $3, now() + interval '1 day', \
+                 CASE WHEN $4 THEN now() ELSE NULL END, \
+                 CASE WHEN $4 THEN 'password' ELSE NULL END, \
+                 CASE WHEN $4 THEN (SELECT credential_version FROM identity.accounts WHERE id = $1) \
+                      ELSE NULL END) RETURNING id",
+    )
+    .bind(account_id)
+    .bind(uuid::Uuid::new_v4().simple().to_string())
+    .bind(uuid::Uuid::new_v4())
+    .bind(is_recent)
+    .fetch_one(pool)
+    .await
+    .expect("insert wallet test session");
+    let auth_version: i64 =
+        sqlx::query_scalar("SELECT auth_version FROM identity.accounts WHERE id = $1")
+            .bind(account_id)
+            .fetch_one(pool)
+            .await
+            .expect("read wallet test auth version");
+    identity::auth::create_session_access_token(
+        account_id,
+        session_id,
+        auth_version,
+        "integration-test-secret-32bytes!",
+        3_600,
+    )
+    .expect("create wallet test session token")
+}
 
 /// ── update my handle ───────────────────────────────────────────────────
 
@@ -189,7 +224,8 @@ async fn test_bind_key_valid_ed25519_succeeds() {
         .await
         .unwrap();
 
-    let (token, account_id) = helpers::create_access_token_for("uma@tongji.edu.cn", &pool).await;
+    let (_, account_id) = helpers::create_access_token_for("uma@tongji.edu.cn", &pool).await;
+    let token = create_session_token(&pool, account_id, true).await;
     let app = create_test_app_with_pool(pool.clone()).await;
 
     let rng = ring::rand::SystemRandom::new();
@@ -287,7 +323,7 @@ async fn test_bind_key_wrong_length_rejects() {
 }
 
 #[tokio::test]
-async fn test_bind_key_duplicate_rejects() {
+async fn test_bind_key_same_canonical_key_is_idempotent() {
     let (pool, _) = create_test_app().await;
 
     sqlx::query("INSERT INTO identity.accounts (email, handle) VALUES ($1, $2)")
@@ -297,7 +333,8 @@ async fn test_bind_key_duplicate_rejects() {
         .await
         .unwrap();
 
-    let (token, account_id) = helpers::create_access_token_for("xena@tongji.edu.cn", &pool).await;
+    let (_, account_id) = helpers::create_access_token_for("xena@tongji.edu.cn", &pool).await;
+    let token = create_session_token(&pool, account_id, true).await;
 
     let key_b64 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
     sqlx::query("INSERT INTO identity.account_keys (account_id, public_key) VALUES ($1, $2)")
@@ -322,5 +359,136 @@ async fn test_bind_key_duplicate_rejects() {
         .await
         .unwrap();
 
-    assert_eq!(resp.status(), StatusCode::CONFLICT);
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
+async fn test_bind_key_requires_fresh_session_authentication() {
+    let (pool, _) = create_test_app().await;
+
+    sqlx::query("INSERT INTO identity.accounts (email, handle) VALUES ($1, $2)")
+        .bind("yara@tongji.edu.cn")
+        .bind("yara")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let (_, account_id) = helpers::create_access_token_for("yara@tongji.edu.cn", &pool).await;
+    let token = create_session_token(&pool, account_id, false).await;
+    let app = create_test_app_with_pool(pool.clone()).await;
+    let public_key = base64::engine::general_purpose::STANDARD.encode([3u8; 32]);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/v2/wallet/bind")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::from(json!({ "publicKey": public_key }).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::PRECONDITION_REQUIRED);
+    let count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM identity.account_keys WHERE account_id = $1")
+            .bind(account_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(count, 0);
+}
+
+#[tokio::test]
+async fn test_bind_key_rejects_session_only_rotation() {
+    let (pool, _) = create_test_app().await;
+
+    sqlx::query("INSERT INTO identity.accounts (email, handle) VALUES ($1, $2)")
+        .bind("zora@tongji.edu.cn")
+        .bind("zora")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let (_, account_id) = helpers::create_access_token_for("zora@tongji.edu.cn", &pool).await;
+    let token = create_session_token(&pool, account_id, true).await;
+    let first_key = base64::engine::general_purpose::STANDARD.encode([4u8; 32]);
+    sqlx::query("INSERT INTO identity.account_keys (account_id, public_key) VALUES ($1, $2)")
+        .bind(account_id)
+        .bind(&first_key)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let different_key = base64::engine::general_purpose::STANDARD.encode([5u8; 32]);
+    let app = create_test_app_with_pool(pool.clone()).await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/v2/wallet/bind")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::from(json!({ "publicKey": different_key }).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let keys: Vec<String> = sqlx::query_scalar(
+        "SELECT public_key FROM identity.account_keys WHERE account_id = $1 ORDER BY public_key",
+    )
+    .bind(account_id)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(keys, vec![first_key]);
+}
+
+#[tokio::test]
+async fn test_bind_key_serializes_concurrent_first_enrollment() {
+    let (pool, _) = create_test_app().await;
+
+    sqlx::query("INSERT INTO identity.accounts (email, handle) VALUES ($1, $2)")
+        .bind("concurrent-wallet@tongji.edu.cn")
+        .bind("concurrent-wallet")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let (_, account_id) =
+        helpers::create_access_token_for("concurrent-wallet@tongji.edu.cn", &pool).await;
+    let token = create_session_token(&pool, account_id, true).await;
+    let app = create_test_app_with_pool(pool.clone()).await;
+    let request = |key_byte: u8| {
+        Request::builder()
+            .method(Method::POST)
+            .uri("/api/v2/wallet/bind")
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::AUTHORIZATION, format!("Bearer {token}"))
+            .body(Body::from(
+                json!({
+                    "publicKey": base64::engine::general_purpose::STANDARD.encode([key_byte; 32])
+                })
+                .to_string(),
+            ))
+            .unwrap()
+    };
+
+    let (first, second) =
+        tokio::join!(app.clone().oneshot(request(6)), app.clone().oneshot(request(7)),);
+    let mut statuses = vec![first.unwrap().status(), second.unwrap().status()];
+    statuses.sort_by_key(|status| status.as_u16());
+
+    assert_eq!(statuses, vec![StatusCode::NO_CONTENT, StatusCode::CONFLICT]);
+    let count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM identity.account_keys WHERE account_id = $1")
+            .bind(account_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(count, 1);
 }

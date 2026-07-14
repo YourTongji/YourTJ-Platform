@@ -16,10 +16,27 @@ pub(crate) mod repo;
 pub mod search;
 pub mod tip_targets;
 
+use std::future::Future;
+use std::pin::Pin;
+
 use axum::routing::{get, patch, post};
 use axum::Router;
-pub use repo::claim_legacy_reviews;
+pub use repo::claim_legacy_reviews_tx;
 use shared::AppState;
+
+/// Reviews-owned implementation of Identity's atomic legacy-claim port.
+pub struct LegacyReviewClaimer;
+
+impl identity::LegacyReviewClaimer for LegacyReviewClaimer {
+    fn claim<'a>(
+        &'a self,
+        connection: &'a mut sqlx::PgConnection,
+        legacy_user_hash: &'a str,
+        account_id: i64,
+    ) -> Pin<Box<dyn Future<Output = shared::AppResult<u64>> + Send + 'a>> {
+        Box::pin(claim_legacy_reviews_tx(connection, legacy_user_hash, account_id))
+    }
+}
 
 /// All routes owned by the reviews domain.
 pub fn routes(state: AppState) -> Router {

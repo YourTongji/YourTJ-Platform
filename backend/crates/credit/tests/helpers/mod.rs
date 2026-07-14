@@ -179,6 +179,21 @@ async fn run_migrations(pool: &PgPool) {
             .expect("migration 0038 failed");
     }
 
+    let has_single_active_wallet_key: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM pg_indexes \
+         WHERE schemaname = 'identity' \
+           AND indexname = 'account_keys_one_active_per_account_idx')",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or(false);
+    if !has_single_active_wallet_key {
+        sqlx::raw_sql(include_str!("../../../../migrations/0067_single_active_wallet_key.sql"))
+            .execute(pool)
+            .await
+            .expect("migration 0067 failed");
+    }
+
     let database_name: String = sqlx::query_scalar("SELECT current_database()")
         .fetch_one(pool)
         .await

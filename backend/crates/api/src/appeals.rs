@@ -778,10 +778,11 @@ mod tests {
         let other_user_token =
             identity::auth::create_appeal_access_token(other_user_id, &state.jwt_secret, 3600)
                 .expect("other user's appeal access token");
-        let regular_identity_response = identity::routes(state.clone())
-            .oneshot(json_request("GET", "/api/v2/me", &other_user_token, Value::Null))
-            .await
-            .expect("regular identity response");
+        let regular_identity_response =
+            identity::routes(state.clone(), std::sync::Arc::new(reviews::LegacyReviewClaimer))
+                .oneshot(json_request("GET", "/api/v2/me", &other_user_token, Value::Null))
+                .await
+                .expect("regular identity response");
         assert_eq!(regular_identity_response.status(), StatusCode::UNAUTHORIZED);
 
         let mut cross_owner_request = json_request(
