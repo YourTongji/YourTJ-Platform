@@ -1,0 +1,35 @@
+name: yourtj_mobile
+description: "YourTJ campus community mobile client."
+publish_to: 'none'
+version: 0.1.0+1
+
+environment:
+  sdk: ^3.12.2
+
+dependencies:
+  cryptography: 2.9.0
+  cryptography_flutter: 2.3.4
+  dio: 5.10.0
+  file_selector: 1.1.0
+  flutter:
+    sdk: flutter
+  flutter_markdown_plus: 1.0.12
+  flutter_riverpod: 3.3.2
+  flutter_secure_storage: 10.3.1
+  go_router: 17.3.0
+  markdown: 7.3.1
+  shared_preferences: 2.5.5
+  url_launcher: 6.3.2
+  uuid: 4.5.3
+  yourtj_api:
+    path: packages/yourtj_api
+
+dev_dependencies:
+  flutter_lints: ^6.0.0
+  flutter_test:
+    sdk: flutter
+
+flutter:
+  uses-material-design: true
+  assets:
+    - ios/Runner/Assets.xcassets/AppIcon.appiconset/Icon-App-1024x1024@1x.png

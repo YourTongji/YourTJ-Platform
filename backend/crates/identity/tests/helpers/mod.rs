@@ -12,11 +12,13 @@ use sqlx::PgPool;
 ///
 /// Reads `DATABASE_URL` from the environment; falls back to a local
 /// default if not set.
+#[allow(dead_code)] // reason: each integration-test binary uses only the state constructor it needs
 pub async fn create_test_app() -> (PgPool, axum::Router) {
     let test_config = shared::Config::from_env().expect("test Config::from_env");
     create_test_app_with_config(test_config).await
 }
 
+#[allow(dead_code)] // reason: config-specific integration binaries call this constructor selectively
 pub async fn create_test_app_with_config(test_config: shared::Config) -> (PgPool, axum::Router) {
     create_test_app_with_config_and_redis(test_config, test_redis_pool()).await
 }
@@ -27,7 +29,7 @@ pub async fn create_test_app_and_state_with_config(
 ) -> (PgPool, axum::Router, AppState) {
     let (pool, state) =
         create_test_state_with_config_and_redis(test_config, test_redis_pool()).await;
-    let router = identity::routes(state.clone());
+    let router = identity::routes(state.clone(), std::sync::Arc::new(reviews::LegacyReviewClaimer));
     (pool, router, state)
 }
 
@@ -42,7 +44,7 @@ async fn create_test_app_with_config_and_redis(
     redis: Option<deadpool_redis::Pool>,
 ) -> (PgPool, axum::Router) {
     let (pool, state) = create_test_state_with_config_and_redis(test_config, redis).await;
-    let router = identity::routes(state);
+    let router = identity::routes(state, std::sync::Arc::new(reviews::LegacyReviewClaimer));
     (pool, router)
 }
 
@@ -103,7 +105,7 @@ pub async fn create_test_app_with_pool_and_encryption(
         captcha_verifier: Some(std::sync::Arc::new(shared::captcha::FakeCaptcha)),
         sse_tx: None,
     };
-    identity::routes(state)
+    identity::routes(state, std::sync::Arc::new(reviews::LegacyReviewClaimer))
 }
 
 fn test_redis_pool() -> Option<deadpool_redis::Pool> {
@@ -149,6 +151,21 @@ async fn run_migrations(pool: &PgPool) {
             .execute(pool)
             .await
             .expect("migration 0011 failed");
+    }
+
+    let has_legacy_review_link: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM information_schema.columns \
+         WHERE table_schema = 'reviews' AND table_name = 'reviews' \
+           AND column_name = 'wallet_user_hash')",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or(false);
+    if !has_legacy_review_link {
+        sqlx::raw_sql(include_str!("../../../../migrations/0010_selection_raw_normalized.sql"))
+            .execute(pool)
+            .await
+            .expect("migration 0010 failed");
     }
 
     let has_encrypted_email: bool = sqlx::query_scalar(
@@ -366,6 +383,21 @@ async fn run_migrations(pool: &PgPool) {
             .execute(pool)
             .await
             .expect("migration 0064 failed");
+    }
+
+    let has_single_active_wallet_key: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM pg_indexes \
+         WHERE schemaname = 'identity' \
+           AND indexname = 'account_keys_one_active_per_account_idx')",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or(false);
+    if !has_single_active_wallet_key {
+        sqlx::raw_sql(include_str!("../../../../migrations/0067_single_active_wallet_key.sql"))
+            .execute(pool)
+            .await
+            .expect("migration 0067 failed");
     }
 
     let database_name: String = sqlx::query_scalar("SELECT current_database()")

@@ -132,8 +132,8 @@ async fn project_review_likes_for_visibility(
 
 /// Build a ReviewDto from a joined row.
 ///
-/// Falls back to `reviewer_name` and `reviewer_avatar` for legacy reviews
-/// that have no matching account (NULL `account_id`).
+/// Legacy reviewer names remain attribution-only fallback text. Legacy avatar URLs are never
+/// projected because they are arbitrary remote locations rather than platform-owned media.
 fn row_to_dto(row: &ReviewWithAuthorRow) -> ReviewDto {
     ReviewDto {
         id: row.id.to_string(),
@@ -143,7 +143,7 @@ fn row_to_dto(row: &ReviewWithAuthorRow) -> ReviewDto {
         score: row.score.clone(),
         semester: row.semester.clone(),
         author_handle: row.handle.clone().or_else(|| row.reviewer_name.clone()).unwrap_or_default(),
-        author_avatar: row.avatar_url.clone().or_else(|| row.reviewer_avatar.clone()),
+        author_avatar: None,
         approve_count: row.approve_count,
         status: row.status.clone(),
         created_at: row.created_at.timestamp(),
@@ -165,15 +165,13 @@ fn report_to_dto(row: ReviewReportRow) -> crate::dto::ReportDto {
     }
 }
 
-/// Look up author handle and avatar, then build a DTO from a raw ReviewRow.
+/// Look up the author handle, then build a DTO from a raw ReviewRow.
 ///
-/// Falls back to `reviewer_name` / `reviewer_avatar` when the review has no
-/// linked account (legacy reviews, NULL `account_id`).
-fn row_to_dto_with_author(row: &ReviewRow, handle: &str, avatar_url: Option<&str>) -> ReviewDto {
+/// Reviews do not yet own a typed Media projection, so avatar disclosure fails closed instead of
+/// falling back to an arbitrary legacy URL.
+fn row_to_dto_with_author(row: &ReviewRow, handle: &str) -> ReviewDto {
     let effective_handle =
         if handle.is_empty() { row.reviewer_name.as_deref().unwrap_or("") } else { handle };
-    let effective_avatar =
-        if avatar_url.is_none() { row.reviewer_avatar.as_deref() } else { avatar_url };
     ReviewDto {
         id: row.id.to_string(),
         course_id: row.course_id.to_string(),
@@ -182,7 +180,7 @@ fn row_to_dto_with_author(row: &ReviewRow, handle: &str, avatar_url: Option<&str
         score: row.score.clone(),
         semester: row.semester.clone(),
         author_handle: effective_handle.to_string(),
-        author_avatar: effective_avatar.map(|a| a.to_string()),
+        author_avatar: None,
         approve_count: row.approve_count,
         status: row.status.clone(),
         created_at: row.created_at.timestamp(),
@@ -342,12 +340,10 @@ pub async fn create_review_tx(
     .fetch_one(&mut *tx)
     .await?;
 
-    // Fetch author handle + avatar for the DTO.
-    let (handle, avatar_url): (String, Option<String>) =
-        sqlx::query_as("SELECT handle, avatar_url FROM identity.accounts WHERE id = $1")
-            .bind(account_id)
-            .fetch_one(&mut *tx)
-            .await?;
+    let handle: String = sqlx::query_scalar("SELECT handle FROM identity.accounts WHERE id = $1")
+        .bind(account_id)
+        .fetch_one(&mut *tx)
+        .await?;
 
     // Incrementally update course stats.
     // In a single UPDATE the right-hand side sees the pre-increment
@@ -366,7 +362,7 @@ pub async fn create_review_tx(
     .execute(&mut *tx)
     .await?;
 
-    Ok(row_to_dto_with_author(&row, &handle, avatar_url.as_deref()))
+    Ok(row_to_dto_with_author(&row, &handle))
 }
 
 /// Serialize creation attempts sharing one account-scoped idempotency key.
@@ -507,15 +503,14 @@ pub async fn update_review(
         }
     }
 
-    let (handle, avatar_url): (String, Option<String>) =
-        sqlx::query_as("SELECT handle, avatar_url FROM identity.accounts WHERE id = $1")
-            .bind(account_id)
-            .fetch_one(&mut *tx)
-            .await?;
+    let handle: String = sqlx::query_scalar("SELECT handle FROM identity.accounts WHERE id = $1")
+        .bind(account_id)
+        .fetch_one(&mut *tx)
+        .await?;
 
     tx.commit().await?;
 
-    Ok(row_to_dto_with_author(&row, &handle, avatar_url.as_deref()))
+    Ok(row_to_dto_with_author(&row, &handle))
 }
 
 /// Like a review and project the positive activity transition atomically.
@@ -1034,11 +1029,11 @@ pub async fn resolve_report(
 /// This is designed to be called after a successful `/wallet/claim` flow so
 /// legacy reviews originally associated with an anonymous wallet hash become
 /// properly linked to the user's account.
-#[tracing::instrument(skip(executor), fields(account_id, wallet_user_hash))]
-pub async fn claim_legacy_reviews(
-    executor: impl sqlx::PgExecutor<'_>,
-    account_id: i64,
+#[tracing::instrument(skip(connection, wallet_user_hash), fields(account_id))]
+pub async fn claim_legacy_reviews_tx(
+    connection: &mut sqlx::PgConnection,
     wallet_user_hash: &str,
+    account_id: i64,
 ) -> AppResult<u64> {
     let rows = sqlx::query(
         "UPDATE reviews.reviews SET account_id = $1 \
@@ -1046,10 +1041,42 @@ pub async fn claim_legacy_reviews(
     )
     .bind(account_id)
     .bind(wallet_user_hash)
-    .execute(executor)
+    .execute(connection)
     .await?;
 
     let count = rows.rows_affected();
-    tracing::info!(account_id, wallet_user_hash, count, "claimed legacy reviews");
+    tracing::info!(account_id, count, "claimed legacy reviews");
     Ok(count)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn review_dto_never_projects_arbitrary_avatar_urls() {
+        let row = ReviewWithAuthorRow {
+            id: 1,
+            course_id: 2,
+            account_id: None,
+            rating: 5,
+            comment: Some("legacy review".into()),
+            score: None,
+            semester: None,
+            approve_count: 0,
+            disapprove_count: 0,
+            status: "visible".into(),
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            reviewer_name: Some("legacy-reviewer".into()),
+            reviewer_avatar: Some("https://tracker.example/legacy.png".into()),
+            handle: None,
+            avatar_url: Some("https://tracker.example/account.png".into()),
+        };
+
+        let dto = row_to_dto(&row);
+
+        assert_eq!(dto.author_handle, "legacy-reviewer");
+        assert_eq!(dto.author_avatar, None);
+    }
 }

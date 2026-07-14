@@ -1489,31 +1489,52 @@ pub(crate) async fn reset_password_with_code(
 // account_keys
 // ---------------------------------------------------------------------------
 
-/// Bind an Ed25519 public key to an account. Returns `KeyAlreadyBound` if
-/// the key is already bound to this account.
-pub async fn insert_account_key(pool: &PgPool, account_id: i64, public_key: &str) -> AppResult<()> {
-    let already: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM identity.account_keys \
-         WHERE account_id = $1 AND public_key = $2)",
-    )
-    .bind(account_id)
-    .bind(public_key)
-    .fetch_one(pool)
-    .await?;
+/// Enroll the first wallet key under an account lock and recent-auth boundary.
+///
+/// Repeating the canonical active key is idempotent. A different active key cannot be appended:
+/// rotation needs an old-key proof or a separately audited recovery protocol.
+pub async fn bind_initial_account_key(
+    pool: &PgPool,
+    context: &crate::auth_middleware::AuthenticatedContext,
+    public_key: &str,
+) -> AppResult<()> {
+    let mut tx = pool.begin().await?;
+    let account_id: Option<i64> =
+        sqlx::query_scalar("SELECT id FROM identity.accounts WHERE id = $1 FOR UPDATE")
+            .bind(context.account.id)
+            .fetch_optional(&mut *tx)
+            .await?;
+    account_id.ok_or(AppError::NotFound)?;
+    crate::auth_middleware::require_recent_auth_tx(context, &mut tx).await?;
 
-    if already {
+    let active_key: Option<String> = sqlx::query_scalar(
+        "SELECT public_key FROM identity.account_keys \
+         WHERE account_id = $1 AND revoked_at IS NULL",
+    )
+    .bind(context.account.id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    if let Some(active_key) = active_key {
+        if active_key == public_key {
+            tx.commit().await?;
+            return Ok(());
+        }
         return Err(crate::error::IdentityError::KeyAlreadyBound.into());
     }
 
-    sqlx::query(
+    let inserted = sqlx::query(
         "INSERT INTO identity.account_keys (account_id, public_key) \
-         VALUES ($1, $2)",
+         VALUES ($1, $2) ON CONFLICT DO NOTHING",
     )
-    .bind(account_id)
+    .bind(context.account.id)
     .bind(public_key)
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
-
+    if inserted.rows_affected() != 1 {
+        return Err(crate::error::IdentityError::KeyAlreadyBound.into());
+    }
+    tx.commit().await?;
+    tracing::info!(account_id = context.account.id, "wallet key enrolled");
     Ok(())
 }
 

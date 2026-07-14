@@ -6,7 +6,7 @@
 >
 > 负责人：Privacy owner、Security owner、Domain maintainers
 >
-> 最近核验：2026-07-14，migrations `0064`–`0066`、会话 installation 数据最小化与 ADMIN 媒体自审边界
+> 最近核验：2026-07-14，migrations `0064`–`0066`、Flutter 本机钱包防重放与 ADMIN 媒体自审边界
 
 本规范将数据最小化、可见性、导出、删除和保留作为产品前置条件。它不是法律意见；涉及 PIPL、
 未成年人、广告或跨境处理的最终政策需要合格法律与隐私负责人确认。
@@ -24,6 +24,9 @@
   Web 的同源 installation UUID 只存在浏览器站点存储，用户清除站点数据即可重置；Identity 仅保存加入
   account id 域隔离后的 32-byte SHA-256 摘要，用于替换同一 installation 的旧 session，不公开、不进入
   owner export，也不得复用于跨账号关联、分析、推荐或广告。
+- Flutter 原始 installation UUID 同样不上传到其他用途：Android 仅存在 backup-excluded preferences，iOS
+  仅存在标记 `isExcludedFromBackup` 的 Application Support 文件。它按 API environment 分区、登出保留、
+  卸载清除；backup/D2D/uninstall 语义在两平台真机负向验证前仍是移动发布 gate。
 - recent-auth 只在当前 session 保存服务端验证时间和受控方法标签，不保存密码、code、
   email 或第二份账号级凭据；session 撤销/保留即是其撤销/保留边界。
 - Password recent-auth 额外保存当时的账号 credential version；密码改变后旧验证即使并发返回也不能
@@ -50,6 +53,9 @@
   作为内容署名，而不是资料页披露；因此 profile/activity visibility 不会匿名化已经发布的公共讨论。
   Forum 只对已授权内容行批量请求 active public account 与短期 typed Media Delivery，账号生命周期关闭、
   内容隐藏或头像失去 clean/published 状态后不再返回头像；DTO 不包含邮箱、object key 或持久 vendor URL。
+- 历史课评的 `reviewer_avatar` 可能指向任意第三方并产生跨站请求元数据，服务端不得把它投影到公开或
+  staff DTO。课评头像在 owner-domain typed Media projection 完成前返回 null；移动端仍以配置的 API/CDN
+  精确 origin allowlist 二次拒绝异常 URL，HTTPS 本身不构成平台所有权证明。
 - 人工认证默认私密；公开 profile 只返回 definition 允许且 grant 明确公开的有效 label/说明/有效期，
   不返回 issuer、reason、evidence reference 或内部 grant id。
 - 账号搜索只索引已验证、discoverable 且非 `only_me` 账号的 id、handle 和可选 display name；响应
@@ -85,6 +91,11 @@
   projection。完成 artifact 在 PostgreSQL JSONB 最多保留 24 小时，下载用 account-bound、SHA-256 at-rest、
   5 分钟且一次性消费的 header token，并记录 `downloaded_at`。原始校园邮箱不复制进 JSONB artifact；
   只在授权下载响应组装时从 Identity encrypted-at-rest 字段解密并注入。
+- Flutter 本机保存把 recent-auth、grant、download 与平台文件操作绑定到同一 account id + session
+  generation，切号立即清除旧 job metadata 并取消 pending save。Dart 只接受固定 v2 schema/sections 且
+  UTF-8 JSON 不超过 16 MiB；Android 从内存直写用户选择的 SAF URI，不产生 App cache；iOS staging 使用
+  随机 `tmp` 子目录、mode-`0600`、完整文件保护和 no-backup 标记，成功/取消/错误删除，冷启动清 orphan。
+  文件名、URI、JSON 内容和 native 错误细节都不进入日志，页面不展示全文或复制到剪贴板。
 - Deactivate/delete 立即撤销 session。30 天恢复窗后 durable worker 删除 Identity 邮箱/密码/session/
   profile/privacy/onboarding/recovery/export artifact，并清理 Forum/Reviews/Activity/Platform/Media 的
   owner-private projection；ledger verification 所需的 Ed25519 public key 只做 revoke 并随 tombstone
@@ -111,6 +122,14 @@
   `purged` 不等价于“所有历史物理字节立即消失”。
 - 当前 export worker 在内存中组装完整 JSONB，适合现阶段规模但不是大账号终态；上线大规模历史前需
   改为有界分页、流式加密 archive/object storage、完整性摘要与同等短期授权，不能靠提高进程内存硬撑。
+- Flutter 原生保存边界已有 Dart/native 编译与取消/切号自动化证据，但尚未在已签名 Android/iOS 真机上
+  验证第三方 document provider、进程终止、磁盘满、文件保护锁屏和 orphan 冷启动清理，因此仍是发布 gate。
+- Flutter 为 value-moving 请求保存 environment+account 隔离的 Keychain/Keystore pending-reconciliation
+  记录，目的是在断网/5xx/App 重启后阻止盲重放。记录不含 seed、signature、signing bytes 或 idempotency
+  key 或原始请求事实；deterministic operation key 是规范请求的版本化 SHA-256 摘要，仍不得进入日志、
+  analytics 或普通 cache。已确认提交或 intent 到期且确认未提交时删除；canonical 状态仍不可确认时
+  有意继续保留并 fail closed。当前没有经过真机验证的“移除本机账号/账号 purge 后安全清理”流程，
+  该设备本地状态也不属于服务端 owner export，最终清理/恢复 UX 仍为 `Partial`。
 
 ## 数据分类
 
@@ -118,6 +137,7 @@
 |---|---|---|---|
 | 资格 PII | 校园邮箱、邮箱验证状态 | identity purpose only | 加密/盲索引、绝不公开、限制保留 |
 | 安全凭据 | password hash、code hash、refresh hash、keys/tokens | security code only | 不记录明文、最短保留、可撤销 |
+| 本机积分防重放状态 | environment/account、规范请求 SHA-256 operation key、action/target、expiry、ledger baseline | 同设备客户端安全代码；不上传为业务记录 | Keychain/Keystore only；canonical reconciliation 后删除，不进日志/analytics/owner export；摘要按敏感关联标识处理 |
 | 会话元数据 | bounded user-agent、创建/最近使用/到期时间、recent-auth 时间/方法、账号隔离的 installation 摘要 | 账号本人可见 label/时间；摘要仅安全代码 | 不收集精确 IP/原始 installation，不作画像；摘要不导出并随 session retention/账号 purge 删除 |
 | 公开身份 | handle、公开头像、display name、院校、bio | 资料按 profile visibility；公共内容保留最小作者署名 | 用户可控、handle history 防冒用；内容署名不携带资料正文或 PII |
 | 公共内容 | thread、comment、review、reaction | 按 board/content policy | revision、治理、导出/删除规则 |

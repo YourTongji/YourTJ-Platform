@@ -81,3 +81,66 @@ pub struct TimeSlotDto {
 pub struct LatestUpdateDto {
     pub updated_at: Option<String>,
 }
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::{LatestUpdateDto, SelectionCourseDto, TimeSlotDto};
+
+    #[test]
+    fn serializes_selection_contract_with_explicit_nullable_fields() {
+        let course = SelectionCourseDto {
+            id: "42".into(),
+            code: "CS100".into(),
+            name: "课程".into(),
+            credit: None,
+            nature_id: None,
+            campus_id: None,
+            teacher_name: None,
+            teacher_names: Vec::new(),
+        };
+        assert_eq!(
+            serde_json::to_value(course).expect("serialize selection course"),
+            json!({
+                "id": "42",
+                "code": "CS100",
+                "name": "课程",
+                "credit": null,
+                "natureId": null,
+                "campusId": null,
+                "teacherName": null,
+                "teacherNames": []
+            })
+        );
+
+        let timeslot = TimeSlotDto {
+            course_id: "42".into(),
+            teacher_name: None,
+            weekday: 1,
+            start_slot: 3,
+            end_slot: 4,
+            weeks: None,
+            location: None,
+        };
+        assert_eq!(
+            serde_json::to_value(timeslot).expect("serialize selection timeslot"),
+            json!({
+                "courseId": "42",
+                "teacherName": null,
+                "weekday": 1,
+                "startSlot": 3,
+                "endSlot": 4,
+                "weeks": null,
+                "location": null
+            })
+        );
+
+        let latest_update =
+            LatestUpdateDto { updated_at: Some("2026-07-14T03:04:05+00:00".into()) };
+        assert_eq!(
+            serde_json::to_value(latest_update).expect("serialize latest selection update"),
+            json!({ "updatedAt": "2026-07-14T03:04:05+00:00" })
+        );
+    }
+}

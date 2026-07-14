@@ -4,6 +4,8 @@ set -Eeuo pipefail
 readonly EXPECTED_FRONTEND_ROOT="${EXPECTED_FRONTEND_ROOT:-/opt/yourtj-preview/releases/main}"
 readonly MAIN_RUNTIME_ENV_FILE="${MAIN_RUNTIME_ENV_FILE:-/opt/yourtj-preview/shared/main-runtime.env}"
 readonly MAIN_EMAIL_ENV_FILE="${MAIN_EMAIL_ENV_FILE:-/opt/yourtj-preview/shared/email-main.env}"
+readonly WALLET_KEY_CUTOVER_MARKER="${WALLET_KEY_CUTOVER_MARKER:-/opt/yourtj-preview/shared/migration-0067-wallet-key-cutover.complete}"
+readonly WALLET_KEY_CUTOVER_DRAIN_SECONDS=360
 readonly BACKEND_CONTAINER="main-be"
 readonly FRONTEND_CONTAINER="main-fe"
 readonly BACKEND_IMAGE="yourtj-api:main"
@@ -20,9 +22,11 @@ BACKEND_NEW_STARTED=0
 BACKEND_NEW_READY=0
 FRONTEND_BACKED_UP=0
 FRONTEND_NEW_STARTED=0
+WALLET_KEY_CUTOVER_REQUIRED=0
+WALLET_KEY_CUTOVER_MARKER_TEMP=""
 
 usage() {
-  echo "usage: deploy-main.sh <frontend_dist_dir> <backend_image_tar> <media_env_file> <git_revision> <media_verifier> <frontend_nginx_template>" >&2
+  echo "usage: deploy-main.sh <frontend_dist_dir> <backend_image_tar> <media_env_file> <git_revision> <media_verifier> <frontend_nginx_template> <wallet_cutover_approved_revision>" >&2
   exit 64
 }
 
@@ -196,13 +200,16 @@ rollback_deployment() {
 handle_exit() {
   local status="$?"
   trap - EXIT
+  if [[ -n "$WALLET_KEY_CUTOVER_MARKER_TEMP" ]]; then
+    rm -f "$WALLET_KEY_CUTOVER_MARKER_TEMP"
+  fi
   if ((DEPLOYMENT_STARTED == 1 && DEPLOYMENT_SUCCEEDED == 0)); then
     rollback_deployment
   fi
   exit "$status"
 }
 
-[[ "$#" -eq 6 ]] || usage
+[[ "$#" -eq 7 ]] || usage
 [[ "$HEALTH_ATTEMPTS" =~ ^[1-9][0-9]*$ ]] || fail "health attempts must be a positive integer"
 [[ "$HEALTH_DELAY_SECONDS" =~ ^[0-9]+([.][0-9]+)?$ ]] || fail "health delay must be numeric"
 
@@ -212,6 +219,7 @@ readonly OSS_ENV_FILE="$3"
 readonly GIT_REVISION="$4"
 readonly OSS_VERIFIER="$5"
 readonly NGINX_TEMPLATE="$6"
+readonly WALLET_KEY_CUTOVER_APPROVED_REVISION="$7"
 readonly RENDERED_NGINX="${FRONTEND_DIR}/nginx.conf"
 readonly FRONTEND_RELEASE_DIR="${FRONTEND_DIR%/frontend}"
 readonly FRONTEND_RELEASE_NAME="${FRONTEND_RELEASE_DIR##*/}"
@@ -237,6 +245,15 @@ readonly FRONTEND_BACKUP="${FRONTEND_CONTAINER}-rollback-${BACKUP_SUFFIX}"
 require_regular_secret_file "$MAIN_RUNTIME_ENV_FILE" "main runtime env file"
 require_regular_secret_file "$MAIN_EMAIL_ENV_FILE" "main email env file"
 require_regular_secret_file "$OSS_ENV_FILE" "OSS env file"
+if [[ -e "$WALLET_KEY_CUTOVER_MARKER" || -L "$WALLET_KEY_CUTOVER_MARKER" ]]; then
+  require_regular_secret_file "$WALLET_KEY_CUTOVER_MARKER" "wallet key cutover marker"
+  grep -Fxq "migration=0067" "$WALLET_KEY_CUTOVER_MARKER" ||
+    fail "wallet key cutover marker is malformed"
+else
+  WALLET_KEY_CUTOVER_REQUIRED=1
+  [[ "$WALLET_KEY_CUTOVER_APPROVED_REVISION" == "$GIT_REVISION" ]] ||
+    fail "wallet key cutover requires approval for the exact deployment revision"
+fi
 
 for key in \
   DATABASE_URL \
@@ -310,6 +327,13 @@ if container_exists "$BACKEND_CONTAINER"; then
   docker rename "$BACKEND_CONTAINER" "$BACKEND_BACKUP"
 fi
 
+backend_command=(api --enforce-controlled-wallet-migration)
+if ((WALLET_KEY_CUTOVER_REQUIRED == 1)); then
+  echo "  Wallet-key cutover: writers stopped; draining signing intents for ${WALLET_KEY_CUTOVER_DRAIN_SECONDS}s..."
+  sleep "$WALLET_KEY_CUTOVER_DRAIN_SECONDS"
+  backend_command+=(--wallet-key-cutover-drained)
+fi
+
 echo "  Starting main backend..."
 docker create \
   --env-file "$MAIN_RUNTIME_ENV_FILE" \
@@ -323,7 +347,7 @@ docker create \
   -e "BIND_ADDRESS=127.0.0.1" \
   -e "PORT=${BACKEND_PORT}" \
   -e "RUST_LOG=info" \
-  "$BACKEND_IMAGE" >/dev/null
+  "$BACKEND_IMAGE" "${backend_command[@]}" >/dev/null
 BACKEND_NEW_STARTED=1
 docker start "$BACKEND_CONTAINER" >/dev/null
 
@@ -331,6 +355,20 @@ wait_for_url "backend direct health" "http://127.0.0.1:${BACKEND_PORT}/health"
 wait_for_url "backend direct readiness" "http://127.0.0.1:${BACKEND_PORT}/ready"
 verify_container_environment
 BACKEND_NEW_READY=1
+verify_container_revision "$BACKEND_CONTAINER"
+
+if ((WALLET_KEY_CUTOVER_REQUIRED == 1)); then
+  WALLET_KEY_CUTOVER_MARKER_TEMP="${WALLET_KEY_CUTOVER_MARKER}.tmp-${BACKUP_SUFFIX}"
+  umask 077
+  {
+    echo "migration=0067"
+    echo "revision=${GIT_REVISION}"
+    date -u '+completed_at=%Y-%m-%dT%H:%M:%SZ'
+  } > "$WALLET_KEY_CUTOVER_MARKER_TEMP"
+  chmod 600 "$WALLET_KEY_CUTOVER_MARKER_TEMP"
+  mv "$WALLET_KEY_CUTOVER_MARKER_TEMP" "$WALLET_KEY_CUTOVER_MARKER"
+  echo "  Wallet-key cutover: migration and pre-serve ledger verification complete"
+fi
 
 if container_exists "$FRONTEND_CONTAINER"; then
   docker stop "$FRONTEND_CONTAINER" >/dev/null

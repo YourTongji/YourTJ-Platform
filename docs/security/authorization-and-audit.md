@@ -6,9 +6,9 @@
 >
 > 负责人：Security owner、Identity/Governance maintainers
 >
-> 最近核验：2026-07-12，migrations `0061`–`0062`、governance/identity/media tests、Cloudflare official CIDR
+> 最近核验：2026-07-14，migrations `0061`–`0067`、钱包登记、Web/Flutter capability clients 与 governance/media tests
 
-后端授权每一个 staff 操作。Web 按 capability 隐藏导航只是可用性和数据最小化措施，绝不是
+后端授权每一个 staff 操作。Web 或 Flutter 按 capability 隐藏导航只是可用性和数据最小化措施，绝不是
 安全边界。
 
 ## 当前状态
@@ -31,6 +31,9 @@
   higher-role target、要求 reason，并把状态与成功 audit 放在同一事务。
 - 角色变更、suspend/解除 suspend 和管理员强制 session revoke 要求 10 分钟内的
   server-side session recent-auth；密码和 `recent_auth` purpose 邮箱 code 均可验证。
+- 钱包首次公钥登记同样要求当前 revocable session 的 server-side recent-auth。数据库只允许每账号一把
+  active key，同一规范 key 可幂等确认；不同 key 的轮换不能仅靠登录态或 recent-auth，签名 intent 只
+  接受冻结的唯一 active key。Migration `0067` 保留历史 revoked key 供 append-only ledger 验证。
 - 申诉复核使用独立 `appeals.review` capability。moderator/admin 均可读取 lower-role 队列，但原处置
   actor 不能领取，领取后只有同一 reviewer 可通过 optimistic version 提交决定。当前角色层级、self
   和 recusal 在 SQL cursor/limit 之前生效，不通过取页后的内存过滤隐藏空页。
@@ -52,6 +55,10 @@
   JPEG/PNG/WebP，并在 callback 事务中原子写 `media.upload.auto_approved` audit 与 processing job；
   metadata 明确 `contentReview=not_performed`，不记录 object key、URL 或 hash。File/PDF 和不受支持 MIME
   保持 pending，人工审核的 hierarchy/no-self/ADMIN 专用例外不受该 system policy 影响。
+- Flutter 管理中心从服务端 effective capability 构造 section，未知/未授权 deep link fail closed；写入
+  使用生成 API，并在确认层保留 target、impact、reason、expected version、recent-auth、hierarchy/no-self/
+  recusal 提示。它不会把 409/428 或 value-moving/admin mutation 交给通用 retry；这些客户端检查只是
+  减少误操作，每个 handler 仍必须在 mutation transaction 内重新授权并写 audit。
 
 ### Partial
 
@@ -63,6 +70,12 @@
 - 缺双人审批、自动 assignment/recusal workflow、SLA escalation 和明确 retention；申诉的原处置人
   回避、reviewer 绑定与 lower-role 检查已经在服务端生效。
 - 仍有 admin/platform 业务 SQL 位于 api crate，owner/audit 一致性需要持续收敛。
+- Flutter capability/deep-link 和 mutation executor 有 focused widget/unit tests，但没有连接专用 backend
+  的 role/capability/recent-auth/hierarchy integration 或 Android/iOS device journey；管理 surface 在这些
+  证据和读侧 pagination/filter 补齐前仍为 `Partial`。
+- 钱包 key rotation/recovery、异常绑定通知、冷却期和人工恢复的双人审核仍未设计；密钥丢失时新积分
+  写入 fail closed。Migration 无法追溯部署前最新 active key 是否由被盗 session 产生，异常账号需要
+  单独调查，不能把“最新即合法”解释成身份凭证。
 
 ## 当前 capability 基线
 

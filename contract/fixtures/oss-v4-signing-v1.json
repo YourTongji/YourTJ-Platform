@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "description": "Alibaba OSS V4 upload signing vector cross-checked with the repository Web client SDK. Secrets are non-production test values.",
+  "vectors": [
+    {
+      "id": "put-with-sts-and-callback",
+      "accessKeyId": "temporary-id",
+      "accessKeySecret": "temporary-secret",
+      "securityToken": "temporary-token",
+      "region": "cn-shanghai",
+      "bucket": "yourtj-test",
+      "prefix": "uploads/1/image/",
+      "ossKey": "uploads/1/image/主题.png",
+      "callbackUrl": "https://api.example.test/api/v2/media/callback",
+      "callbackBody": "{\"uploadIntentId\":\"intent\",\"ossKey\":${object},\"bytes\":${size},\"mime\":${mimeType},\"sha256\":${x:sha256}}",
+      "contentType": "image/png",
+      "contentSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "requestTime": "2026-07-11T08:09:10Z",
+      "canonicalRequestSha256": "aef55c0ed6bfc97b3b2df12f2d3564c91f68a841c6321cad6eac68f31851cd71",
+      "authorization": "OSS4-HMAC-SHA256 Credential=temporary-id/20260711/cn-shanghai/oss/aliyun_v4_request,Signature=6d94c8315f639ac4bfb4c50517ade794e7cc8a96f8ec400f252fe24b57ae85c6"
+    }
+  ]
+}

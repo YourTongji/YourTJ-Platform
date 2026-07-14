@@ -28,7 +28,9 @@ pub enum IdentityError {
     #[error("public key is not a valid Ed25519 key")]
     InvalidPublicKey,
 
-    #[error("key is already bound to this account")]
+    #[error(
+        "wallet key enrollment conflicts with an existing key; rotation requires recovery proof"
+    )]
     KeyAlreadyBound,
 
     #[error("request too frequent — wait 60 seconds")]

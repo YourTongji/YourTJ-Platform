@@ -18,10 +18,18 @@ use tower_http::set_header::SetResponseHeaderLayer;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
 static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("../../migrations");
+const SINGLE_ACTIVE_WALLET_KEY_MIGRATION: i64 = 67;
+
+#[derive(Debug, Default, PartialEq, Eq)]
+struct StartupOptions {
+    enforce_controlled_wallet_migration: bool,
+    wallet_key_cutover_drained: bool,
+}
 
 /// Full bootstrap: init tracing, load config, connect DB, build and serve.
 pub async fn run() -> anyhow::Result<()> {
     init_tracing();
+    let startup_options = parse_startup_options(std::env::args_os().skip(1))?;
     let config = shared::Config::from_env()?;
 
     // Reject default JWT secret in production.
@@ -32,7 +40,7 @@ pub async fn run() -> anyhow::Result<()> {
     }
 
     let db = sqlx::PgPool::connect(&config.database_url).await?;
-    run_migrations(&db).await?;
+    run_migrations(&db, &startup_options).await?;
     tracing::info!("connected to database");
 
     // Connect Redis (optional — app degrades gracefully if unavailable).
@@ -62,6 +70,13 @@ pub async fn run() -> anyhow::Result<()> {
     // Decode system Ed25519 private key and derive public key.
     let (system_private_key, system_public_key_b64) =
         derive_system_key(&config.credit_system_private_key)?;
+    if startup_options.wallet_key_cutover_drained {
+        let verification = credit::repo::verify_full_ledger(&db, &system_public_key_b64).await?;
+        if !verification.ok {
+            anyhow::bail!("credit ledger verification failed after wallet key cutover");
+        }
+        tracing::info!("credit ledger verified before serving wallet-key cutover");
+    }
 
     // SSE broadcast channel (capacity 128, wrapping).
     let (sse_tx, _sse_rx) = broadcast::channel::<SsePayload>(128);
@@ -375,7 +390,7 @@ fn build_router(state: AppState) -> anyhow::Result<Router> {
         .merge(crate::admin::routes(state.clone()))
         .merge(crate::appeals::routes(state.clone()))
         .merge(crate::account_data::routes(state.clone()))
-        .merge(identity::routes(state.clone()))
+        .merge(identity::routes(state.clone(), std::sync::Arc::new(reviews::LegacyReviewClaimer)))
         .merge(activity::routes(state.clone()))
         .merge(search::routes(state.clone()))
         .merge(courses::routes(state.clone()))
@@ -444,8 +459,45 @@ async fn ready(State(state): State<AppState>) -> shared::AppResult<Json<Value>> 
     })))
 }
 
-async fn run_migrations(pool: &sqlx::PgPool) -> anyhow::Result<()> {
+fn parse_startup_options(
+    arguments: impl IntoIterator<Item = std::ffi::OsString>,
+) -> anyhow::Result<StartupOptions> {
+    let mut options = StartupOptions::default();
+    for argument in arguments {
+        match argument.to_str() {
+            Some("--enforce-controlled-wallet-migration") => {
+                options.enforce_controlled_wallet_migration = true;
+            }
+            Some("--wallet-key-cutover-drained") => {
+                options.wallet_key_cutover_drained = true;
+            }
+            Some(_) | None => anyhow::bail!("unknown api startup argument"),
+        }
+    }
+    if options.wallet_key_cutover_drained && !options.enforce_controlled_wallet_migration {
+        anyhow::bail!("wallet key cutover drain requires controlled migration enforcement");
+    }
+    Ok(options)
+}
+
+async fn run_migrations(
+    pool: &sqlx::PgPool,
+    startup_options: &StartupOptions,
+) -> anyhow::Result<()> {
     baseline_legacy_database(pool).await?;
+    let wallet_migration_applied: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM _sqlx_migrations \
+         WHERE version = $1 AND success = TRUE)",
+    )
+    .bind(SINGLE_ACTIVE_WALLET_KEY_MIGRATION)
+    .fetch_one(pool)
+    .await?;
+    if startup_options.enforce_controlled_wallet_migration
+        && !wallet_migration_applied
+        && !startup_options.wallet_key_cutover_drained
+    {
+        anyhow::bail!("wallet key migration requires a stopped-writer drain before migration 0067");
+    }
     MIGRATOR.run(pool).await?;
     Ok(())
 }
@@ -547,7 +599,7 @@ mod tests {
     use shared::AppState;
     use tower::ServiceExt as _;
 
-    use super::{build_router, legacy_marker_query};
+    use super::{build_router, legacy_marker_query, parse_startup_options, StartupOptions};
 
     fn test_state() -> AppState {
         AppState {
@@ -636,5 +688,27 @@ mod tests {
             Some("SELECT to_regclass('selection.pk_calendars') IS NOT NULL")
         );
         assert_eq!(legacy_marker_query(14), None);
+    }
+
+    #[test]
+    fn wallet_cutover_drain_requires_controlled_migration_enforcement() {
+        let options = parse_startup_options([
+            "--enforce-controlled-wallet-migration".into(),
+            "--wallet-key-cutover-drained".into(),
+        ])
+        .expect("controlled cutover arguments");
+        assert_eq!(
+            options,
+            StartupOptions {
+                enforce_controlled_wallet_migration: true,
+                wallet_key_cutover_drained: true,
+            }
+        );
+
+        assert!(
+            parse_startup_options(["--wallet-key-cutover-drained".into()]).is_err(),
+            "a caller cannot assert drain without enabling the migration guard"
+        );
+        assert!(parse_startup_options(["--unknown".into()]).is_err());
     }
 }

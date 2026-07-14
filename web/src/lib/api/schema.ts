@@ -2335,7 +2335,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Bind a client-generated Ed25519 public key */
+        /**
+         * Enroll the first client-generated Ed25519 public key
+         * @description Requires fresh session-bound authentication. Repeating the canonical active key is idempotent; enrolling a different key while one is active is rejected because key rotation requires a separately designed old-key proof or audited recovery flow.
+         */
         post: {
             parameters: {
                 query?: never;
@@ -2346,18 +2349,23 @@ export interface paths {
             requestBody: {
                 content: {
                     "application/json": {
+                        /** @description Standard base64 encoding of a 32-byte Ed25519 public key */
                         publicKey: string;
                     };
                 };
             };
             responses: {
-                /** @description ok */
+                /** @description enrolled or already the canonical active key */
                 204: {
                     headers: {
                         [name: string]: unknown;
                     };
                     content?: never;
                 };
+                400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
+                409: components["responses"]["Conflict"];
+                428: components["responses"]["RecentAuthRequired"];
             };
         };
         delete?: never;
@@ -2389,10 +2397,7 @@ export interface paths {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": {
-                            challengeId?: string;
-                            nonce?: string;
-                        };
+                        "application/json": components["schemas"]["WalletClaimChallenge"];
                     };
                 };
             };
@@ -6518,9 +6523,7 @@ export interface paths {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": {
-                            count?: number;
-                        };
+                        "application/json": components["schemas"]["NotificationUnreadCount"];
                     };
                 };
             };
@@ -9618,7 +9621,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Rebuild thread */
+        /** Rebuild thread, public user, board, and tag search indices */
         post: {
             parameters: {
                 query?: never;
@@ -11035,9 +11038,9 @@ export interface components {
         };
         /** @description Base cursor-pagination envelope; typed lists override `items`. */
         Page: {
-            items?: Record<string, never>[];
-            nextCursor?: string | null;
-            hasMore?: boolean;
+            items: unknown[];
+            nextCursor: string | null;
+            hasMore: boolean;
         };
         Account: {
             id: string;
@@ -11211,7 +11214,7 @@ export interface components {
         };
         /**
          * Format: uuid
-         * @description Optional first-party UUID v4. The raw value remains in the browser; the server stores only an account-scoped digest and replaces the prior active session for the same installation.
+         * @description Optional first-party UUID v4. The raw value remains on the first-party client; the server stores only an account-scoped digest and replaces the prior active session for the same installation.
          */
         ClientInstallationId: string;
         PasswordSetInput: {
@@ -11400,6 +11403,7 @@ export interface components {
             score?: string | null;
             semester?: string | null;
             authorHandle?: string;
+            /** @description Reserved for a current platform-owned avatar projection. Legacy reviewer-provided remote URLs are never returned; null until Reviews integrates a typed Media projection. */
             authorAvatar?: string | null;
             approveCount?: number;
             /** @enum {string} */
@@ -11443,6 +11447,10 @@ export interface components {
         Wallet: {
             accountId?: string;
             balance?: number;
+        };
+        WalletClaimChallenge: {
+            challengeId: string;
+            nonce: string;
         };
         LedgerEntry: {
             seq?: number;
@@ -11713,26 +11721,27 @@ export interface components {
             name?: string;
         };
         SelectionCourse: {
-            id?: string;
-            code?: string;
-            name?: string;
-            credit?: number;
-            natureId?: string | null;
-            campus?: string | null;
-            teacherName?: string | null;
+            id: string;
+            code: string;
+            name: string;
+            credit: number | null;
+            natureId: string | null;
+            campusId: string | null;
+            teacherName: string | null;
+            teacherNames: string[];
         };
         TimeSlot: {
-            courseId?: string;
-            teacherName?: string | null;
-            weekday?: number;
-            startSlot?: number;
-            endSlot?: number;
-            weeks?: string;
-            location?: string | null;
+            courseId: string;
+            teacherName: string | null;
+            weekday: number;
+            startSlot: number;
+            endSlot: number;
+            weeks: string | null;
+            location: string | null;
         };
         LatestUpdate: {
-            source?: string;
-            fetchedAt?: number;
+            /** Format: date-time */
+            updatedAt: string | null;
         };
         Board: {
             id: string;
@@ -12374,6 +12383,10 @@ export interface components {
         NotificationPage: components["schemas"]["Page"] & {
             items?: components["schemas"]["Notification"][];
         };
+        NotificationUnreadCount: {
+            /** Format: int64 */
+            count: number;
+        };
         AppealPage: components["schemas"]["Page"] & {
             items?: components["schemas"]["Appeal"][];
         };
@@ -12768,9 +12781,9 @@ export interface components {
             checkedIn: boolean;
             /** @description True only when this request created today's check-in. Always false on GET. */
             newlyCheckedIn: boolean;
-            /** @description Unix seconds for today's check-in */
+            /** @description Unix seconds for today's check-in, or null before check-in. */
             checkedInAt: number | null;
-            /** @description Consecutive checked days ending today */
+            /** @description Consecutive checked days ending today, or yesterday before today's check-in. */
             currentStreak: number;
             totalDays: number;
             /** @description Unix seconds for the next Asia/Shanghai midnight. */

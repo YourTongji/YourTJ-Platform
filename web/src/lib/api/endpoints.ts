@@ -81,6 +81,7 @@ import type {
   NotificationOutboxEvent,
   NotificationOutboxState,
   NotificationPreferences,
+  NotificationUnreadCount,
   Page,
   Poll,
   Product,
@@ -109,6 +110,7 @@ import type {
   TimeSlot,
   Upload,
   UploadCredentials,
+  WalletClaimChallenge,
   VerificationGrant,
   VerificationGrantInput,
   VerificationType,
@@ -1020,7 +1022,7 @@ export const api = {
   },
 
   unreadNotificationCount() {
-    return apiRequest<{ count?: number }>("/notifications/unread-count");
+    return apiRequest<NotificationUnreadCount>("/notifications/unread-count");
   },
 
   markNotificationsRead(ids?: string[]) {
@@ -1097,7 +1099,7 @@ export const api = {
   },
 
   claimChallenge() {
-    return apiRequest<{ challengeId?: string; nonce?: string }>("/wallet/claim-challenge");
+    return apiRequest<WalletClaimChallenge>("/wallet/claim-challenge");
   },
 
   claimWallet(body: { legacyUserHash: string; challengeId: string; signature: string }) {

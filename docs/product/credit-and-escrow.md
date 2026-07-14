@@ -6,14 +6,14 @@
 >
 > 负责人：Credit maintainers、Product owner、Security owner
 >
-> 最近核验：2026-07-12，`codex/x-credit-reconciliation`
+> 最近核验：2026-07-14，wallet enrollment、ledger/reconcile 与 Flutter exact-signing/pending-reconciliation 边界
 
 积分是用户贡献产生、只在 YourTJ 内使用的虚拟权益，不是货币。系统不提供充值、提现、法币
 兑换或无理由自由转账。HTTP 结构以 `contract/openapi.yaml` 为准，本规范只定义业务语义。
 
 ## 当前能力与边界
 
-- `Current`：system-signed mint、绑定 Ed25519 公钥、一次性 signing intent、hash-chain ledger、
+- `Current`：system-signed mint、近期认证保护的首次 Ed25519 公钥绑定、一次性 signing intent、hash-chain ledger、
   wallet projection、内容打赏、悬赏任务和商品托管。
 - `Current`：ledger 新写入只允许 `mint`、`tip`、`escrow_hold`、`escrow_release`；应用写路径不能
   update/delete 历史 ledger。
@@ -25,6 +25,26 @@
   mint，撤销成就也不删除、冲销或重写已经产生的 ledger entry。
 - `Partial`：持久结果尚未接告警通知、SLO 和受审批的 projection 重建流程；当前发现异常只留证和
   升级处理，不自动改账。
+- `Partial`：钱包密钥轮换和丢失恢复尚无 old-key proof、双人审核恢复或独立安全事件模型；服务端只允许
+  首次绑定和同一规范公钥的幂等确认。客户端清除或丢失唯一私钥后，value-moving 写入会 fail closed，
+  余额和历史 ledger 不受影响，但不能只凭登录态换绑新钥。
+- `Partial`：Flutter 已用服务端 exact signing bytes 和共享 Ed25519 vector 完成 wallet/task/product/
+  purchase/tip 旅程，并在 value-moving 请求前持久化 account+environment 隔离的待核验记录。成功或
+  确定拒绝会清除；无响应/5xx 时回查 ledger/task/purchase，确认前阻止同一操作创建新 intent。该边界
+  ledger 不确定结果有 unit/fixture 证据；task/purchase reconciliation 尚无独立 focused test，并仍缺真实
+  backend 断线/重启 integration 与 Android/iOS secure-storage/backup 验证。
+
+### 钱包公钥登记
+
+- `/wallet/bind` 必须绑定当前未撤销 session 的 recent-auth；普通 bearer、旧 session 或 appeal/recovery
+  credential 都不能登记公钥。
+- 每个账号最多一把 active key。Migration `0067` 按变更前 signing-intent 的运行事实冻结
+  `created_at DESC, public_key DESC` 的最新 key，把其余历史 key 标记 revoked，并用 partial unique index
+  阻止旧 writer、并发请求或应用缺陷再次产生第二把 active key。历史 key 保留用于 ledger 验证。
+- 相同 Ed25519 bytes 先规范化为标准 base64，再幂等返回；不同 active key 返回 conflict。后续 rotation
+  不能复用这个 endpoint，必须另行设计 old-key 签名或可审计恢复、通知、冷却期和撤销语义。
+- 此迁移无法判断部署前某把现行 key 是否曾由被盗 session 绑定；上线前需要审查异常多 key 账号，
+  可疑账号走人工安全处置，而不是自动猜测真正 owner。
 
 ## 参与者与可见性
 
@@ -76,6 +96,11 @@ stateDiagram-v2
 - ledger append、wallet projection、库存、订单/任务状态和 hold 处理在同一数据库事务提交。
 - API 超时后客户端先重新读取状态；不能盲目生成另一笔 value-moving 请求。相同 intent/idempotency
   key 只对应同一请求。
+- Flutter 的 pending reconciliation 记录写入 Keychain/Keystore-backed storage；它不保存 seed、signature、
+  signing bytes、idempotency key 或原始请求正文，只保存规范请求的 deterministic SHA-256 operation key、action、target、
+  expiry 和可选 ledger baseline。账号切换不删除已经发出的不确定操作，而是把它与新 session 隔离；
+  回到同一 environment+account 后先 reconcile。记录损坏、读写失败或 canonical 状态仍不确定时 fail closed，
+  不能提供“忽略并重试”绕过。
 - reconcile 请求必须带理由与 `Idempotency-Key`；服务端只保存 key hash，相同 operator/key/reason
   返回同一 run，不同 reason 冲突。同一时刻只有一个 queued/running run，数据库 advisory lock
   防止多实例重复扫描；中断后可用理由化 resume 继续同一 run，已经终态的 run 只返回原结果而不会重跑。
@@ -96,6 +121,8 @@ stateDiagram-v2
 - public Product 永不含 delivery instructions；Purchase 仅订单双方可见。
 - list 严格拒绝非法 cursor/limit，并用 `limit + 1` 准确计算 `hasMore`。
 - 每条 value journey 后 ledger verification 通过，wallet projection 与 ledger 重算一致。
+- 非 recent-auth session 不能首次绑定；并发不同 key 只有一把成功，同 key 重试幂等，不同 key 不能
+  仅凭登录态轮换；签名 intent 只使用数据库唯一 active key。
 - 普通用户/moderator 无法运行、列出或读取 reconcile；管理员重复请求幂等，同类并发请求被拒绝。
 - drift、缺 wallet、篡改 ledger 和任务失败均产生可区分的持久状态；任何路径都不改变余额或 ledger。
 - 人工成就授予、撤销和重新授予不产生 pending mint；重复自动贡献授予只产生一个幂等 mint。

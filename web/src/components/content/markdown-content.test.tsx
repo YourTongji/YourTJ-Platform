@@ -4,8 +4,46 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { expectNoAccessibilityViolations } from "@/test/accessibility";
+import type { ForumAttachment } from "@/lib/api/types";
+
+import contentRenderingCorpus from "../../../../contract/fixtures/content-rendering-v1.json";
 
 import { MarkdownContent } from "./markdown-content";
+
+interface ContentRenderingCase {
+  id: string;
+  format: "plain_v1" | "markdown_v1";
+  source: string;
+  repeat?: number;
+  canonical: {
+    accepted: boolean;
+    assetIds: number[];
+  };
+  render: {
+    containsText: string[];
+    excludesText?: string[];
+    textLength?: number;
+    selectorCounts: Record<string, number>;
+  };
+}
+
+const corpus = contentRenderingCorpus as unknown as {
+  schemaVersion: number;
+  cases: ContentRenderingCase[];
+};
+
+function corpusAttachments(testCase: ContentRenderingCase): ForumAttachment[] {
+  return testCase.canonical.assetIds.map((assetId, position) => ({
+    assetId: assetId.toString(),
+    reference: `yourtj-asset:${assetId}`,
+    position,
+    alt: `测试资源 ${assetId}`,
+    url: `https://cdn.example.test/asset-${assetId}.webp`,
+    expiresAt: 4_102_444_800,
+    width: 1200,
+    height: 800,
+  }));
+}
 
 const apiMocks = vi.hoisted(() => ({
   mediaUrl: vi.fn(),
@@ -141,4 +179,47 @@ describe("MarkdownContent", () => {
     await user.click(await screen.findByRole("button", { name: "查看大图：作者预览" }));
     expect(screen.getByRole("dialog", { name: "作者预览" })).toBeVisible();
   });
+});
+
+describe("cross-client content rendering corpus", () => {
+  it.each(corpus.cases.map((testCase) => [testCase.id, testCase] as const))(
+    "%s",
+    (_caseId, testCase) => {
+      expect(corpus.schemaVersion).toBe(1);
+      const source = testCase.source.repeat(testCase.repeat ?? 1);
+      const view = render(
+        <MarkdownContent
+          format={testCase.format}
+          content={source}
+          attachments={corpusAttachments(testCase)}
+        />,
+      );
+
+      for (const text of testCase.render.containsText) {
+        expect(view.container.textContent).toContain(text);
+      }
+      for (const text of testCase.render.excludesText ?? []) {
+        expect(view.container.textContent).not.toContain(text);
+      }
+      if (testCase.render.textLength !== undefined) {
+        expect(view.container.textContent).toHaveLength(testCase.render.textLength);
+      }
+      for (const [selector, count] of Object.entries(testCase.render.selectorCounts)) {
+        expect(view.container.querySelectorAll(selector), selector).toHaveLength(count);
+      }
+
+      expect(
+        view.container.querySelectorAll("script, style, iframe, object, embed, link, meta"),
+      ).toHaveLength(0);
+      for (const anchor of view.container.querySelectorAll("a[href]")) {
+        const href = anchor.getAttribute("href") ?? "";
+        expect(href).toMatch(/^(?:\/(?!\/)|#|https?:\/\/)/);
+        expect(href.toLowerCase()).not.toMatch(/^(?:javascript|data):/);
+      }
+      for (const image of view.container.querySelectorAll("img[src]")) {
+        const src = image.getAttribute("src") ?? "";
+        expect(src).toMatch(/^https:\/\/cdn\.example\.test\/asset-[1-9][0-9]*\.webp$/);
+      }
+    },
+  );
 });

@@ -89,7 +89,25 @@ pub fn verify_signature(payload: &str, signature_b64: &str, public_key_b64: &str
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::Engine as _;
+    use serde::Deserialize;
     use serde_json::json;
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct WalletSigningFixture {
+        vectors: Vec<WalletSigningVector>,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct WalletSigningVector {
+        id: String,
+        seed_hex: String,
+        public_key_base64: String,
+        signing_bytes: String,
+        signature_base64: String,
+    }
 
     #[test]
     fn canonicalize_sorts_keys() {
@@ -151,5 +169,24 @@ mod tests {
         let payload = r#"{"amount":100}"#;
         let sig = sign_payload(payload, seed1_bytes);
         assert!(!verify_signature(payload, &sig, &pk2_b64));
+    }
+
+    #[test]
+    fn matches_cross_client_wallet_signing_vectors() {
+        let fixture: WalletSigningFixture = serde_json::from_str(include_str!(
+            "../../../../contract/fixtures/wallet-signing-v1.json"
+        ))
+        .expect("wallet signing fixture must be valid JSON");
+
+        for vector in fixture.vectors {
+            let seed = hex::decode(&vector.seed_hex).expect("fixture seed must be valid hex");
+            let public_key =
+                base64::engine::general_purpose::STANDARD.encode(derive_public_key(&seed));
+            let signature = sign_with_seed(&vector.signing_bytes, &seed);
+
+            assert_eq!(public_key, vector.public_key_base64, "{}", vector.id);
+            assert_eq!(signature, vector.signature_base64, "{}", vector.id);
+            assert!(verify_signature(&vector.signing_bytes, &signature, &public_key));
+        }
     }
 }

@@ -467,8 +467,63 @@ pub(crate) fn prepare_comment_update(
 
 #[cfg(test)]
 mod tests {
-    use super::{mention_handles, plain_text_projection, validate_format_profile};
+    use serde::Deserialize;
+
+    use super::{
+        mention_handles, plain_text_projection, validate_format_profile, validate_thread_body,
+    };
     use crate::dto::ContentFormat;
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct ContentRenderingCorpus {
+        schema_version: u32,
+        cases: Vec<ContentRenderingCase>,
+    }
+
+    #[derive(Deserialize)]
+    struct ContentRenderingCase {
+        id: String,
+        format: ContentFormat,
+        source: String,
+        repeat: Option<usize>,
+        canonical: CanonicalExpectation,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct CanonicalExpectation {
+        accepted: bool,
+        asset_ids: Vec<i64>,
+    }
+
+    #[test]
+    fn canonical_parser_matches_cross_client_rendering_corpus() {
+        let corpus: ContentRenderingCorpus = serde_json::from_str(include_str!(
+            "../../../../contract/fixtures/content-rendering-v1.json"
+        ))
+        .expect("content rendering corpus must be valid JSON");
+        assert_eq!(corpus.schema_version, 1);
+
+        for test_case in corpus.cases {
+            let source = test_case.source.repeat(test_case.repeat.unwrap_or(1));
+            let result = validate_thread_body(Some(&source), test_case.format);
+            if test_case.canonical.accepted {
+                let references = result.unwrap_or_else(|_| {
+                    panic!("{} must be accepted by the canonical parser", test_case.id)
+                });
+                let asset_ids =
+                    references.into_iter().map(|reference| reference.asset_id).collect::<Vec<_>>();
+                assert_eq!(asset_ids, test_case.canonical.asset_ids, "{}", test_case.id);
+            } else {
+                assert!(
+                    result.is_err(),
+                    "{} must be rejected by the canonical parser",
+                    test_case.id
+                );
+            }
+        }
+    }
 
     #[test]
     fn markdown_profile_rejects_html_images_and_unsafe_links() {

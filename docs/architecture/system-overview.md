@@ -6,19 +6,20 @@
 >
 > 负责人：Platform maintainers
 >
-> 最近核验：2026-07-12，migrations `0060`–`0062`、domain workers 与 ADMIN/委派授权边界
+> 最近核验：2026-07-14，Flutter Android/iOS 真实 API 边界、domain workers 与 ADMIN/委派授权边界
 
-YourTJ 是 Rust/Axum 后端与 React Web 的 monorepo。论坛、课程、评课、选课、积分共享身份和
-PostgreSQL，但每个 domain 仍拥有自己的表、业务规则和 HTTP routes。
+YourTJ 是 Rust/Axum 后端、React Web 与 Flutter Android/iOS 客户端的 monorepo。论坛、课程、评课、
+选课、积分共享身份和 PostgreSQL，但每个 domain 仍拥有自己的表、业务规则和 HTTP routes。
 
 ## 当前运行结构
 
 ```mermaid
 flowchart LR
     accTitle: YourTJ 当前系统结构
-    accDescr: Web 和其他客户端通过 Axum API 访问各领域服务，PostgreSQL 保存业务事实，Redis、Meilisearch 和 OSS 保存可重建投影或媒体对象。
+    accDescr: 当前 Web 与 Partial 状态的 Flutter Android/iOS 客户端共享同一 Axum API；PostgreSQL 保存业务事实，Redis、Meilisearch 和 OSS 保存可重建投影或媒体对象。
 
-    C["Web / iOS / Flutter"] --> A["Axum API gateway"]
+    W["React Web"] --> A["Axum API gateway"]
+    FLC["Flutter Android / iOS (Partial)"] -->|"generated typed client"| A
     A --> I["Identity"]
     A --> F["Forum"]
     A --> R["Reviews"]
@@ -81,6 +82,7 @@ moderation/publication/binding 决定。
 ```text
 backend/                 Rust workspace 与 migrations
 web/                     React + TypeScript Web
+mobile/                  Flutter Android/iOS 客户端
 contract/openapi.yaml    HTTP wire contract
 docs/                    产品、架构、开发、运维与安全规范
 tools/d1/                D1 选课快照导入工具
@@ -88,12 +90,24 @@ tools/d1/                D1 选课快照导入工具
 .agents/skills/          仓库级 Codex 工作流
 ```
 
-iOS 与 Flutter 在独立仓库，只消费 OpenAPI 生成的类型和平台 HTTP 接口。
+`mobile/` 必须与 Web 消费同一 OpenAPI 契约，不拥有服务端业务事实，也不得引入未写入 contract 的私有
+HTTP surface；Dart consumer 由固定版本与校验和的 generator 从 contract 生成，并由 CI 拒绝漂移。历史
+iOS/Flutter 选课客户端仍在独立仓库，仅作为需求研究；当前移动端是 proprietary clean-room 重写，不复制
+FluxDO 或历史客户端的源码、资产、生成文件与 Git 历史。
+
+当前移动端工程已用生成 Dart client 接入身份、首页/推广、论坛/媒体、课程/评课/课程级课表、搜索/
+资料、通知/全局公告、私信、申诉/生命周期、积分和 capability 管理中心；安全 Markdown corpus、
+Ed25519 exact bytes 与 OSS V4 vectors 也已被自动测试消费。这些事实仍整体为 `Partial`：部分后端契约和
+读侧 UX 未闭合，hosted verified-link association、golden、真实环境 integration/device、release signing
+和商店发布证据尚不存在。目录存在、widget test 或无签名编译都不代表移动产品已经上线，逐项状态见
+[Flutter 移动端产品规范](../product/mobile-client.md)。
 
 ## 当前部署与目标架构
 
 - `Current`：GitHub Actions 通过 SSH 把 main 和 PR preview 部署到共享测试服务器；preview 有独立
   路径和后端容器/数据库编排，详见[部署与 PR Preview](../operations/deployment-and-previews.md)。
+- `Partial`：GitHub Actions 对 Flutter 执行格式、静态分析、测试和 Android/iOS 无签名构建；release
+  signing、App Store/应用市场上传、分阶段发布与回滚尚未接入，也不属于现有 server preview。
 - `Target`：Aliyun 华东的无状态容器、PolarDB PostgreSQL、Redis/Tair、Meilisearch、OSS + CDN；
   SAE/SLB/ECS 的最终 IaC 尚未在 `infra/` 落地。
 

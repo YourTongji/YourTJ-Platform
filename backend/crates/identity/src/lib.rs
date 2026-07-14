@@ -6,7 +6,13 @@
 //! - The server stores only Ed25519 *public* keys — never private keys or secrets.
 //! - Old wallets are merged via a signed challenge (`/wallet/claim`), not by import.
 
-use shared::AppState;
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
+
+use axum::extract::FromRef;
+use shared::{AppResult, AppState};
+use sqlx::PgConnection;
 pub mod auth;
 pub mod auth_middleware;
 pub mod credential_state;
@@ -34,8 +40,30 @@ mod models;
 use axum::routing::{delete, get, patch, post};
 use axum::Router;
 
+/// Reviews-owned transaction boundary used by the atomic legacy-wallet claim.
+pub trait LegacyReviewClaimer: Send + Sync {
+    fn claim<'a>(
+        &'a self,
+        connection: &'a mut PgConnection,
+        legacy_user_hash: &'a str,
+        account_id: i64,
+    ) -> Pin<Box<dyn Future<Output = AppResult<u64>> + Send + 'a>>;
+}
+
+#[derive(Clone)]
+pub(crate) struct IdentityState {
+    pub(crate) app: AppState,
+    pub(crate) legacy_review_claimer: Arc<dyn LegacyReviewClaimer>,
+}
+
+impl FromRef<IdentityState> for AppState {
+    fn from_ref(state: &IdentityState) -> Self {
+        state.app.clone()
+    }
+}
+
 /// All routes owned by the identity domain.
-pub fn routes(state: AppState) -> Router {
+pub fn routes(state: AppState, legacy_review_claimer: Arc<dyn LegacyReviewClaimer>) -> Router {
     Router::new()
         // Auth
         .route("/api/v2/auth/email/request-code", post(handlers::request_code))
@@ -102,7 +130,7 @@ pub fn routes(state: AppState) -> Router {
             "/api/v2/admin/account-lifecycle/jobs/{id}/requeue",
             post(handlers::admin::requeue_lifecycle_job),
         )
-        .with_state(state)
+        .with_state(IdentityState { app: state, legacy_review_claimer })
 }
 
 /// Encrypt legacy plaintext identity emails before the application accepts traffic.

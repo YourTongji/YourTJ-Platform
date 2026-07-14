@@ -6,7 +6,7 @@
 >
 > 负责人：Platform maintainers、Domain maintainers
 >
-> 最近核验：2026-07-14，identity installation sessions、durable notification、lifecycle lease fencing 与 Onebox TLS fixture
+> 最近核验：2026-07-14，Web Vitest CI、Flutter 3.44.6 Android/iOS gates 与 backend integration matrix
 
 先跑最小 focused test 获得快速反馈，再按 changed scope 跑与 CI 一致的完整 gate。没有运行的检查
 不能在 PR 或交付中写成通过。
@@ -126,6 +126,50 @@ contrast 或真实 layout 验收。视觉或交互变更至少人工验证 deskt
 Markdown/sanitizer、auth storage 或其他安全关键 browser logic 不能只靠人工 QA；相关 PR 必须先建立
 可重复的最小自动化 test harness，并覆盖 XSS/unsafe URL/resource-limit corpus。
 
+## Flutter gates
+
+Flutter 3.44.6 stable / Dart 3.12.2 是当前 CI toolchain。在 `mobile/` 运行：
+
+```bash
+flutter pub get --enforce-lockfile
+git diff --exit-code -- pubspec.lock
+../scripts/generate_mobile_api.sh
+git diff --exit-code -- packages/yourtj_api
+dart format --output=none --set-exit-if-changed lib test
+flutter analyze --fatal-infos --fatal-warnings
+flutter test
+flutter build apk --debug
+flutter build apk --release
+```
+
+iOS gate 只能在 macOS/Xcode runner 执行，且 CI 不读取个人签名：
+
+```bash
+flutter build ios --debug --no-codesign
+flutter build ios --release --no-codesign
+```
+
+`flutter test` 是当前 unit/widget 总入口；仓库尚无 `mobile/integration_test/` 和已提交 golden，新增后
+必须进入无交互 gate，不能只在开发者机器截图。测试不得访问真实 email、captcha、OSS/CDN 或 production API，
+使用 local fake transport/fixture，并覆盖 loading、empty、error/retry、permission、stale/refetch、账号
+切换、取消和 mutation 冲突。
+
+Dart OpenAPI generator、配置、校验和与生成输出已经落库；CI 执行 regenerate 后以
+`git diff --exit-code -- packages/yourtj_api` 拒绝漂移。consumer 测试仍须覆盖错误 envelope、nullable、
+unknown enum、有界 cursor 和 Unix seconds，不得用手写 DTO 或 dynamic map 规避 contract。Flutter
+renderer 已与 Web/backend 消费同一 Markdown 恶意样例 corpus；Flutter/Credit 已消费同一 Ed25519
+exact-byte fixture，Flutter OSS uploader 也有固定 V4 signing fixture。这些是算法/协议证据，不替代真实
+API、断网/重启、平台 secure storage 或完整用户 journey。
+
+Android 与 iOS 是同一产品矩阵。平台 API、secure storage、deep link、系统返回/前后台、IME、安全区、
+dynamic type、TalkBack/VoiceOver 和 reduced motion 的差异必须有对应 widget/device evidence。当前 CI 的
+无签名编译不等价于真机、商店签名或发布验证；release signing、store upload、rollout 和 rollback 为
+独立受控发布动作。
+
+移动端 PR 还要记录 clean-room provenance：FluxDO 和历史 YourTJ 客户端只作为需求观察来源，不复制
+源码、资产、生成文件或 Git 历史。新增 package 从官方来源解析，并在依赖变化时审查许可证与传递依赖；
+自动化 license/secret scan 尚未接入时必须如实标为未运行。
+
 Forum 图片变更还必须运行 `cargo test -p forum --test forum_media_attachment_tests --
 --test-threads=1`，覆盖 `yourtj-asset` AST/ordered set、owner/usage/clean、stale CAS、revision、
 delete/restore/GC grace；Web 运行 Markdown renderer/editor 与 Forum attachment component tests。测试
@@ -193,6 +237,8 @@ published Markdown/`asset_usages` 或 OSS object inventory；这两项 reconcili
 | Migration | backend gates + fresh migration + affected integration tests |
 | OpenAPI | backend handler tests + generate types + Web gates + contract diff review |
 | Web UI | generate types + Vitest/axe + lint/typecheck/build + desktop/mobile manual QA |
+| Flutter UI/feature | format + analyzer + unit/widget + Android debug/release + iOS debug/release no-codesign build；按行为补 golden/integration/device QA |
+| Flutter API consumer | OpenAPI/handler tests + Web gates + 固定 Dart generation/drift + mapper/error/refresh tests |
 | Cross-stack feature | 全部 backend integration + Web gates + preview journey |
 | Auth/PII/governance | 权限/枚举/重放/审计/retention 负向测试 |
 | Credit | tamper/replay/edge amount/full ledger verification，高保证全套 |
@@ -207,7 +253,7 @@ security 和 operations 都不受影响。
 
 | Suite | 必须覆盖 |
 |---|---|
-| S1 Contract | OpenAPI 可解析、生成类型无 diff、关键错误/分页/unauthorized shape 与 handler 一致 |
+| S1 Contract | OpenAPI 可解析、Web/Dart 生成类型均无 diff；关键错误/分页/unauthorized shape 与 handler 一致 |
 | S2 Identity | 注册/onboarding/当前条款、密码/验证码登录、purpose/replay、找回、credential-version recent-auth race、refresh rotation、session revoke、sanction、停用/删除/恢复、deadline-locked irreversible purge、partial owner failure、dead-letter list/requeue/audit、owner export/grant/lease |
 | S3 Selection data | fresh migration、Raw→catalogue/selection 物化不变量、重复运行、关键 API/search |
 | S4 Reviews | publish idempotency、edit/like/unlike/report/decision、visibility、course-delete restriction |
@@ -216,10 +262,12 @@ security 和 operations 都不受影响。
 | S7 Credit | signing intent、tamper/replay、ledger chain、balance reconciliation、escrow edge states |
 | S8 Search/media | typed federated results、visibility/stale index、reindex；upload intent/callback/scan/binding/delete/GC |
 | S9 Final reconciliation | counters、activity、search、unread、jobs、audit 与 source-of-truth 终态一致 |
+| S10 Mobile parity | Android/iOS 相同 capability matrix；匿名→登录返回、secure refresh、账号隔离、deep link、离线恢复、媒体 expiry、Markdown corpus、wallet signing vectors、动态字体与读屏 |
 
-当前 `crates/e2e` 没有覆盖这张完整矩阵，也未进入 CI；Web 只有最小 component/axe harness，仍没有
-浏览器 suite。不要在文档或 PR
-声称“E2E 完整”。每个功能 PR 先补受影响旅程，平台后续再把 S1–S9 编排成可重复的隔离环境 gate。
+当前 `crates/e2e` 没有覆盖这张完整矩阵，也未进入 CI；Web 只有最小 component/axe harness，Flutter
+有跨 feature unit/widget、共享 corpus/signing fixture 与 build gates，但仍没有真实环境 integration/device
+journey suite。不要在文档或 PR
+声称“E2E 完整”。每个功能 PR 先补受影响旅程，平台后续再把 S1–S10 编排成可重复的隔离环境 gate。
 
 ## PR 记录
 

@@ -1224,22 +1224,15 @@ pub async fn claim_challenge(
 ///
 /// Runs in a single transaction that locks the challenge and legacy wallet
 /// link rows, validates all conditions, then auto-assigns legacy reviews
-/// by `wallet_user_hash`, mints any legacy balance into the credit ledger,
-/// and commits.
-///
-/// NOTE: This handler directly accesses `credit.ledger`, `credit.wallets`,
-/// and `reviews.reviews` — an intentional exception to the domain-boundary
-/// rule. The cross-domain access is architecturally necessary because this
-/// is a one-time legacy-claim flow that must atomically link legacy data
-/// into the new system. The tight coupling is confined to this single
-/// handler and is not used as a precedent for other identity → cross-domain
-/// queries.
-#[tracing::instrument(skip(state, headers))]
+/// by `wallet_user_hash`, appends any legacy balance through Credit's
+/// transaction API, and commits.
+#[tracing::instrument(skip(identity_state, headers, body))]
 pub async fn claim_wallet(
-    State(state): State<AppState>,
+    State(identity_state): State<crate::IdentityState>,
     headers: HeaderMap,
     Json(body): Json<ClaimInput>,
 ) -> AppResult<Json<WalletDto>> {
+    let state = &identity_state.app;
     let auth = crate::auth_middleware::authenticate(
         &headers,
         &state.db,
@@ -1325,32 +1318,15 @@ pub async fn claim_wallet(
     .execute(&mut *tx)
     .await?;
 
-    // Auto-assign legacy reviews (by wallet_user_hash) to the claimed account.
-    let claimed_review_count = sqlx::query(
-        "UPDATE reviews.reviews SET account_id = $1 \
-         WHERE wallet_user_hash = $2 AND account_id IS NULL",
-    )
-    .bind(auth.id)
-    .bind(&body.legacy_user_hash)
-    .execute(&mut *tx)
-    .await?
-    .rows_affected();
-    if claimed_review_count > 0 {
-        tracing::info!(account_id = auth.id, legacy_user_hash = %body.legacy_user_hash,
-            count = claimed_review_count, "claimed legacy reviews");
-    }
+    identity_state.legacy_review_claimer.claim(&mut tx, &body.legacy_user_hash, auth.id).await?;
 
     // If there is a legacy balance, mint points into the credit ledger.
     if link.legacy_balance > 0 {
-        let tx_id = format!("legacy_claim:{}", body.legacy_user_hash);
+        let tx_id = uuid::Uuid::new_v4().to_string();
         let nonce = uuid::Uuid::new_v4().to_string();
         let created_at = Utc::now().timestamp();
-        let metadata = serde_json::json!({
-            "reason": "legacy_wallet_claim",
-            "legacy_user_hash": body.legacy_user_hash,
-        });
+        let metadata = serde_json::json!({ "reason": "legacy_wallet_claim" });
 
-        // Build canonical payload and sign with system key.
         let canonical = credit::ledger::build_ledger_canonical(
             &tx_id,
             "mint",
@@ -1364,71 +1340,38 @@ pub async fn claim_wallet(
         );
         let signature = credit::ledger::sign_with_seed(&canonical, &state.system_private_key);
 
-        // Append mint entry via the shared repo function.
-        let prev_hash: Option<String> =
-            sqlx::query_scalar("SELECT hash FROM credit.ledger ORDER BY seq DESC LIMIT 1")
-                .fetch_optional(&mut *tx)
-                .await?;
-        let prev_hash = prev_hash.unwrap_or_else(|| {
-            "0000000000000000000000000000000000000000000000000000000000000000".to_string()
-        });
-
-        let hash = credit::ledger::compute_hash(&canonical, &prev_hash);
-
-        sqlx::query(
-            "INSERT INTO credit.ledger \
-             (tx_id, type, from_account, to_account, amount, nonce, metadata, \
-              signer, signature, prev_hash, hash) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
+        credit::repo::append_ledger_entry_tx(
+            &mut tx,
+            &tx_id,
+            "mint",
+            None,
+            Some(auth.id),
+            link.legacy_balance,
+            &nonce,
+            Some(&metadata),
+            "system",
+            &signature,
+            created_at,
         )
-        .bind(&tx_id)
-        .bind("mint")
-        .bind(None::<i64>)
-        .bind(auth.id)
-        .bind(link.legacy_balance)
-        .bind(&nonce)
-        .bind(&metadata)
-        .bind("system")
-        .bind(&signature)
-        .bind(&prev_hash)
-        .bind(&hash)
-        .execute(&mut *tx)
-        .await?;
-
-        // Ensure wallet cache exists and update balance.
-        sqlx::query(
-            "INSERT INTO credit.wallets (account_id, balance, last_seq) \
-             VALUES ($1, $2, 0) ON CONFLICT (account_id) DO UPDATE \
-             SET balance = credit.wallets.balance + $2",
-        )
-        .bind(auth.id)
-        .bind(link.legacy_balance)
-        .execute(&mut *tx)
         .await?;
     }
 
     tx.commit().await?;
 
-    // Read the final wallet balance.
-    let balance: i64 =
-        sqlx::query_scalar("SELECT COALESCE(balance, 0) FROM credit.wallets WHERE account_id = $1")
-            .bind(auth.id)
-            .fetch_one(&state.db)
-            .await?;
+    let wallet = credit::repo::get_wallet(&state.db, auth.id).await?;
 
-    Ok(Json(WalletDto { account_id: auth.id.to_string(), balance }))
+    Ok(Json(WalletDto { account_id: wallet.account_id, balance: wallet.balance }))
 }
 
 /// POST /wallet/bind
 ///
-/// Bind an Ed25519 public key (base64-encoded, 32 bytes) to the
-/// authenticated account.
+/// Enroll the first Ed25519 public key for a recently authenticated session.
 pub async fn bind_key(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(body): Json<BindKeyInput>,
 ) -> AppResult<StatusCode> {
-    let auth = crate::auth_middleware::authenticate(
+    let auth = crate::auth_middleware::authenticate_context(
         &headers,
         &state.db,
         &state.jwt_secret,
@@ -1446,7 +1389,9 @@ pub async fn bind_key(
         return Err(IdentityError::InvalidPublicKey.into());
     }
 
-    repo::insert_account_key(&state.db, auth.id, &body.public_key).await?;
+    let canonical_public_key =
+        base64::Engine::encode(&base64::engine::general_purpose::STANDARD, key_bytes);
+    repo::bind_initial_account_key(&state.db, &auth, &canonical_public_key).await?;
 
     Ok(StatusCode::NO_CONTENT)
 }

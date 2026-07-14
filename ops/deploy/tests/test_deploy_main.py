@@ -16,6 +16,7 @@ FAKE_DOCKER = r"""#!/usr/bin/env bash
 set -eu
 state="${FAKE_DOCKER_STATE:?}"
 revision_template='{{index .Config.Labels "org.opencontainers.image.revision"}}'
+printf '%s\n' "$*" >> "${state}/docker-calls"
 
 if [[ "$1" == "container" && "$2" == "inspect" ]]; then
   test -f "${state}/container-$3"
@@ -160,6 +161,12 @@ exit 0
 """
 
 
+FAKE_SLEEP = r"""#!/usr/bin/env bash
+set -eu
+printf '%s\n' "$1" >> "${FAKE_DOCKER_STATE:?}/sleep-calls"
+"""
+
+
 class DeployMainTests(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
@@ -171,6 +178,7 @@ class DeployMainTests(unittest.TestCase):
         self.fake_bin.mkdir()
         self.write_executable(self.fake_bin / "docker", FAKE_DOCKER)
         self.write_executable(self.fake_bin / "curl", FAKE_CURL)
+        self.write_executable(self.fake_bin / "sleep", FAKE_SLEEP)
 
         self.frontend_root = self.root / "releases"
         self.frontend = self.frontend_root / f"{REVISION}-123-1" / "frontend"
@@ -194,6 +202,9 @@ class DeployMainTests(unittest.TestCase):
         self.email_env.write_text("EMAIL_PROVIDER=log\n")
         os.chmod(self.runtime_env, 0o600)
         os.chmod(self.email_env, 0o600)
+        self.wallet_cutover_marker = self.root / "wallet-cutover.complete"
+        self.wallet_cutover_marker.write_text("migration=0067\nrevision=previous\n")
+        os.chmod(self.wallet_cutover_marker, 0o600)
 
         image = tempfile.NamedTemporaryFile(prefix="api-image-main-", suffix=".tar", dir="/tmp", delete=False)
         image.close()
@@ -240,6 +251,7 @@ class DeployMainTests(unittest.TestCase):
         fake_revision: str = REVISION,
         unsafe_preview: int | None = None,
         fail_backend_start: bool = False,
+        cutover_approval: str | None = None,
     ) -> subprocess.CompletedProcess[str]:
         environment = os.environ.copy()
         environment.update(
@@ -248,6 +260,7 @@ class DeployMainTests(unittest.TestCase):
                 "EXPECTED_FRONTEND_ROOT": str(self.frontend_root),
                 "MAIN_RUNTIME_ENV_FILE": str(self.runtime_env),
                 "MAIN_EMAIL_ENV_FILE": str(self.email_env),
+                "WALLET_KEY_CUTOVER_MARKER": str(self.wallet_cutover_marker),
                 "DEPLOY_HEALTH_ATTEMPTS": "2",
                 "DEPLOY_HEALTH_DELAY_SECONDS": "0",
                 "FAKE_DOCKER_STATE": str(self.state),
@@ -269,6 +282,7 @@ class DeployMainTests(unittest.TestCase):
                 REVISION,
                 str(self.verifier),
                 str(self.nginx),
+                cutover_approval or "",
             ],
             env=environment,
             capture_output=True,
@@ -282,7 +296,7 @@ class DeployMainTests(unittest.TestCase):
 
     def test_success_replaces_both_containers(self):
         self.seed_current_containers()
-        result = self.run_deploy()
+        result = self.run_deploy(cutover_approval=REVISION)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue((self.state / "container-main-be").exists())
         self.assertTrue((self.state / "container-main-fe").exists())
@@ -292,6 +306,42 @@ class DeployMainTests(unittest.TestCase):
         self.assertIn("https://media.example.test", rendered_nginx)
         self.assertIn("https://yourtj-media.oss-cn-shanghai.aliyuncs.com", rendered_nginx)
         self.assertNotIn("__MEDIA_", rendered_nginx)
+        docker_calls = (self.state / "docker-calls").read_text()
+        self.assertIn("--enforce-controlled-wallet-migration", docker_calls)
+        self.assertNotIn("--wallet-key-cutover-drained", docker_calls)
+
+    def test_first_wallet_key_cutover_drains_and_records_verified_revision(self):
+        self.seed_current_containers()
+        self.wallet_cutover_marker.unlink()
+
+        result = self.run_deploy(cutover_approval=REVISION)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("draining signing intents for 360s", result.stdout)
+        self.assertIn(
+            "migration and pre-serve ledger verification complete",
+            result.stdout,
+        )
+        self.assertIn("360", (self.state / "sleep-calls").read_text().splitlines())
+        marker = self.wallet_cutover_marker.read_text()
+        self.assertIn("migration=0067", marker)
+        self.assertIn(f"revision={REVISION}", marker)
+        self.assertIn(
+            "--wallet-key-cutover-drained",
+            (self.state / "docker-calls").read_text(),
+        )
+
+    def test_wallet_key_cutover_requires_exact_revision_approval_before_stopping_backend(self):
+        self.seed_current_containers()
+        self.wallet_cutover_marker.unlink()
+
+        result = self.run_deploy(cutover_approval="b" * 40)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("requires approval for the exact deployment revision", result.stderr)
+        self.assertTrue((self.state / "container-main-be").exists())
+        self.assertFalse((self.state / "stopped-main-be").exists())
+        self.assertFalse(self.wallet_cutover_marker.exists())
 
     def test_rejects_runtime_without_strict_email_encryption(self):
         self.runtime_env.write_text(

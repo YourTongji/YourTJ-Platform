@@ -416,6 +416,7 @@ dependencies = [
  "sqlx",
  "thiserror 2.0.18",
  "tokio",
+ "tower",
  "tracing",
  "uuid",
 ]
@@ -1439,6 +1440,7 @@ dependencies = [
  "jsonwebtoken",
  "meilisearch-sdk",
  "redis",
+ "reviews",
  "ring",
  "serde",
  "serde_json",
