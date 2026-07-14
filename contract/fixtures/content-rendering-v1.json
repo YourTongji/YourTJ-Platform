@@ -1,0 +1,130 @@
+{
+  "schemaVersion": 1,
+  "description": "Synthetic cross-client conformance cases for canonical forum content and fail-closed rendering.",
+  "cases": [
+    {
+      "id": "plain-markup-remains-literal",
+      "format": "plain_v1",
+      "source": "**不是粗体**\n<script>alert('plain')</script>\n[危险](javascript:alert(1))\n![远程](https://tracker.example/pixel.png)",
+      "canonical": { "accepted": true, "assetIds": [] },
+      "render": {
+        "containsText": ["**不是粗体**", "<script>alert('plain')</script>", "javascript:alert(1)"],
+        "selectorCounts": { "strong": 0, "script": 0, "a": 0, "img": 0 }
+      }
+    },
+    {
+      "id": "markdown-gfm-and-safe-links",
+      "format": "markdown_v1",
+      "source": "# 规范标题\n\n**粗体** 与 ~~删除线~~\n\n- [x] 已完成\n\n| 列一 | 列二 |\n| --- | --- |\n| A | B |\n\n[站内](/forum/threads/1) [外链](https://example.com/path)",
+      "canonical": { "accepted": true, "assetIds": [] },
+      "render": {
+        "containsText": ["规范标题", "粗体", "删除线", "已完成", "站内", "外链"],
+        "selectorCounts": {
+          "h2": 1,
+          "strong": 1,
+          "del": 1,
+          "table": 1,
+          "input[type='checkbox']": 1,
+          "a[href='/forum/threads/1']": 1,
+          "a[href='https://example.com/path'][target='_blank'][rel='noopener noreferrer nofollow ugc']": 1
+        }
+      }
+    },
+    {
+      "id": "markdown-raw-html-is-rejected-and-skipped",
+      "format": "markdown_v1",
+      "source": "<script>window.evil=1</script><iframe src=\"https://evil.example\"></iframe>\n\n安全文本",
+      "canonical": { "accepted": false, "assetIds": [] },
+      "render": {
+        "containsText": ["安全文本"],
+        "excludesText": ["window.evil=1"],
+        "selectorCounts": { "script": 0, "iframe": 0 }
+      }
+    },
+    {
+      "id": "markdown-javascript-link-has-no-target",
+      "format": "markdown_v1",
+      "source": "[危险链接](javascript:alert(1))",
+      "canonical": { "accepted": false, "assetIds": [] },
+      "render": {
+        "containsText": ["危险链接"],
+        "selectorCounts": { "a": 1, "a[href]": 0 }
+      }
+    },
+    {
+      "id": "markdown-data-link-has-no-target",
+      "format": "markdown_v1",
+      "source": "[数据链接](data:text/html;base64,PHNjcmlwdD4=)",
+      "canonical": { "accepted": false, "assetIds": [] },
+      "render": {
+        "containsText": ["数据链接"],
+        "selectorCounts": { "a": 1, "a[href]": 0 }
+      }
+    },
+    {
+      "id": "markdown-remote-image-never-loads",
+      "format": "markdown_v1",
+      "source": "![跟踪像素](https://tracker.example/pixel.png)",
+      "canonical": { "accepted": false, "assetIds": [] },
+      "render": {
+        "containsText": ["图片当前不可用：跟踪像素"],
+        "selectorCounts": { "[role='img']": 1, "img": 0 }
+      }
+    },
+    {
+      "id": "markdown-data-image-never-loads",
+      "format": "markdown_v1",
+      "source": "![内联图片](data:image/png;base64,AAAA)",
+      "canonical": { "accepted": false, "assetIds": [] },
+      "render": {
+        "containsText": ["图片当前不可用：内联图片"],
+        "selectorCounts": { "[role='img']": 1, "img": 0 }
+      }
+    },
+    {
+      "id": "markdown-platform-image-uses-derived-delivery",
+      "format": "markdown_v1",
+      "source": "![校园风景](yourtj-asset:42)",
+      "canonical": { "accepted": true, "assetIds": [42] },
+      "render": {
+        "containsText": [],
+        "selectorCounts": {
+          "img[src='https://cdn.example.test/asset-42.webp']": 1,
+          "img[src^='yourtj-asset:']": 0
+        }
+      }
+    },
+    {
+      "id": "markdown-noncanonical-asset-id-fails-closed",
+      "format": "markdown_v1",
+      "source": "![畸形资源](yourtj-asset:042)",
+      "canonical": { "accepted": false, "assetIds": [] },
+      "render": {
+        "containsText": ["图片当前不可用：畸形资源"],
+        "selectorCounts": { "[role='img']": 1, "img": 0 }
+      }
+    },
+    {
+      "id": "markdown-malformed-link-remains-text",
+      "format": "markdown_v1",
+      "source": "[未闭合](javascript:alert(1)",
+      "canonical": { "accepted": true, "assetIds": [] },
+      "render": {
+        "containsText": ["[未闭合](javascript:alert(1)"],
+        "selectorCounts": { "a": 0 }
+      }
+    },
+    {
+      "id": "markdown-overlong-source-is-not-canonical",
+      "format": "markdown_v1",
+      "source": "界",
+      "repeat": 50001,
+      "canonical": { "accepted": false, "assetIds": [] },
+      "render": {
+        "containsText": ["界界界"],
+        "textLength": 50001,
+        "selectorCounts": { "p": 1 }
+      }
+    }
+  ]
+}
