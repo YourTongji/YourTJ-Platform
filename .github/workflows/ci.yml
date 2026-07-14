@@ -5,12 +5,16 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
   RUST_LOG: info
   JWT_SECRET: ci-test-secret
   CREDIT_SYSTEM_PRIVATE_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
   PNPM_VERSION: "11.11.0"
+  FLUTTER_VERSION: "3.44.6"
 
 jobs:
   docs:
@@ -115,7 +119,7 @@ jobs:
           DATABASE_URL: postgres://yourtj:yourtj@localhost:5432/yourtj_test
           REDIS_URL: redis://localhost:6379
 
-  # ── Frontend: lint, typecheck, and build ──
+  # ── Web: generated types, tests, lint, typecheck, and build ──
   web:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -138,9 +142,75 @@ jobs:
         run: |
           pnpm run generate:api
           git diff --exit-code
+      - name: tests
+        run: pnpm run test:run
       - name: lint
         run: pnpm run lint
       - name: typecheck
         run: pnpm run typecheck
       - name: build
         run: pnpm run build
+
+  # ── Flutter: shared checks and Android build ──
+  mobile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - name: install dependencies
+        run: |
+          flutter pub get --enforce-lockfile
+          git diff --exit-code -- pubspec.lock
+      - name: verify generated Dart API client
+        run: |
+          ../scripts/generate_mobile_api.sh
+          git diff --exit-code -- packages/yourtj_api
+      - name: format
+        run: dart format --output=none --set-exit-if-changed lib test
+      - name: analyze
+        run: flutter analyze --fatal-infos --fatal-warnings
+      - name: tests
+        run: flutter test
+      - name: build Android debug app
+        run: flutter build apk --debug
+      - name: build Android release app without publication
+        run: flutter build apk --release
+
+  # ── Flutter: iOS compile without repository signing credentials ──
+  mobile-ios:
+    runs-on: macos-latest
+    timeout-minutes: 45
+    needs: [mobile]
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - name: install dependencies
+        run: flutter pub get --enforce-lockfile
+      - name: build iOS debug app
+        run: flutter build ios --debug --no-codesign
+      - name: build iOS release app without publication
+        run: flutter build ios --release --no-codesign

@@ -6,7 +6,7 @@
 >
 > 负责人：Platform maintainers
 >
-> 最近核验：2026-07-11，`origin/main@33584db`
+> 最近核验：2026-07-14，Flutter 3.44.6 Android/iOS local setup
 
 ## 前置工具
 
@@ -14,6 +14,8 @@
 - Rust stable toolchain，workspace MSRV 为 1.80；`backend/rust-toolchain.toml` 安装 rustfmt/clippy
 - Node.js 22
 - pnpm 11.11.0
+- Flutter 3.44.6 stable（包含 Dart 3.12.2）；CI 精确使用该版本
+- JDK 17、Android Studio/Android SDK、可用 emulator 或设备；iOS 开发另需 macOS、Xcode 和 CocoaPods
 - PostgreSQL client/sqlx-cli（运行 migration 与 CI-parity integration tests 时）
 
 ```bash
@@ -21,6 +23,17 @@ cargo install sqlx-cli --no-default-features --features postgres --locked
 corepack enable
 corepack prepare pnpm@11.11.0 --activate
 ```
+
+移动端环境先验证：
+
+```bash
+flutter --version
+flutter doctor -v
+flutter devices
+```
+
+Android 首次安装 SDK 后按 Flutter doctor 指引接受 Android licenses。iOS 只能在 macOS/Xcode 上构建；
+个人 development team、证书和 provisioning profile 不进入仓库，也不应写入共享开发文档或日志。
 
 ## 建立安全工作区
 
@@ -86,6 +99,49 @@ pnpm run dev
 Vite 默认把 `/api` 代理到 `http://localhost:8080`。需要其他 gateway 时使用
 `VITE_API_BASE_URL`；captcha endpoint 用 `VITE_CAPTCHA_URL` 覆盖。
 
+## 启动 Flutter
+
+```bash
+cd mobile
+flutter pub get
+flutter run
+```
+
+使用 `flutter devices` 返回的 id 通过 `flutter run -d <device-id>` 选择 Android emulator、iOS simulator
+或真机。`pubspec.lock` 是应用依赖锁，应随依赖变更提交；不要用全局 package cache、未记录的 path
+dependency 或参考仓库 checkout 让本机“碰巧可编译”。
+
+本机 backend 监听 `127.0.0.1:8080` 时，Android emulator/USB debug device 先反向映射端口，再把完整
+`/api/v2` base 显式传给 App：
+
+```bash
+adb reverse tcp:8080 tcp:8080
+flutter run -d <android-device-id> \
+  --dart-define=YOURTJ_API_BASE_URL=http://127.0.0.1:8080/api/v2 \
+  --dart-define=YOURTJ_MEDIA_CDN_BASE_URL=http://127.0.0.1:8080
+```
+
+iOS Simulator 与 macOS 共享 loopback，可直接运行：
+
+```bash
+flutter run -d <ios-simulator-id> \
+  --dart-define=YOURTJ_API_BASE_URL=http://127.0.0.1:8080/api/v2 \
+  --dart-define=YOURTJ_MEDIA_CDN_BASE_URL=http://127.0.0.1:8080
+```
+
+Android cleartext 与 iOS local-network exception 只服务 debug loopback；release 中 `AppEnvironment` 仍拒绝
+HTTP。未通过 `adb reverse` 的 Android 真机和 iOS 真机不能把电脑的 `127.0.0.1` 当 backend，必须使用
+受控 HTTPS development gateway；不得为方便真机调试放宽 release network policy 或接受任意 HTTP host。
+本地 loopback 图片仍按 fail-closed 不加载；需要验证平台媒体时，显式把
+`YOURTJ_MEDIA_CDN_BASE_URL` 设为与后端 `MEDIA_CDN_BASE_URL` 一致的受控 HTTPS origin，不能使用通配域名。
+
+OpenAPI 变化后先在仓库根目录运行 `scripts/generate_mobile_api.sh`；脚本固定 OpenAPI Generator 版本与
+校验和，并原子更新 `mobile/packages/yourtj_api`。Flutter 当前仍为 `Partial`：typed client 和主要普通/
+管理旅程已接真实 API，但后端契约、golden/integration/device、verified link 与 release 证据仍按产品
+矩阵逐项验收，不能因页面可达或 debug build 成功就描述为完整 Web parity。
+access/refresh token、钱包 seed 或其他 secret 不通过
+`--dart-define`、源码、普通本地文件或日志注入。
+
 ## Local provider 行为
 
 - Email 默认 `log`，只记录 redacted metadata，不发送真实 code。
@@ -128,3 +184,9 @@ docker compose down -v
   不篡改 migration ledger。
 - **Integration test 相互干扰**：使用 `yourtj_test` 并按 CI 串行运行。
 - **生成类型有 diff**：contract 或 generated schema 漂移；提交正确生成文件，不手改 schema.ts。
+- **Flutter/Dart 版本不匹配**：确认 `flutter --version` 为 3.44.6 stable；升级要同时更新 CI pin、
+  `pubspec.lock`、本指南并跑 Android/iOS gates。
+- **Android licenses/SDK 缺失**：以 `flutter doctor -v` 为准修复 SDK component，不提交
+  `android/local.properties`。
+- **iOS CocoaPods/Xcode 错误**：先确认 Xcode command-line tools 和 CocoaPods 可用；不要通过提交
+  `Generated.xcconfig`、个人签名或 DerivedData 修复。

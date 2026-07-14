@@ -11,12 +11,14 @@ implementation, testing, review, CI, or PR work.
 
 ## 1. What this is
 
-YourTJ Platform is the unified backend + web monorepo for a **campus community
+YourTJ Platform is the unified backend + Web + Flutter monorepo for a **campus community
 platform**. The forum is the headline product; course selection (选课), course
 reviews (评课), and the Web2.5 points system (积分) are sub-domains that share one
-identity, one database, and one deployment.
+identity, one database, and one backend deployment. Mobile store releases are separate controlled
+publication actions, not part of the server deploy.
 
 - Backend: **Rust** — Axum + Tokio, a Cargo workspace split by domain.
+- Web: **React + TypeScript**. Mobile: **Flutter**, with Android and iOS as equal supported targets.
 - Database: **PolarDB** (PostgreSQL-compatible), one schema per domain.
 - Search: **Meilisearch**. Cache/counters/rate-limit/hot-rank: **Redis**. Media: **OSS + CDN**.
 - Current deploy: GitHub Actions deploy PR previews and main staging to the shared test server.
@@ -26,8 +28,9 @@ identity, one database, and one deployment.
   used only to sign money operations.
 - Points: **Web2.5 closed-loop** — central ledger + Ed25519 signatures + hash chain.
 
-iOS and Flutter clients live in **separate repos** and consume types generated from
-`contract/openapi.yaml`. They are not in this monorepo.
+The current Flutter client lives in `mobile/`; every HTTP surface it implements must consume types
+generated from `contract/openapi.yaml`. Historical iOS and course-selection Flutter clients remain in
+separate repositories as product references; they are not part of the current application or its source tree.
 
 ---
 
@@ -48,6 +51,9 @@ backend/crates/
   search/     typed federated search orchestration; owns no business tables.
   shared/     config, the AppError type, pagination. Dependency-light; compiled by everyone.
   e2e/        executable cross-domain journey-test harness; never production business logic.
+web/          React + TypeScript browser client.
+mobile/       Flutter Android/iOS client.
+contract/     OpenAPI wire contract shared by every first-party client.
 ```
 
 **Boundary rules**
@@ -74,8 +80,9 @@ only normal schema runner.
 
 1. Run `python3 scripts/check_docs.py` and `git diff --check` for every change.
 2. Run the scope-appropriate CI-parity commands in
-   [`docs/development/testing.md`](docs/development/testing.md); docs-only work does not need cargo/npm.
-3. HTTP changes update OpenAPI first, regenerate Web types, update consumers, and add contract/handler tests.
+   [`docs/development/testing.md`](docs/development/testing.md); docs-only work does not need cargo/pnpm/Flutter.
+3. HTTP changes update OpenAPI first, regenerate Web and checked-in Dart types, update consumers,
+   and add contract/handler/client tests. Both generators must leave the worktree clean.
 4. Schema changes add a **new** migration, pass a fresh-database up-path, and document rollout/backfill.
 5. User behavior, security/privacy, config, deployment, or developer workflow changes update their
    canonical documents in the same PR.
@@ -248,6 +255,9 @@ let account = repo.find(id).await.unwrap().unwrap();
 - Tests must be process-safe. Do not assume shared static state, global counters, or
   filesystem paths that are unique within-process but collide across processes.
   Use random prefixes for temp paths when needed.
+- Flutter changes run format, analyzer with warnings as errors, unit/widget tests, and the
+  scope-appropriate Android/iOS build. Golden, integration, and generated-client drift checks are added
+  with the feature they protect; do not claim those gates exist before they are wired into CI.
 
 ### 4.14 Dependencies
 - Pin versions in the workspace `[workspace.dependencies]`; crates reference them with
@@ -278,7 +288,25 @@ let account = repo.find(id).await.unwrap().unwrap();
 - Avoid N+1 queries; batch. Measure before optimizing further — current scale is small,
   correctness and latency-to-campus matter more than micro-throughput.
 
-### 4.16 Documentation
+### 4.16 Mobile / Flutter
+- `mobile/` is one Flutter application for Android and iOS. A feature is not complete when only one
+  platform builds or when platform-specific behavior is silently omitted.
+- CI uses Flutter 3.44.6 stable / Dart 3.12.2. Keep `pubspec.lock` committed and update the CI pin,
+  local-development guide, and dependency impact together when changing the toolchain.
+- The mobile HTTP layer is generated from `contract/openapi.yaml` with
+  `scripts/generate_mobile_api.sh`; never hand-copy DTOs or add a mobile-only endpoint. JSON remains camelCase
+  and timestamps remain Unix seconds. CI regenerates the checked-in package and rejects drift.
+- FluxDO and historical YourTJ clients are clean-room product references only. Do not copy their source,
+  assets, generated files, or repository history. Any code reuse needs an explicit, recorded license and
+  copyright decision first; obtain dependencies from their official package sources.
+- Adapt Web capability and state semantics to native phone/tablet navigation; pixel-copying desktop rails,
+  tables, hover behavior, or dialogs is not parity. Follow
+  [`docs/product/mobile-client.md`](docs/product/mobile-client.md).
+- Access credentials and Ed25519 private material use account-scoped iOS Keychain/Android Keystore-backed
+  storage. Never downgrade to shared preferences, SQLite, files, logs, or analytics. Wallet writes sign the
+  exact bytes supplied by the server and are never retried as ordinary idempotent HTTP calls.
+
+### 4.17 Documentation
 - Every public item gets a rustdoc line saying what it does and any invariant it upholds.
   Skip the doc when the name and signature already make the purpose obvious.
 - Module-level `//!` docs state the domain's responsibility and its hard rules (see the
@@ -331,7 +359,7 @@ legal boundary, not a preference.
 
 ### API contract
 The HTTP surface is owned by `contract/openapi.yaml`. Change the contract first, then
-implement, regenerate Web types, update consumers, and test. A route that isn't in the
+implement, regenerate Web and any checked-in Dart types, update consumers, and test. A route that isn't in the
 contract is not done.
 
 ### Migrations

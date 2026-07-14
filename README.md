@@ -8,6 +8,7 @@
   <img src="https://img.shields.io/badge/PostgreSQL-PolarDB-336791?style=flat-square&logo=postgresql&logoColor=white" alt="PostgreSQL">
   <img src="https://img.shields.io/badge/Redis-DC382D?style=flat-square&logo=redis&logoColor=white" alt="Redis">
   <img src="https://img.shields.io/badge/Search-Meilisearch-FF5C83?style=flat-square" alt="Meilisearch">
+  <img src="https://img.shields.io/badge/Flutter-3.44.6-02569B?style=flat-square&logo=flutter&logoColor=white" alt="Flutter 3.44.6">
   <img src="https://img.shields.io/badge/license-Proprietary-lightgrey?style=flat-square" alt="License">
 </p>
 
@@ -15,8 +16,9 @@
 
 同济大学校园社区平台：论坛为核心，选课、评课与闭环积分共享身份、数据和治理能力。
 
-> **YourTJ 产品矩阵**： [iOS](https://github.com/YourTongji/YourTJCourse-iOS) ·
-> [Flutter](https://github.com/YourTongji/YourTJCourse-Flutter) ·
+> **YourTJ 产品矩阵**： [当前 Flutter Android/iOS 客户端](mobile/) ·
+> [历史 iOS 选课客户端](https://github.com/YourTongji/YourTJCourse-iOS) ·
+> [历史 Flutter 选课客户端](https://github.com/YourTongji/YourTJCourse-Flutter) ·
 > [旧版 Serverless](https://github.com/YourTongji/YourTJCourse-Serverless) ·
 > [HomePage](https://github.com/YourTongji/YourTJ-HomePage)
 
@@ -40,11 +42,17 @@ backend/
   migrations/    Append-only PostgreSQL migrations
   ops/           可重放物化脚本
 web/              React + TypeScript Web
+mobile/           Flutter Android/iOS 客户端
 contract/         OpenAPI wire contract
 docs/             产品、架构、开发、运维与安全规范
 tools/d1/         Cloudflare D1 选课快照导入工具
 .agents/skills/   仓库级 Codex 工作流
 ```
+
+`mobile/` 是 proprietary clean-room 实现。FluxDO 和历史 YourTJ 客户端只用于观察产品需求与交互，
+它们的源码、资产、生成文件和 Git 历史不会复制进本仓库；任何未来代码复用都必须先有明确的许可证与
+版权授权记录。移动端当前状态和 Web 对齐范围见
+[Flutter 移动端产品规范](docs/product/mobile-client.md)。
 
 ## 文档
 
@@ -79,6 +87,19 @@ pnpm run generate:api
 pnpm run dev
 ```
 
+启动 Flutter 客户端（Flutter 3.44.6 stable / Dart 3.12.2）：
+
+```bash
+cd mobile
+flutter pub get --enforce-lockfile
+../scripts/generate_mobile_api.sh
+flutter run
+```
+
+生成脚本固定并校验 OpenAPI Generator，产物位于 `mobile/packages/yourtj_api`。客户端仍为 `Partial`；
+主要普通/管理旅程已接真实 API，但逐项后端契约与 golden/integration/device/release 证据仍以移动端
+产品规范的 19 项矩阵为准。
+
 详细前置工具、测试数据库和 provider 行为见[本地环境](docs/development/local-development.md)。
 
 ## 提交前
@@ -93,12 +114,28 @@ cargo test --lib
 
 cd ../web
 pnpm run generate:api
+pnpm run test:run
 pnpm run lint
 pnpm run typecheck
 pnpm run build
+
+cd ../mobile
+flutter pub get --enforce-lockfile
+git diff --exit-code -- pubspec.lock
+../scripts/generate_mobile_api.sh
+git diff --exit-code -- packages/yourtj_api
+dart format --output=none --set-exit-if-changed lib test
+flutter analyze --fatal-infos --fatal-warnings
+flutter test
+flutter build apk --debug
+flutter build apk --release
+# macOS/Xcode only
+flutter build ios --debug --no-codesign
+flutter build ios --release --no-codesign
 ```
 
-Database integration tests 需要专用测试库并串行运行，完整 CI-parity 命令见测试文档。
+Database integration tests 需要专用测试库并串行运行；iOS build 需要 macOS/Xcode。完整 CI-parity
+命令见测试文档。
 
 ---
 

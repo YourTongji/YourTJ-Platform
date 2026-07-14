@@ -6,7 +6,7 @@
 >
 > 负责人：Forum/Web/Platform maintainers、Community operations、Privacy owner
 >
-> 最近核验：2026-07-12，migration `0054`、Forum/Platform notification tests 与 Web announcement auth-state tests
+> 最近核验：2026-07-14，migration `0054`、Web/Flutter announcement gates 与 notification/DM clients
 
 通知告诉用户“发生了什么”，公告传达平台级信息，私信承载参与者之间的非公开交流。三者都
 涉及未读、实时、偏好和保留，但必须保持各自的权限和证据边界。
@@ -54,6 +54,10 @@
 - 全局公告队列等待 Auth Provider 完成账号/session 初始化并确认 onboarding 可进入应用后才挂载；loading
   期间不先按匿名 local seen 读取再切到登录 receipt，避免同一 revision 闪现、漏记或重复展示。真正匿名
   状态确认后才使用本地 seen；登录/退出后的下一次 mount 重新选择对应事实源。
+- Flutter 的全局 gate 遵循同一顺序：按 session generation + account 取消旧队列，只在 dialog 完成可见
+  渲染后记录 seen，登录用户回写服务端 receipt，匿名 visitor 使用 environment+revision 隔离的本地 seen；
+  App resume 会重新拉取 canonical queue。身份切换过程中已经打开的旧账号 dialog 会关闭，迟到请求不能
+  向新账号写 receipt。该行为有 widget test，但尚无 Android/iOS device journey。
 - 私信有 canonical 1:1 conversation、分页 inbox/messages、单调 read pointer、准确未读、
   block/sanction/trust 检查、单条举报和受限 staff evidence。
 - 私信支持 participant-local archive/unarchive、可恢复删除、会话搜索和 mute；新消息会让双方的归档/
@@ -73,6 +77,9 @@
   当前实现提供机制，不替代政策决定。
 - `presentation` 已进入 contract、数据库和后台，但 Web 目前在公告页统一以 card 展示；全站 persistent
   banner 及其占位、关闭和无障碍行为仍需单独完成。
+- Flutter 已接普通/治理通知列表、合并 badge、mark-read、偏好、DM/公告消息中心与 resume 回源，但尚未
+  消费 notifications/DM SSE；公告历史页只消费 active 列表，contract 没有为普通用户提供已结束公告历史。
+  全局 gate、target authorization、账号切换和 master-detail 仍缺真实环境 integration/device 证据。
 - 私信仍缺附件、typing/presence、消息撤回、request expiry 和 retention/legal-hold worker。
 
 ## 通知模型
