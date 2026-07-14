@@ -6,7 +6,7 @@
 >
 > 负责人：Platform maintainers
 >
-> 最近核验：2026-07-11，`origin/main@33584db`
+> 最近核验：2026-07-14，Flutter 移动端产品规范与 monorepo 边界
 
 这里是 YourTJ 产品、架构、开发、运维与安全规范的统一入口。Git 历史承担归档职责；
 已经失真的阶段计划、PR 交付清单和重复的 API/DDL 快照不在当前文档树中长期保留。
@@ -51,6 +51,7 @@
 - [成熟社区能力模型](product/community-capability-model.md)
 - [当前能力、缺口与路线图](product/current-state-and-roadmap.md)
 - [设计系统与无障碍](product/design-system-and-accessibility.md)
+- [Flutter 移动端产品规范](product/mobile-client.md)
 - [身份、登录与账号生命周期](product/identity-and-access.md)
 - [个人资料、社交图与隐私](product/social-profile-and-privacy.md)
 - [内容、媒体与发现](product/content-media-and-discovery.md)
