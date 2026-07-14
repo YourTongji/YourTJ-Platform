@@ -64,6 +64,7 @@
 
 - [系统概览与域边界](architecture/system-overview.md)
 - [契约、数据与派生投影](architecture/contracts-and-data.md)
+- [Flutter 移动端架构与信任边界](architecture/mobile-client.md)
 
 ### 开发
 
