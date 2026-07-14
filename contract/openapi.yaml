@@ -930,25 +930,32 @@ components:
     CourseNature: { type: object, properties: { id: { type: string }, name: { type: string } } }
     SelectionCourse:
       type: object
+      required: [id, code, name, credit, natureId, campusId, teacherName, teacherNames]
       properties:
         id: { type: string }
         code: { type: string }
         name: { type: string }
-        credit: { type: number }
+        credit: { type: number, nullable: true }
         natureId: { type: string, nullable: true }
-        campus: { type: string, nullable: true }
+        campusId: { type: string, nullable: true }
         teacherName: { type: string, nullable: true }
+        teacherNames: { type: array, items: { type: string } }
     TimeSlot:
       type: object
+      required: [courseId, teacherName, weekday, startSlot, endSlot, weeks, location]
       properties:
         courseId: { type: string }
         teacherName: { type: string, nullable: true }
         weekday: { type: integer }
         startSlot: { type: integer }
         endSlot: { type: integer }
-        weeks: { type: string }
+        weeks: { type: string, nullable: true }
         location: { type: string, nullable: true }
-    LatestUpdate: { type: object, properties: { source: { type: string }, fetchedAt: { type: integer } } }
+    LatestUpdate:
+      type: object
+      required: [updatedAt]
+      properties:
+        updatedAt: { type: string, format: date-time, nullable: true }
 
     # ---- forum (F1) ----
     Board:
@@ -2114,8 +2121,8 @@ components:
         date: { type: string, format: date }
         checkedIn: { type: boolean }
         newlyCheckedIn: { type: boolean, description: True only when this request created today's check-in. Always false on GET. }
-        checkedInAt: { type: integer, nullable: true, description: Unix seconds for today's check-in, or null before check-in. }
-        currentStreak: { type: integer, minimum: 0, description: Consecutive checked days ending today, or yesterday before today's check-in. }
+        checkedInAt: { type: integer, nullable: true, description: "Unix seconds for today's check-in, or null before check-in." }
+        currentStreak: { type: integer, minimum: 0, description: "Consecutive checked days ending today, or yesterday before today's check-in." }
         totalDays: { type: integer, minimum: 0 }
         nextResetAt: { type: integer, description: Unix seconds for the next Asia/Shanghai midnight. }
     TrustProgress:
@@ -4072,7 +4079,6 @@ paths:
           description: Existing sanitized variant to project; defaults to display_1280 for backward compatibility.
           schema:
             allOf: [{ $ref: "#/components/schemas/MediaDeliveryVariant" }]
-            default: display_1280
       responses:
         "200": { description: short-lived CDN projection, content: { application/json: { schema: { $ref: "#/components/schemas/MediaDelivery" } } } }
         "400": { $ref: "#/components/responses/BadRequest" }
@@ -4898,7 +4904,7 @@ paths:
   /admin/reviews/reindex:
     post: { tags: [admin], summary: Rebuild the Meilisearch review index, requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/AdminReasonInput" } } } }, responses: { "202": { description: queued } } }
   /admin/forum/reindex:
-    post: { tags: [admin], summary: Rebuild thread, public user, board, and tag search indices, requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/AdminReasonInput" } } } }, responses: { "202": { description: queued } } }
+    post: { tags: [admin], summary: "Rebuild thread, public user, board, and tag search indices", requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/AdminReasonInput" } } } }, responses: { "202": { description: queued } } }
   /admin/forum/boards:
     post: { tags: [admin], summary: Create board, requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/AdminBoardCreateInput" } } } }, responses: { "201": { description: created, content: { application/json: { schema: { $ref: "#/components/schemas/Board" } } } } } }
   /admin/forum/boards/{id}:

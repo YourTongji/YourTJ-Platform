@@ -179,18 +179,9 @@ export type Campus = Schema["Campus"];
 export type CourseNature = Schema["CourseNature"];
 export type Faculty = Schema["Faculty"];
 export type Major = Schema["Major"];
-export type SelectionCourse = Schema["SelectionCourse"] & {
-  credit?: number | null;
-  campusId?: string | null;
-  teacherNames?: string[];
-};
-export type TimeSlot = Schema["TimeSlot"] & {
-  weeks?: string | null;
-  location?: string | null;
-};
-export type LatestUpdate = Schema["LatestUpdate"] & {
-  updatedAt?: string | null;
-};
+export type SelectionCourse = Schema["SelectionCourse"];
+export type TimeSlot = Schema["TimeSlot"];
+export type LatestUpdate = Schema["LatestUpdate"];
 
 export type PollOption = Schema["PollOption"];
 export type Poll = Schema["Poll"];

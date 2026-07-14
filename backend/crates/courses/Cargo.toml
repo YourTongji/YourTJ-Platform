@@ -26,4 +26,5 @@ governance.workspace = true
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt"] }
 axum = { workspace = true, features = ["macros"] }
+tower.workspace = true
 uuid.workspace = true

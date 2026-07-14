@@ -9618,7 +9618,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Rebuild thread */
+        /** Rebuild thread, public user, board, and tag search indices */
         post: {
             parameters: {
                 query?: never;
@@ -11713,26 +11713,27 @@ export interface components {
             name?: string;
         };
         SelectionCourse: {
-            id?: string;
-            code?: string;
-            name?: string;
-            credit?: number;
-            natureId?: string | null;
-            campus?: string | null;
-            teacherName?: string | null;
+            id: string;
+            code: string;
+            name: string;
+            credit: number | null;
+            natureId: string | null;
+            campusId: string | null;
+            teacherName: string | null;
+            teacherNames: string[];
         };
         TimeSlot: {
-            courseId?: string;
-            teacherName?: string | null;
-            weekday?: number;
-            startSlot?: number;
-            endSlot?: number;
-            weeks?: string;
-            location?: string | null;
+            courseId: string;
+            teacherName: string | null;
+            weekday: number;
+            startSlot: number;
+            endSlot: number;
+            weeks: string | null;
+            location: string | null;
         };
         LatestUpdate: {
-            source?: string;
-            fetchedAt?: number;
+            /** Format: date-time */
+            updatedAt: string | null;
         };
         Board: {
             id: string;
@@ -12768,9 +12769,9 @@ export interface components {
             checkedIn: boolean;
             /** @description True only when this request created today's check-in. Always false on GET. */
             newlyCheckedIn: boolean;
-            /** @description Unix seconds for today's check-in */
+            /** @description Unix seconds for today's check-in, or null before check-in. */
             checkedInAt: number | null;
-            /** @description Consecutive checked days ending today */
+            /** @description Consecutive checked days ending today, or yesterday before today's check-in. */
             currentStreak: number;
             totalDays: number;
             /** @description Unix seconds for the next Asia/Shanghai midnight. */

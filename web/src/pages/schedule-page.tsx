@@ -226,7 +226,7 @@ export function SchedulePage() {
                 选课上下文
               </CardTitle>
               <CardDescription>
-                最近同步：{formatDate(latest.data?.updatedAt ?? latest.data?.fetchedAt ?? null)}
+                最近同步：{formatDate(latest.data?.updatedAt ?? null)}
               </CardDescription>
             </CardHeader>
             <CardContent className="grid gap-3 md:grid-cols-3">
