@@ -111,9 +111,10 @@ export type CreditReconciliationRun = Schema["CreditReconciliationRun"];
 export type CreditReconciliationStats = Schema["CreditReconciliationStats"];
 export type CreditReconciliationWallet = Schema["CreditReconciliationWallet"];
 export type Notification = Schema["Notification"];
-export type NotificationPreferences = Schema["NotificationPreferences"];
 export type NotificationOutboxEvent = Schema["NotificationOutboxEvent"];
 export type NotificationOutboxState = NotificationOutboxEvent["state"];
+export type NotificationPreferences = Schema["NotificationPreferences"];
+export type NotificationUnreadCount = Schema["NotificationUnreadCount"];
 export type Product = Schema["Product"];
 export type Promotion = Schema["Promotion"];
 export type PromotionCreateInput = Schema["PromotionCreateInput"];
@@ -173,6 +174,7 @@ export interface WatchedWordInput {
   reason: string;
 }
 export type Wallet = Schema["Wallet"];
+export type WalletClaimChallenge = Schema["WalletClaimChallenge"];
 
 export type Calendar = Schema["Calendar"];
 export type Campus = Schema["Campus"];
@@ -209,9 +211,9 @@ export interface AdminForumFlag {
 }
 
 export interface Page<T> {
-  items?: T[];
-  nextCursor?: string | null;
-  hasMore?: boolean;
+  items: T[];
+  nextCursor: string | null;
+  hasMore: boolean;
 }
 
 export interface ApiErrorBody {

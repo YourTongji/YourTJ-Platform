@@ -2389,10 +2389,7 @@ export interface paths {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": {
-                            challengeId?: string;
-                            nonce?: string;
-                        };
+                        "application/json": components["schemas"]["WalletClaimChallenge"];
                     };
                 };
             };
@@ -6518,9 +6515,7 @@ export interface paths {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": {
-                            count?: number;
-                        };
+                        "application/json": components["schemas"]["NotificationUnreadCount"];
                     };
                 };
             };
@@ -11035,9 +11030,9 @@ export interface components {
         };
         /** @description Base cursor-pagination envelope; typed lists override `items`. */
         Page: {
-            items?: Record<string, never>[];
-            nextCursor?: string | null;
-            hasMore?: boolean;
+            items: unknown[];
+            nextCursor: string | null;
+            hasMore: boolean;
         };
         Account: {
             id: string;
@@ -11211,7 +11206,7 @@ export interface components {
         };
         /**
          * Format: uuid
-         * @description Optional first-party UUID v4. The raw value remains in the browser; the server stores only an account-scoped digest and replaces the prior active session for the same installation.
+         * @description Optional first-party UUID v4. The raw value remains on the first-party client; the server stores only an account-scoped digest and replaces the prior active session for the same installation.
          */
         ClientInstallationId: string;
         PasswordSetInput: {
@@ -11443,6 +11438,10 @@ export interface components {
         Wallet: {
             accountId?: string;
             balance?: number;
+        };
+        WalletClaimChallenge: {
+            challengeId: string;
+            nonce: string;
         };
         LedgerEntry: {
             seq?: number;
@@ -12374,6 +12373,10 @@ export interface components {
         };
         NotificationPage: components["schemas"]["Page"] & {
             items?: components["schemas"]["Notification"][];
+        };
+        NotificationUnreadCount: {
+            /** Format: int64 */
+            count: number;
         };
         AppealPage: components["schemas"]["Page"] & {
             items?: components["schemas"]["Appeal"][];
