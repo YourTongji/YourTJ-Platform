@@ -34,6 +34,12 @@ class Review {
 
     this.approveCount,
 
+    required this.viewerLiked,
+
+    required this.canEdit,
+
+    required this.canReport,
+
     this.status,
 
     this.createdAt,
@@ -67,6 +73,18 @@ class Review {
   @JsonKey(name: r'approveCount', required: false, includeIfNull: false)
   final int? approveCount;
 
+  /// Whether the authenticated viewer currently likes this review; false for anonymous viewers.
+  @JsonKey(name: r'viewerLiked', required: true, includeIfNull: false)
+  final bool viewerLiked;
+
+  /// Server-authoritative permission for the current viewer to edit this review.
+  @JsonKey(name: r'canEdit', required: true, includeIfNull: false)
+  final bool canEdit;
+
+  /// Server-authoritative permission for the current viewer to report this review.
+  @JsonKey(name: r'canReport', required: true, includeIfNull: false)
+  final bool canReport;
+
   @JsonKey(
     name: r'status',
     required: false,
@@ -91,6 +109,9 @@ class Review {
           other.authorHandle == authorHandle &&
           other.authorAvatar == authorAvatar &&
           other.approveCount == approveCount &&
+          other.viewerLiked == viewerLiked &&
+          other.canEdit == canEdit &&
+          other.canReport == canReport &&
           other.status == status &&
           other.createdAt == createdAt;
 
@@ -105,6 +126,9 @@ class Review {
       authorHandle.hashCode +
       (authorAvatar == null ? 0 : authorAvatar.hashCode) +
       approveCount.hashCode +
+      viewerLiked.hashCode +
+      canEdit.hashCode +
+      canReport.hashCode +
       status.hashCode +
       createdAt.hashCode;
 

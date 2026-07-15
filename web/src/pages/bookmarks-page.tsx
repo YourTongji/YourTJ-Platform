@@ -1,38 +1,26 @@
-import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
-import { toast } from "sonner";
 
 import { PageHeader } from "@/components/common/page-header";
 import { EmptyState, ErrorState, LoadingState } from "@/components/common/states";
+import { useForumBookmarkMutation } from "@/components/forum/use-forum-interactions";
 import { ProfilePostCard } from "@/components/profile/profile-post-card";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/context/auth-provider";
 import { api } from "@/lib/api/endpoints";
 import { formatRelativeTime } from "@/lib/format";
+import { forumQueryKeys } from "@/lib/forum-query-keys";
 
 export function BookmarksPage() {
   const { isAuthenticated } = useAuth();
-  const queryClient = useQueryClient();
   const bookmarks = useInfiniteQuery({
-    queryKey: ["forum", "bookmarks"],
+    queryKey: forumQueryKeys.bookmarks(),
     queryFn: ({ pageParam }) => api.bookmarks(pageParam),
     initialPageParam: null as string | null,
     getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
     enabled: isAuthenticated,
   });
-  const removeBookmark = useMutation({
-    mutationFn: (input: { id: string; targetType: "thread" | "comment" }) => (
-      api.removeBookmark(input.id, input.targetType)
-    ),
-    onSuccess: async () => {
-      toast.success("已取消收藏");
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["forum", "bookmarks"] }),
-        queryClient.invalidateQueries({ queryKey: ["profile"] }),
-      ]);
-    },
-    onError: (error) => toast.error(error instanceof Error ? error.message : "取消收藏失败"),
-  });
+  const bookmark = useForumBookmarkMutation();
 
   if (!isAuthenticated) {
     return <EmptyState title="登录后查看收藏" />;
@@ -82,13 +70,16 @@ export function BookmarksPage() {
                 href: `/forum/threads/${item.content.threadId}`,
                 isBookmarked: true,
               }}
-              bookmarkPending={removeBookmark.isPending
-                && removeBookmark.variables?.id === item.targetId
-                && removeBookmark.variables.targetType === item.targetType}
-              onToggleBookmark={() => removeBookmark.mutate({
+              bookmarkPending={bookmark.isTargetPending({
                 id: item.targetId,
                 targetType: item.targetType,
               })}
+              onToggleBookmark={() => {
+                const target = { id: item.targetId, targetType: item.targetType };
+                if (!bookmark.isTargetPending(target)) {
+                  bookmark.mutate({ ...target, isBookmarked: true });
+                }
+              }}
               onAttachmentDeliveryRefresh={() => void bookmarks.refetch()}
             />
           ))}

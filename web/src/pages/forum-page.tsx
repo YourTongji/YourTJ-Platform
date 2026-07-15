@@ -1,7 +1,7 @@
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Flame, Loader2, Plus, Send, ThumbsUp } from "lucide-react";
+import { Bookmark, Flame, Loader2, MessageCircle, Plus, Send, Share2, ThumbsDown, ThumbsUp } from "lucide-react";
 import * as React from "react";
-import { Link, useSearchParams } from "react-router";
+import { Link, useNavigate, useSearchParams } from "react-router";
 import { toast } from "sonner";
 
 import { PageHeader } from "@/components/common/page-header";
@@ -13,6 +13,10 @@ import {
 import { DraftSyncNotice } from "@/components/forum/draft-sync-notice";
 import { ForumAuthorAvatar } from "@/components/forum/forum-author-avatar";
 import { useForumDraft } from "@/components/forum/use-forum-draft";
+import {
+  useForumBookmarkMutation,
+  useForumVoteMutation,
+} from "@/components/forum/use-forum-interactions";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -26,6 +30,8 @@ import { useAuth } from "@/context/auth-provider";
 import { api } from "@/lib/api/endpoints";
 import type { Board, DraftPayload, ThreadFeed } from "@/lib/api/types";
 import { formatNumber, formatUnixTime } from "@/lib/format";
+import { forumQueryKeys } from "@/lib/forum-query-keys";
+import { shareForumThread } from "@/lib/forum-share";
 
 const MarkdownEditor = React.lazy(() =>
   import("@/components/content/markdown-editor").then((module) => ({
@@ -41,12 +47,28 @@ function ThreadCard({
   thread,
   boards,
   onAttachmentDeliveryRefresh,
+  onVote,
+  onToggleBookmark,
+  isVotePending,
+  isBookmarkPending,
 }: {
   thread: ThreadFeed;
   boards: Board[];
   onAttachmentDeliveryRefresh: () => void;
+  onVote: (thread: ThreadFeed, value: "up" | "down") => void;
+  onToggleBookmark: (thread: ThreadFeed) => void;
+  isVotePending: boolean;
+  isBookmarkPending: boolean;
 }) {
   const board = boards.find((item) => item.id === thread.boardId);
+  const share = async () => {
+    try {
+      const result = await shareForumThread(thread.title || "YourTJ 社区讨论", thread.id);
+      if (result === "copied") toast.success("帖子链接已复制");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "分享失败");
+    }
+  };
   return (
     <Card className="transition-shadow hover:shadow-md">
       <CardContent className="p-5">
@@ -107,13 +129,80 @@ function ThreadCard({
             className="mt-3 max-h-72 w-full rounded-xl border object-cover"
           />
         ) : null}
+        <div className="mt-3 flex flex-wrap items-center gap-1 border-t pt-3 text-sm text-muted-foreground">
+          <Button
+            asChild
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="h-8 px-2"
+          >
+            <Link
+              to={`/forum/threads/${thread.id}`}
+              aria-label={`${formatNumber(thread.replyCount)} 条回复`}
+            >
+              <MessageCircle className="size-4" />
+              {formatNumber(thread.replyCount)}
+            </Link>
+          </Button>
+          <Button
+            type="button"
+            variant={thread.viewerVote === "up" ? "secondary" : "ghost"}
+            size="sm"
+            className="h-8 px-2"
+            aria-label={thread.viewerVote === "up" ? "取消赞同" : "赞同"}
+            aria-pressed={thread.viewerVote === "up"}
+            disabled={isVotePending}
+            onClick={() => onVote(thread, "up")}
+          >
+            <ThumbsUp className="size-4" />
+            {formatNumber(thread.voteCount)}
+          </Button>
+          <Button
+            type="button"
+            variant={thread.viewerVote === "down" ? "secondary" : "ghost"}
+            size="icon"
+            className="size-8"
+            aria-label={thread.viewerVote === "down" ? "取消反对" : "反对"}
+            aria-pressed={thread.viewerVote === "down"}
+            disabled={isVotePending}
+            onClick={() => onVote(thread, "down")}
+          >
+            <ThumbsDown className="size-4" />
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="ml-auto size-8"
+            aria-label={`分享：${thread.title}`}
+            onClick={() => void share()}
+          >
+            <Share2 className="size-4" />
+          </Button>
+          <Button
+            type="button"
+            variant={thread.isBookmarked ? "secondary" : "ghost"}
+            size="icon"
+            className="size-8"
+            aria-label={thread.isBookmarked ? "取消收藏" : "收藏"}
+            aria-pressed={thread.isBookmarked}
+            disabled={isBookmarkPending}
+            onClick={() => onToggleBookmark(thread)}
+          >
+            <Bookmark
+              className="size-4"
+              fill={thread.isBookmarked ? "currentColor" : "none"}
+            />
+          </Button>
+        </div>
       </CardContent>
     </Card>
   );
 }
 
 function CreateThreadDialog({ boards }: { boards: Board[] }) {
-  const { isAuthenticated } = useAuth();
+  const { account, isAuthenticated } = useAuth();
   const queryClient = useQueryClient();
   const [open, setOpen] = React.useState(false);
   const [boardId, setBoardId] = React.useState("");
@@ -151,6 +240,7 @@ function CreateThreadDialog({ boards }: { boards: Board[] }) {
   }, []);
   const draft = useForumDraft({
     draftKey: "thread:new",
+    accountId: account?.id,
     enabled: isAuthenticated && open,
     isEmpty: !boardId && !title && !body && !tags && !pollQuestion && !pollOptions && attachmentAssetIds.length === 0,
     payload: draftPayload,
@@ -192,7 +282,7 @@ function CreateThreadDialog({ boards }: { boards: Board[] }) {
       setPollQuestion("");
       setPollOptions("");
       setAttachmentAssetIds([]);
-      await queryClient.invalidateQueries({ queryKey: ["forum", "threads"] });
+      await queryClient.invalidateQueries({ queryKey: forumQueryKeys.feeds() });
       if (thread.id) {
         window.location.href = `/forum/threads/${thread.id}`;
       }
@@ -223,6 +313,7 @@ function CreateThreadDialog({ boards }: { boards: Board[] }) {
           <div className="space-y-3">
             <DraftSyncNotice
               status={draft.status}
+              localBackupStatus={draft.localBackupStatus}
               savedAt={draft.savedAt}
               onRestoreRemote={draft.restoreRemote}
               onKeepLocal={draft.keepLocal}
@@ -308,7 +399,10 @@ function CreateThreadDialog({ boards }: { boards: Board[] }) {
 
 export function ForumPage() {
   const { isAuthenticated } = useAuth();
+  const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
+  const vote = useForumVoteMutation();
+  const bookmark = useForumBookmarkMutation();
   const requestedFeed = params.get("feed");
   const selectedFeed = forumFeedOptions.includes(requestedFeed as ForumFeed)
     ? requestedFeed as ForumFeed
@@ -318,10 +412,10 @@ export function ForumPage() {
     : selectedFeed;
   const board = params.get("board") ?? "all";
   const tag = params.get("tag") ?? "all";
-  const boards = useQuery({ queryKey: ["forum", "boards"], queryFn: api.boards });
-  const tags = useQuery({ queryKey: ["forum", "tags"], queryFn: api.tags });
+  const boards = useQuery({ queryKey: forumQueryKeys.boards(), queryFn: api.boards });
+  const tags = useQuery({ queryKey: forumQueryKeys.tags(), queryFn: api.tags });
   const threads = useInfiniteQuery({
-    queryKey: ["forum", "threads", feed, board, tag],
+    queryKey: forumQueryKeys.feed(feed, board, tag),
     queryFn: ({ pageParam }) =>
       api.threads({
         feed,
@@ -343,6 +437,35 @@ export function ForumPage() {
       }
     }
     setParams(copy);
+  }
+
+  function requireForumAccount(message: string) {
+    if (isAuthenticated) return true;
+    toast.error(message);
+    navigate("/login");
+    return false;
+  }
+
+  function voteOnThread(thread: ThreadFeed, requestedVote: "up" | "down") {
+    if (!requireForumAccount("登录后才能参与投票")) return;
+    if (vote.isTargetPending({ id: thread.id, targetType: "thread" })) return;
+    vote.mutate({
+      id: thread.id,
+      targetType: "thread",
+      requestedVote,
+      voteCount: thread.voteCount,
+      viewerVote: thread.viewerVote,
+    });
+  }
+
+  function toggleThreadBookmark(thread: ThreadFeed) {
+    if (!requireForumAccount("登录后才能收藏")) return;
+    if (bookmark.isTargetPending({ id: thread.id, targetType: "thread" })) return;
+    bookmark.mutate({
+      id: thread.id,
+      targetType: "thread",
+      isBookmarked: thread.isBookmarked,
+    });
   }
 
   const boardItems = boards.data ?? [];
@@ -404,6 +527,16 @@ export function ForumPage() {
                     thread={thread}
                     boards={boardItems}
                     onAttachmentDeliveryRefresh={() => void threads.refetch()}
+                    onVote={voteOnThread}
+                    onToggleBookmark={toggleThreadBookmark}
+                    isVotePending={vote.isTargetPending({
+                      id: thread.id,
+                      targetType: "thread",
+                    })}
+                    isBookmarkPending={bookmark.isTargetPending({
+                      id: thread.id,
+                      targetType: "thread",
+                    })}
                   />
                 ))}
                 {threads.hasNextPage ? (

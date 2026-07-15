@@ -467,8 +467,12 @@ class _SearchPageState extends ConsumerState<SearchPage> {
 
   Widget _reviewCard(ReviewSearchHit review) {
     return _ResultCard(
-      onTap: () =>
-          context.push('/courses/${Uri.encodeComponent(review.courseId)}'),
+      onTap: () => context.push(
+        Uri(
+          path: '/courses/${Uri.encodeComponent(review.courseId)}',
+          queryParameters: <String, String>{'review': review.id},
+        ).toString(),
+      ),
       title: Row(
         children: <Widget>[
           Expanded(

@@ -50,6 +50,7 @@ pub struct SelectionCourseRow {
     pub name: String,
     pub credit: Option<f64>,
     pub nature_id: Option<i64>,
+    pub calendar_id: Option<i64>,
     pub campus_id: Option<i64>,
     pub teacher_name: Option<String>,
     pub teacher_names: Option<Vec<String>>,

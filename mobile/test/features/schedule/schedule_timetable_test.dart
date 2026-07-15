@@ -51,6 +51,7 @@ List<ScheduledCourse> _courses() {
         name: '程序设计',
         credit: 3,
         natureId: null,
+        calendarId: 'calendar-1',
         campusId: null,
         teacherName: '张老师',
         teacherNames: const <String>['张老师'],

@@ -1,10 +1,13 @@
 //! Axum handlers for the selection (选课) domain. Each handler maps to a GET
 //! route under `/api/v2/selection/...` and delegates to the selection repo layer.
 
+use std::collections::HashMap;
+
+use axum::extract::rejection::QueryRejection;
 use axum::extract::{Path, Query, State};
 use axum::Json;
 use serde::Deserialize;
-use shared::{AppResult, AppState};
+use shared::{AppError, AppResult, AppState};
 
 use crate::error::CoursesError;
 use crate::selection::dto::{
@@ -60,25 +63,44 @@ pub struct GradesQuery {
     pub calendar_id: i64,
 }
 
+fn validate_calendar_id(calendar_id: i64) -> AppResult<()> {
+    if calendar_id <= 0 {
+        return Err(AppError::BadRequest("invalid selection calendar id".into()));
+    }
+    Ok(())
+}
+
+fn parse_selection_query<T>(query: Result<Query<T>, QueryRejection>) -> AppResult<T> {
+    query
+        .map(|Query(params)| params)
+        .map_err(|_| AppError::BadRequest("invalid selection query".into()))
+}
+
 pub async fn selection_grades(
     State(state): State<AppState>,
-    Query(params): Query<GradesQuery>,
+    query: Result<Query<GradesQuery>, QueryRejection>,
 ) -> AppResult<Json<Vec<String>>> {
+    let params = parse_selection_query(query)?;
+    validate_calendar_id(params.calendar_id)?;
     let grades = selection_repo::list_grades(&state.db, params.calendar_id).await?;
     Ok(Json(grades))
 }
 
-/// `GET /api/v2/selection/majors?grade=...`
+/// `GET /api/v2/selection/majors?calendarId=...&grade=...`
 #[derive(Debug, Deserialize)]
 pub struct MajorsQuery {
+    #[serde(rename = "calendarId")]
+    pub calendar_id: i64,
     pub grade: String,
 }
 
 pub async fn selection_majors(
     State(state): State<AppState>,
-    Query(params): Query<MajorsQuery>,
+    query: Result<Query<MajorsQuery>, QueryRejection>,
 ) -> AppResult<Json<Vec<MajorDto>>> {
-    let rows = selection_repo::list_majors(&state.db, &params.grade).await?;
+    let params = parse_selection_query(query)?;
+    validate_calendar_id(params.calendar_id)?;
+    let rows = selection_repo::list_majors(&state.db, params.calendar_id, &params.grade).await?;
     let items: Vec<MajorDto> = rows
         .into_iter()
         .map(|r| MajorDto {
@@ -107,9 +129,11 @@ pub async fn selection_course_natures(
     Ok(Json(items))
 }
 
-/// `GET /api/v2/selection/courses-by-major?majorId=...&grade=...`
+/// `GET /api/v2/selection/courses-by-major?calendarId=...&majorId=...&grade=...`
 #[derive(Debug, Deserialize)]
 pub struct CoursesByMajorQuery {
+    #[serde(rename = "calendarId")]
+    pub calendar_id: i64,
     #[serde(rename = "majorId")]
     pub major_id: i64,
     pub grade: String,
@@ -117,10 +141,17 @@ pub struct CoursesByMajorQuery {
 
 pub async fn selection_courses_by_major(
     State(state): State<AppState>,
-    Query(params): Query<CoursesByMajorQuery>,
+    query: Result<Query<CoursesByMajorQuery>, QueryRejection>,
 ) -> AppResult<Json<Vec<SelectionCourseDto>>> {
-    let rows =
-        selection_repo::list_courses_by_major(&state.db, params.major_id, &params.grade).await?;
+    let params = parse_selection_query(query)?;
+    validate_calendar_id(params.calendar_id)?;
+    let rows = selection_repo::list_courses_by_major(
+        &state.db,
+        params.calendar_id,
+        params.major_id,
+        &params.grade,
+    )
+    .await?;
     let items: Vec<SelectionCourseDto> = rows
         .into_iter()
         .map(|r| SelectionCourseDto {
@@ -129,6 +160,7 @@ pub async fn selection_courses_by_major(
             name: r.name,
             credit: r.credit,
             nature_id: r.nature_id.map(|v| v.to_string()),
+            calendar_id: r.calendar_id.map(|v| v.to_string()),
             campus_id: r.campus_id.map(|v| v.to_string()),
             teacher_name: r.teacher_name,
             teacher_names: r.teacher_names.unwrap_or_default(),
@@ -137,18 +169,24 @@ pub async fn selection_courses_by_major(
     Ok(Json(items))
 }
 
-/// `GET /api/v2/selection/courses-by-nature?natureId=...`
+/// `GET /api/v2/selection/courses-by-nature?calendarId=...&natureId=...`
 #[derive(Debug, Deserialize)]
 pub struct CoursesByNatureQuery {
+    #[serde(rename = "calendarId")]
+    pub calendar_id: i64,
     #[serde(rename = "natureId")]
     pub nature_id: i64,
 }
 
 pub async fn selection_courses_by_nature(
     State(state): State<AppState>,
-    Query(params): Query<CoursesByNatureQuery>,
+    query: Result<Query<CoursesByNatureQuery>, QueryRejection>,
 ) -> AppResult<Json<Vec<SelectionCourseDto>>> {
-    let rows = selection_repo::list_courses_by_nature(&state.db, params.nature_id).await?;
+    let params = parse_selection_query(query)?;
+    validate_calendar_id(params.calendar_id)?;
+    let rows =
+        selection_repo::list_courses_by_nature(&state.db, params.calendar_id, params.nature_id)
+            .await?;
     let items: Vec<SelectionCourseDto> = rows
         .into_iter()
         .map(|r| SelectionCourseDto {
@@ -157,6 +195,7 @@ pub async fn selection_courses_by_nature(
             name: r.name,
             credit: r.credit,
             nature_id: r.nature_id.map(|v| v.to_string()),
+            calendar_id: r.calendar_id.map(|v| v.to_string()),
             campus_id: r.campus_id.map(|v| v.to_string()),
             teacher_name: r.teacher_name,
             teacher_names: r.teacher_names.unwrap_or_default(),
@@ -165,12 +204,23 @@ pub async fn selection_courses_by_nature(
     Ok(Json(items))
 }
 
-/// `GET /api/v2/selection/courses/:code`
-pub async fn selection_course_by_code(
+fn parse_teaching_class_id(raw_id: &str) -> AppResult<i64> {
+    let teaching_class_id = raw_id
+        .parse::<i64>()
+        .map_err(|_| AppError::BadRequest("invalid teaching class id".into()))?;
+    if teaching_class_id <= 0 {
+        return Err(AppError::BadRequest("invalid teaching class id".into()));
+    }
+    Ok(teaching_class_id)
+}
+
+/// `GET /api/v2/selection/courses/:teachingClassId`
+pub async fn selection_course_by_id(
     State(state): State<AppState>,
-    Path(code): Path<String>,
+    Path(raw_id): Path<String>,
 ) -> AppResult<Json<SelectionCourseDto>> {
-    let row = selection_repo::find_selection_course_by_code(&state.db, &code)
+    let teaching_class_id = parse_teaching_class_id(&raw_id)?;
+    let row = selection_repo::find_selection_course_by_id(&state.db, teaching_class_id)
         .await?
         .ok_or(CoursesError::SelectionCourseNotFound)?;
     Ok(Json(SelectionCourseDto {
@@ -179,54 +229,76 @@ pub async fn selection_course_by_code(
         name: row.name,
         credit: row.credit,
         nature_id: row.nature_id.map(|v| v.to_string()),
+        calendar_id: row.calendar_id.map(|v| v.to_string()),
         campus_id: row.campus_id.map(|v| v.to_string()),
         teacher_name: row.teacher_name,
         teacher_names: row.teacher_names.unwrap_or_default(),
     }))
 }
 
-/// `GET /api/v2/selection/courses/search?q=...`
+/// `GET /api/v2/selection/courses/search?calendarId=...&q=...`
 #[derive(Debug, Deserialize)]
 pub struct SelectionSearchQuery {
+    #[serde(rename = "calendarId")]
+    pub calendar_id: i64,
     pub q: String,
 }
 
 pub async fn selection_courses_search(
     State(state): State<AppState>,
-    Query(params): Query<SelectionSearchQuery>,
+    query: Result<Query<SelectionSearchQuery>, QueryRejection>,
 ) -> AppResult<Json<Vec<SelectionCourseDto>>> {
     use crate::meili;
 
-    let results =
-        meili::search_selection_courses(&state.meili_url, &state.meili_master_key, &params.q, 20)
-            .await;
+    let params = parse_selection_query(query)?;
+    validate_calendar_id(params.calendar_id)?;
+    let results = meili::search_selection_courses(
+        &state.meili_url,
+        &state.meili_master_key,
+        &params.q,
+        params.calendar_id,
+        20,
+    )
+    .await;
 
-    let items: Vec<SelectionCourseDto> = results
+    let candidate_ids =
+        results.iter().filter_map(|result| result.id.parse::<i64>().ok()).collect::<Vec<_>>();
+    let canonical_rows = selection_repo::find_selection_courses_by_ids(
+        &state.db,
+        params.calendar_id,
+        &candidate_ids,
+    )
+    .await?;
+    let mut canonical_by_id =
+        canonical_rows.into_iter().map(|row| (row.id.to_string(), row)).collect::<HashMap<_, _>>();
+    let items = results
         .into_iter()
-        .map(|r| SelectionCourseDto {
-            id: r.id,
-            code: r.code,
-            name: r.name,
-            credit: r.credit,
-            nature_id: r.nature_id.map(|v| v.to_string()),
-            campus_id: r.campus_id.map(|v| v.to_string()),
-            teacher_name: r.teacher_name,
-            teacher_names: r.teacher_names.unwrap_or_default(),
+        .filter_map(|candidate| canonical_by_id.remove(&candidate.id))
+        .map(|row| SelectionCourseDto {
+            id: row.id.to_string(),
+            code: row.code,
+            name: row.name,
+            credit: row.credit,
+            nature_id: row.nature_id.map(|value| value.to_string()),
+            calendar_id: row.calendar_id.map(|value| value.to_string()),
+            campus_id: row.campus_id.map(|value| value.to_string()),
+            teacher_name: row.teacher_name,
+            teacher_names: row.teacher_names.unwrap_or_default(),
         })
         .collect();
     Ok(Json(items))
 }
 
-/// `GET /api/v2/selection/courses/:code/timeslots`
-pub async fn selection_courses_by_time(
+/// `GET /api/v2/selection/courses/:teachingClassId/timeslots`
+pub async fn selection_course_timeslots(
     State(state): State<AppState>,
-    Path(code): Path<String>,
+    Path(raw_id): Path<String>,
 ) -> AppResult<Json<Vec<TimeSlotDto>>> {
-    // First find the course by code to get its id
-    let course = selection_repo::find_selection_course_by_code(&state.db, &code)
+    let teaching_class_id = parse_teaching_class_id(&raw_id)?;
+    selection_repo::find_selection_course_by_id(&state.db, teaching_class_id)
         .await?
         .ok_or(CoursesError::SelectionCourseNotFound)?;
-    let rows = selection_repo::list_timeslots(&state.db, course.id).await?;
+    let rows = selection_repo::list_timeslots(&state.db, teaching_class_id).await?;
     let items: Vec<TimeSlotDto> = rows
         .into_iter()
         .map(|r| TimeSlotDto {

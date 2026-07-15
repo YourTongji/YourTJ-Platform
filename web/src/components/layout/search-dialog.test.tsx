@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import type { PropsWithChildren } from "react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router";
+import { MemoryRouter, useLocation } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { expectNoAccessibilityViolations } from "@/test/accessibility";
@@ -108,10 +108,11 @@ describe("SearchDialog", () => {
       defaultOptions: { queries: { retry: false } },
     });
     const user = userEvent.setup();
+    const onOpenChange = vi.fn();
     render(
       <QueryClientProvider client={queryClient}>
         <MemoryRouter>
-          <SearchDialog open onOpenChange={vi.fn()} />
+          <SearchDialog open onOpenChange={onOpenChange} />
         </MemoryRouter>
       </QueryClientProvider>,
     );
@@ -120,7 +121,10 @@ describe("SearchDialog", () => {
 
     expect(await screen.findByText("数据结构复习资料")).toBeVisible();
     expect(screen.getByRole("link", { name: /CS101/ })).toHaveAttribute("href", "/courses/12");
-    expect(screen.getByRole("link", { name: /讲解清晰/ })).toHaveAttribute("href", "/courses/12");
+    expect(screen.getByRole("link", { name: /讲解清晰/ })).toHaveAttribute(
+      "href",
+      "/courses/12?review=21#review-21",
+    );
     expect(screen.getByRole("link", { name: /数据结构复习资料/ })).toHaveAttribute(
       "href",
       "/forum/threads/31",
@@ -129,6 +133,92 @@ describe("SearchDialog", () => {
     expect(screen.getByRole("link", { name: "学习交流" })).toHaveAttribute("href", "/forum?board=51");
     expect(screen.getByRole("link", { name: "#算法" })).toHaveAttribute("href", "/forum?tag=algorithm");
     await expectNoAccessibilityViolations(document.body);
+
+    const input = screen.getByRole("textbox", { name: "搜索关键词" });
+    input.focus();
+    await user.keyboard("{ArrowDown}");
+    expect(screen.getByRole("link", { name: /CS101/ })).toHaveFocus();
+    await user.keyboard("{ArrowDown}");
+    expect(screen.getByRole("link", { name: /讲解清晰/ })).toHaveFocus();
+    await user.keyboard("{Enter}");
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  it("debounces input and aborts an obsolete request", async () => {
+    const response = await searchMock();
+    searchMock.mockClear();
+    const signals: AbortSignal[] = [];
+    searchMock.mockImplementation((...parameters: unknown[]) => {
+      const query = parameters[0];
+      const signal = parameters[4] as AbortSignal;
+      signals.push(signal);
+      if (query === "数据结构") return Promise.resolve(response);
+      return new Promise((_, reject) => {
+        signal.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+      });
+    });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const user = userEvent.setup();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter>
+          <SearchDialog open onOpenChange={vi.fn()} />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    const input = screen.getByRole("textbox", { name: "搜索关键词" });
+    await user.type(input, "数据");
+    expect(searchMock).not.toHaveBeenCalled();
+    await waitFor(() => expect(searchMock).toHaveBeenCalledTimes(1));
+    await user.type(input, "结构");
+    await waitFor(() => expect(searchMock).toHaveBeenCalledTimes(2));
+
+    expect(signals[0]?.aborted).toBe(true);
+    expect(signals[1]?.aborted).toBe(false);
+    expect(await screen.findByText("数据结构复习资料")).toBeVisible();
+  });
+
+  it("closes from the search field with Escape", async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const onOpenChange = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter>
+          <SearchDialog open onOpenChange={onOpenChange} />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    await user.click(screen.getByRole("textbox", { name: "搜索关键词" }));
+    await user.keyboard("{Escape}");
+
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  it("opens the full search route from Enter without waiting for the preview request", async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const onOpenChange = vi.fn();
+    const user = userEvent.setup();
+    function LocationProbe() {
+      const location = useLocation();
+      return <output data-testid="location">{location.pathname}{location.search}</output>;
+    }
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter>
+          <SearchDialog open onOpenChange={onOpenChange} />
+          <LocationProbe />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    await user.type(screen.getByRole("textbox", { name: "搜索关键词" }), "数据{Enter}");
+
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    expect(screen.getByTestId("location")).toHaveTextContent("/search?q=%E6%95%B0%E6%8D%AE");
+    expect(searchMock).not.toHaveBeenCalled();
   });
 
   it("refetches the owning search result when a signed avatar expires", async () => {

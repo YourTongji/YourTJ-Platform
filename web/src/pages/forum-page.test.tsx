@@ -10,8 +10,12 @@ import { ForumPage } from "./forum-page";
 
 const apiMocks = vi.hoisted(() => ({
   boards: vi.fn(),
+  bookmarkPost: vi.fn(),
+  removeBookmark: vi.fn(),
+  removePostVote: vi.fn(),
   tags: vi.fn(),
   threads: vi.fn(),
+  votePost: vi.fn(),
 }));
 
 vi.mock("@/context/auth-provider", () => ({
@@ -38,6 +42,9 @@ const firstThread = {
   createdAt: 1_700_000_000,
   lastActivityAt: 1_700_000_100,
   tags: [],
+  attachments: [],
+  viewerVote: null,
+  isBookmarked: false,
   canEdit: false,
   canDelete: false,
   canModerate: false,
@@ -69,6 +76,18 @@ describe("ForumPage", () => {
       minTrustToPost: 0,
     }]);
     apiMocks.tags.mockReset().mockResolvedValue([]);
+    apiMocks.bookmarkPost.mockReset().mockResolvedValue(undefined);
+    apiMocks.removeBookmark.mockReset().mockResolvedValue(undefined);
+    apiMocks.removePostVote.mockReset().mockResolvedValue({
+      ok: true,
+      voteCount: 5,
+      viewerVote: null,
+    });
+    apiMocks.votePost.mockReset().mockResolvedValue({
+      ok: true,
+      voteCount: 6,
+      viewerVote: "up",
+    });
     apiMocks.threads.mockReset().mockImplementation(async ({ cursor }) => cursor
       ? {
           items: [{ ...firstThread, id: "10", title: "第二页帖子" }],
@@ -127,5 +146,17 @@ describe("ForumPage", () => {
     expect(threadLink.querySelector("button")).toBeNull();
     await user.click(screen.getByRole("button", { name: "查看大图：教学楼" }));
     expect(screen.getByRole("dialog", { name: "教学楼" })).toBeVisible();
+  });
+
+  it("offers vote and bookmark controls on a forum feed card", async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    await screen.findByText("第一页帖子");
+    await user.click(screen.getByRole("button", { name: "赞同" }));
+    await waitFor(() => expect(apiMocks.votePost).toHaveBeenCalledWith("11", "up", "thread"));
+    await user.click(screen.getByRole("button", { name: "收藏" }));
+    await waitFor(() => expect(apiMocks.bookmarkPost).toHaveBeenCalledWith("11", "thread"));
+    expect(screen.getByRole("button", { name: "分享：第一页帖子" })).toBeVisible();
   });
 });

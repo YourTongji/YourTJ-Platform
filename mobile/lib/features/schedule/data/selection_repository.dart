@@ -10,22 +10,29 @@ abstract interface class SelectionRepository {
   Future<List<CourseNature>> natures({CancelToken? cancelToken});
   Future<LatestUpdate?> latestUpdate({CancelToken? cancelToken});
   Future<List<String>> grades(String calendarId, {CancelToken? cancelToken});
-  Future<List<Major>> majors(String grade, {CancelToken? cancelToken});
+  Future<List<Major>> majors({
+    required String calendarId,
+    required String grade,
+    CancelToken? cancelToken,
+  });
   Future<List<SelectionCourse>> byMajor({
+    required String calendarId,
     required String majorId,
     required String grade,
     CancelToken? cancelToken,
   });
-  Future<List<SelectionCourse>> byNature(
-    String natureId, {
+  Future<List<SelectionCourse>> byNature({
+    required String calendarId,
+    required String natureId,
     CancelToken? cancelToken,
   });
-  Future<List<SelectionCourse>> search(
-    String query, {
+  Future<List<SelectionCourse>> search({
+    required String calendarId,
+    required String query,
     CancelToken? cancelToken,
   });
   Future<List<TimeSlot>> timeslots(
-    String courseCode, {
+    String teachingClassId, {
     CancelToken? cancelToken,
   });
 }
@@ -69,19 +76,28 @@ class GeneratedSelectionRepository implements SelectionRepository {
       );
 
   @override
-  Future<List<Major>> majors(String grade, {CancelToken? cancelToken}) =>
-      _request(
-        () => _api.selectionMajorsGet(grade: grade, cancelToken: cancelToken),
-        '专业',
-      );
+  Future<List<Major>> majors({
+    required String calendarId,
+    required String grade,
+    CancelToken? cancelToken,
+  }) => _request(
+    () => _api.selectionMajorsGet(
+      calendarId: calendarId,
+      grade: grade,
+      cancelToken: cancelToken,
+    ),
+    '专业',
+  );
 
   @override
   Future<List<SelectionCourse>> byMajor({
+    required String calendarId,
     required String majorId,
     required String grade,
     CancelToken? cancelToken,
   }) => _request(
     () => _api.selectionCoursesByMajorGet(
+      calendarId: calendarId,
       majorId: majorId,
       grade: grade,
       cancelToken: cancelToken,
@@ -90,11 +106,13 @@ class GeneratedSelectionRepository implements SelectionRepository {
   );
 
   @override
-  Future<List<SelectionCourse>> byNature(
-    String natureId, {
+  Future<List<SelectionCourse>> byNature({
+    required String calendarId,
+    required String natureId,
     CancelToken? cancelToken,
   }) => _request(
     () => _api.selectionCoursesByNatureGet(
+      calendarId: calendarId,
       natureId: natureId,
       cancelToken: cancelToken,
     ),
@@ -102,21 +120,26 @@ class GeneratedSelectionRepository implements SelectionRepository {
   );
 
   @override
-  Future<List<SelectionCourse>> search(
-    String query, {
+  Future<List<SelectionCourse>> search({
+    required String calendarId,
+    required String query,
     CancelToken? cancelToken,
   }) => _request(
-    () => _api.selectionCoursesSearchGet(q: query, cancelToken: cancelToken),
+    () => _api.selectionCoursesSearchGet(
+      calendarId: calendarId,
+      q: query,
+      cancelToken: cancelToken,
+    ),
     '选课搜索',
   );
 
   @override
   Future<List<TimeSlot>> timeslots(
-    String courseCode, {
+    String teachingClassId, {
     CancelToken? cancelToken,
   }) => _request(
-    () => _api.selectionCoursesCodeTimeslotsGet(
-      code: courseCode,
+    () => _api.selectionCoursesTeachingClassIdTimeslotsGet(
+      teachingClassId: teachingClassId,
       cancelToken: cancelToken,
     ),
     '课程时段',

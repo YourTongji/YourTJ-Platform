@@ -4,9 +4,21 @@ import * as React from "react";
 import { readAccessToken } from "@/lib/auth-storage";
 import { API_BASE_URL } from "@/lib/api/client";
 import { accountQueryKeys } from "@/lib/account-query-keys";
+import { forumRefreshQueryRoots } from "@/lib/forum-query-keys";
 import { consumeSseBuffer } from "@/lib/sse";
 
 const MAX_RECONNECT_DELAY = 30_000;
+const FORUM_REFRESH_EVENTS = new Set([
+  "sync",
+  "reply",
+  "mention",
+  "quote",
+  "vote",
+  "watching",
+  "flag_auto_hide",
+  "mod_action",
+  "follow",
+]);
 
 export function RealtimeRefresh({
   accountId,
@@ -36,6 +48,10 @@ export function RealtimeRefresh({
             queryKey: [...accountQueryKeys.directMessages(accountId), "conversations"],
           }),
         );
+      }
+      if (FORUM_REFRESH_EVENTS.has(eventType)) {
+        tasks.push(...forumRefreshQueryRoots().map((queryKey) =>
+          queryClient.invalidateQueries({ queryKey })));
       }
       await Promise.all(tasks);
     }

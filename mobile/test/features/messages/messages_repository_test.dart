@@ -60,6 +60,36 @@ void main() {
       expect(request.uri.queryParameters['limit'], '20');
     },
   );
+
+  test('message send carries the caller-owned idempotency identity', () async {
+    late final RecordingAdapter adapter;
+    final Dio dio = Dio(BaseOptions(baseUrl: 'https://api.yourtj.de/api/v2'));
+    adapter = RecordingAdapter((RequestOptions options) {
+      expect(options.path, '/forum/dm/conversations/conversation-1/messages');
+      return jsonResponse(<String, Object?>{
+        'id': 'message-1',
+        'conversationId': 'conversation-1',
+        'senderId': 'account-1',
+        'senderHandle': 'alice',
+        'senderDisplayName': 'Alice',
+        'body': '你好',
+        'createdAt': 100,
+      });
+    });
+    dio.httpClientAdapter = adapter;
+    final MessagesRepository repository = MessagesRepository(ForumApi(dio));
+
+    await repository.send(
+      'conversation-1',
+      ' 你好 ',
+      clientMessageId: '018f2857-4f63-7d31-a72a-4e75f006c5c8',
+    );
+
+    expect(requestJson(adapter.requests.single), <String, Object?>{
+      'body': '你好',
+      'clientMessageId': '018f2857-4f63-7d31-a72a-4e75f006c5c8',
+    });
+  });
 }
 
 Map<String, Object?> _conversationJson() => <String, Object?>{

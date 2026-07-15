@@ -1,11 +1,17 @@
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as React from "react";
+import { useNavigate, useSearchParams } from "react-router";
 import { toast } from "sonner";
 
 import { ActivityHeatmap } from "@/components/activity/activity-heatmap";
 import { getTwentyWeekActivityRange } from "@/components/activity/calendar-range";
+import { CheckInShareDialog } from "@/components/activity/check-in-share-dialog";
 import { DailyCheckInButton } from "@/components/activity/daily-check-in-button";
 import { useForumDeliveryRefresh } from "@/components/content/forum-delivery-image";
+import {
+  useForumBookmarkMutation,
+  useForumVoteMutation,
+} from "@/components/forum/use-forum-interactions";
 import { CommunityFeed, type CommunityFeedMode } from "@/components/home/community-feed";
 import {
   CommunitySidebar,
@@ -14,19 +20,79 @@ import {
 import { Card, CardContent } from "@/components/ui/card";
 import { useAuth } from "@/context/auth-provider";
 import { api } from "@/lib/api/endpoints";
+import type { ThreadFeed } from "@/lib/api/types";
+import { forumQueryKeys } from "@/lib/forum-query-keys";
+
+const communityFeedModes: CommunityFeedMode[] = ["hot", "new", "following", "subscriptions"];
+const authenticatedFeedModes: CommunityFeedMode[] = ["following", "subscriptions"];
 
 export function HomePage() {
-  const [feedMode, setFeedMode] = React.useState<CommunityFeedMode>("hot");
   const { account } = useAuth();
+  const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
+  const [isCheckInShareOpen, setIsCheckInShareOpen] = React.useState(false);
+  const requestedFeed = searchParams.get("feed");
+  const selectedFeed = communityFeedModes.includes(requestedFeed as CommunityFeedMode)
+    ? requestedFeed as CommunityFeedMode
+    : "hot";
+  const feedMode = !account && authenticatedFeedModes.includes(selectedFeed)
+    ? "hot"
+    : selectedFeed;
+
   React.useEffect(() => {
-    if (!account && (feedMode === "following" || feedMode === "subscriptions")) {
-      setFeedMode("hot");
+    if (requestedFeed && requestedFeed !== feedMode) {
+      const nextParams = new URLSearchParams(searchParams);
+      nextParams.delete("feed");
+      setSearchParams(nextParams, { replace: true });
     }
-  }, [account, feedMode]);
+  }, [feedMode, requestedFeed, searchParams, setSearchParams]);
+
+  function setFeedMode(nextFeed: CommunityFeedMode) {
+    const nextParams = new URLSearchParams(searchParams);
+    if (nextFeed === "hot") {
+      nextParams.delete("feed");
+    } else {
+      nextParams.set("feed", nextFeed);
+    }
+    setSearchParams(nextParams);
+  }
+
+  const vote = useForumVoteMutation();
+  const bookmark = useForumBookmarkMutation();
+
+  function requireForumAccount(message: string) {
+    if (account) return true;
+    toast.error(message);
+    navigate("/login");
+    return false;
+  }
+
+  function voteOnThread(thread: ThreadFeed, requestedVote: "up" | "down") {
+    if (!requireForumAccount("登录后才能参与投票")) return;
+    if (vote.isTargetPending({ id: thread.id, targetType: "thread" })) return;
+    vote.mutate({
+      id: thread.id,
+      targetType: "thread",
+      requestedVote,
+      voteCount: thread.voteCount,
+      viewerVote: thread.viewerVote,
+    });
+  }
+
+  function toggleThreadBookmark(thread: ThreadFeed) {
+    if (!requireForumAccount("登录后才能收藏")) return;
+    if (bookmark.isTargetPending({ id: thread.id, targetType: "thread" })) return;
+    bookmark.mutate({
+      id: thread.id,
+      targetType: "thread",
+      isBookmarked: thread.isBookmarked,
+    });
+  }
+
   const [activityRange, setActivityRange] = React.useState(getTwentyWeekActivityRange);
   const threads = useInfiniteQuery({
-    queryKey: ["home", "threads", feedMode],
+    queryKey: forumQueryKeys.homeFeed(feedMode),
     queryFn: ({ pageParam }) => api.threads({ feed: feedMode, cursor: pageParam }),
     initialPageParam: null as string | null,
     getNextPageParam: (page) => page.hasMore ? page.nextCursor ?? undefined : undefined,
@@ -73,6 +139,7 @@ export function HomePage() {
     onSuccess: async (status) => {
       queryClient.setQueryData(["home", "check-in", account?.id], status);
       toast.success(status.newlyCheckedIn ? `签到成功，已连续 ${status.currentStreak} 天` : "今天已经签到");
+      setIsCheckInShareOpen(true);
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["home", "activity", account?.id] }),
         queryClient.invalidateQueries({ queryKey: ["home", "trust-progress", account?.id] }),
@@ -88,6 +155,7 @@ export function HomePage() {
     error: checkInStatus.error,
     onCheckIn: () => checkIn.mutate(),
     onRetry: () => void checkInStatus.refetch(),
+    onShare: () => setIsCheckInShareOpen(true),
   };
 
   const threadItems = threads.data?.pages.flatMap((page) => page.items ?? []) ?? [];
@@ -133,6 +201,16 @@ export function HomePage() {
           onLoadMore={() => void threads.fetchNextPage()}
           isAuthenticated={Boolean(account)}
           onAttachmentDeliveryRefresh={() => void threads.refetch()}
+          onVote={voteOnThread}
+          onToggleBookmark={toggleThreadBookmark}
+          isVotePending={(thread) => vote.isTargetPending({
+            id: thread.id,
+            targetType: "thread",
+          })}
+          isBookmarkPending={(thread) => bookmark.isTargetPending({
+            id: thread.id,
+            targetType: "thread",
+          })}
         />
       </div>
 
@@ -153,6 +231,13 @@ export function HomePage() {
           onTrustRetry={() => void trustProgress.refetch()}
         />
       </div>
+      <CheckInShareDialog
+        open={isCheckInShareOpen}
+        onOpenChange={setIsCheckInShareOpen}
+        status={checkInStatus.data}
+        trustProgress={trustProgress.data ?? null}
+        fallbackTrustLevel={account?.trustLevel}
+      />
     </div>
   );
 }

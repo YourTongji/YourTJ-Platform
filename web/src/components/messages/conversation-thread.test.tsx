@@ -85,4 +85,66 @@ describe("ConversationThread message requests", () => {
     expect(onReport).toHaveBeenCalledWith(requestMessage, true);
     await expectNoAccessibilityViolations(view.container);
   });
+
+  it("keeps failed optimistic messages visible for retry or discard", async () => {
+    const user = userEvent.setup();
+    const onRetryPending = vi.fn();
+    const onDiscardPending = vi.fn();
+    const pendingMessage = {
+      accountId: "1",
+      clientId: "local-1",
+      conversationId: requestConversation.id,
+      body: "这条消息还没有送达",
+      createdAt: 1_700_000_010,
+      status: "failed" as const,
+      errorMessage: "网络连接中断",
+    };
+    const view = render(
+      <MemoryRouter>
+        <ConversationThread
+          conversation={{
+            ...requestConversation,
+            requestStatus: "accepted",
+            requestDirection: undefined,
+            canSend: true,
+          }}
+          messages={[]}
+          pendingMessages={[pendingMessage]}
+          currentAccountId="1"
+          body=""
+          isIgnored={false}
+          relationshipPending={false}
+          lifecyclePending={false}
+          requestActionPending={false}
+          isLoading={false}
+          isSending={false}
+          hasOlder={false}
+          isLoadingOlder={false}
+          onBodyChange={vi.fn()}
+          onBack={vi.fn()}
+          onRetry={vi.fn()}
+          onLoadOlder={vi.fn()}
+          onSend={vi.fn()}
+          onRetryPending={onRetryPending}
+          onDiscardPending={onDiscardPending}
+          onReport={vi.fn()}
+          onAcceptRequest={vi.fn()}
+          onDeclineRequest={vi.fn()}
+          onToggleIgnore={vi.fn()}
+          onToggleArchive={vi.fn()}
+          onToggleMute={vi.fn()}
+          onDelete={vi.fn()}
+        />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByText("这条消息还没有送达")).toBeVisible();
+    expect(screen.getByText("发送失败")).toBeVisible();
+    expect(screen.getByText("网络连接中断")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "重试" }));
+    expect(onRetryPending).toHaveBeenCalledWith(pendingMessage);
+    await user.click(screen.getByRole("button", { name: "丢弃未发送消息" }));
+    expect(onDiscardPending).toHaveBeenCalledWith("local-1");
+    await expectNoAccessibilityViolations(view.container);
+  });
 });

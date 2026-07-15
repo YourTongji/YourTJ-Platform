@@ -233,10 +233,11 @@ class SelectionApi {
     );
   }
 
-  /// Courses for a major
+  /// Teaching classes for a major in a calendar
   ///
   ///
   /// Parameters:
+  /// * [calendarId] - Selection calendar that bounds every returned teaching class.
   /// * [majorId]
   /// * [grade]
   /// * [cancelToken] - A [CancelToken] that can be used to cancel the operation
@@ -249,6 +250,7 @@ class SelectionApi {
   /// Returns a [Future] containing a [Response] with a [List<SelectionCourse>] as data
   /// Throws [DioException] if API call or serialization fails
   Future<Response<List<SelectionCourse>>> selectionCoursesByMajorGet({
+    required String calendarId,
     required String majorId,
     required String grade,
     CancelToken? cancelToken,
@@ -267,6 +269,7 @@ class SelectionApi {
     );
 
     final _queryParameters = <String, dynamic>{
+      r'calendarId': calendarId,
       r'majorId': majorId,
       r'grade': grade,
     };
@@ -313,10 +316,11 @@ class SelectionApi {
     );
   }
 
-  /// Courses by nature/type
+  /// Teaching classes by nature/type in a calendar
   ///
   ///
   /// Parameters:
+  /// * [calendarId] - Selection calendar that bounds every returned teaching class.
   /// * [natureId]
   /// * [cancelToken] - A [CancelToken] that can be used to cancel the operation
   /// * [headers] - Can be used to add additional headers to the request
@@ -328,6 +332,7 @@ class SelectionApi {
   /// Returns a [Future] containing a [Response] with a [List<SelectionCourse>] as data
   /// Throws [DioException] if API call or serialization fails
   Future<Response<List<SelectionCourse>>> selectionCoursesByNatureGet({
+    required String calendarId,
     required String natureId,
     CancelToken? cancelToken,
     Map<String, dynamic>? headers,
@@ -344,7 +349,10 @@ class SelectionApi {
       validateStatus: validateStatus,
     );
 
-    final _queryParameters = <String, dynamic>{r'natureId': natureId};
+    final _queryParameters = <String, dynamic>{
+      r'calendarId': calendarId,
+      r'natureId': natureId,
+    };
 
     final _response = await _dio.request<Object>(
       _path,
@@ -388,11 +396,91 @@ class SelectionApi {
     );
   }
 
-  /// Selection course detail by code
+  /// Search selection teaching classes in a calendar
   ///
   ///
   /// Parameters:
-  /// * [code]
+  /// * [calendarId] - Selection calendar that bounds every returned teaching class.
+  /// * [q]
+  /// * [cancelToken] - A [CancelToken] that can be used to cancel the operation
+  /// * [headers] - Can be used to add additional headers to the request
+  /// * [extras] - Can be used to add flags to the request
+  /// * [validateStatus] - A [ValidateStatus] callback that can be used to determine request success based on the HTTP status of the response
+  /// * [onSendProgress] - A [ProgressCallback] that can be used to get the send progress
+  /// * [onReceiveProgress] - A [ProgressCallback] that can be used to get the receive progress
+  ///
+  /// Returns a [Future] containing a [Response] with a [List<SelectionCourse>] as data
+  /// Throws [DioException] if API call or serialization fails
+  Future<Response<List<SelectionCourse>>> selectionCoursesSearchGet({
+    required String calendarId,
+    required String q,
+    CancelToken? cancelToken,
+    Map<String, dynamic>? headers,
+    Map<String, dynamic>? extra,
+    ValidateStatus? validateStatus,
+    ProgressCallback? onSendProgress,
+    ProgressCallback? onReceiveProgress,
+  }) async {
+    final _path = r'/selection/courses/search';
+    final _options = Options(
+      method: r'GET',
+      headers: <String, dynamic>{...?headers},
+      extra: <String, dynamic>{'secure': <Map<String, String>>[], ...?extra},
+      validateStatus: validateStatus,
+    );
+
+    final _queryParameters = <String, dynamic>{
+      r'calendarId': calendarId,
+      r'q': q,
+    };
+
+    final _response = await _dio.request<Object>(
+      _path,
+      options: _options,
+      queryParameters: _queryParameters,
+      cancelToken: cancelToken,
+      onSendProgress: onSendProgress,
+      onReceiveProgress: onReceiveProgress,
+    );
+
+    List<SelectionCourse>? _responseData;
+
+    try {
+      final rawData = _response.data;
+      _responseData = rawData == null
+          ? null
+          : deserialize<List<SelectionCourse>, SelectionCourse>(
+              rawData,
+              'List<SelectionCourse>',
+              growable: true,
+            );
+    } catch (error, stackTrace) {
+      throw DioException(
+        requestOptions: _response.requestOptions,
+        response: _response,
+        type: DioExceptionType.unknown,
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
+
+    return Response<List<SelectionCourse>>(
+      data: _responseData,
+      headers: _response.headers,
+      isRedirect: _response.isRedirect,
+      requestOptions: _response.requestOptions,
+      redirects: _response.redirects,
+      statusCode: _response.statusCode,
+      statusMessage: _response.statusMessage,
+      extra: _response.extra,
+    );
+  }
+
+  /// Selection teaching-class detail by stable identifier
+  ///
+  ///
+  /// Parameters:
+  /// * [teachingClassId] - Stable upstream teaching-class identifier, not a canonical course code.
   /// * [cancelToken] - A [CancelToken] that can be used to cancel the operation
   /// * [headers] - Can be used to add additional headers to the request
   /// * [extras] - Can be used to add flags to the request
@@ -402,8 +490,8 @@ class SelectionApi {
   ///
   /// Returns a [Future] containing a [Response] with a [SelectionCourse] as data
   /// Throws [DioException] if API call or serialization fails
-  Future<Response<SelectionCourse>> selectionCoursesCodeGet({
-    required String code,
+  Future<Response<SelectionCourse>> selectionCoursesTeachingClassIdGet({
+    required String teachingClassId,
     CancelToken? cancelToken,
     Map<String, dynamic>? headers,
     Map<String, dynamic>? extra,
@@ -411,11 +499,11 @@ class SelectionApi {
     ProgressCallback? onSendProgress,
     ProgressCallback? onReceiveProgress,
   }) async {
-    final _path = r'/selection/courses/{code}'.replaceAll(
+    final _path = r'/selection/courses/{teachingClassId}'.replaceAll(
       '{'
-      r'code'
+      r'teachingClassId'
       '}',
-      code.toString(),
+      teachingClassId.toString(),
     );
     final _options = Options(
       method: r'GET',
@@ -465,11 +553,11 @@ class SelectionApi {
     );
   }
 
-  /// Timeslots for a selection course code
+  /// Timeslots for a stable teaching-class identifier
   ///
   ///
   /// Parameters:
-  /// * [code]
+  /// * [teachingClassId] - Stable upstream teaching-class identifier, not a canonical course code.
   /// * [cancelToken] - A [CancelToken] that can be used to cancel the operation
   /// * [headers] - Can be used to add additional headers to the request
   /// * [extras] - Can be used to add flags to the request
@@ -479,8 +567,8 @@ class SelectionApi {
   ///
   /// Returns a [Future] containing a [Response] with a [List<TimeSlot>] as data
   /// Throws [DioException] if API call or serialization fails
-  Future<Response<List<TimeSlot>>> selectionCoursesCodeTimeslotsGet({
-    required String code,
+  Future<Response<List<TimeSlot>>> selectionCoursesTeachingClassIdTimeslotsGet({
+    required String teachingClassId,
     CancelToken? cancelToken,
     Map<String, dynamic>? headers,
     Map<String, dynamic>? extra,
@@ -488,11 +576,11 @@ class SelectionApi {
     ProgressCallback? onSendProgress,
     ProgressCallback? onReceiveProgress,
   }) async {
-    final _path = r'/selection/courses/{code}/timeslots'.replaceAll(
+    final _path = r'/selection/courses/{teachingClassId}/timeslots'.replaceAll(
       '{'
-      r'code'
+      r'teachingClassId'
       '}',
-      code.toString(),
+      teachingClassId.toString(),
     );
     final _options = Options(
       method: r'GET',
@@ -531,81 +619,6 @@ class SelectionApi {
     }
 
     return Response<List<TimeSlot>>(
-      data: _responseData,
-      headers: _response.headers,
-      isRedirect: _response.isRedirect,
-      requestOptions: _response.requestOptions,
-      redirects: _response.redirects,
-      statusCode: _response.statusCode,
-      statusMessage: _response.statusMessage,
-      extra: _response.extra,
-    );
-  }
-
-  /// Search selection courses
-  ///
-  ///
-  /// Parameters:
-  /// * [q]
-  /// * [cancelToken] - A [CancelToken] that can be used to cancel the operation
-  /// * [headers] - Can be used to add additional headers to the request
-  /// * [extras] - Can be used to add flags to the request
-  /// * [validateStatus] - A [ValidateStatus] callback that can be used to determine request success based on the HTTP status of the response
-  /// * [onSendProgress] - A [ProgressCallback] that can be used to get the send progress
-  /// * [onReceiveProgress] - A [ProgressCallback] that can be used to get the receive progress
-  ///
-  /// Returns a [Future] containing a [Response] with a [List<SelectionCourse>] as data
-  /// Throws [DioException] if API call or serialization fails
-  Future<Response<List<SelectionCourse>>> selectionCoursesSearchGet({
-    required String q,
-    CancelToken? cancelToken,
-    Map<String, dynamic>? headers,
-    Map<String, dynamic>? extra,
-    ValidateStatus? validateStatus,
-    ProgressCallback? onSendProgress,
-    ProgressCallback? onReceiveProgress,
-  }) async {
-    final _path = r'/selection/courses/search';
-    final _options = Options(
-      method: r'GET',
-      headers: <String, dynamic>{...?headers},
-      extra: <String, dynamic>{'secure': <Map<String, String>>[], ...?extra},
-      validateStatus: validateStatus,
-    );
-
-    final _queryParameters = <String, dynamic>{r'q': q};
-
-    final _response = await _dio.request<Object>(
-      _path,
-      options: _options,
-      queryParameters: _queryParameters,
-      cancelToken: cancelToken,
-      onSendProgress: onSendProgress,
-      onReceiveProgress: onReceiveProgress,
-    );
-
-    List<SelectionCourse>? _responseData;
-
-    try {
-      final rawData = _response.data;
-      _responseData = rawData == null
-          ? null
-          : deserialize<List<SelectionCourse>, SelectionCourse>(
-              rawData,
-              'List<SelectionCourse>',
-              growable: true,
-            );
-    } catch (error, stackTrace) {
-      throw DioException(
-        requestOptions: _response.requestOptions,
-        response: _response,
-        type: DioExceptionType.unknown,
-        error: error,
-        stackTrace: stackTrace,
-      );
-    }
-
-    return Response<List<SelectionCourse>>(
       data: _responseData,
       headers: _response.headers,
       isRedirect: _response.isRedirect,
@@ -691,7 +704,7 @@ class SelectionApi {
   ///
   ///
   /// Parameters:
-  /// * [calendarId]
+  /// * [calendarId] - Selection calendar that bounds every returned teaching class.
   /// * [cancelToken] - A [CancelToken] that can be used to cancel the operation
   /// * [headers] - Can be used to add additional headers to the request
   /// * [extras] - Can be used to add flags to the request
@@ -832,10 +845,11 @@ class SelectionApi {
     );
   }
 
-  /// Majors for a grade
+  /// Majors with teaching classes in a calendar and grade
   ///
   ///
   /// Parameters:
+  /// * [calendarId] - Selection calendar that bounds every returned teaching class.
   /// * [grade]
   /// * [cancelToken] - A [CancelToken] that can be used to cancel the operation
   /// * [headers] - Can be used to add additional headers to the request
@@ -847,6 +861,7 @@ class SelectionApi {
   /// Returns a [Future] containing a [Response] with a [List<Major>] as data
   /// Throws [DioException] if API call or serialization fails
   Future<Response<List<Major>>> selectionMajorsGet({
+    required String calendarId,
     required String grade,
     CancelToken? cancelToken,
     Map<String, dynamic>? headers,
@@ -863,7 +878,10 @@ class SelectionApi {
       validateStatus: validateStatus,
     );
 
-    final _queryParameters = <String, dynamic>{r'grade': grade};
+    final _queryParameters = <String, dynamic>{
+      r'calendarId': calendarId,
+      r'grade': grade,
+    };
 
     final _response = await _dio.request<Object>(
       _path,

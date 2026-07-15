@@ -27,11 +27,21 @@ abstract interface class ReviewsRepository {
     CancelToken? cancelToken,
   });
 
+  Future<Review> get(String reviewId, {CancelToken? cancelToken});
+
   Future<Review> publish({
     required String courseId,
     required int rating,
     required String captchaToken,
     required String idempotencyKey,
+    String? comment,
+    String? semester,
+    String? score,
+  });
+
+  Future<Review> edit({
+    required String reviewId,
+    required int rating,
     String? comment,
     String? semester,
     String? score,
@@ -83,6 +93,19 @@ class GeneratedReviewsRepository implements ReviewsRepository {
   }
 
   @override
+  Future<Review> get(String reviewId, {CancelToken? cancelToken}) async {
+    try {
+      final Response<Review> response = await _api.reviewsIdGet(
+        id: reviewId,
+        cancelToken: cancelToken,
+      );
+      return response.data ?? (throw _incompleteResponse('点评详情'));
+    } on DioException catch (exception) {
+      throw ApiFailure.fromDio(exception);
+    }
+  }
+
+  @override
   Future<Review> publish({
     required String courseId,
     required int rating,
@@ -105,6 +128,30 @@ class GeneratedReviewsRepository implements ReviewsRepository {
         ),
       );
       return response.data ?? (throw _incompleteResponse('发布点评'));
+    } on DioException catch (exception) {
+      throw ApiFailure.fromDio(exception);
+    }
+  }
+
+  @override
+  Future<Review> edit({
+    required String reviewId,
+    required int rating,
+    String? comment,
+    String? semester,
+    String? score,
+  }) async {
+    try {
+      final Response<Review> response = await _api.reviewsIdPatch(
+        id: reviewId,
+        reviewInput: ReviewInput(
+          rating: rating,
+          comment: _optionalText(comment),
+          semester: _optionalText(semester),
+          score: _optionalText(score),
+        ),
+      );
+      return response.data ?? (throw _incompleteResponse('编辑点评'));
     } on DioException catch (exception) {
       throw ApiFailure.fromDio(exception);
     }

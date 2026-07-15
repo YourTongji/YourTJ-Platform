@@ -11,6 +11,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/lib/api/endpoints";
 import type { MediaUsage, MyProfile, MyUpload, Page } from "@/lib/api/types";
 import { formatUnixTime } from "@/lib/format";
+import { forumQueryKeys } from "@/lib/forum-query-keys";
 import { mediaDeliveryRefetchInterval } from "@/lib/media-delivery";
 import { invalidateMediaDeliveryUrl } from "@/lib/media-delivery-cache";
 import { STATIC_IMAGE_REUPLOAD_MESSAGE } from "@/lib/media-policy";
@@ -164,11 +165,11 @@ function ProfileMediaSlotPanel({
   async function refreshProfileMedia() {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: ["my-profile"] }),
-      queryClient.invalidateQueries({ queryKey: ["profile"] }),
-      queryClient.invalidateQueries({ queryKey: ["home", "threads"] }),
-      queryClient.invalidateQueries({ queryKey: ["forum", "threads"] }),
-      queryClient.invalidateQueries({ queryKey: ["thread"] }),
-      queryClient.invalidateQueries({ queryKey: ["thread-comments"] }),
+      queryClient.invalidateQueries({ queryKey: forumQueryKeys.profiles() }),
+      queryClient.invalidateQueries({ queryKey: forumQueryKeys.homeFeeds() }),
+      queryClient.invalidateQueries({ queryKey: forumQueryKeys.feeds() }),
+      queryClient.invalidateQueries({ queryKey: forumQueryKeys.threadDetails() }),
+      queryClient.invalidateQueries({ queryKey: forumQueryKeys.threadComments() }),
     ]);
   }
 

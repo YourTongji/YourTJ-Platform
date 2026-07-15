@@ -12,6 +12,7 @@ import {
   writeAccount,
   writeAuth,
 } from "@/lib/auth-storage";
+import { discardAllForumOptimisticUpdates } from "@/lib/forum-cache";
 
 interface AuthContextValue {
   account: Account | null;
@@ -47,6 +48,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const activeAccountId = React.useRef(account?.id);
 
   const clearPrincipalQueries = React.useCallback(async () => {
+    discardAllForumOptimisticUpdates(queryClient);
     await queryClient.cancelQueries();
     queryClient.clear();
   }, [queryClient]);

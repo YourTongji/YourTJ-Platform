@@ -40,6 +40,7 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { api } from "@/lib/api/endpoints";
 import type { Board, Comment, ThreadDetailWithPoll } from "@/lib/api/types";
+import { forumQueryKeys } from "@/lib/forum-query-keys";
 
 type ThreadModerationAction =
   | "pin"
@@ -265,12 +266,12 @@ export function ThreadModerationMenu({
       toast.success(`${threadActionCopy[variables.action].title}已完成`);
       setSelectedAction(null);
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["thread", threadId] }),
-        queryClient.invalidateQueries({ queryKey: ["thread-comments", threadId] }),
-        queryClient.invalidateQueries({ queryKey: ["forum", "threads"] }),
-        queryClient.invalidateQueries({ queryKey: ["forum", "boards"] }),
-        queryClient.invalidateQueries({ queryKey: ["home", "threads"] }),
-        queryClient.invalidateQueries({ queryKey: ["profile", thread.authorHandle] }),
+        queryClient.invalidateQueries({ queryKey: forumQueryKeys.thread(threadId) }),
+        queryClient.invalidateQueries({ queryKey: forumQueryKeys.comments(threadId) }),
+        queryClient.invalidateQueries({ queryKey: forumQueryKeys.feeds() }),
+        queryClient.invalidateQueries({ queryKey: forumQueryKeys.boards() }),
+        queryClient.invalidateQueries({ queryKey: forumQueryKeys.homeFeeds() }),
+        queryClient.invalidateQueries({ queryKey: forumQueryKeys.profile(thread.authorHandle) }),
         queryClient.invalidateQueries({ queryKey: ["admin", "forum-flags"] }),
         queryClient.invalidateQueries({ queryKey: ["admin", "forum", "thread", threadId] }),
         queryClient.invalidateQueries({ queryKey: ["admin", "overview"] }),
@@ -399,11 +400,11 @@ export function CommentModerationMenu({ comment, threadId }: { comment: Comment;
       toast.success(`${commentActionCopy[variables.action].title}已完成`);
       setSelectedAction(null);
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["thread", threadId] }),
-        queryClient.invalidateQueries({ queryKey: ["thread-comments", threadId] }),
-        queryClient.invalidateQueries({ queryKey: ["forum", "threads"] }),
-        queryClient.invalidateQueries({ queryKey: ["home", "threads"] }),
-        queryClient.invalidateQueries({ queryKey: ["profile", comment.authorHandle] }),
+        queryClient.invalidateQueries({ queryKey: forumQueryKeys.thread(threadId) }),
+        queryClient.invalidateQueries({ queryKey: forumQueryKeys.comments(threadId) }),
+        queryClient.invalidateQueries({ queryKey: forumQueryKeys.feeds() }),
+        queryClient.invalidateQueries({ queryKey: forumQueryKeys.homeFeeds() }),
+        queryClient.invalidateQueries({ queryKey: forumQueryKeys.profile(comment.authorHandle) }),
         queryClient.invalidateQueries({ queryKey: ["admin", "forum-flags"] }),
         queryClient.invalidateQueries({ queryKey: ["admin", "forum", "comment", commentId] }),
         queryClient.invalidateQueries({ queryKey: ["admin", "overview"] }),

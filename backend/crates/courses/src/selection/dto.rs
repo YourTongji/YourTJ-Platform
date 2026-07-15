@@ -48,15 +48,17 @@ pub struct CourseNatureDto {
     pub name: String,
 }
 
-/// A selection course in a list.
+/// One teaching class in the selection mirror.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SelectionCourseDto {
+    /// Stable upstream teaching-class identifier.
     pub id: String,
     pub code: String,
     pub name: String,
     pub credit: Option<f64>,
     pub nature_id: Option<String>,
+    pub calendar_id: Option<String>,
     pub campus_id: Option<String>,
     pub teacher_name: Option<String>,
     pub teacher_names: Vec<String>,
@@ -96,6 +98,7 @@ mod tests {
             name: "课程".into(),
             credit: None,
             nature_id: None,
+            calendar_id: Some("7".into()),
             campus_id: None,
             teacher_name: None,
             teacher_names: Vec::new(),
@@ -108,6 +111,7 @@ mod tests {
                 "name": "课程",
                 "credit": null,
                 "natureId": null,
+                "calendarId": "7",
                 "campusId": null,
                 "teacherName": null,
                 "teacherNames": []

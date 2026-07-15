@@ -172,6 +172,12 @@ void main() {
         '/courses/course-1',
       );
       expect(
+        safePublicInteractionReturnLocation(
+          '/courses/course-1?review=review-7&token=secret',
+        ),
+        '/courses/course-1?review=review-7',
+      );
+      expect(
         safePublicInteractionReturnLocation('/profile/student_1/followers'),
         '/profile/student_1/followers',
       );

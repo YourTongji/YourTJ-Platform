@@ -82,6 +82,7 @@ import type {
   NotificationOutboxState,
   NotificationPreferences,
   NotificationUnreadCount,
+  OneboxResult,
   Page,
   Poll,
   Product,
@@ -581,8 +582,12 @@ export const api = {
   courseReviews(id: string, query: { sort?: "hot" | "new"; cursor?: string | null }) {
     return apiRequest<Page<Review>>(`/courses/${encodeURIComponent(id)}/reviews`, {
       query: { ...query, limit: 20 },
-      auth: false,
+      auth: "optional",
     });
+  },
+
+  review(id: string) {
+    return apiRequest<Review>(`/reviews/${encodeURIComponent(id)}`, { auth: "optional" });
   },
 
   createReview(
@@ -611,6 +616,21 @@ export const api = {
     return apiRequest<void>(`/reviews/${encodeURIComponent(id)}/like`, { method: "DELETE" });
   },
 
+  editReview(
+    id: string,
+    body: {
+      rating: number;
+      comment?: string;
+      semester?: string;
+      score?: string;
+    },
+  ) {
+    return apiRequest<Review>(`/reviews/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body,
+    });
+  },
+
   reportReview(id: string, reason: string, captchaToken: string) {
     return apiRequest<void>(`/reviews/${encodeURIComponent(id)}/report`, {
       method: "POST",
@@ -623,10 +643,12 @@ export const api = {
     type: "course" | "teacher" | "review" | "thread" | "user" | "board" | "tag" | "all" = "all",
     limit = 12,
     cursor?: string | null,
+    signal?: AbortSignal,
   ) {
     return apiRequest<SearchResult>("/search", {
       query: { q, type, limit, cursor },
       auth: "optional",
+      signal,
     });
   },
 
@@ -649,9 +671,9 @@ export const api = {
     });
   },
 
-  majors(grade: string) {
+  majors(calendarId: string, grade: string) {
     return apiRequest<Major[]>("/selection/majors", {
-      query: { grade },
+      query: { calendarId, grade },
       auth: false,
     });
   },
@@ -660,35 +682,35 @@ export const api = {
     return apiRequest<CourseNature[]>("/selection/course-natures", { auth: false });
   },
 
-  selectionByMajor(majorId: string, grade: string) {
+  selectionByMajor(calendarId: string, majorId: string, grade: string) {
     return apiRequest<SelectionCourse[]>("/selection/courses-by-major", {
-      query: { majorId, grade },
+      query: { calendarId, majorId, grade },
       auth: false,
     });
   },
 
-  selectionByNature(natureId: string) {
+  selectionByNature(calendarId: string, natureId: string) {
     return apiRequest<SelectionCourse[]>("/selection/courses-by-nature", {
-      query: { natureId },
+      query: { calendarId, natureId },
       auth: false,
     });
   },
 
-  selectionSearch(q: string) {
+  selectionSearch(calendarId: string, q: string) {
     return apiRequest<SelectionCourse[]>("/selection/courses/search", {
-      query: { q },
+      query: { calendarId, q },
       auth: false,
     });
   },
 
-  selectionCourse(code: string) {
-    return apiRequest<SelectionCourse>(`/selection/courses/${encodeURIComponent(code)}`, {
+  selectionCourse(teachingClassId: string) {
+    return apiRequest<SelectionCourse>(`/selection/courses/${encodeURIComponent(teachingClassId)}`, {
       auth: false,
     });
   },
 
-  selectionTimeslots(code: string) {
-    return apiRequest<TimeSlot[]>(`/selection/courses/${encodeURIComponent(code)}/timeslots`, {
+  selectionTimeslots(teachingClassId: string) {
+    return apiRequest<TimeSlot[]>(`/selection/courses/${encodeURIComponent(teachingClassId)}/timeslots`, {
       auth: false,
     });
   },
@@ -703,6 +725,14 @@ export const api = {
 
   tags() {
     return apiRequest<Tag[]>("/forum/tags", { auth: false });
+  },
+
+  onebox(url: string, signal?: AbortSignal) {
+    return apiRequest<OneboxResult>("/onebox", {
+      auth: false,
+      query: { url },
+      signal,
+    });
   },
 
   threads(query: {
@@ -949,10 +979,10 @@ export const api = {
     });
   },
 
-  sendDmMessage(id: string, body: string) {
+  sendDmMessage(id: string, body: string, clientMessageId?: string) {
     return apiRequest<DmMessage>(`/forum/dm/conversations/${encodeURIComponent(id)}/messages`, {
       method: "POST",
-      body: { body },
+      body: { body, clientMessageId },
     });
   },
 

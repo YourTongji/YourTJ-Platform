@@ -1,6 +1,8 @@
 //! Meilisearch integration for courses search, index setup, and document sync.
 //!
-//! Background synchronization degrades safely when Meilisearch is unreachable.
+//! Selection search reads degrade to an empty result when Meilisearch is
+//! unreachable. Index setup and synchronization propagate failures so an
+//! operator cannot mistake an enqueued or failed reindex for completion.
 //! Federated candidate reads return an error so callers can distinguish an
 //! unavailable section from a genuine empty result.
 
@@ -275,7 +277,7 @@ pub async fn search_document_ids(
 // Selection course index
 // ---------------------------------------------------------------------------
 
-/// Setup the Meilisearch "selection_courses" index with searchable attributes.
+/// Setup the Meilisearch "selection_courses" index with searchable and filterable attributes.
 pub async fn setup_selection_index(url: &str, api_key: &str) -> Result<(), String> {
     let client =
         Client::new(url, meili_api_key(api_key)).map_err(|e| format!("Meili client: {e}"))?;
@@ -300,7 +302,7 @@ pub async fn setup_selection_index(url: &str, api_key: &str) -> Result<(), Strin
     wait_for_task(&client, searchable_task, "selection searchable attributes").await?;
 
     let filterable_task = index
-        .set_filterable_attributes(&["natureId", "campusId"])
+        .set_filterable_attributes(&["calendarId", "natureId", "campusId"])
         .await
         .map_err(|error| format!("selection filterable attributes: {error}"))?;
     wait_for_task(&client, filterable_task, "selection filterable attributes").await?;
@@ -317,6 +319,7 @@ pub struct SelectionCourseDocument {
     pub name: String,
     pub credit: Option<f64>,
     pub nature_id: Option<i64>,
+    pub calendar_id: Option<i64>,
     pub campus_id: Option<i64>,
     pub teacher_name: Option<String>,
     pub teacher_names: Option<Vec<String>>,
@@ -328,6 +331,7 @@ pub async fn search_selection_courses(
     url: &str,
     api_key: &str,
     q: &str,
+    calendar_id: i64,
     limit: usize,
 ) -> Vec<SelectionCourseDocument> {
     let client = match Client::new(url, meili_api_key(api_key)) {
@@ -339,11 +343,18 @@ pub async fn search_selection_courses(
     };
 
     let index = client.index("selection_courses");
-    match index.search().with_query(q).with_limit(limit).execute::<SelectionCourseDocument>().await
+    let calendar_filter = format!("calendarId = {calendar_id}");
+    match index
+        .search()
+        .with_query(q)
+        .with_filter(&calendar_filter)
+        .with_limit(limit)
+        .execute::<SelectionCourseDocument>()
+        .await
     {
         Ok(results) => results.hits.into_iter().map(|h| h.result).collect(),
         Err(e) => {
-            tracing::warn!(error = %e, query = %q, "Meili selection search failed");
+            tracing::warn!(error = %e, "Meili selection search failed");
             Vec::new()
         }
     }
@@ -357,26 +368,24 @@ struct SelectionCourseRow {
     name: String,
     credit: Option<f64>,
     nature_id: Option<i64>,
+    calendar_id: Option<i64>,
     campus_id: Option<i64>,
     teacher_name: Option<String>,
     teacher_names: Option<Vec<String>>,
 }
 
-/// Sync all selection courses to Meilisearch.
-pub async fn sync_selection_courses_to_meili(url: &str, api_key: &str, pool: &PgPool) {
-    let rows: Vec<SelectionCourseRow> = match sqlx::query_as::<_, SelectionCourseRow>(
-        "SELECT id, code, name, credit, nature_id, campus_id, teacher_name, teacher_names \
+/// Replace all selection-course documents and confirm both index tasks completed.
+pub async fn sync_selection_courses_to_meili(
+    url: &str,
+    api_key: &str,
+    pool: &PgPool,
+) -> AppResult<usize> {
+    let rows: Vec<SelectionCourseRow> = sqlx::query_as::<_, SelectionCourseRow>(
+        "SELECT id, code, name, credit, nature_id, calendar_id, campus_id, teacher_name, teacher_names \
          FROM selection.courses ORDER BY id",
     )
     .fetch_all(pool)
-    .await
-    {
-        Ok(r) => r,
-        Err(e) => {
-            tracing::warn!(error = %e, "failed to fetch selection courses for Meili sync");
-            return;
-        }
-    };
+    .await?;
 
     let docs: Vec<serde_json::Value> = rows
         .into_iter()
@@ -387,6 +396,7 @@ pub async fn sync_selection_courses_to_meili(url: &str, api_key: &str, pool: &Pg
                 "name": r.name,
                 "credit": r.credit,
                 "natureId": r.nature_id,
+                "calendarId": r.calendar_id,
                 "campusId": r.campus_id,
                 "teacherName": r.teacher_name,
                 "teacherNames": r.teacher_names.unwrap_or_default(),
@@ -394,18 +404,30 @@ pub async fn sync_selection_courses_to_meili(url: &str, api_key: &str, pool: &Pg
             })
         })
         .collect();
+    let document_count = docs.len();
 
-    let client = match Client::new(url, meili_api_key(api_key)) {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::warn!(error = %e, "Meili client failed during selection sync");
-            return;
-        }
-    };
+    let client = Client::new(url, meili_api_key(api_key))
+        .map_err(|error| meili_app_failure("selection client creation", error))?;
+    let index = client.index("selection_courses");
+    let clear_task = index
+        .delete_all_documents()
+        .await
+        .map_err(|error| meili_app_failure("selection index clear enqueue", error))?;
+    wait_for_task(&client, clear_task, "selection index clear")
+        .await
+        .map_err(|error| meili_app_failure("selection index clear", error))?;
 
-    if let Err(e) = client.index("selection_courses").add_documents(&docs, Some("id")).await {
-        tracing::warn!(error = %e, "Meili add_documents failed for selection sync");
+    if !docs.is_empty() {
+        let add_task = index
+            .add_documents(&docs, Some("id"))
+            .await
+            .map_err(|error| meili_app_failure("selection index addition enqueue", error))?;
+        wait_for_task(&client, add_task, "selection index addition")
+            .await
+            .map_err(|error| meili_app_failure("selection index addition", error))?;
     }
+
+    Ok(document_count)
 }
 
 // ---------------------------------------------------------------------------

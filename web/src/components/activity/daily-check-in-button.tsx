@@ -1,4 +1,4 @@
-import { CalendarCheck2, LoaderCircle, RotateCcw } from "lucide-react";
+import { CalendarCheck2, LoaderCircle, RotateCcw, Share2 } from "lucide-react";
 import { Link } from "react-router";
 
 import { Button } from "@/components/ui/button";
@@ -12,6 +12,7 @@ interface DailyCheckInButtonProps {
   error?: unknown;
   onCheckIn: () => void;
   onRetry: () => void;
+  onShare?: () => void;
 }
 
 export function DailyCheckInButton({
@@ -22,6 +23,7 @@ export function DailyCheckInButton({
   error,
   onCheckIn,
   onRetry,
+  onShare,
 }: DailyCheckInButtonProps) {
   if (!account) {
     return (
@@ -57,16 +59,16 @@ export function DailyCheckInButton({
       type="button"
       className="h-10 w-full rounded-lg"
       variant={status.checkedIn ? "secondary" : "default"}
-      disabled={status.checkedIn || isPending}
-      onClick={onCheckIn}
+      disabled={isPending || (status.checkedIn && !onShare)}
+      onClick={status.checkedIn ? onShare : onCheckIn}
     >
       {isPending ? (
         <LoaderCircle className="size-4 animate-spin" />
       ) : (
-        <CalendarCheck2 className="size-4" />
+        status.checkedIn ? <Share2 className="size-4" /> : <CalendarCheck2 className="size-4" />
       )}
       {status.checkedIn
-        ? `今日已签到 · 连续 ${status.currentStreak} 天`
+        ? `今日已签到 · 连续 ${status.currentStreak} 天 · 分享`
         : `每日签到 · 累计 ${status.totalDays} 天`}
     </Button>
   );

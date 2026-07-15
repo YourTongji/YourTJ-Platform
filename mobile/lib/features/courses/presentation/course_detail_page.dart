@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -16,26 +18,89 @@ import '../data/courses_repository.dart';
 import '../domain/course_detail_controller.dart';
 
 class CourseDetailPage extends ConsumerStatefulWidget {
-  const CourseDetailPage({required this.courseId, super.key});
+  const CourseDetailPage({
+    required this.courseId,
+    this.targetReviewId,
+    super.key,
+  });
 
   final String courseId;
+  final String? targetReviewId;
 
   @override
   ConsumerState<CourseDetailPage> createState() => _CourseDetailPageState();
 }
 
 class _CourseDetailPageState extends ConsumerState<CourseDetailPage> {
-  late final CourseDetailController _controller;
+  late CourseDetailController _controller;
+  final GlobalKey _targetReviewKey = GlobalKey();
+  (int, SessionPhase, String?)? _sessionIdentity;
+  String? _scheduledTargetReviewId;
+  String? _scrolledTargetReviewId;
 
   @override
   void initState() {
     super.initState();
-    _controller = CourseDetailController(
+    _controller = _newController();
+    ref.listenManual<AsyncValue<SessionState>>(
+      sessionStateProvider,
+      _handleSessionState,
+      fireImmediately: true,
+    );
+    unawaited(_controller.initialize());
+  }
+
+  CourseDetailController _newController() {
+    return CourseDetailController(
       courseId: widget.courseId,
+      targetReviewId: widget.targetReviewId,
       courseSource: ref.read(coursesRepositoryProvider),
       reviewSource: ref.read(reviewsRepositoryProvider),
     );
-    _controller.initialize();
+  }
+
+  void _handleSessionState(
+    AsyncValue<SessionState>? _,
+    AsyncValue<SessionState> next,
+  ) {
+    final SessionState? session = next.value;
+    if (session == null) {
+      return;
+    }
+    final (int, SessionPhase, String?) identity = (
+      session.generation,
+      session.phase,
+      session.account?.id,
+    );
+    if (_sessionIdentity == null) {
+      _sessionIdentity = identity;
+      return;
+    }
+    if (_sessionIdentity == identity) {
+      return;
+    }
+    _sessionIdentity = identity;
+    final CourseDetailController controller = _controller;
+    unawaited(
+      Future.wait<void>(<Future<void>>[
+        controller.reloadReviews(),
+        controller.reloadTargetReview(),
+      ]),
+    );
+  }
+
+  @override
+  void didUpdateWidget(CourseDetailPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.courseId == widget.courseId &&
+        oldWidget.targetReviewId == widget.targetReviewId) {
+      return;
+    }
+    _controller.dispose();
+    _scheduledTargetReviewId = null;
+    _scrolledTargetReviewId = null;
+    _controller = _newController();
+    unawaited(_controller.initialize());
   }
 
   @override
@@ -276,9 +341,23 @@ class _CourseDetailPageState extends ConsumerState<CourseDetailPage> {
   }
 
   Widget _reviewsSection(BuildContext context) {
+    final String? targetId = _controller.targetReview?.id;
+    if (targetId != null && targetId == widget.targetReviewId) {
+      _scheduleTargetReviewScroll(targetId);
+    }
+    final List<Review> listedReviews = _controller.reviews
+        .where((Review review) => review.id != targetId)
+        .toList(growable: false);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
+        if (widget.targetReviewId != null) ...<Widget>[
+          KeyedSubtree(
+            key: _targetReviewKey,
+            child: _targetReviewSurface(context),
+          ),
+          const SizedBox(height: 20),
+        ],
         Row(
           children: <Widget>[
             Expanded(
@@ -309,7 +388,7 @@ class _CourseDetailPageState extends ConsumerState<CourseDetailPage> {
             ),
           )
         else if (_controller.reviewsFailure case final ApiFailure failure)
-          if (_controller.reviews.isEmpty)
+          if (listedReviews.isEmpty)
             SizedBox(
               height: 260,
               child: AppErrorState(
@@ -323,28 +402,26 @@ class _CourseDetailPageState extends ConsumerState<CourseDetailPage> {
               message: failure.message,
               onRetry: _controller.loadMoreReviews,
             )
-        else if (_controller.reviews.isEmpty)
-          const SizedBox(
+        else if (listedReviews.isEmpty)
+          SizedBox(
             height: 240,
             child: AppEmptyState(
-              title: '还没有点评',
-              description: '成为第一个记录这门课体验的人。',
+              title: targetId == null ? '还没有点评' : '没有更多点评',
+              description: targetId == null
+                  ? '成为第一个记录这门课体验的人。'
+                  : '已在上方单独展示定位到的点评。',
             ),
           )
         else ...<Widget>[
-          ..._controller.reviews.map((Review review) {
-            final String reviewId = review.id ?? '';
-            return Padding(
+          ...listedReviews.map(
+            (Review review) => Padding(
               padding: const EdgeInsets.only(bottom: 10),
-              child: ReviewCard(
-                review: review,
-                isBusy: _controller.isReviewBusy(reviewId),
-                onLike: () => _likeReview(reviewId),
-                onReport: () => _reportReview(reviewId),
+              child: _reviewCard(
+                review,
                 onRefreshAvatar: _controller.reloadReviews,
               ),
-            );
-          }),
+            ),
+          ),
           if (_controller.reviewsHaveMore)
             Center(
               child: OutlinedButton.icon(
@@ -364,6 +441,84 @@ class _CourseDetailPageState extends ConsumerState<CourseDetailPage> {
             ),
         ],
       ],
+    );
+  }
+
+  void _scheduleTargetReviewScroll(String reviewId) {
+    if (_scheduledTargetReviewId == reviewId ||
+        _scrolledTargetReviewId == reviewId) {
+      return;
+    }
+    _scheduledTargetReviewId = reviewId;
+    WidgetsBinding.instance.addPostFrameCallback((Duration _) {
+      if (!mounted ||
+          _controller.targetReview?.id != reviewId ||
+          widget.targetReviewId != reviewId) {
+        _scheduledTargetReviewId = null;
+        return;
+      }
+      final BuildContext? targetContext = _targetReviewKey.currentContext;
+      if (targetContext == null) {
+        _scheduledTargetReviewId = null;
+        return;
+      }
+      unawaited(
+        Scrollable.ensureVisible(
+          targetContext,
+          duration: const Duration(milliseconds: 280),
+          curve: Curves.easeOutCubic,
+          alignment: 0.08,
+        ).whenComplete(() {
+          if (!mounted || widget.targetReviewId != reviewId) {
+            return;
+          }
+          _scheduledTargetReviewId = null;
+          _scrolledTargetReviewId = reviewId;
+        }),
+      );
+    });
+  }
+
+  Widget _targetReviewSurface(BuildContext context) {
+    if (_controller.isTargetReviewLoading) {
+      return const SizedBox(
+        height: 200,
+        child: AppLoadingState(title: '正在定位点评', description: '正在按精确点评编号读取内容。'),
+      );
+    }
+    if (_controller.targetReviewFailure case final ApiFailure failure) {
+      return _PartialFailureCard(
+        title: '无法定位点评',
+        message: failure.message,
+        onRetry: _controller.reloadTargetReview,
+      );
+    }
+    final Review? review = _controller.targetReview;
+    if (review == null || review.courseId != widget.courseId) {
+      return const SizedBox(
+        height: 200,
+        child: AppEmptyState(title: '无法定位点评', description: '这条点评不存在，或不属于当前课程。'),
+      );
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        Text('定位点评', style: Theme.of(context).textTheme.titleLarge),
+        const SizedBox(height: 12),
+        _reviewCard(review, onRefreshAvatar: _controller.reloadTargetReview),
+      ],
+    );
+  }
+
+  Widget _reviewCard(Review review, {required VoidCallback onRefreshAvatar}) {
+    final String reviewId = review.id ?? '';
+    return ReviewCard(
+      review: review,
+      isBusy: _controller.isReviewBusy(reviewId),
+      onLike: () => _likeReview(review),
+      onEdit: () => _editReview(review),
+      onReport: () => _reportReview(reviewId),
+      onRefreshAvatar: onRefreshAvatar,
     );
   }
 
@@ -418,16 +573,46 @@ class _CourseDetailPageState extends ConsumerState<CourseDetailPage> {
     return false;
   }
 
-  Future<void> _likeReview(String reviewId) async {
+  Future<void> _likeReview(Review review) async {
     if (!_isAuthenticated()) {
       return;
     }
     try {
-      await _controller.like(reviewId);
+      await _controller.toggleLike(review);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(review.viewerLiked ? '已取消赞同' : '已赞同这条点评')),
+        );
+      }
+    } on ApiFailure catch (failure) {
       if (mounted) {
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(const SnackBar(content: Text('已赞同这条点评')));
+        ).showSnackBar(SnackBar(content: Text(failure.message)));
+      }
+    }
+  }
+
+  Future<void> _editReview(Review review) async {
+    if (!_isAuthenticated()) {
+      return;
+    }
+    final ReviewEditDraft? draft = await requestReviewEdit(context, review);
+    if (!mounted || draft == null) {
+      return;
+    }
+    try {
+      await _controller.edit(
+        reviewId: review.id ?? '',
+        rating: draft.rating,
+        comment: draft.comment,
+        semester: draft.semester,
+        score: draft.score,
+      );
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('点评已更新')));
       }
     } on ApiFailure catch (failure) {
       if (mounted) {

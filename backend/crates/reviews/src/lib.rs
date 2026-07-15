@@ -19,7 +19,7 @@ pub mod tip_targets;
 use std::future::Future;
 use std::pin::Pin;
 
-use axum::routing::{get, patch, post};
+use axum::routing::{get, post};
 use axum::Router;
 pub use repo::claim_legacy_reviews_tx;
 use shared::AppState;
@@ -46,7 +46,7 @@ pub fn routes(state: AppState) -> Router {
             "/api/v2/courses/{id}/reviews",
             get(handlers::list_reviews).post(handlers::create_review),
         )
-        .route("/api/v2/reviews/{id}", patch(handlers::edit_review))
+        .route("/api/v2/reviews/{id}", get(handlers::get_review).patch(handlers::edit_review))
         // POST like, DELETE like (canonical), POST unlike (alias)
         .route(
             "/api/v2/reviews/{id}/like",

@@ -8,21 +8,44 @@ import { PageHeader } from "@/components/common/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useAuth } from "@/context/auth-provider";
+import { API_BASE_URL } from "@/lib/api/client";
 import { api } from "@/lib/api/endpoints";
-import type { SelectionCourse } from "@/lib/api/types";
+import type { SelectionCourse, TimeSlot } from "@/lib/api/types";
 import { formatDate } from "@/lib/format";
-import { ScheduledCourse, timetableCells, useScheduleStore } from "@/lib/schedule-store";
+import {
+  type ScheduleConflict,
+  type ScheduledCourse,
+  type ScheduleScope,
+  timetableCells,
+  useScheduleStore,
+} from "@/lib/schedule-store";
 import { cn } from "@/lib/utils";
 
 const weekdays = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"];
 const maxSlot = 13;
 
-function courseCode(course: SelectionCourse) {
-  return course.code ?? course.id ?? "";
+interface PendingPossibleConflict {
+  calendarId: string;
+  course: SelectionCourse;
+  timeslots: TimeSlot[];
+  conflict: ScheduleConflict;
+}
+
+function teachingClassId(course: SelectionCourse) {
+  return course.id;
 }
 
 function teachers(course: SelectionCourse) {
@@ -81,7 +104,7 @@ function Timetable({ staged }: { staged: ScheduledCourse[] }) {
                   <div className="space-y-1">
                     {(cells[key] ?? []).map((item) => (
                       <div
-                        key={`${courseCode(item.course)}-${section}`}
+                        key={`${teachingClassId(item.course)}-${section}`}
                         className="rounded px-2 py-1 text-xs leading-snug text-white"
                         style={{ backgroundColor: item.color }}
                       >
@@ -128,16 +151,29 @@ function exportCsv(staged: ScheduledCourse[]) {
 }
 
 export function SchedulePage() {
+  const { account } = useAuth();
   const [calendarId, setCalendarId] = React.useState("");
   const [grade, setGrade] = React.useState("");
   const [majorId, setMajorId] = React.useState("");
   const [natureId, setNatureId] = React.useState("");
   const [searchText, setSearchText] = React.useState("");
   const [activeTab, setActiveTab] = React.useState("major");
-  const staged = useScheduleStore((state) => state.staged);
-  const addCourse = useScheduleStore((state) => state.addCourse);
-  const removeCourse = useScheduleStore((state) => state.removeCourse);
-  const clearSchedule = useScheduleStore((state) => state.clear);
+  const [pendingPossibleConflict, setPendingPossibleConflict] =
+    React.useState<PendingPossibleConflict | null>(null);
+  const calendarIdRef = React.useRef(calendarId);
+  calendarIdRef.current = calendarId;
+  const scheduleScope = React.useMemo<ScheduleScope>(
+    () => ({
+      environment: API_BASE_URL,
+      principal: account?.id ?? "anonymous",
+      calendarId,
+    }),
+    [account?.id, calendarId],
+  );
+  const staged = useScheduleStore(scheduleScope, (state) => state.staged);
+  const addCourse = useScheduleStore(scheduleScope, (state) => state.addCourse);
+  const removeCourse = useScheduleStore(scheduleScope, (state) => state.removeCourse);
+  const clearSchedule = useScheduleStore(scheduleScope, (state) => state.clear);
 
   const calendars = useQuery({ queryKey: ["selection", "calendars"], queryFn: api.calendars });
   const latest = useQuery({ queryKey: ["selection", "latest"], queryFn: api.selectionLatestUpdate });
@@ -147,46 +183,101 @@ export function SchedulePage() {
     enabled: Boolean(calendarId),
   });
   const majors = useQuery({
-    queryKey: ["selection", "majors", grade],
-    queryFn: () => api.majors(grade),
-    enabled: Boolean(grade),
+    queryKey: ["selection", "majors", calendarId, grade],
+    queryFn: () => api.majors(calendarId, grade),
+    enabled: Boolean(calendarId && grade),
   });
   const natures = useQuery({ queryKey: ["selection", "natures"], queryFn: api.courseNatures });
   const majorCourses = useQuery({
-    queryKey: ["selection", "major-courses", majorId, grade],
-    queryFn: () => api.selectionByMajor(majorId, grade),
-    enabled: Boolean(majorId && grade),
+    queryKey: ["selection", "major-courses", calendarId, majorId, grade],
+    queryFn: () => api.selectionByMajor(calendarId, majorId, grade),
+    enabled: Boolean(calendarId && majorId && grade),
   });
   const natureCourses = useQuery({
-    queryKey: ["selection", "nature-courses", natureId],
-    queryFn: () => api.selectionByNature(natureId),
-    enabled: Boolean(natureId),
+    queryKey: ["selection", "nature-courses", calendarId, natureId],
+    queryFn: () => api.selectionByNature(calendarId, natureId),
+    enabled: Boolean(calendarId && natureId),
   });
   const searchCourses = useQuery({
-    queryKey: ["selection", "search", searchText.trim()],
-    queryFn: () => api.selectionSearch(searchText.trim()),
-    enabled: searchText.trim().length >= 2,
+    queryKey: ["selection", "search", calendarId, searchText.trim()],
+    queryFn: () => api.selectionSearch(calendarId, searchText.trim()),
+    enabled: Boolean(calendarId) && searchText.trim().length >= 2,
   });
 
   React.useEffect(() => {
     const current = calendars.data?.find((calendar) => calendar.isCurrent);
     if (!calendarId && current?.id) {
+      calendarIdRef.current = current.id;
       setCalendarId(current.id);
     }
   }, [calendarId, calendars.data]);
 
   async function handleAddCourse(course: SelectionCourse) {
+    const selectedCalendarId = calendarId;
+    if (course.calendarId !== selectedCalendarId) {
+      toast.error("教学班不属于当前学期，请刷新后重试");
+      return;
+    }
     try {
-      const slots = await api.selectionTimeslots(courseCode(course));
-      const conflict = addCourse(course, slots);
-      if (conflict) {
-        toast.error(`与 ${conflict.withName} 冲突`);
+      const slots = await api.selectionTimeslots(teachingClassId(course));
+      if (calendarIdRef.current !== selectedCalendarId) {
         return;
       }
-      toast.success(`${course.name} 已加入课表`);
+      const result = addCourse(course, slots);
+      if (result.status === "added") {
+        toast.success(`${course.name} 已加入课表`);
+      } else if (result.status === "duplicate") {
+        toast.info(`${course.name} 已在当前课表中`);
+      } else if (result.status === "scopeMismatch") {
+        toast.error("教学班不属于当前学期，请刷新后重试");
+      } else if (result.conflict.kind === "confirmed") {
+        toast.error(`与 ${result.conflict.withName} 在相同周次确定冲突`);
+      } else {
+        setPendingPossibleConflict({
+          calendarId: selectedCalendarId,
+          course,
+          timeslots: slots,
+          conflict: result.conflict,
+        });
+      }
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "拉取课程时段失败");
     }
+  }
+
+  function confirmPossibleConflict() {
+    const pending = pendingPossibleConflict;
+    if (!pending) {
+      return;
+    }
+    if (pending.calendarId !== calendarId) {
+      setPendingPossibleConflict(null);
+      toast.error("学期已切换，请重新选择教学班");
+      return;
+    }
+    const result = addCourse(pending.course, pending.timeslots, {
+      allowPossibleConflict: true,
+    });
+    setPendingPossibleConflict(null);
+    if (result.status === "added") {
+      toast.success(`${pending.course.name} 已加入课表`);
+    } else if (result.status === "duplicate") {
+      toast.info(`${pending.course.name} 已在当前课表中`);
+    } else if (result.status === "scopeMismatch") {
+      toast.error("教学班不属于当前学期，请刷新后重试");
+    } else {
+      toast.error(`与 ${result.conflict.withName} 在相同周次确定冲突`);
+    }
+  }
+
+  function handleCalendarChange(nextCalendarId: string) {
+    calendarIdRef.current = nextCalendarId;
+    setCalendarId(nextCalendarId);
+    setGrade("");
+    setMajorId("");
+    setNatureId("");
+    setSearchText("");
+    setPendingPossibleConflict(null);
   }
 
   const totalCredits = staged.reduce((sum, item) => sum + Number(item.course.credit ?? 0), 0);
@@ -200,9 +291,34 @@ export function SchedulePage() {
 
   return (
     <div>
+      <Dialog
+        open={pendingPossibleConflict !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setPendingPossibleConflict(null);
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>可能存在周次冲突</DialogTitle>
+            <DialogDescription>
+              {pendingPossibleConflict
+                ? `与“${pendingPossibleConflict.conflict.withName}”在${weekdays[(pendingPossibleConflict.conflict.candidateSlot.weekday ?? 1) - 1]} ${pendingPossibleConflict.conflict.candidateSlot.startSlot}-${pendingPossibleConflict.conflict.candidateSlot.endSlot} 节重叠，但至少一方周次缺失或无法解析，系统不能确认是否同周上课。`
+                : null}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPendingPossibleConflict(null)}>
+              取消
+            </Button>
+            <Button onClick={confirmPossibleConflict}>仍然加入</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       <PageHeader
         title="选课排课"
-        description="浏览培养方案课程，完成本地待选、冲突检查和课表模拟。"
+        description="按学期浏览教学班，完成本地待选、冲突检查和课表模拟。"
         actions={
           <>
             <Button variant="outline" onClick={() => exportCsv(staged)} disabled={staged.length === 0}>
@@ -232,7 +348,7 @@ export function SchedulePage() {
             <CardContent className="grid gap-3 md:grid-cols-3">
               <div className="space-y-2">
                 <Label>学期</Label>
-                <Select value={calendarId} onValueChange={setCalendarId}>
+                <Select value={calendarId} onValueChange={handleCalendarChange}>
                   <SelectTrigger>
                     <SelectValue placeholder="选择学期" />
                   </SelectTrigger>
@@ -295,7 +411,7 @@ export function SchedulePage() {
               ) : (
                 <div className="space-y-2">
                   {(majorCourses.data ?? []).map((course) => (
-                    <CourseRow key={course.id ?? course.code} course={course} onAdd={handleAddCourse} />
+                    <CourseRow key={course.id} course={course} onAdd={handleAddCourse} />
                   ))}
                 </div>
               )}
@@ -326,7 +442,7 @@ export function SchedulePage() {
               ) : (
                 <div className="space-y-2">
                   {(natureCourses.data ?? []).map((course) => (
-                    <CourseRow key={course.id ?? course.code} course={course} onAdd={handleAddCourse} />
+                    <CourseRow key={course.id} course={course} onAdd={handleAddCourse} />
                   ))}
                 </div>
               )}
@@ -351,7 +467,7 @@ export function SchedulePage() {
               ) : (
                 <div className="space-y-2">
                   {(searchCourses.data ?? []).map((course) => (
-                    <CourseRow key={course.id ?? course.code} course={course} onAdd={handleAddCourse} />
+                    <CourseRow key={course.id} course={course} onAdd={handleAddCourse} />
                   ))}
                 </div>
               )}
@@ -371,14 +487,14 @@ export function SchedulePage() {
           <Card>
             <CardHeader>
               <CardTitle>待选课程</CardTitle>
-              <CardDescription>保存在本机浏览器，不会写回一系统。</CardDescription>
+              <CardDescription>按当前环境、账号和学期保存在本机浏览器，不会写回一系统。</CardDescription>
             </CardHeader>
             <CardContent className="space-y-2">
               {staged.length === 0 ? (
                 <p className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">还没有加入课程</p>
               ) : (
                 staged.map((item) => (
-                  <div key={courseCode(item.course)} className="rounded-md border p-3">
+                  <div key={teachingClassId(item.course)} className="rounded-md border p-3">
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0">
                         <p className="font-medium">{item.course.name}</p>
@@ -387,7 +503,7 @@ export function SchedulePage() {
                       <Button
                         size="icon"
                         variant="ghost"
-                        onClick={() => removeCourse(courseCode(item.course))}
+                        onClick={() => removeCourse(teachingClassId(item.course))}
                         aria-label="移除课程"
                       >
                         <Trash2 className="h-4 w-4" />

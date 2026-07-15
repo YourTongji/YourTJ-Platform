@@ -529,6 +529,12 @@ pub async fn send_message_handler(
     if body.body.trim().is_empty() || !(1..=16000).contains(&character_count) {
         return Err(AppError::BadRequest("message body must contain 1 to 16000 characters".into()));
     }
+    let client_message_id = body
+        .client_message_id
+        .as_deref()
+        .map(str::parse)
+        .transpose()
+        .map_err(|_| AppError::BadRequest("clientMessageId must be a UUID".into()))?;
     if identity::sanctions::is_silenced(state.redis.as_ref(), &state.db, auth.id).await? {
         return Err(AppError::Forbidden);
     }
@@ -541,18 +547,39 @@ pub async fn send_message_handler(
     if repo::relationships::pair_is_blocked(&state.db, auth.id, recipient_id).await? {
         return Err(AppError::Forbidden);
     }
-    shared::ratelimit::check_token_bucket(
-        state.redis.as_ref(),
-        "dm_send",
-        &auth.id.to_string(),
-        30,
-        60,
-    )
-    .await?;
-
-    let (message_id, created_at) =
-        repo::dms::send_message(&state.db, conversation_id, auth.id, recipient_id, &body.body)
-            .await?;
+    let replay = if let Some(client_message_id) = client_message_id {
+        repo::dms::find_send_replay(
+            &state.db,
+            auth.id,
+            client_message_id,
+            conversation_id,
+            &body.body,
+        )
+        .await?
+    } else {
+        None
+    };
+    let (message_id, created_at) = if let Some(message) = replay {
+        (message.id, message.created_at)
+    } else {
+        shared::ratelimit::check_token_bucket(
+            state.redis.as_ref(),
+            "dm_send",
+            &auth.id.to_string(),
+            30,
+            60,
+        )
+        .await?;
+        repo::dms::send_message(
+            &state.db,
+            conversation_id,
+            auth.id,
+            recipient_id,
+            &body.body,
+            client_message_id,
+        )
+        .await?
+    };
     let sender_handle: String =
         sqlx::query_scalar("SELECT handle::text FROM identity.accounts WHERE id = $1")
             .bind(auth.id)

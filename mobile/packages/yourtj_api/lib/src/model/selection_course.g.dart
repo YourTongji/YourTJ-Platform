@@ -16,6 +16,7 @@ SelectionCourse _$SelectionCourseFromJson(Map<String, dynamic> json) =>
           'name',
           'credit',
           'natureId',
+          'calendarId',
           'campusId',
           'teacherName',
           'teacherNames',
@@ -27,6 +28,7 @@ SelectionCourse _$SelectionCourseFromJson(Map<String, dynamic> json) =>
         name: $checkedConvert('name', (v) => v as String),
         credit: $checkedConvert('credit', (v) => v as num?),
         natureId: $checkedConvert('natureId', (v) => v as String?),
+        calendarId: $checkedConvert('calendarId', (v) => v as String?),
         campusId: $checkedConvert('campusId', (v) => v as String?),
         teacherName: $checkedConvert('teacherName', (v) => v as String?),
         teacherNames: $checkedConvert(
@@ -44,6 +46,7 @@ Map<String, dynamic> _$SelectionCourseToJson(SelectionCourse instance) =>
       'name': instance.name,
       'credit': instance.credit,
       'natureId': instance.natureId,
+      'calendarId': instance.calendarId,
       'campusId': instance.campusId,
       'teacherName': instance.teacherName,
       'teacherNames': instance.teacherNames,
