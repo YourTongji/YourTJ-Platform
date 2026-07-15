@@ -6,7 +6,7 @@
 >
 > 负责人：Privacy owner、Security owner、Domain maintainers
 >
-> 最近核验：2026-07-14，migrations `0064`–`0066`、Flutter 本机钱包防重放与 ADMIN 媒体自审边界
+> 最近核验：2026-07-15，migrations `0064`–`0068`、HTTP query-string 日志最小化、DM 幂等与 ADMIN 媒体自审边界
 
 本规范将数据最小化、可见性、导出、删除和保留作为产品前置条件。它不是法律意见；涉及 PIPL、
 未成年人、广告或跨境处理的最终政策需要合格法律与隐私负责人确认。
@@ -35,12 +35,20 @@
 - Identity 密码 set/change/reset 和 refresh replay 只写 account-scoped 安全事实类型、可选 session id 与时间，
   不写邮箱、IP、user-agent、password/code/token 或请求正文；普通登录失败不作 PII 事件流。Owner export
   只返回尚在保留期的 `eventType/createdAt`，不返回 subject session id。
+- HTTP request trace 只记录 method 和 URI path，不记录 query string；搜索词、filter、cursor 和其他 query
+  value 即使在 debug level 也不得进入通用 request span。业务错误日志同样不得另行记录原始搜索词。
 - 密码安全通知和管理员邀请的 durable job 只持久 account id、固定 template kind、lease/retry 和有界错误码；
   收件邮箱和正文在 worker 内存中解密/渲染，不进入 job、owner export 或日志。
 - Staff 无通用 DM 浏览接口，只能访问 participant 报告的最小证据。
 - 陌生私信请求只保存一条最多 1000 字附言；decline/withdraw/block 会立即删除未举报正文，report
   只保留被举报附言作为治理证据。请求状态、pair、时间、撤回 5 分钟防抖和拒绝/block 30 天冷却
   属于最小反骚扰元数据。
+- 普通私信可保存 client-generated message UUID，只用于 sender-scoped 幂等重放；不进入响应、通知、
+  analytics 或账号画像，不能当 installation/device 标识，且随消息正文删除。
+- Web 论坛草稿可在同源 IndexedDB 保存 7 天的 account-scoped 恢复副本；显式白名单只保留 typed 正文
+  字段和 attachment asset id，不保留短期 Delivery URL、token、邮箱或设备标识。发布、登出、切号会按
+  账号串行清除；任一本地草稿操作都会惰性清扫全部过期记录，读取也永不返回过期副本。云端 CAS 草稿
+  仍是 canonical source。
 - Governance audit 和制裁保留 actor/reason 历史，credit ledger append-only。
 - Profile 默认仅校园登录用户可见；followers/following 默认仅关注者可见，新 DM 默认只允许接收方
   已关注的人发起。匿名只有在 owner 显式选择 `public` 后才能访问资料。
@@ -143,6 +151,8 @@
 | 公共内容 | thread、comment、review、reaction | 按 board/content policy | revision、治理、导出/删除规则 |
 | 社交关系 | follow、block、mute、subscription | 本人及 policy 允许对象 | block/mute 默认私密、最小暴露 |
 | 私密通信 | DM body、单条 request 附言、private attachment | participants | staff 仅举报证据；未举报 declined request 正文立即删除，其他内容独立 retention |
+| 私信防重复元数据 | sender-scoped client message UUID | Forum 写路径；用户不可枚举 | 仅校验一次消息重放；随消息删除，不进日志/通知/analytics/owner profile |
+| Web 本机论坛草稿 | account/draft key、typed 未发布正文、attachment asset id、更新时间 | 同源页面和同一浏览器账号；不上传为额外业务记录 | IndexedDB 明文恢复副本，7 天 TTL；发布/登出/切号清除，不含 Delivery URL/secret，不进日志、analytics 或服务端 owner export |
 | 治理证据 | reports、sanctions、appeals、appeal history、audit | 本人最小披露；staff capability + purpose | 防篡改、访问审计、期限/hold；不向本人泄露 reporter/staff/evidence |
 | 治理通知 | 处置/申诉安全摘要、subject/event/appeal id、read time | 仅受影响账号 | 不受互动偏好关闭、无 evidence/PII、随治理 retention 协调 |
 | 通知 outbox/receipt | account/actor id、event type、有界站内 payload、状态/error code、delivery outcome | consumer；operators 只见无 payload 元数据 | 成功/取消 30 天，dead/receipt 90 天；不含邮箱、secret、stack trace |
@@ -164,6 +174,12 @@
 
 新 column/event/index 前必须在对应产品文档说明 data category、purpose、controller/processor、
 可见者、retention、export 和 deletion。没有答案时不得先“留着以后分析”。
+
+IndexedDB 不是安全保险库：同一操作系统账号、浏览器 profile 或成功执行的同源 XSS 都可能读取未发布
+草稿。实现不声称浏览器静态加密能抵御这些主体；边界依靠最小字段、短 TTL、账号隔离、清号和 CSP/XSS
+防护。其他设备上的账号 purge 无法主动擦除离线浏览器站点数据；记录满 7 天后不可恢复，并在该浏览器
+下次打开本站执行本地草稿操作时惰性物理删除，用户也可提前清除站点数据。因此本机副本不属于服务端
+owner export，也不能成为长期留存或治理证据来源。
 
 ## 可见性与默认值
 
@@ -295,7 +311,8 @@ lifecycle job 置为 exhausted failed，只有修复 Media 队列后再经 recen
 - expired email codes、revoked sessions、security logs；
 - soft-deleted public content 和 revision；
 - unreported DM、reported evidence、private attachments；
-- DM request pair/cooldown metadata、request idempotency、其他 job records；通知 outbox 的成功/取消记录
+- DM request pair/cooldown metadata、request idempotency、普通消息 UUID 和其他 job records；普通消息 UUID
+  随对应消息删除，不另建长期历史；通知 outbox 的成功/取消记录
   固定 30 天、dead-letter 和 delivery receipt 固定 90 天，purge worker 幂等执行；
 - sanctions、appeals、audit 与 access logs；
 - account-private governance notices 与 appeal idempotency records；notice 清理不能先于其申诉窗口，

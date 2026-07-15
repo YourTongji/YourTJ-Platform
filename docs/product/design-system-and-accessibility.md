@@ -6,7 +6,7 @@
 >
 > 负责人：Product design、Web maintainers、Mobile maintainers
 >
-> 最近核验：2026-07-14，Web 运行 token、Flutter Android/iOS 自适应基线与共享无障碍要求
+> 最近核验：2026-07-15，Web 运行 token、Flutter Android/iOS 自适应基线与共享无障碍要求
 
 YourTJ Community Web 的 Figma 第三版是当前跨端品牌与视觉方向来源：
 [Figma node 106:2](https://www.figma.com/design/dndgylImv8ZuVAXg9uWU3y/YourTJ-Community-Web?node-id=106-2)。
@@ -60,8 +60,9 @@ journey、状态和测试接通后才能标为 `Current`。
 显式操作、系统分享和 bottom sheet/full-screen route，不能等比例缩小。
 
 签到按钮必须覆盖匿名登录引导、loading、error/retry、submitting、当日已签到和未签到状态；当日已签到
-显示连续天数且禁用重复提交。Mutation 成功后同时刷新签到、活跃度与等级进度事实，不用仅更新按钮的
-局部动画冒充投影已更新。
+显示连续天数并把同一控件变为“打开分享结果”，不得重复提交。Mutation 成功后同时刷新签到、活跃度与
+等级进度事实并打开单一结果 Dialog，不用仅更新按钮的局部动画冒充投影已更新。复制/保存操作有可见
+文字标签；分享图中的日期、签到天数和成长等级不能只靠颜色表达，也不能包含账号或设备标识。
 
 ## 当前视觉 token
 

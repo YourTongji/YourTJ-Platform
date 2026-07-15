@@ -6,7 +6,7 @@
 >
 > 负责人：Platform maintainers
 >
-> 最近核验：2026-07-14，server deploy workflows、wallet-key migration、Flutter debug/release compile gates 与 verified-link release gaps
+> 最近核验：2026-07-15，server deploy workflows、migrations `0067`–`0068`、selection calendar index cutover 与 Flutter release gates
 
 本文件描述仓库当前 GitHub Actions 行为，不把目标 Aliyun 架构写成已上线生产事实。Workflow
 或服务器脚本变化时必须在同一 PR 更新本 runbook。
@@ -397,6 +397,25 @@ recent-auth 的首次登记，而新 backend 在 migration 前也不能假设每
 继续关闭 bind/value-moving 路由并部署 forward-fix；不得启动旧 backend、删除 unique index、重新激活旧
 key 或记录 raw key 来“恢复”。未来 key rotation/recovery 必须另有 old-key proof、通知、冷却和审计 runbook。
 
+### Migration `0068` DM 消息幂等
+
+`0068` 为普通私信消息增加 nullable、sender-scoped client UUID 和 partial unique index。历史消息不需要
+backfill；缺少该值的旧客户端和旧 backend 继续按原 insert 路径工作，因此数据库迁移后可与旧进程短时
+兼容。新版 backend 会读取和写入新列，必须在新 revision 接流量前先完成 migration，不能依赖请求失败后
+再补 schema。
+
+新增 nullable column 不重写历史正文，但 `CREATE UNIQUE INDEX` 不是 concurrent build，会扫描消息表并在
+构建期间阻塞并发 DM writes。先在 staging 记录表规模、迁移耗时和 lock wait；超过该环境可接受的写暂停时，
+为 DM send 安排维护窗口并停止新写，不要在 live writer 高峰直接试跑。该 migration 无 backfill worker，
+也不读取、导出或记录历史正文/client UUID。
+
+Cutover 顺序是：在 disposable fresh database 验证全量 up-path；保留旧 backend 时执行 `0068` 并等待 index
+完成；核对 migration ledger、nullable UUID column、valid/ready partial unique index，以及非空 UUID 没有
+sender-scoped duplicate；再启动新版 backend。发布 smoke 用合成 participant 并发重放同一 UUID，必须只
+产生一条 message 和一条 `dm-message:<id>` outbox source key；坏 UUID 为平台 `BAD_REQUEST`，同 UUID
+改 conversation/body 为 `CONFLICT`。失败时保持新 backend 不接流量并做 forward-fix，不在已有新版写入后
+回滚 column/index。
+
 ## PostgreSQL migration owner 与 runtime role
 
 正式环境必须使用两个不同角色：migration/table owner 只在受控 rollout 中执行 sqlx migration；应用
@@ -418,6 +437,21 @@ credential 分成 migration owner/runtime 两个角色。该差距必须在 prod
 - 上线前核对 runtime 不是表 owner，并用 `has_table_privilege` 验证上述 deny；以 runtime credential
   执行 update/delete/truncate 负向 smoke，以 migration credential 只验证 migration ledger，不在 live
   数据上试 destructive statement。
+
+### Selection calendar index schema cutover
+
+新增 `calendarId` filter 前已有的 `selection_courses` documents 不含该字段；只部署 backend 或只修改
+filterable settings 会让新 calendar-scoped search 返回空结果。首次 rollout 必须先在不接用户流量的新
+revision 实例触发一次 admin selection sync。新版 pipeline 先等待 index settings 成功，再等待 full clear，
+最后从 PostgreSQL 加入 current documents 并等待 add 成功；任一步失败都会中止，不能提前记录 complete
+或更新 cache version。
+
+`POST /api/v2/admin/selection/sync` 的 `202` 仍只表示进程内任务已排队。Operator 需要为 selection search
+安排 clear→add 的短暂维护空窗，同一环境只触发一个 sync，并从 server log、Meilisearch task 状态和
+PostgreSQL row count 三处确认 settings/clear/add/document count。随后用至少两个 calendar 的已知课号和
+关键词验证有结果、同 course code 的教学班不串学期，再切新 backend 流量。失败时保持新 revision 下线，
+从完整 sync 重试；不能把空搜索或仅成功 enqueue 当作 rollout 完成。详细数据验证见
+[D1 选课快照导入](data-import.md)。
 
 新增或改变社区搜索文档后，部署完成还需要由具备 `operations.jobs` 的管理员以
 `{"reason":"deploy <revision> community search schema"}` 请求体触发
