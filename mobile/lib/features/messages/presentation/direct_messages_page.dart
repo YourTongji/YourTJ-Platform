@@ -47,6 +47,7 @@ class _DirectMessagesPageState extends ConsumerState<DirectMessagesPage>
   NewConversationDraft? _pendingStartDraft;
   String? _pendingStartKey;
   int _requestGeneration = 0;
+  int _mutationGeneration = 0;
   int? _sessionGeneration;
   ApiFailure? _failure;
 
@@ -146,6 +147,8 @@ class _DirectMessagesPageState extends ConsumerState<DirectMessagesPage>
     if (_isLoadingMore || !_hasMore || cursor == null) {
       return;
     }
+    final int generation = _requestGeneration;
+    final int? expectedSessionGeneration = _sessionGeneration;
     setState(() => _isLoadingMore = true);
     try {
       final DmConversationPage page = await _repository.conversations(
@@ -153,7 +156,8 @@ class _DirectMessagesPageState extends ConsumerState<DirectMessagesPage>
         query: _searchController.text,
         cursor: cursor,
       );
-      if (mounted) {
+      if (_isCurrentSession(expectedSessionGeneration) &&
+          generation == _requestGeneration) {
         setState(() {
           _conversations = _deduplicate(<DmConversation>[
             ..._conversations,
@@ -164,9 +168,13 @@ class _DirectMessagesPageState extends ConsumerState<DirectMessagesPage>
         });
       }
     } on ApiFailure catch (failure) {
-      _showMessage(failure.message);
+      if (_isCurrentSession(expectedSessionGeneration) &&
+          generation == _requestGeneration) {
+        _showMessage(failure.message);
+      }
     } finally {
-      if (mounted) {
+      if (_isCurrentSession(expectedSessionGeneration) &&
+          generation == _requestGeneration) {
         setState(() => _isLoadingMore = false);
       }
     }
@@ -184,10 +192,11 @@ class _DirectMessagesPageState extends ConsumerState<DirectMessagesPage>
   }
 
   Future<void> _startConversation({bool retry = false}) async {
+    final int? expectedSessionGeneration = _sessionGeneration;
     final NewConversationDraft? draft = retry
         ? _pendingStartDraft
         : await showNewConversationDialog(context);
-    if (draft == null || !mounted) {
+    if (draft == null || !_isCurrentSession(expectedSessionGeneration)) {
       return;
     }
     if (!retry) {
@@ -195,6 +204,7 @@ class _DirectMessagesPageState extends ConsumerState<DirectMessagesPage>
       _pendingStartKey = const Uuid().v4();
     }
     final String idempotencyKey = _pendingStartKey ??= const Uuid().v4();
+    final int mutationGeneration = ++_mutationGeneration;
     setState(() => _isMutating = true);
     try {
       final DmConversation conversation = await _repository.start(
@@ -202,7 +212,7 @@ class _DirectMessagesPageState extends ConsumerState<DirectMessagesPage>
         requestMessage: draft.requestMessage,
         idempotencyKey: idempotencyKey,
       );
-      if (!mounted) {
+      if (!_isCurrentMutation(mutationGeneration, expectedSessionGeneration)) {
         return;
       }
       final ConversationView nextView =
@@ -222,12 +232,26 @@ class _DirectMessagesPageState extends ConsumerState<DirectMessagesPage>
       );
       await _load();
     } on ApiFailure catch (failure) {
-      _showMessage('${failure.message}；发送结果可能不确定，可使用页面中的“按原请求重试”保留同一幂等键');
+      if (_isCurrentMutation(mutationGeneration, expectedSessionGeneration)) {
+        _showMessage('${failure.message}；发送结果可能不确定，可使用页面中的“按原请求重试”保留同一幂等键');
+      }
     } finally {
-      if (mounted) {
+      if (_isCurrentMutation(mutationGeneration, expectedSessionGeneration)) {
         setState(() => _isMutating = false);
       }
     }
+  }
+
+  bool _isCurrentSession(int? expectedGeneration) {
+    return mounted &&
+        expectedGeneration != null &&
+        _sessionGeneration == expectedGeneration &&
+        ref.read(sessionStateProvider).value?.generation == expectedGeneration;
+  }
+
+  bool _isCurrentMutation(int mutationGeneration, int? sessionGeneration) {
+    return mutationGeneration == _mutationGeneration &&
+        _isCurrentSession(sessionGeneration);
   }
 
   Future<void> _conversationChanged({
@@ -259,6 +283,7 @@ class _DirectMessagesPageState extends ConsumerState<DirectMessagesPage>
     if (state != null && state.generation != _sessionGeneration) {
       _sessionGeneration = state.generation;
       ++_requestGeneration;
+      ++_mutationGeneration;
       _conversations = <DmConversation>[];
       _selected = null;
       _counts = null;
@@ -266,6 +291,8 @@ class _DirectMessagesPageState extends ConsumerState<DirectMessagesPage>
       _pendingStartKey = null;
       _nextCursor = null;
       _hasMore = false;
+      _isLoadingMore = false;
+      _isMutating = false;
       _failure = null;
       _isLoading = state.isAuthenticated;
       final int expectedGeneration = state.generation;
@@ -310,7 +337,7 @@ class _DirectMessagesPageState extends ConsumerState<DirectMessagesPage>
         final bool split = constraints.maxWidth >= 840;
         if (!split && _selected != null) {
           return _ConversationPane(
-            key: ValueKey<String>(_selected!.id),
+            key: ValueKey<String>('${state.account!.id}:${_selected!.id}'),
             conversation: _selected!,
             currentAccountId: state.account!.id,
             repository: _repository,
@@ -334,7 +361,9 @@ class _DirectMessagesPageState extends ConsumerState<DirectMessagesPage>
                       description: '平板和宽屏会在右侧显示消息记录。',
                     )
                   : _ConversationPane(
-                      key: ValueKey<String>(_selected!.id),
+                      key: ValueKey<String>(
+                        '${state.account!.id}:${_selected!.id}',
+                      ),
                       conversation: _selected!,
                       currentAccountId: state.account!.id,
                       repository: _repository,
@@ -630,6 +659,11 @@ class _ConversationPaneState extends State<_ConversationPane> {
   bool _isLoadingMore = false;
   bool _isMutating = false;
   ApiFailure? _failure;
+  String? _pendingMessageBody;
+  String? _pendingClientMessageId;
+  int? _pendingCreatedAt;
+  bool _pendingIsSending = false;
+  ApiFailure? _pendingFailure;
 
   @override
   void initState() {
@@ -707,50 +741,70 @@ class _ConversationPaneState extends State<_ConversationPane> {
     }
   }
 
-  Future<void> _send() async {
-    final String body = _bodyController.text.trim();
+  Future<void> _send({bool retry = false}) async {
+    final String body = retry
+        ? _pendingMessageBody ?? ''
+        : _bodyController.text.trim();
     if (_isMutating || body.isEmpty || body.length > 16000) {
       return;
     }
-    setState(() => _isMutating = true);
-    try {
-      await widget.repository.send(widget.conversation.id, body);
-      if (mounted) {
+    final String clientMessageId = retry
+        ? _pendingClientMessageId ?? const Uuid().v4()
+        : const Uuid().v4();
+    setState(() {
+      _isMutating = true;
+      _pendingMessageBody = body;
+      _pendingClientMessageId = clientMessageId;
+      _pendingCreatedAt ??= DateTime.now().millisecondsSinceEpoch ~/ 1000;
+      _pendingIsSending = true;
+      _pendingFailure = null;
+      if (!retry) {
         _bodyController.clear();
-        await _load();
+      }
+    });
+    try {
+      final DmMessage message = await widget.repository.send(
+        widget.conversation.id,
+        body,
+        clientMessageId: clientMessageId,
+      );
+      if (mounted) {
+        setState(() {
+          _messages.removeWhere((DmMessage item) => item.id == message.id);
+          _messages.insert(0, message);
+          _pendingMessageBody = null;
+          _pendingClientMessageId = null;
+          _pendingCreatedAt = null;
+          _pendingIsSending = false;
+          _pendingFailure = null;
+          _failure = null;
+        });
         await widget.onChanged();
       }
     } on ApiFailure catch (failure) {
       if (mounted) {
         setState(() {
-          _failure = ApiFailure(
-            kind: failure.kind,
-            message: '${failure.message}；不会自动重发，请先刷新确认服务器是否已收到',
-            code: failure.code,
-            statusCode: failure.statusCode,
-            retryAfter: failure.retryAfter,
-          );
+          _pendingIsSending = false;
+          _pendingFailure = failure;
         });
-        try {
-          final DmMessagePage canonical = await widget.repository.messages(
-            widget.conversation.id,
-          );
-          if (mounted) {
-            setState(() {
-              _messages = canonical.items;
-              _nextCursor = canonical.nextCursor;
-              _hasMore = canonical.hasMore;
-            });
-          }
-        } on ApiFailure {
-          // The original failure remains actionable; no send is replayed.
-        }
       }
     } finally {
       if (mounted) {
         setState(() => _isMutating = false);
       }
     }
+  }
+
+  void _discardPendingMessage() {
+    if (_pendingIsSending) {
+      return;
+    }
+    setState(() {
+      _pendingMessageBody = null;
+      _pendingClientMessageId = null;
+      _pendingCreatedAt = null;
+      _pendingFailure = null;
+    });
   }
 
   Future<void> _accept() async {
@@ -939,6 +993,7 @@ class _ConversationPaneState extends State<_ConversationPane> {
     final List<DmMessage> chronological = _messages.reversed.toList(
       growable: false,
     );
+    final bool hasPendingMessage = _pendingMessageBody != null;
     return Column(
       children: <Widget>[
         Material(
@@ -1049,7 +1104,7 @@ class _ConversationPaneState extends State<_ConversationPane> {
               ? const AppLoadingState(title: '正在加载消息')
               : _failure != null && _messages.isEmpty
               ? AppErrorState(description: _failure!.message, onRetry: _load)
-              : chronological.isEmpty
+              : chronological.isEmpty && !hasPendingMessage
               ? const AppEmptyState(
                   title: '还没有普通消息',
                   description: '接受请求后，双方才能继续发送消息。',
@@ -1058,7 +1113,10 @@ class _ConversationPaneState extends State<_ConversationPane> {
                   onRefresh: _load,
                   child: ListView.builder(
                     padding: const EdgeInsets.all(16),
-                    itemCount: chronological.length + (_hasMore ? 1 : 0),
+                    itemCount:
+                        chronological.length +
+                        (_hasMore ? 1 : 0) +
+                        (hasPendingMessage ? 1 : 0),
                     itemBuilder: (BuildContext context, int index) {
                       if (_hasMore && index == 0) {
                         return Center(
@@ -1066,6 +1124,20 @@ class _ConversationPaneState extends State<_ConversationPane> {
                             onPressed: _isLoadingMore ? null : _loadMore,
                             child: Text(_isLoadingMore ? '加载中' : '加载更早消息'),
                           ),
+                        );
+                      }
+                      final int messageStart = _hasMore ? 1 : 0;
+                      if (hasPendingMessage &&
+                          index == messageStart + chronological.length) {
+                        return _PendingMessageBubble(
+                          body: _pendingMessageBody!,
+                          createdAt: _pendingCreatedAt!,
+                          isSending: _pendingIsSending,
+                          failure: _pendingFailure,
+                          onRetry: _isMutating
+                              ? null
+                              : () => _send(retry: true),
+                          onDiscard: _discardPendingMessage,
                         );
                       }
                       final int messageIndex = index - (_hasMore ? 1 : 0);
@@ -1092,7 +1164,10 @@ class _ConversationPaneState extends State<_ConversationPane> {
                       Expanded(
                         child: TextField(
                           controller: _bodyController,
-                          enabled: conversation.canSend && !_isMutating,
+                          enabled:
+                              conversation.canSend &&
+                              !_isMutating &&
+                              !hasPendingMessage,
                           minLines: 1,
                           maxLines: 5,
                           maxLength: 16000,
@@ -1108,8 +1183,11 @@ class _ConversationPaneState extends State<_ConversationPane> {
                       const SizedBox(width: 8),
                       IconButton.filled(
                         tooltip: '发送消息',
-                        onPressed: conversation.canSend && !_isMutating
-                            ? _send
+                        onPressed:
+                            conversation.canSend &&
+                                !_isMutating &&
+                                !hasPendingMessage
+                            ? () => _send()
                             : null,
                         icon: const Icon(Icons.send_rounded),
                       ),
@@ -1202,6 +1280,77 @@ class _MessageBubble extends StatelessWidget {
                         ),
                     ],
                   ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _PendingMessageBubble extends StatelessWidget {
+  const _PendingMessageBubble({
+    required this.body,
+    required this.createdAt,
+    required this.isSending,
+    required this.failure,
+    required this.onRetry,
+    required this.onDiscard,
+  });
+
+  final String body;
+  final int createdAt;
+  final bool isSending;
+  final ApiFailure? failure;
+  final VoidCallback? onRetry;
+  final VoidCallback onDiscard;
+
+  @override
+  Widget build(BuildContext context) {
+    final bool hasFailed = failure != null;
+    return Align(
+      alignment: Alignment.centerRight,
+      child: Padding(
+        padding: const EdgeInsets.only(bottom: 10),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 560),
+          child: Semantics(
+            label:
+                '你在${_formatUnix(createdAt)}发送：$body；${isSending ? '发送中' : '发送失败'}',
+            child: Card(
+              color: hasFailed
+                  ? Theme.of(context).colorScheme.errorContainer
+                  : Theme.of(context).colorScheme.primaryContainer,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(14, 10, 8, 8),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Text(body),
+                    const SizedBox(height: 4),
+                    Text(
+                      isSending ? '发送中' : failure?.message ?? '发送失败',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                    if (hasFailed)
+                      Wrap(
+                        spacing: 4,
+                        children: <Widget>[
+                          TextButton.icon(
+                            onPressed: onRetry,
+                            icon: const Icon(Icons.refresh_rounded),
+                            label: const Text('按原消息重试'),
+                          ),
+                          TextButton.icon(
+                            onPressed: onDiscard,
+                            icon: const Icon(Icons.close_rounded),
+                            label: const Text('丢弃'),
+                          ),
+                        ],
+                      ),
+                  ],
                 ),
               ),
             ),

@@ -35,7 +35,7 @@ class SharedPreferencesScheduleStorage implements ScheduleStorage {
 class ScheduleLocalRepository {
   const ScheduleLocalRepository(this._storage);
 
-  static const int _schemaVersion = 2;
+  static const int _schemaVersion = 3;
   final ScheduleStorage _storage;
 
   Future<List<ScheduledCourse>> load({
@@ -61,9 +61,10 @@ class ScheduleLocalRepository {
       for (final Object? rawItem in rawItems) {
         final ScheduledCourse? item = _decodeItem(rawItem);
         if (item != null &&
+            item.course.calendarId == calendarId &&
             !items.any(
               (ScheduledCourse existing) =>
-                  existing.course.code == item.course.code,
+                  existing.course.id == item.course.id,
             )) {
           items.add(item);
         }
@@ -88,6 +89,14 @@ class ScheduleLocalRepository {
       throw const ApiFailure(
         kind: ApiFailureKind.invalidInput,
         message: '本机课表最多保存 100 门课程',
+      );
+    }
+    if (courses.any(
+      (ScheduledCourse item) => item.course.calendarId != calendarId,
+    )) {
+      throw const ApiFailure(
+        kind: ApiFailureKind.invalidInput,
+        message: '教学班不属于当前学期，请刷新后重试',
       );
     }
     final String encoded = jsonEncode(<String, Object>{

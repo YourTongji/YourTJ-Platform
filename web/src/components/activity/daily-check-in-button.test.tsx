@@ -27,6 +27,7 @@ function renderButton(overrides: Partial<React.ComponentProps<typeof DailyCheckI
     isPending: false,
     onCheckIn: vi.fn(),
     onRetry: vi.fn(),
+    onShare: vi.fn(),
     ...overrides,
   };
   render(
@@ -47,12 +48,16 @@ describe("DailyCheckInButton", () => {
     expect(props.onCheckIn).toHaveBeenCalledOnce();
   });
 
-  it("disables a completed day and shows the current streak", () => {
-    renderButton({
+  it("opens the share result for a completed day", async () => {
+    const user = userEvent.setup();
+    const props = renderButton({
       status: { ...unchecked, checkedIn: true, currentStreak: 5 },
     });
 
-    expect(screen.getByRole("button", { name: "今日已签到 · 连续 5 天" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "今日已签到 · 连续 5 天 · 分享" }));
+
+    expect(props.onShare).toHaveBeenCalledOnce();
+    expect(props.onCheckIn).not.toHaveBeenCalled();
   });
 
   it("offers a retry when the status request fails", async () => {

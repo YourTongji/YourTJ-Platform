@@ -31,6 +31,7 @@ class TimeSlot {
     required this.location,
   });
 
+  /// Stable teaching-class identifier matching SelectionCourse.id.
   @JsonKey(name: r'courseId', required: true, includeIfNull: false)
   final String courseId;
 

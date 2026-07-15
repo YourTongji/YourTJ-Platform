@@ -11,6 +11,7 @@ import {
 } from "@/components/admin/capabilities";
 import { getTwentyWeekActivityRange } from "@/components/activity/calendar-range";
 import { EmptyState, ErrorState, LoadingState } from "@/components/common/states";
+import { useForumBookmarkMutation } from "@/components/forum/use-forum-interactions";
 import {
   ProfileRelationshipListDialog,
   type ProfileRelationshipListKind,
@@ -25,6 +26,7 @@ import { accountQueryKeys } from "@/lib/account-query-keys";
 import { api } from "@/lib/api/endpoints";
 import type { ProfileContent } from "@/lib/api/types";
 import { formatRelativeTime } from "@/lib/format";
+import { forumQueryKeys } from "@/lib/forum-query-keys";
 
 type ProfileActivityTab = "threads" | "comments" | "bookmarks" | "media" | "likes";
 
@@ -37,7 +39,7 @@ interface ProfileContentListProps {
   hasNextPage: boolean;
   isFetchingNextPage: boolean;
   loadMoreLabel: string;
-  bookmarkTarget?: { id: string; targetType: "thread" | "comment" };
+  isBookmarkPending: (content: ProfileContent) => boolean;
   onRetry: () => void;
   onLoadMore: () => void;
   onToggleBookmark: (content: ProfileContent) => void;
@@ -53,7 +55,7 @@ function ProfileContentList({
   hasNextPage,
   isFetchingNextPage,
   loadMoreLabel,
-  bookmarkTarget,
+  isBookmarkPending,
   onRetry,
   onLoadMore,
   onToggleBookmark,
@@ -104,8 +106,7 @@ function ProfileContentList({
             href: `/forum/threads/${content.threadId}`,
             isBookmarked: content.isBookmarked,
           }}
-          bookmarkPending={bookmarkTarget?.id === content.id
-            && bookmarkTarget.targetType === content.targetType}
+          bookmarkPending={isBookmarkPending(content)}
           onToggleBookmark={() => onToggleBookmark(content)}
           onAttachmentDeliveryRefresh={onAttachmentDeliveryRefresh}
         />
@@ -138,22 +139,23 @@ export function ProfilePage() {
   const capabilities = React.useMemo(() => capabilitiesForAccount(account), [account]);
   const viewerCacheKey = account?.id ?? "anonymous";
   const activityRange = React.useMemo(() => getTwentyWeekActivityRange(), []);
+  const bookmark = useForumBookmarkMutation();
 
   const profile = useQuery({
-    queryKey: ["profile", name, "viewer", viewerCacheKey],
+    queryKey: forumQueryKeys.profileViewer(name, viewerCacheKey),
     queryFn: () => api.publicUser(name),
     enabled: Boolean(name),
     refetchInterval: 4 * 60_000,
   });
   const threads = useInfiniteQuery({
-    queryKey: ["profile", name, "threads", viewerCacheKey],
+    queryKey: forumQueryKeys.profileThreads(name, viewerCacheKey),
     queryFn: ({ pageParam }) => api.userThreads(name, pageParam),
     initialPageParam: null as string | null,
     getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
     enabled: Boolean(name) && profile.data?.canViewActivity === true,
   });
   const comments = useInfiniteQuery({
-    queryKey: ["profile", name, "comments", viewerCacheKey],
+    queryKey: forumQueryKeys.profileComments(name, viewerCacheKey),
     queryFn: ({ pageParam }) => api.userComments(name, pageParam),
     initialPageParam: null as string | null,
     getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
@@ -166,21 +168,21 @@ export function ProfilePage() {
     ),
   );
   const media = useInfiniteQuery({
-    queryKey: ["profile", name, "media", viewerCacheKey],
+    queryKey: forumQueryKeys.profileMedia(name, viewerCacheKey),
     queryFn: ({ pageParam }) => api.userMedia(name, pageParam),
     initialPageParam: null as string | null,
     getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
     enabled: Boolean(name) && profile.data?.canViewActivity === true && activityTab === "media",
   });
   const likes = useInfiniteQuery({
-    queryKey: ["profile", name, "likes", viewerCacheKey],
+    queryKey: forumQueryKeys.profileLikes(name, viewerCacheKey),
     queryFn: ({ pageParam }) => api.userLikes(name, pageParam),
     initialPageParam: null as string | null,
     getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
     enabled: Boolean(name) && profile.data?.canViewActivity === true && activityTab === "likes",
   });
   const bookmarks = useInfiniteQuery({
-    queryKey: ["profile", name, "bookmarks", viewerCacheKey],
+    queryKey: forumQueryKeys.profileBookmarks(name, viewerCacheKey),
     queryFn: ({ pageParam }) => api.bookmarks(pageParam),
     initialPageParam: null as string | null,
     getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
@@ -247,29 +249,6 @@ export function ProfilePage() {
     },
     onError: (error) => toast.error(error instanceof Error ? error.message : "屏蔽设置失败"),
   });
-  const bookmark = useMutation({
-    mutationFn: async (input: {
-      id: string;
-      targetType: "thread" | "comment";
-      isBookmarked: boolean;
-    }) => {
-      if (input.isBookmarked) {
-        await api.removeBookmark(input.id, input.targetType);
-      } else {
-        await api.bookmarkPost(input.id, input.targetType);
-      }
-      return input;
-    },
-    onSuccess: async (input) => {
-      toast.success(input.isBookmarked ? "已取消收藏" : "已收藏");
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["profile", name] }),
-        queryClient.invalidateQueries({ queryKey: ["forum", "bookmarks"] }),
-      ]);
-    },
-    onError: (error) => toast.error(error instanceof Error ? error.message : "收藏设置失败"),
-  });
-
   const toggleBookmark = React.useCallback((content: {
     id: string;
     targetType: "thread" | "comment";
@@ -280,6 +259,7 @@ export function ProfilePage() {
       navigate("/login");
       return;
     }
+    if (bookmark.isTargetPending(content)) return;
     bookmark.mutate(content);
   }, [bookmark, isAuthenticated, navigate]);
 
@@ -295,9 +275,12 @@ export function ProfilePage() {
   const mediaItems = media.data?.pages.flatMap((page) => page.items ?? []) ?? [];
   const likedItems = likes.data?.pages.flatMap((page) => page.items ?? []) ?? [];
   const bookmarkItems = bookmarks.data?.pages.flatMap((page) => page.items ?? []) ?? [];
-  const bookmarkTarget = bookmark.isPending ? bookmark.variables : undefined;
+  const isBookmarkPending = (content: {
+    id: string;
+    targetType: "thread" | "comment";
+  }) => bookmark.isTargetPending(content);
   const refreshProfileContent = () => {
-    void queryClient.invalidateQueries({ queryKey: ["profile", name] });
+    void queryClient.invalidateQueries({ queryKey: forumQueryKeys.profile(name) });
   };
   const canManageUser = hasCapability(capabilities, ADMIN_CAPABILITIES.searchUsers)
     || hasCapability(capabilities, ADMIN_CAPABILITIES.changeRoles)
@@ -426,8 +409,10 @@ export function ProfilePage() {
                           href: `/forum/threads/${thread.id}`,
                           isBookmarked: thread.isBookmarked,
                         }}
-                        bookmarkPending={bookmarkTarget?.id === thread.id
-                          && bookmarkTarget.targetType === "thread"}
+                        bookmarkPending={bookmark.isTargetPending({
+                          id: thread.id,
+                          targetType: "thread",
+                        })}
                         onToggleBookmark={() => toggleBookmark({
                           id: thread.id,
                           targetType: "thread",
@@ -483,8 +468,10 @@ export function ProfilePage() {
                           href: `/forum/threads/${comment.threadId}`,
                           isBookmarked: comment.isBookmarked,
                         }}
-                        bookmarkPending={bookmarkTarget?.id === comment.id
-                          && bookmarkTarget.targetType === "comment"}
+                        bookmarkPending={bookmark.isTargetPending({
+                          id: comment.id,
+                          targetType: "comment",
+                        })}
                         onToggleBookmark={() => toggleBookmark({
                           id: comment.id,
                           targetType: "comment",
@@ -522,7 +509,7 @@ export function ProfilePage() {
                   hasNextPage={Boolean(bookmarks.hasNextPage)}
                   isFetchingNextPage={bookmarks.isFetchingNextPage}
                   loadMoreLabel="加载更多收藏"
-                  bookmarkTarget={bookmarkTarget}
+                  isBookmarkPending={isBookmarkPending}
                   onRetry={() => void bookmarks.refetch()}
                   onLoadMore={() => void bookmarks.fetchNextPage()}
                   onToggleBookmark={toggleBookmark}
@@ -540,7 +527,7 @@ export function ProfilePage() {
                   hasNextPage={Boolean(media.hasNextPage)}
                   isFetchingNextPage={media.isFetchingNextPage}
                   loadMoreLabel="加载更多媒体"
-                  bookmarkTarget={bookmarkTarget}
+                  isBookmarkPending={isBookmarkPending}
                   onRetry={() => void media.refetch()}
                   onLoadMore={() => void media.fetchNextPage()}
                   onToggleBookmark={toggleBookmark}
@@ -561,7 +548,7 @@ export function ProfilePage() {
                   hasNextPage={Boolean(likes.hasNextPage)}
                   isFetchingNextPage={likes.isFetchingNextPage}
                   loadMoreLabel="加载更多喜欢"
-                  bookmarkTarget={bookmarkTarget}
+                  isBookmarkPending={isBookmarkPending}
                   onRetry={() => void likes.refetch()}
                   onLoadMore={() => void likes.fetchNextPage()}
                   onToggleBookmark={toggleBookmark}

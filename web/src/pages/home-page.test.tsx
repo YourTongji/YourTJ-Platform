@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router";
+import { MemoryRouter, useLocation } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { HomePage } from "./home-page";
@@ -12,7 +12,11 @@ const apiMocks = vi.hoisted(() => ({
   myActivity: vi.fn(),
   myCheckInStatus: vi.fn(),
   myTrustProgress: vi.fn(),
+  bookmarkPost: vi.fn(),
+  removeBookmark: vi.fn(),
+  removePostVote: vi.fn(),
   threads: vi.fn(),
+  votePost: vi.fn(),
 }));
 const authState = vi.hoisted(() => ({
   account: null as null | { id: string; handle: string; trustLevel: number },
@@ -28,7 +32,11 @@ vi.mock("@/lib/api/endpoints", () => ({
     checkIn: apiMocks.checkIn,
     myCheckInStatus: apiMocks.myCheckInStatus,
     myTrustProgress: apiMocks.myTrustProgress,
+    bookmarkPost: apiMocks.bookmarkPost,
+    removeBookmark: apiMocks.removeBookmark,
+    removePostVote: apiMocks.removePostVote,
     threads: apiMocks.threads,
+    votePost: apiMocks.votePost,
     myActivity: apiMocks.myActivity,
   },
 }));
@@ -48,18 +56,27 @@ const firstThread = {
   createdAt: 1_700_000_000,
   lastActivityAt: 1_700_000_100,
   tags: [],
+  attachments: [],
+  viewerVote: null,
+  isBookmarked: false,
   canEdit: false,
   canDelete: false,
   canModerate: false,
 };
 
+function LocationProbe() {
+  const location = useLocation();
+  return <output aria-label="当前位置">{location.pathname}{location.search}</output>;
+}
+
 function renderPage(queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-  })) {
+  }), initialEntry = "/") {
   return render(
     <QueryClientProvider client={queryClient}>
-      <MemoryRouter>
+      <MemoryRouter initialEntries={[initialEntry]}>
         <HomePage />
+        <LocationProbe />
       </MemoryRouter>
     </QueryClientProvider>,
   );
@@ -104,6 +121,18 @@ describe("HomePage", () => {
       promotionBlockedUntil: null,
       promotionRequiresNewActivity: false,
     });
+    apiMocks.bookmarkPost.mockReset().mockResolvedValue(undefined);
+    apiMocks.removeBookmark.mockReset().mockResolvedValue(undefined);
+    apiMocks.removePostVote.mockReset().mockResolvedValue({
+      ok: true,
+      voteCount: 5,
+      viewerVote: null,
+    });
+    apiMocks.votePost.mockReset().mockResolvedValue({
+      ok: true,
+      voteCount: 6,
+      viewerVote: "up",
+    });
     apiMocks.threads.mockReset().mockImplementation(async ({ cursor }) => cursor
       ? {
           items: [{ ...firstThread, id: "20", title: "首页第二页" }],
@@ -133,6 +162,84 @@ describe("HomePage", () => {
       feed: "hot",
       cursor: "cursor-21",
     }));
+  });
+
+  it("restores the selected feed from the URL", async () => {
+    renderPage(undefined, "/?feed=new");
+
+    await screen.findAllByText("首页第一页");
+    expect(apiMocks.threads).toHaveBeenCalledWith({ feed: "new", cursor: null });
+    expect(screen.getByLabelText("当前位置")).toHaveTextContent("/?feed=new");
+  });
+
+  it("redirects anonymous interaction attempts to login", async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    await screen.findAllByText("首页第一页");
+    await user.click(screen.getByRole("button", { name: "收藏" }));
+
+    expect(screen.getByLabelText("当前位置")).toHaveTextContent("/login");
+    expect(apiMocks.bookmarkPost).not.toHaveBeenCalled();
+  });
+
+  it("updates the visible vote count before the server responds", async () => {
+    authState.account = { id: "7", handle: "alice", trustLevel: 2 };
+    let resolveVote: ((value: { ok: boolean; voteCount: number; viewerVote: "up" }) => void) | undefined;
+    apiMocks.votePost.mockReturnValue(new Promise((resolve) => {
+      resolveVote = resolve;
+    }));
+    const user = userEvent.setup();
+    renderPage();
+
+    await screen.findAllByText("首页第一页");
+    await user.click(screen.getByRole("button", { name: "赞同" }));
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "取消赞同" })).toHaveTextContent("6"));
+    resolveVote?.({ ok: true, voteCount: 6, viewerVote: "up" });
+    await waitFor(() => expect(apiMocks.votePost).toHaveBeenCalledWith("21", "up", "thread"));
+  });
+
+  it("keeps every in-flight vote target locked while another target runs", async () => {
+    authState.account = { id: "7", handle: "alice", trustLevel: 2 };
+    const secondThread = { ...firstThread, id: "22", title: "首页另一条" };
+    apiMocks.threads.mockResolvedValue({
+      items: [firstThread, secondThread],
+      nextCursor: null,
+      hasMore: false,
+    });
+    const resolvers = new Map<
+      string,
+      (value: { ok: boolean; voteCount: number; viewerVote: "up" }) => void
+    >();
+    apiMocks.votePost.mockImplementation((id: string) => new Promise((resolve) => {
+      resolvers.set(id, resolve);
+    }));
+    const user = userEvent.setup();
+    renderPage();
+
+    const [firstVote, secondVote] = await screen.findAllByRole("button", {
+      name: "赞同",
+    });
+    await user.click(firstVote!);
+    await waitFor(() => expect(firstVote).toBeDisabled());
+    await user.click(secondVote!);
+    await waitFor(() => {
+      expect(firstVote).toBeDisabled();
+      expect(secondVote).toBeDisabled();
+      expect(apiMocks.votePost).toHaveBeenCalledTimes(2);
+    });
+
+    await user.click(firstVote!);
+    expect(apiMocks.votePost).toHaveBeenCalledTimes(2);
+    expect(apiMocks.removePostVote).not.toHaveBeenCalled();
+
+    resolvers.get("21")?.({ ok: true, voteCount: 6, viewerVote: "up" });
+    resolvers.get("22")?.({ ok: true, voteCount: 6, viewerVote: "up" });
+    await waitFor(() => {
+      expect(firstVote).not.toBeDisabled();
+      expect(secondVote).not.toBeDisabled();
+    });
   });
 
   it("shows activity-based trust progress in the narrow-screen home card", async () => {

@@ -185,15 +185,6 @@ export function ProfilePostCard({
                   {post.body}
                 </p>
               ) : null}
-              {post.attachment ? (
-                <ForumDeliveryImage
-                  attachment={post.attachment}
-                  onDeliveryRefresh={onAttachmentDeliveryRefresh}
-                  loading="lazy"
-                  decoding="async"
-                  className="mt-3 max-h-64 w-full rounded-xl border border-border/50 object-cover"
-                />
-              ) : null}
             </Link>
           ) : (
             <>
@@ -207,6 +198,17 @@ export function ProfilePostCard({
               ) : null}
             </>
           )}
+
+          {post.attachment ? (
+            <ForumDeliveryImage
+              attachment={post.attachment}
+              onDeliveryRefresh={onAttachmentDeliveryRefresh}
+              enableLightbox
+              loading="lazy"
+              decoding="async"
+              className="mt-3 max-h-64 w-full rounded-xl border border-border/50 object-cover"
+            />
+          ) : null}
 
           {post.boardSlug ? (
             <div className="mt-3">

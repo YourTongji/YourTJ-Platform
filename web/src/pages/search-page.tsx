@@ -259,7 +259,7 @@ export function SearchPage() {
                 </h2>
                 <div className="space-y-3">
                   {reviews.map((review) => (
-                    <Link key={review.id} to={`/courses/${review.courseId}`} className="block rounded-xl border bg-card p-4 transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50">
+                    <Link key={review.id} to={`/courses/${review.courseId}?review=${review.id}#review-${review.id}`} className="block rounded-xl border bg-card p-4 transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50">
                       <div className="flex flex-wrap items-center gap-2">
                         <h3 className="font-semibold">
                           <HighlightedText text={review.courseName} ranges={rangesFor("review", review.id, "courseName")} />

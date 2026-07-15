@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Bookmark, Flag, MessageSquare, Send, ThumbsDown, ThumbsUp } from "lucide-react";
+import { Bookmark, Flag, MessageSquare, Send, Share2, ThumbsDown, ThumbsUp } from "lucide-react";
 import * as React from "react";
 import { Link, useParams } from "react-router";
 import { toast } from "sonner";
@@ -11,6 +11,10 @@ import { MarkdownContent } from "@/components/content/markdown-content";
 import { MarkdownEditor } from "@/components/content/markdown-editor";
 import { DraftSyncNotice } from "@/components/forum/draft-sync-notice";
 import { ForumAuthorAvatar } from "@/components/forum/forum-author-avatar";
+import {
+  useForumBookmarkMutation,
+  useForumVoteMutation,
+} from "@/components/forum/use-forum-interactions";
 import {
   CommentAuthorActions,
   ThreadAuthorActions,
@@ -28,35 +32,18 @@ import { useAuth } from "@/context/auth-provider";
 import { api } from "@/lib/api/endpoints";
 import type { Comment, DraftPayload } from "@/lib/api/types";
 import { formatUnixTime } from "@/lib/format";
+import { forumQueryKeys } from "@/lib/forum-query-keys";
+import { shareForumThread } from "@/lib/forum-share";
 
 function CommentCard({ comment, threadId }: { comment: Comment; threadId: string }) {
   const queryClient = useQueryClient();
-  const vote = useMutation({
-    mutationFn: (value: "up" | "down") =>
-      comment.viewerVote === value
-        ? api.removePostVote(comment.id ?? "", "comment")
-        : api.votePost(comment.id ?? "", value, "comment"),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["thread-comments", threadId] });
-    },
-    onError: (error) => toast.error(error instanceof Error ? error.message : "操作失败"),
-  });
+  const vote = useForumVoteMutation();
   const flag = useMutation({
     mutationFn: () => api.flagPost(comment.id ?? "", "other", undefined, "comment"),
     onSuccess: () => toast.success("已提交举报"),
     onError: (error) => toast.error(error instanceof Error ? error.message : "举报失败"),
   });
-  const bookmark = useMutation({
-    mutationFn: () =>
-      comment.isBookmarked
-        ? api.removeBookmark(comment.id ?? "", "comment")
-        : api.bookmarkPost(comment.id ?? "", "comment"),
-    onSuccess: async () => {
-      toast.success(comment.isBookmarked ? "已取消收藏" : "已收藏");
-      await queryClient.invalidateQueries({ queryKey: ["thread-comments", threadId] });
-    },
-    onError: (error) => toast.error(error instanceof Error ? error.message : "收藏失败"),
-  });
+  const bookmark = useForumBookmarkMutation();
   return (
     <Card>
       <CardContent className="p-4">
@@ -71,7 +58,7 @@ function CommentCard({ comment, threadId }: { comment: Comment; threadId: string
                 avatar={comment.authorAvatar}
                 handle={comment.authorHandle}
                 onDeliveryRefresh={() => {
-                  void queryClient.invalidateQueries({ queryKey: ["thread-comments", threadId] });
+                  void queryClient.invalidateQueries({ queryKey: forumQueryKeys.comments(threadId) });
                 }}
                 className="size-9 border"
               />
@@ -102,7 +89,7 @@ function CommentCard({ comment, threadId }: { comment: Comment; threadId: string
           format={comment.contentFormat}
           attachments={comment.attachments}
           onAttachmentDeliveryRefresh={() => {
-            void queryClient.invalidateQueries({ queryKey: ["thread-comments", threadId] });
+            void queryClient.invalidateQueries({ queryKey: forumQueryKeys.comments(threadId) });
           }}
           className="mt-3 text-sm"
         />
@@ -110,8 +97,18 @@ function CommentCard({ comment, threadId }: { comment: Comment; threadId: string
           <Button
             size="sm"
             variant={comment.viewerVote === "up" ? "secondary" : "ghost"}
-            onClick={() => vote.mutate("up")}
-            disabled={vote.isPending}
+            onClick={() => {
+              const target = { id: comment.id, targetType: "comment" as const };
+              if (!vote.isTargetPending(target)) {
+                vote.mutate({
+                  ...target,
+                  requestedVote: "up",
+                  voteCount: comment.voteCount,
+                  viewerVote: comment.viewerVote,
+                });
+              }
+            }}
+            disabled={vote.isTargetPending({ id: comment.id, targetType: "comment" })}
           >
             <ThumbsUp className="h-4 w-4" />
             顶
@@ -119,8 +116,18 @@ function CommentCard({ comment, threadId }: { comment: Comment; threadId: string
           <Button
             size="sm"
             variant={comment.viewerVote === "down" ? "secondary" : "ghost"}
-            onClick={() => vote.mutate("down")}
-            disabled={vote.isPending}
+            onClick={() => {
+              const target = { id: comment.id, targetType: "comment" as const };
+              if (!vote.isTargetPending(target)) {
+                vote.mutate({
+                  ...target,
+                  requestedVote: "down",
+                  voteCount: comment.voteCount,
+                  viewerVote: comment.viewerVote,
+                });
+              }
+            }}
+            disabled={vote.isTargetPending({ id: comment.id, targetType: "comment" })}
           >
             <ThumbsDown className="h-4 w-4" />
             踩
@@ -128,8 +135,16 @@ function CommentCard({ comment, threadId }: { comment: Comment; threadId: string
           <Button
             size="sm"
             variant={comment.isBookmarked ? "secondary" : "ghost"}
-            onClick={() => bookmark.mutate()}
-            disabled={bookmark.isPending}
+            onClick={() => {
+              const target = { id: comment.id, targetType: "comment" as const };
+              if (!bookmark.isTargetPending(target)) {
+                bookmark.mutate({
+                  ...target,
+                  isBookmarked: comment.isBookmarked,
+                });
+              }
+            }}
+            disabled={bookmark.isTargetPending({ id: comment.id, targetType: "comment" })}
           >
             <Bookmark className="h-4 w-4" />
             {comment.isBookmarked ? "已收藏" : "收藏"}
@@ -160,7 +175,7 @@ function PollCard({
         ? api.removePollVote(poll.id ?? "", optionId)
         : api.votePoll(poll.id ?? "", optionId),
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["thread", threadId] });
+      await queryClient.invalidateQueries({ queryKey: forumQueryKeys.thread(threadId) });
     },
     onError: (error) => toast.error(error instanceof Error ? error.message : "投票失败"),
   });
@@ -203,7 +218,7 @@ function PollCard({
 }
 
 function CommentForm({ threadId }: { threadId: string }) {
-  const { isAuthenticated } = useAuth();
+  const { account, isAuthenticated } = useAuth();
   const queryClient = useQueryClient();
   const [body, setBody] = React.useState("");
   const [attachmentAssetIds, setAttachmentAssetIds] = React.useState<string[]>([]);
@@ -224,6 +239,7 @@ function CommentForm({ threadId }: { threadId: string }) {
   }, [threadId]);
   const draft = useForumDraft({
     draftKey: `comment:${threadId}`,
+    accountId: account?.id,
     enabled: isAuthenticated && Boolean(threadId),
     isEmpty: !body && attachmentAssetIds.length === 0,
     payload,
@@ -236,8 +252,8 @@ function CommentForm({ threadId }: { threadId: string }) {
       await draft.clearDraft().catch(() => toast.warning("回复已发布，但云端草稿清理失败"));
       setBody("");
       setAttachmentAssetIds([]);
-      await queryClient.invalidateQueries({ queryKey: ["thread-comments", threadId] });
-      await queryClient.invalidateQueries({ queryKey: ["thread", threadId] });
+      await queryClient.invalidateQueries({ queryKey: forumQueryKeys.comments(threadId) });
+      await queryClient.invalidateQueries({ queryKey: forumQueryKeys.thread(threadId) });
     },
     onError: (error) => toast.error(error instanceof Error ? error.message : "回复失败"),
   });
@@ -254,6 +270,7 @@ function CommentForm({ threadId }: { threadId: string }) {
       <CardContent className="space-y-3">
         <DraftSyncNotice
           status={draft.status}
+          localBackupStatus={draft.localBackupStatus}
           savedAt={draft.savedAt}
           onRestoreRemote={draft.restoreRemote}
           onKeepLocal={draft.keepLocal}
@@ -287,13 +304,13 @@ export function ThreadDetailPage() {
   const queryClient = useQueryClient();
   const { isAuthenticated } = useAuth();
   const thread = useQuery({
-    queryKey: ["thread", threadId],
+    queryKey: forumQueryKeys.thread(threadId),
     queryFn: () => api.thread(threadId),
     enabled: Boolean(threadId),
   });
-  const boards = useQuery({ queryKey: ["forum", "boards"], queryFn: api.boards });
+  const boards = useQuery({ queryKey: forumQueryKeys.boards(), queryFn: api.boards });
   const comments = useQuery({
-    queryKey: ["thread-comments", threadId],
+    queryKey: forumQueryKeys.comments(threadId),
     queryFn: () => api.comments(threadId),
     enabled: Boolean(threadId),
   });
@@ -308,27 +325,8 @@ export function ThreadDetailPage() {
   useForumDeliveryRefresh(deliveryResources, () => {
     void Promise.all([thread.refetch(), comments.refetch()]);
   });
-  const vote = useMutation({
-    mutationFn: (value: "up" | "down") =>
-      thread.data?.viewerVote === value
-        ? api.removePostVote(threadId, "thread")
-        : api.votePost(threadId, value, "thread"),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["thread", threadId] });
-    },
-    onError: (error) => toast.error(error instanceof Error ? error.message : "投票失败"),
-  });
-  const bookmark = useMutation({
-    mutationFn: () =>
-      thread.data?.isBookmarked
-        ? api.removeBookmark(threadId, "thread")
-        : api.bookmarkPost(threadId, "thread"),
-    onSuccess: async () => {
-      toast.success(thread.data?.isBookmarked ? "已取消收藏" : "已收藏");
-      await queryClient.invalidateQueries({ queryKey: ["thread", threadId] });
-    },
-    onError: (error) => toast.error(error instanceof Error ? error.message : "收藏失败"),
-  });
+  const vote = useForumVoteMutation();
+  const bookmark = useForumBookmarkMutation();
   const flag = useMutation({
     mutationFn: () => api.flagPost(threadId, "other", undefined, "thread"),
     onSuccess: () => toast.success("已提交举报"),
@@ -341,7 +339,7 @@ export function ThreadDetailPage() {
         : api.setSubscription({ targetType: "thread", targetId: threadId, level }),
     onSuccess: async () => {
       toast.success("订阅已更新");
-      await queryClient.invalidateQueries({ queryKey: ["thread", threadId] });
+      await queryClient.invalidateQueries({ queryKey: forumQueryKeys.thread(threadId) });
     },
     onError: (error) => toast.error(error instanceof Error ? error.message : "订阅失败"),
   });
@@ -352,7 +350,7 @@ export function ThreadDetailPage() {
     }
     void api
       .reportThreadRead(threadId, null)
-      .then(() => queryClient.invalidateQueries({ queryKey: ["forum", "threads"] }))
+      .then(() => queryClient.invalidateQueries({ queryKey: forumQueryKeys.feeds() }))
       .catch(() => undefined);
   }, [isAuthenticated, queryClient, thread.data?.id, threadId]);
 
@@ -374,6 +372,14 @@ export function ThreadDetailPage() {
         : item.closedAt
           ? "帖子已由版主关闭，不再接受新回复。"
           : null;
+  const share = async () => {
+    try {
+      const result = await shareForumThread(item.title ?? "YourTJ 社区讨论", threadId);
+      if (result === "copied") toast.success("帖子链接已复制");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "分享失败");
+    }
+  };
 
   return (
     <div className="space-y-5">
@@ -395,11 +401,20 @@ export function ThreadDetailPage() {
             </Select>
             <Button
               variant={item.isBookmarked ? "secondary" : "outline"}
-              onClick={() => bookmark.mutate()}
-              disabled={bookmark.isPending}
+              onClick={() => {
+                const target = { id: threadId, targetType: "thread" as const };
+                if (!bookmark.isTargetPending(target)) {
+                  bookmark.mutate({ ...target, isBookmarked: item.isBookmarked });
+                }
+              }}
+              disabled={bookmark.isTargetPending({ id: threadId, targetType: "thread" })}
             >
               <Bookmark className="h-4 w-4" />
               {item.isBookmarked ? "已收藏" : "收藏"}
+            </Button>
+            <Button variant="outline" onClick={() => void share()}>
+              <Share2 className="h-4 w-4" />
+              分享
             </Button>
             <ThreadAuthorActions thread={item} />
             <ThreadModerationControls thread={item} boards={boards.data ?? []} />
@@ -459,16 +474,36 @@ export function ThreadDetailPage() {
           <div className="mt-5 flex flex-wrap gap-2">
             <Button
               variant={item.viewerVote === "up" ? "default" : "secondary"}
-              onClick={() => vote.mutate("up")}
-              disabled={vote.isPending}
+              onClick={() => {
+                const target = { id: threadId, targetType: "thread" as const };
+                if (!vote.isTargetPending(target)) {
+                  vote.mutate({
+                    ...target,
+                    requestedVote: "up",
+                    voteCount: item.voteCount,
+                    viewerVote: item.viewerVote,
+                  });
+                }
+              }}
+              disabled={vote.isTargetPending({ id: threadId, targetType: "thread" })}
             >
               <ThumbsUp className="h-4 w-4" />
               顶
             </Button>
             <Button
               variant={item.viewerVote === "down" ? "default" : "secondary"}
-              onClick={() => vote.mutate("down")}
-              disabled={vote.isPending}
+              onClick={() => {
+                const target = { id: threadId, targetType: "thread" as const };
+                if (!vote.isTargetPending(target)) {
+                  vote.mutate({
+                    ...target,
+                    requestedVote: "down",
+                    voteCount: item.voteCount,
+                    viewerVote: item.viewerVote,
+                  });
+                }
+              }}
+              disabled={vote.isTargetPending({ id: threadId, targetType: "thread" })}
             >
               <ThumbsDown className="h-4 w-4" />
               踩

@@ -18,6 +18,12 @@ pub struct ReviewDto {
     pub author_handle: String,
     pub author_avatar: Option<String>,
     pub approve_count: i32,
+    #[serde(default)]
+    pub viewer_liked: bool,
+    #[serde(default)]
+    pub can_edit: bool,
+    #[serde(default)]
+    pub can_report: bool,
     pub status: String,
     pub created_at: i64,
 }
@@ -62,10 +68,26 @@ pub struct ReportInput {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ListReviewsQuery {
-    pub sort: Option<String>,
+    pub sort: Option<ReviewSort>,
     pub cursor: Option<i64>,
     #[serde(default = "default_limit")]
     pub limit: i64,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ReviewSort {
+    Hot,
+    New,
+}
+
+impl ReviewSort {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Hot => "hot",
+            Self::New => "new",
+        }
+    }
 }
 
 fn default_limit() -> i64 {

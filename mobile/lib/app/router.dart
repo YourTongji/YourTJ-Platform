@@ -250,8 +250,18 @@ String? safePublicInteractionReturnLocation(String? rawLocation) {
       queryParameters: query.isEmpty ? null : query,
     ).toString();
   }
+  if (RegExp(r'^/courses/[A-Za-z0-9_-]{1,128}$').hasMatch(path)) {
+    final String? reviewId = parsed.queryParameters['review'];
+    if (reviewId != null &&
+        RegExp(r'^[A-Za-z0-9_-]{1,128}$').hasMatch(reviewId)) {
+      return Uri(
+        path: path,
+        queryParameters: <String, String>{'review': reviewId},
+      ).toString();
+    }
+    return path;
+  }
   if (RegExp(r'^/forum/threads/[A-Za-z0-9_-]{1,128}$').hasMatch(path) ||
-      RegExp(r'^/courses/[A-Za-z0-9_-]{1,128}$').hasMatch(path) ||
       RegExp(
         r'^/profile/[a-z0-9._-]{3,30}(?:/(?:followers|following))?$',
       ).hasMatch(path)) {
@@ -409,7 +419,9 @@ GoRouter createAppRouter({
                     path: ':courseId',
                     builder: (BuildContext context, GoRouterState state) {
                       return CourseDetailPage(
+                        key: ValueKey<String>(state.uri.toString()),
                         courseId: state.pathParameters['courseId']!,
+                        targetReviewId: state.uri.queryParameters['review'],
                       );
                     },
                   ),

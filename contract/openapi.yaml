@@ -38,6 +38,18 @@ components:
   parameters:
     Cursor: { name: cursor, in: query, schema: { type: string }, description: Opaque pagination cursor }
     Limit: { name: limit, in: query, schema: { type: integer, default: 20, minimum: 1, maximum: 100 } }
+    SelectionCalendarId:
+      name: calendarId
+      in: query
+      required: true
+      schema: { type: string, pattern: '^[1-9][0-9]*$' }
+      description: Selection calendar that bounds every returned teaching class.
+    TeachingClassId:
+      name: teachingClassId
+      in: path
+      required: true
+      schema: { type: string, pattern: '^[1-9][0-9]*$' }
+      description: Stable upstream teaching-class identifier, not a canonical course code.
     WalletIntent:
       name: X-Wallet-Intent
       in: header
@@ -583,6 +595,7 @@ components:
             aliases: { type: array, items: { type: string } }
     Review:
       type: object
+      required: [viewerLiked, canEdit, canReport]
       properties:
         id: { type: string }
         courseId: { type: string }
@@ -593,6 +606,9 @@ components:
         authorHandle: { type: string }
         authorAvatar: { type: string, nullable: true, description: Reserved for a current platform-owned avatar projection. Legacy reviewer-provided remote URLs are never returned; null until Reviews integrates a typed Media projection. }
         approveCount: { type: integer }
+        viewerLiked: { type: boolean, description: Whether the authenticated viewer currently likes this review; false for anonymous viewers. }
+        canEdit: { type: boolean, description: Server-authoritative permission for the current viewer to edit this review. }
+        canReport: { type: boolean, description: Server-authoritative permission for the current viewer to report this review. }
         status: { type: string, enum: [visible, hidden, pending] }
         createdAt: { type: integer }
     ReviewInput:
@@ -937,13 +953,15 @@ components:
     CourseNature: { type: object, properties: { id: { type: string }, name: { type: string } } }
     SelectionCourse:
       type: object
-      required: [id, code, name, credit, natureId, campusId, teacherName, teacherNames]
+      description: One teaching class in the selection mirror. Multiple teaching classes may share a course code.
+      required: [id, code, name, credit, natureId, calendarId, campusId, teacherName, teacherNames]
       properties:
-        id: { type: string }
-        code: { type: string }
+        id: { type: string, description: Stable upstream teaching-class identifier. }
+        code: { type: string, description: Canonical course code; not unique across teaching classes or calendars. }
         name: { type: string }
         credit: { type: number, nullable: true }
         natureId: { type: string, nullable: true }
+        calendarId: { type: string, nullable: true }
         campusId: { type: string, nullable: true }
         teacherName: { type: string, nullable: true }
         teacherNames: { type: array, items: { type: string } }
@@ -951,7 +969,7 @@ components:
       type: object
       required: [courseId, teacherName, weekday, startSlot, endSlot, weeks, location]
       properties:
-        courseId: { type: string }
+        courseId: { type: string, description: Stable teaching-class identifier matching SelectionCourse.id. }
         teacherName: { type: string, nullable: true }
         weekday: { type: integer }
         startSlot: { type: integer }
@@ -1781,6 +1799,10 @@ components:
       required: [body]
       properties:
         body: { type: string, minLength: 1, maxLength: 16000 }
+        clientMessageId:
+          type: string
+          format: uuid
+          description: Optional client-generated idempotency identity; retries with the same value must keep the same conversation and body.
     DmReadInput:
       type: object
       properties:
@@ -3719,52 +3741,68 @@ paths:
       tags: [selection]
       security: []
       summary: Grades for a calendar
-      parameters: [{ name: calendarId, in: query, required: true, schema: { type: string } }]
-      responses: { "200": { description: ok, content: { application/json: { schema: { type: array, items: { type: string } } } } } }
+      parameters: [{ $ref: "#/components/parameters/SelectionCalendarId" }]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { type: string } } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
   /selection/majors:
     get:
       tags: [selection]
       security: []
-      summary: Majors for a grade
-      parameters: [{ name: grade, in: query, required: true, schema: { type: string } }]
-      responses: { "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Major" } } } } } }
+      summary: Majors with teaching classes in a calendar and grade
+      parameters: [{ $ref: "#/components/parameters/SelectionCalendarId" }, { name: grade, in: query, required: true, schema: { type: string } }]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Major" } } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
   /selection/course-natures:
     get: { tags: [selection], security: [], summary: Optional course types/natures, responses: { "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/CourseNature" } } } } } } }
   /selection/courses-by-major:
     get:
       tags: [selection]
       security: []
-      summary: Courses for a major
-      parameters: [{ name: majorId, in: query, required: true, schema: { type: string } }, { name: grade, in: query, required: true, schema: { type: string } }]
-      responses: { "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/SelectionCourse" } } } } } }
+      summary: Teaching classes for a major in a calendar
+      parameters: [{ $ref: "#/components/parameters/SelectionCalendarId" }, { name: majorId, in: query, required: true, schema: { type: string } }, { name: grade, in: query, required: true, schema: { type: string } }]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/SelectionCourse" } } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
   /selection/courses-by-nature:
     get:
       tags: [selection]
       security: []
-      summary: Courses by nature/type
-      parameters: [{ name: natureId, in: query, required: true, schema: { type: string } }]
-      responses: { "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/SelectionCourse" } } } } } }
-  /selection/courses/{code}:
+      summary: Teaching classes by nature/type in a calendar
+      parameters: [{ $ref: "#/components/parameters/SelectionCalendarId" }, { name: natureId, in: query, required: true, schema: { type: string } }]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/SelectionCourse" } } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+  /selection/courses/{teachingClassId}:
     get:
       tags: [selection]
       security: []
-      summary: Selection course detail by code
-      parameters: [{ name: code, in: path, required: true, schema: { type: string } }]
-      responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/SelectionCourse" } } } } }
+      summary: Selection teaching-class detail by stable identifier
+      parameters: [{ $ref: "#/components/parameters/TeachingClassId" }]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/SelectionCourse" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /selection/courses/search:
     get:
       tags: [selection]
       security: []
-      summary: Search selection courses
-      parameters: [{ name: q, in: query, required: true, schema: { type: string } }]
-      responses: { "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/SelectionCourse" } } } } } }
-  /selection/courses/{code}/timeslots:
+      summary: Search selection teaching classes in a calendar
+      parameters: [{ $ref: "#/components/parameters/SelectionCalendarId" }, { name: q, in: query, required: true, schema: { type: string } }]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/SelectionCourse" } } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+  /selection/courses/{teachingClassId}/timeslots:
     get:
       tags: [selection]
       security: []
-      summary: Timeslots for a selection course code
-      parameters: [{ name: code, in: path, required: true, schema: { type: string } }]
-      responses: { "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/TimeSlot" } } } } } }
+      summary: Timeslots for a stable teaching-class identifier
+      parameters: [{ $ref: "#/components/parameters/TeachingClassId" }]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/TimeSlot" } } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /selection/latest-update:
     get: { tags: [selection], security: [], summary: Latest sync time, responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/LatestUpdate" } } } } } }
 
@@ -3772,7 +3810,7 @@ paths:
   /courses/{id}/reviews:
     get:
       tags: [reviews]
-      security: []
+      security: [{}, { bearer: [] }]
       summary: Course reviews (paginated, sorted)
       parameters:
         - { name: id, in: path, required: true, schema: { type: string } }
@@ -3789,6 +3827,14 @@ paths:
         "201": { description: created, content: { application/json: { schema: { $ref: "#/components/schemas/Review" } } } }
         "409": { $ref: "#/components/responses/Conflict" }
   /reviews/{id}:
+    get:
+      tags: [reviews]
+      security: [{}, { bearer: [] }]
+      summary: Get one visible review with viewer state
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Review" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
     patch:
       tags: [reviews]
       summary: Edit own review
@@ -4022,10 +4068,13 @@ paths:
       responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/DmMessagePage" } } } } }
     post:
       tags: [forum]
-      summary: Send a message
+      summary: Send or safely replay a message
       parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/DmMessageInput" } } } }
-      responses: { "201": { description: created, content: { application/json: { schema: { $ref: "#/components/schemas/DmMessage" } } } } }
+      responses:
+        "201": { description: created or safely replayed, content: { application/json: { schema: { $ref: "#/components/schemas/DmMessage" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "409": { $ref: "#/components/responses/Conflict" }
   /forum/dm/conversations/{id}/read:
     post:
       tags: [forum]

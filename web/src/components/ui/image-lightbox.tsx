@@ -1,4 +1,4 @@
-import { ChevronLeft, ChevronRight, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, Download, Minus, Plus, X } from "lucide-react";
 import * as React from "react";
 
 import {
@@ -8,7 +8,10 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+
+const ZOOM_LEVELS = [1, 1.5, 2, 3] as const;
 
 export type LightboxImage = {
   src: string;
@@ -38,6 +41,20 @@ export function ImageLightbox({
     : Math.min(Math.max(openIndex, 0), Math.max(images.length - 1, 0));
   const current = images[safeIndex];
   const canNavigate = images.length > 1;
+  const [zoomIndex, setZoomIndex] = React.useState(0);
+  const zoom = ZOOM_LEVELS[zoomIndex];
+
+  React.useEffect(() => {
+    setZoomIndex(0);
+  }, [open, safeIndex]);
+
+  const zoomIn = React.useCallback(() => {
+    setZoomIndex((currentIndex) => Math.min(currentIndex + 1, ZOOM_LEVELS.length - 1));
+  }, []);
+
+  const zoomOut = React.useCallback(() => {
+    setZoomIndex((currentIndex) => Math.max(currentIndex - 1, 0));
+  }, []);
 
   const showPrevious = React.useCallback(() => {
     if (!canNavigate) return;
@@ -60,11 +77,20 @@ export function ImageLightbox({
       } else if (event.key === "ArrowRight") {
         event.preventDefault();
         showNext();
+      } else if (event.key === "+" || event.key === "=") {
+        event.preventDefault();
+        zoomIn();
+      } else if (event.key === "-") {
+        event.preventDefault();
+        zoomOut();
+      } else if (event.key === "0") {
+        event.preventDefault();
+        setZoomIndex(0);
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [open, showNext, showPrevious]);
+  }, [open, showNext, showPrevious, zoomIn, zoomOut]);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -87,16 +113,22 @@ export function ImageLightbox({
           className="relative flex max-h-[min(96vh,960px)] max-w-[min(96vw,1200px)] items-center justify-center"
           onClick={(event) => event.stopPropagation()}
         >
-          {current ? (
-            <img
-              src={current.src}
-              alt={current.alt?.trim() || "查看图片"}
-              width={current.width ?? undefined}
-              height={current.height ?? undefined}
-              referrerPolicy="no-referrer"
-              className="max-h-[min(92vh,920px)] max-w-full rounded-lg object-contain shadow-2xl"
-            />
-          ) : null}
+          <div className="max-h-[min(92vh,920px)] max-w-[min(96vw,1200px)] overflow-auto rounded-lg">
+            {current ? (
+              <img
+                src={current.src}
+                alt={current.alt?.trim() || "查看图片"}
+                width={current.width ?? undefined}
+                height={current.height ?? undefined}
+                referrerPolicy="no-referrer"
+                className={cn(
+                  "m-auto block rounded-lg object-contain shadow-2xl transition-[width,max-height] motion-reduce:transition-none",
+                  zoom === 1 && "max-h-[min(92vh,920px)] max-w-full",
+                )}
+                style={zoom === 1 ? undefined : { width: `${zoom * 100}%`, maxWidth: "none" }}
+              />
+            ) : null}
+          </div>
           <DialogClose
             className="absolute right-2 top-2 rounded-full bg-black/55 p-2 text-white transition-opacity hover:bg-black/75 focus-visible:ring-[3px] focus-visible:ring-ring/50"
             aria-label="关闭图片预览"
@@ -122,6 +154,52 @@ export function ImageLightbox({
                 <ChevronRight className="size-5" />
               </button>
             </>
+          ) : null}
+          {current ? (
+            <div className="absolute bottom-2 left-1/2 flex -translate-x-1/2 items-center gap-1 rounded-full bg-black/65 p-1 text-white shadow-lg">
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="size-8 text-white hover:bg-white/15 hover:text-white"
+                onClick={zoomOut}
+                disabled={zoomIndex === 0}
+                aria-label="缩小图片"
+              >
+                <Minus className="size-4" />
+              </Button>
+              <span className="min-w-20 text-center text-xs tabular-nums" aria-live="polite">
+                {canNavigate ? `${safeIndex + 1}/${images.length} · ` : ""}{Math.round(zoom * 100)}%
+              </span>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="size-8 text-white hover:bg-white/15 hover:text-white"
+                onClick={zoomIn}
+                disabled={zoomIndex === ZOOM_LEVELS.length - 1}
+                aria-label="放大图片"
+              >
+                <Plus className="size-4" />
+              </Button>
+              <Button
+                asChild
+                variant="ghost"
+                size="icon"
+                className="size-8 text-white hover:bg-white/15 hover:text-white"
+              >
+                <a
+                  href={current.src}
+                  download
+                  target="_blank"
+                  rel="noreferrer"
+                  referrerPolicy="no-referrer"
+                  aria-label="下载原图"
+                >
+                  <Download className="size-4" />
+                </a>
+              </Button>
+            </div>
           ) : null}
         </div>
       </DialogContent>

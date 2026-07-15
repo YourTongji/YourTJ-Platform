@@ -59,4 +59,28 @@ describe("RealtimeRefresh", () => {
       queryKey: ["dm", "account-2", "conversations"],
     }));
   });
+
+  it("uses a forum event type as a broad refresh hint without reading its payload", async () => {
+    localStorage.setItem("yourtj.accessToken", "access-token");
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(
+      "event: vote\ndata: {\"targetId\":\"not-a-trusted-resource-id\"}\n\n",
+      { status: 200, headers: { "Content-Type": "text/event-stream" } },
+    )));
+    const queryClient = new QueryClient();
+    const invalidate = vi.spyOn(queryClient, "invalidateQueries").mockResolvedValue(undefined);
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RealtimeRefresh accountId="account-3" isAuthenticated />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({
+      queryKey: ["home", "threads"],
+    }));
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["forum", "threads"] });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["profile"] });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["thread"] });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["thread-comments"] });
+  });
 });

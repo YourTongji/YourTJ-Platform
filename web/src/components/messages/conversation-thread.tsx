@@ -9,10 +9,12 @@ import {
   Flag,
   Loader2,
   MoreHorizontal,
+  RefreshCw,
   Send,
   Trash2,
   Undo2,
   UserRoundCheck,
+  X,
 } from "lucide-react";
 import * as React from "react";
 import { Link } from "react-router";
@@ -41,9 +43,20 @@ import type { DmConversation, DmMessage } from "@/lib/api/types";
 import { formatUnixTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
+export interface PendingDmMessage {
+  accountId: string;
+  clientId: string;
+  conversationId: string;
+  body: string;
+  createdAt: number;
+  status: "sending" | "failed";
+  errorMessage?: string;
+}
+
 export function ConversationThread({
   conversation,
   messages,
+  pendingMessages = [],
   currentAccountId,
   body,
   isIgnored,
@@ -61,6 +74,8 @@ export function ConversationThread({
   onRetry,
   onLoadOlder,
   onSend,
+  onRetryPending,
+  onDiscardPending,
   onReport,
   onAcceptRequest,
   onDeclineRequest,
@@ -71,6 +86,7 @@ export function ConversationThread({
 }: {
   conversation?: DmConversation;
   messages: DmMessage[];
+  pendingMessages?: PendingDmMessage[];
   currentAccountId?: string;
   body: string;
   isIgnored: boolean;
@@ -88,6 +104,8 @@ export function ConversationThread({
   onRetry: () => void;
   onLoadOlder: () => void;
   onSend: () => void;
+  onRetryPending?: (message: PendingDmMessage) => void;
+  onDiscardPending?: (clientId: string) => void;
   onReport: (message: DmMessage, isRequest: boolean) => void;
   onAcceptRequest: () => void;
   onDeclineRequest: () => void;
@@ -99,7 +117,7 @@ export function ConversationThread({
   const [confirmBlockOpen, setConfirmBlockOpen] = React.useState(false);
   const [confirmDeleteOpen, setConfirmDeleteOpen] = React.useState(false);
   const viewportRef = React.useRef<HTMLDivElement>(null);
-  const newestMessageId = messages.at(-1)?.id;
+  const newestMessageId = pendingMessages.at(-1)?.clientId ?? messages.at(-1)?.id;
   const isIncomingRequest = conversation?.requestStatus === "pending"
     && conversation.requestDirection === "incoming";
   const isOutgoingRequest = conversation?.requestStatus === "pending"
@@ -204,7 +222,7 @@ export function ConversationThread({
             <LoadingState label="加载消息" />
           ) : error ? (
             <ErrorState error={error} onRetry={onRetry} />
-          ) : messages.length === 0 ? (
+          ) : messages.length === 0 && pendingMessages.length === 0 ? (
             <EmptyState
               title="从一句问候开始"
               description="私信仅对会话双方可见；举报时只提交被举报的单条消息。"
@@ -257,6 +275,55 @@ export function ConversationThread({
                   </li>
                 );
               })}
+              {pendingMessages.map((message) => (
+                <li key={message.clientId} className="flex justify-end">
+                  <div className="max-w-[85%] text-right sm:max-w-[72%]">
+                    <div className="mb-1 flex items-center justify-end gap-2 text-[11px] text-muted-foreground">
+                      <time dateTime={new Date(message.createdAt * 1000).toISOString()}>
+                        {formatUnixTime(message.createdAt)}
+                      </time>
+                      <span role="status">
+                        {message.status === "sending" ? "发送中" : "发送失败"}
+                      </span>
+                    </div>
+                    <div className={cn(
+                      "whitespace-pre-wrap break-words rounded-2xl rounded-br-sm px-3.5 py-2.5 text-left text-sm leading-6 shadow-sm",
+                      message.status === "failed"
+                        ? "border border-destructive/50 bg-destructive/5 text-foreground"
+                        : "bg-primary text-primary-foreground opacity-80",
+                    )}>
+                      {message.body}
+                    </div>
+                    {message.status === "failed" ? (
+                      <div className="mt-1 flex items-center justify-end gap-1">
+                        <span className="mr-1 text-xs text-destructive">
+                          {message.errorMessage ?? "消息未送达"}
+                        </span>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => onRetryPending?.(message)}
+                          disabled={!onRetryPending}
+                        >
+                          <RefreshCw className="size-3.5" />重试
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="size-8"
+                          onClick={() => onDiscardPending?.(message.clientId)}
+                          disabled={!onDiscardPending}
+                          aria-label="丢弃未发送消息"
+                        >
+                          <X className="size-3.5" />
+                        </Button>
+                      </div>
+                    ) : null}
+                  </div>
+                </li>
+              ))}
             </ol>
           )}
         </CardContent>

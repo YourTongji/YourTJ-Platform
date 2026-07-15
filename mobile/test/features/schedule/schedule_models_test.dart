@@ -50,6 +50,17 @@ void main() {
 
       expect(conflict?.kind, ScheduleConflictKind.possible);
     });
+
+    test('keeps identical unknown week grammar as a possible conflict', () {
+      final ScheduleConflict? conflict = findScheduleConflict(
+        existing: <ScheduledCourse>[
+          _scheduled(_slot(start: 3, end: 4, weeks: '前八周')),
+        ],
+        candidate: <TimeSlot>[_slot(start: 4, end: 5, weeks: '前八周')],
+      );
+
+      expect(conflict?.kind, ScheduleConflictKind.possible);
+    });
   });
 
   test('parses ranges, lists, and odd-even week suffixes', () {
@@ -57,6 +68,14 @@ void main() {
     expect(parseCourseWeeks('1-6单'), <int>{1, 3, 5});
     expect(parseCourseWeeks('2-8双'), <int>{2, 4, 6, 8});
     expect(parseCourseWeeks('任意'), isNull);
+  });
+
+  test('marks unparseable non-empty week facts as unknown', () {
+    final ScheduledCourse course = _scheduled(
+      _slot(start: 3, end: 4, weeks: '前八周'),
+    );
+
+    expect(course.hasUnknownWeeks, isTrue);
   });
 }
 
@@ -75,6 +94,7 @@ SelectionCourse _course(String code) {
     name: '测试课程',
     credit: 2,
     natureId: null,
+    calendarId: 'calendar-1',
     campusId: null,
     teacherName: null,
     teacherNames: const <String>[],

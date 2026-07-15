@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:yourtj_api/yourtj_api.dart';
+import 'package:yourtj_mobile/core/network/api_failure.dart';
 import 'package:yourtj_mobile/features/schedule/data/schedule_local_repository.dart';
 import 'package:yourtj_mobile/features/schedule/domain/schedule_models.dart';
 
@@ -61,6 +62,24 @@ void main() {
 
     expect(loaded, isEmpty);
   });
+
+  test('rejects a teaching class outside the target calendar', () async {
+    final ScheduleLocalRepository repository = ScheduleLocalRepository(
+      _MemoryScheduleStorage(),
+    );
+
+    expect(
+      repository.save(
+        namespace: const ScheduleNamespace(
+          environment: 'https://api.example/api/v2',
+          principal: 'account-a',
+        ),
+        calendarId: '2026-autumn',
+        courses: <ScheduledCourse>[_scheduled()],
+      ),
+      throwsA(isA<ApiFailure>()),
+    );
+  });
 }
 
 class _MemoryScheduleStorage implements ScheduleStorage {
@@ -88,6 +107,7 @@ ScheduledCourse _scheduled() {
       name: '程序设计',
       credit: 3,
       natureId: 'required',
+      calendarId: '2026-spring',
       campusId: 'siping',
       teacherName: '张老师',
       teacherNames: const <String>['张老师'],

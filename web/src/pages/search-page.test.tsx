@@ -106,6 +106,10 @@ describe("SearchPage", () => {
     const view = renderPage();
 
     expect((await screen.findAllByRole("link", { name: /算法设计/ }))[0]).toHaveAttribute("href", "/courses/1");
+    expect(screen.getByRole("link", { name: /讲解清晰/ })).toHaveAttribute(
+      "href",
+      "/courses/1?review=2#review-2",
+    );
     expect(screen.getByRole("link", { name: /算法作业讨论/ })).toHaveAttribute("href", "/forum/threads/3");
     expect(screen.getByRole("link", { name: /Alice/ })).toHaveAttribute("href", "/profile/alice");
     expect(screen.getByRole("link", { name: /学习交流/ })).toHaveAttribute("href", "/forum?board=5");

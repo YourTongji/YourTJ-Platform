@@ -370,7 +370,7 @@ class _ScheduleJourneyState extends ConsumerState<_ScheduleJourney> {
               padding: const EdgeInsets.only(bottom: 8),
               child: _SelectionCourseRow(
                 course: course,
-                isBusy: _controller.isCourseBusy(course.code),
+                isBusy: _controller.isCourseBusy(course.id),
                 onAdd: () => _addCourse(course),
               ),
             );
@@ -422,7 +422,7 @@ class _ScheduleJourneyState extends ConsumerState<_ScheduleJourney> {
                   padding: const EdgeInsets.only(bottom: 8),
                   child: _ScheduledCourseCard(
                     scheduled: scheduled,
-                    onRemove: () => _removeCourse(scheduled.course.code),
+                    onRemove: () => _removeCourse(scheduled.course.id),
                   ),
                 );
               }),
@@ -543,9 +543,9 @@ class _ScheduleJourneyState extends ConsumerState<_ScheduleJourney> {
     }
   }
 
-  Future<void> _removeCourse(String courseCode) async {
+  Future<void> _removeCourse(String teachingClassId) async {
     try {
-      await _controller.removeCourse(courseCode);
+      await _controller.removeCourse(teachingClassId);
     } on ApiFailure catch (failure) {
       if (mounted) {
         _showMessage(failure.message);
@@ -609,7 +609,7 @@ class _ScopeNotice extends StatelessWidget {
             SizedBox(width: 10),
             Expanded(
               child: Text(
-                '当前是课程级本机排课：不代表已选择具体教学班，不监测停开或换班，'
+                '当前按教学班保存本机课表；镜像仍可能缺少完整周次、停开或换班状态，'
                 '也不会跨设备同步或写回教务系统。',
               ),
             ),

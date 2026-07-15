@@ -31,7 +31,7 @@ class ScheduledCourse {
   final int colorIndex;
 
   bool get hasUnknownWeeks => timeslots.any(
-    (TimeSlot timeslot) => timeslot.weeks?.trim().isNotEmpty != true,
+    (TimeSlot timeslot) => parseCourseWeeks(timeslot.weeks ?? '') == null,
   );
 }
 
@@ -135,9 +135,7 @@ ScheduleConflictKind? _weekConflictKind(String? left, String? right) {
   final Set<int>? leftWeeks = parseCourseWeeks(leftValue);
   final Set<int>? rightWeeks = parseCourseWeeks(rightValue);
   if (leftWeeks == null || rightWeeks == null) {
-    return leftValue == rightValue
-        ? ScheduleConflictKind.confirmed
-        : ScheduleConflictKind.possible;
+    return ScheduleConflictKind.possible;
   }
   return leftWeeks.any(rightWeeks.contains)
       ? ScheduleConflictKind.confirmed

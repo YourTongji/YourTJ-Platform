@@ -491,6 +491,21 @@ async fn run_migrations(pool: &PgPool) {
             .expect("migration 0065 failed");
     }
 
+    let has_dm_message_idempotency: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM information_schema.columns \
+         WHERE table_schema = 'forum' AND table_name = 'dm_messages' \
+           AND column_name = 'client_message_id')",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or(false);
+    if !has_dm_message_idempotency {
+        sqlx::raw_sql(include_str!("../../../../migrations/0068_dm_message_idempotency.sql"))
+            .execute(pool)
+            .await
+            .expect("migration 0068 failed");
+    }
+
     let has_trust_levels: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM information_schema.tables \
          WHERE table_schema = 'activity' AND table_name = 'trust_level_policies')",

@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { MarkdownContent } from "@/components/content/markdown-content";
 import { ForumImageAttachments } from "@/components/content/forum-image-attachments";
+import { OneboxPreviewDialog } from "@/components/content/onebox-preview-dialog";
 import type { MediaUsage } from "@/lib/api/types";
 
 interface MarkdownAction {
@@ -116,6 +117,28 @@ export function MarkdownEditor({
     view.focus();
   }
 
+  function insertPreviewLink(url: string, label: string) {
+    const safeLabel = label
+      .replaceAll("[", "")
+      .replaceAll("]", "")
+      .replaceAll("\n", " ")
+      .trim()
+      .slice(0, 200) || "链接";
+    const reference = `[${safeLabel}](<${url}>)`;
+    const view = editorRef.current?.view;
+    if (view) {
+      const { from, to } = view.state.selection.main;
+      view.dispatch({
+        changes: { from, to, insert: reference },
+        selection: { anchor: from + reference.length },
+        scrollIntoView: true,
+      });
+      view.focus();
+    } else {
+      onChange(`${value}${value && !value.endsWith("\n") ? "\n\n" : ""}${reference}`);
+    }
+  }
+
   function insertImage(assetId: string, alt: string) {
     if (attachmentAssetIds.includes(assetId)) return;
     const view = editorRef.current?.view;
@@ -188,6 +211,7 @@ export function MarkdownEditor({
             <Button type="button" variant="ghost" size="icon" className="size-8" onClick={() => prefixLines("1. ", "列表项")} disabled={mode !== "edit"} aria-label="有序列表">
               <ListOrdered className="size-4" />
             </Button>
+            <OneboxPreviewDialog disabled={mode !== "edit"} onInsert={insertPreviewLink} />
           </div>
           <TabsList className="h-8">
             <TabsTrigger value="edit" className="h-6 text-xs">编辑</TabsTrigger>

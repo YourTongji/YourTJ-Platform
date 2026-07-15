@@ -3613,7 +3613,8 @@ export interface paths {
         get: {
             parameters: {
                 query: {
-                    calendarId: string;
+                    /** @description Selection calendar that bounds every returned teaching class. */
+                    calendarId: components["parameters"]["SelectionCalendarId"];
                 };
                 header?: never;
                 path?: never;
@@ -3630,6 +3631,7 @@ export interface paths {
                         "application/json": string[];
                     };
                 };
+                400: components["responses"]["BadRequest"];
             };
         };
         put?: never;
@@ -3647,10 +3649,12 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Majors for a grade */
+        /** Majors with teaching classes in a calendar and grade */
         get: {
             parameters: {
                 query: {
+                    /** @description Selection calendar that bounds every returned teaching class. */
+                    calendarId: components["parameters"]["SelectionCalendarId"];
                     grade: string;
                 };
                 header?: never;
@@ -3668,6 +3672,7 @@ export interface paths {
                         "application/json": components["schemas"]["Major"][];
                     };
                 };
+                400: components["responses"]["BadRequest"];
             };
         };
         put?: never;
@@ -3721,10 +3726,12 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Courses for a major */
+        /** Teaching classes for a major in a calendar */
         get: {
             parameters: {
                 query: {
+                    /** @description Selection calendar that bounds every returned teaching class. */
+                    calendarId: components["parameters"]["SelectionCalendarId"];
                     majorId: string;
                     grade: string;
                 };
@@ -3743,6 +3750,7 @@ export interface paths {
                         "application/json": components["schemas"]["SelectionCourse"][];
                     };
                 };
+                400: components["responses"]["BadRequest"];
             };
         };
         put?: never;
@@ -3760,10 +3768,12 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Courses by nature/type */
+        /** Teaching classes by nature/type in a calendar */
         get: {
             parameters: {
                 query: {
+                    /** @description Selection calendar that bounds every returned teaching class. */
+                    calendarId: components["parameters"]["SelectionCalendarId"];
                     natureId: string;
                 };
                 header?: never;
@@ -3781,6 +3791,7 @@ export interface paths {
                         "application/json": components["schemas"]["SelectionCourse"][];
                     };
                 };
+                400: components["responses"]["BadRequest"];
             };
         };
         put?: never;
@@ -3791,20 +3802,21 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/selection/courses/{code}": {
+    "/selection/courses/{teachingClassId}": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** Selection course detail by code */
+        /** Selection teaching-class detail by stable identifier */
         get: {
             parameters: {
                 query?: never;
                 header?: never;
                 path: {
-                    code: string;
+                    /** @description Stable upstream teaching-class identifier, not a canonical course code. */
+                    teachingClassId: components["parameters"]["TeachingClassId"];
                 };
                 cookie?: never;
             };
@@ -3819,6 +3831,8 @@ export interface paths {
                         "application/json": components["schemas"]["SelectionCourse"];
                     };
                 };
+                400: components["responses"]["BadRequest"];
+                404: components["responses"]["NotFound"];
             };
         };
         put?: never;
@@ -3836,10 +3850,12 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Search selection courses */
+        /** Search selection teaching classes in a calendar */
         get: {
             parameters: {
                 query: {
+                    /** @description Selection calendar that bounds every returned teaching class. */
+                    calendarId: components["parameters"]["SelectionCalendarId"];
                     q: string;
                 };
                 header?: never;
@@ -3857,6 +3873,7 @@ export interface paths {
                         "application/json": components["schemas"]["SelectionCourse"][];
                     };
                 };
+                400: components["responses"]["BadRequest"];
             };
         };
         put?: never;
@@ -3867,20 +3884,21 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/selection/courses/{code}/timeslots": {
+    "/selection/courses/{teachingClassId}/timeslots": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** Timeslots for a selection course code */
+        /** Timeslots for a stable teaching-class identifier */
         get: {
             parameters: {
                 query?: never;
                 header?: never;
                 path: {
-                    code: string;
+                    /** @description Stable upstream teaching-class identifier, not a canonical course code. */
+                    teachingClassId: components["parameters"]["TeachingClassId"];
                 };
                 cookie?: never;
             };
@@ -3895,6 +3913,8 @@ export interface paths {
                         "application/json": components["schemas"]["TimeSlot"][];
                     };
                 };
+                400: components["responses"]["BadRequest"];
+                404: components["responses"]["NotFound"];
             };
         };
         put?: never;
@@ -4020,7 +4040,30 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /** Get one visible review with viewer state */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Review"];
+                    };
+                };
+                404: components["responses"]["NotFound"];
+            };
+        };
         put?: never;
         post?: never;
         delete?: never;
@@ -5550,7 +5593,7 @@ export interface paths {
             };
         };
         put?: never;
-        /** Send a message */
+        /** Send or safely replay a message */
         post: {
             parameters: {
                 query?: never;
@@ -5566,7 +5609,7 @@ export interface paths {
                 };
             };
             responses: {
-                /** @description created */
+                /** @description created or safely replayed */
                 201: {
                     headers: {
                         [name: string]: unknown;
@@ -5575,6 +5618,8 @@ export interface paths {
                         "application/json": components["schemas"]["DmMessage"];
                     };
                 };
+                400: components["responses"]["BadRequest"];
+                409: components["responses"]["Conflict"];
             };
         };
         delete?: never;
@@ -11406,6 +11451,12 @@ export interface components {
             /** @description Reserved for a current platform-owned avatar projection. Legacy reviewer-provided remote URLs are never returned; null until Reviews integrates a typed Media projection. */
             authorAvatar?: string | null;
             approveCount?: number;
+            /** @description Whether the authenticated viewer currently likes this review; false for anonymous viewers. */
+            viewerLiked: boolean;
+            /** @description Server-authoritative permission for the current viewer to edit this review. */
+            canEdit: boolean;
+            /** @description Server-authoritative permission for the current viewer to report this review. */
+            canReport: boolean;
             /** @enum {string} */
             status?: "visible" | "hidden" | "pending";
             createdAt?: number;
@@ -11720,17 +11771,22 @@ export interface components {
             id?: string;
             name?: string;
         };
+        /** @description One teaching class in the selection mirror. Multiple teaching classes may share a course code. */
         SelectionCourse: {
+            /** @description Stable upstream teaching-class identifier. */
             id: string;
+            /** @description Canonical course code; not unique across teaching classes or calendars. */
             code: string;
             name: string;
             credit: number | null;
             natureId: string | null;
+            calendarId: string | null;
             campusId: string | null;
             teacherName: string | null;
             teacherNames: string[];
         };
         TimeSlot: {
+            /** @description Stable teaching-class identifier matching SelectionCourse.id. */
             courseId: string;
             teacherName: string | null;
             weekday: number;
@@ -12484,6 +12540,11 @@ export interface components {
         };
         DmMessageInput: {
             body: string;
+            /**
+             * Format: uuid
+             * @description Optional client-generated idempotency identity; retries with the same value must keep the same conversation and body.
+             */
+            clientMessageId?: string;
         };
         DmReadInput: {
             lastReadMessageId?: string | null;
@@ -13470,6 +13531,10 @@ export interface components {
         /** @description Opaque pagination cursor */
         Cursor: string;
         Limit: number;
+        /** @description Selection calendar that bounds every returned teaching class. */
+        SelectionCalendarId: string;
+        /** @description Stable upstream teaching-class identifier, not a canonical course code. */
+        TeachingClassId: string;
         /** @description One-time signing intent returned by POST /credit/signing-intents */
         WalletIntent: string;
         /** @description Base64 Ed25519 signature over the intent's exact signingBytes */

@@ -11,6 +11,7 @@ void main() {
         'name': '程序设计',
         'credit': null,
         'natureId': null,
+        'calendarId': '2026-spring',
         'campusId': null,
         'teacherName': null,
         'teacherNames': <String>[],
@@ -18,6 +19,7 @@ void main() {
 
       expect(course.credit, isNull);
       expect(course.natureId, isNull);
+      expect(course.calendarId, '2026-spring');
       expect(course.campusId, isNull);
       expect(course.teacherName, isNull);
       expect(course.teacherNames, isEmpty);
@@ -30,6 +32,7 @@ void main() {
         'code': 'CS1001',
         'name': '程序设计',
         'natureId': null,
+        'calendarId': '2026-spring',
         'campusId': null,
         'teacherName': null,
         'teacherNames': <String>[],

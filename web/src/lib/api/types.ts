@@ -115,6 +115,7 @@ export type NotificationOutboxEvent = Schema["NotificationOutboxEvent"];
 export type NotificationOutboxState = NotificationOutboxEvent["state"];
 export type NotificationPreferences = Schema["NotificationPreferences"];
 export type NotificationUnreadCount = Schema["NotificationUnreadCount"];
+export type OneboxResult = Schema["OneboxResult"];
 export type Product = Schema["Product"];
 export type Promotion = Schema["Promotion"];
 export type PromotionCreateInput = Schema["PromotionCreateInput"];

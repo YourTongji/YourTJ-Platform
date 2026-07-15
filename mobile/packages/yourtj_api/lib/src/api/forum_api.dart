@@ -1022,7 +1022,7 @@ class ForumApi {
     );
   }
 
-  /// Send a message
+  /// Send or safely replay a message
   ///
   ///
   /// Parameters:

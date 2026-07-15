@@ -26,6 +26,8 @@ class SelectionCourse {
 
     required this.natureId,
 
+    required this.calendarId,
+
     required this.campusId,
 
     required this.teacherName,
@@ -33,9 +35,11 @@ class SelectionCourse {
     required this.teacherNames,
   });
 
+  /// Stable upstream teaching-class identifier.
   @JsonKey(name: r'id', required: true, includeIfNull: false)
   final String id;
 
+  /// Canonical course code; not unique across teaching classes or calendars.
   @JsonKey(name: r'code', required: true, includeIfNull: false)
   final String code;
 
@@ -47,6 +51,9 @@ class SelectionCourse {
 
   @JsonKey(name: r'natureId', required: true, includeIfNull: true)
   final String? natureId;
+
+  @JsonKey(name: r'calendarId', required: true, includeIfNull: true)
+  final String? calendarId;
 
   @JsonKey(name: r'campusId', required: true, includeIfNull: true)
   final String? campusId;
@@ -66,6 +73,7 @@ class SelectionCourse {
           other.name == name &&
           other.credit == credit &&
           other.natureId == natureId &&
+          other.calendarId == calendarId &&
           other.campusId == campusId &&
           other.teacherName == teacherName &&
           other.teacherNames == teacherNames;
@@ -77,6 +85,7 @@ class SelectionCourse {
       name.hashCode +
       (credit == null ? 0 : credit.hashCode) +
       (natureId == null ? 0 : natureId.hashCode) +
+      (calendarId == null ? 0 : calendarId.hashCode) +
       (campusId == null ? 0 : campusId.hashCode) +
       (teacherName == null ? 0 : teacherName.hashCode) +
       teacherNames.hashCode;

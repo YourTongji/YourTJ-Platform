@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { expectNoAccessibilityViolations } from "@/test/accessibility";
 
@@ -45,6 +45,11 @@ function renderPage() {
 }
 
 describe("ThreadDetailPage Markdown content", () => {
+  afterEach(() => {
+    Reflect.deleteProperty(navigator, "share");
+    Reflect.deleteProperty(navigator, "clipboard");
+  });
+
   beforeEach(() => {
     apiMocks.boards.mockReset().mockResolvedValue([{ id: "1", name: "校园生活" }]);
     apiMocks.thread.mockReset().mockResolvedValue({
@@ -176,5 +181,18 @@ describe("ThreadDetailPage Markdown content", () => {
     expect(dialog).toBeVisible();
     await user.click(screen.getByRole("button", { name: "下一张图片" }));
     expect(within(dialog).getByRole("img", { name: "校园夜景" })).toBeVisible();
+  });
+
+  it("shares the canonical thread deep link", async () => {
+    const user = userEvent.setup();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    renderPage();
+
+    await user.click(await screen.findByRole("button", { name: "分享" }));
+
+    expect(writeText).toHaveBeenCalledWith(
+      new URL("/forum/threads/42", window.location.origin).toString(),
+    );
   });
 });

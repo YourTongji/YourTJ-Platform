@@ -1,3 +1,6 @@
+import 'dart:async';
+
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -111,6 +114,55 @@ void main() {
     expect(result?.note, '需要审核');
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets('account change invalidates an in-flight conversation start', (
+    WidgetTester tester,
+  ) async {
+    final StreamController<SessionState> sessions =
+        StreamController<SessionState>();
+    addTearDown(sessions.close);
+    final _DelayedMessagesRepository repository = _DelayedMessagesRepository();
+    sessions.add(
+      SessionState.authenticated(generation: 1, account: _account('account-a')),
+    );
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          sessionStateProvider.overrideWith((Ref ref) => sessions.stream),
+          messagesRepositoryProvider.overrideWithValue(repository),
+        ],
+        child: MaterialApp(
+          theme: AppTheme.light,
+          home: const Scaffold(
+            body: DirectMessagesPage(initialView: ConversationView.inbox),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('新私信'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextFormField).first, 'old-user');
+    await tester.tap(find.text('继续'));
+    await tester.pump();
+    expect(repository.startCalls, 1);
+
+    sessions.add(
+      SessionState.authenticated(generation: 2, account: _account('account-b')),
+    );
+    await tester.pumpAndSettle();
+    final FilledButton newMessageButton = tester.widget<FilledButton>(
+      find.widgetWithText(FilledButton, '新私信'),
+    );
+    expect(newMessageButton.onPressed, isNotNull);
+
+    repository.startResult.complete(_conversation());
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('已打开与 @old-user'), findsNothing);
+    expect(find.textContaining('消息请求已发送'), findsNothing);
+  });
 }
 
 Future<void> _pumpAnonymous(WidgetTester tester, Widget child) async {
@@ -130,4 +182,69 @@ Future<void> _pumpAnonymous(WidgetTester tester, Widget child) async {
     ),
   );
   await tester.pumpAndSettle();
+}
+
+Account _account(String id) {
+  return Account(
+    id: id,
+    handle: id,
+    avatarUrl: null,
+    role: AccountRoleEnum.user,
+    capabilities: const <String>[],
+    trustLevel: 1,
+    hasPassword: true,
+    onboardingRequired: false,
+    createdAt: 1,
+  );
+}
+
+DmConversation _conversation() {
+  return DmConversation(
+    id: 'conversation-a',
+    participantId: 'recipient-a',
+    participantHandle: 'old-user',
+    unreadCount: 0,
+    isArchived: false,
+    isMuted: false,
+    isDeleted: false,
+    requestStatus: DmConversationRequestStatusEnum.pending,
+    requestDirection: DmConversationRequestDirectionEnum.outgoing,
+    canSend: false,
+    createdAt: 1,
+  );
+}
+
+class _DelayedMessagesRepository extends MessagesRepository {
+  _DelayedMessagesRepository() : super(ForumApi(Dio()));
+
+  final Completer<DmConversation> startResult = Completer<DmConversation>();
+  int startCalls = 0;
+
+  @override
+  Future<DmConversationPage> conversations({
+    required ConversationView view,
+    String? query,
+    String? cursor,
+  }) async {
+    return DmConversationPage(
+      items: const <DmConversation>[],
+      nextCursor: null,
+      hasMore: false,
+    );
+  }
+
+  @override
+  Future<DmCounts> counts() async {
+    return DmCounts(count: 0, unreadCount: 0, requestCount: 0);
+  }
+
+  @override
+  Future<DmConversation> start({
+    required String recipientHandle,
+    required String requestMessage,
+    required String idempotencyKey,
+  }) {
+    startCalls += 1;
+    return startResult.future;
+  }
 }

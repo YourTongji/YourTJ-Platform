@@ -53,11 +53,21 @@ pub async fn list_grades(pool: &PgPool, calendar_id: i64) -> Result<Vec<String>,
     Ok(rows.into_iter().filter_map(|(g,)| g).collect())
 }
 
-/// List majors for a given grade.
-pub async fn list_majors(pool: &PgPool, grade: &str) -> Result<Vec<MajorRow>, CoursesError> {
+/// List majors that have teaching classes in a given calendar and grade.
+pub async fn list_majors(
+    pool: &PgPool,
+    calendar_id: i64,
+    grade: &str,
+) -> Result<Vec<MajorRow>, CoursesError> {
     let rows = sqlx::query_as::<_, MajorRow>(
-        "SELECT id, name, faculty_id, grade FROM selection.majors WHERE grade = $1 ORDER BY id",
+        "SELECT DISTINCT m.id, m.name, m.faculty_id, m.grade \
+         FROM selection.majors m \
+         JOIN selection.major_courses mc ON mc.major_id = m.id \
+         JOIN selection.courses c ON c.id = mc.course_id \
+         WHERE c.calendar_id = $1 AND mc.grade = $2 \
+         ORDER BY m.id",
     )
+    .bind(calendar_id)
     .bind(grade)
     .fetch_all(pool)
     .await?;
@@ -77,16 +87,18 @@ pub async fn list_course_natures(pool: &PgPool) -> Result<Vec<CourseNatureRow>, 
 /// List selection courses for a given major + grade.
 pub async fn list_courses_by_major(
     pool: &PgPool,
+    calendar_id: i64,
     major_id: i64,
     grade: &str,
 ) -> Result<Vec<SelectionCourseRow>, CoursesError> {
     let rows = sqlx::query_as::<_, SelectionCourseRow>(
-        "SELECT c.id, c.code, c.name, c.credit, c.nature_id, c.campus_id, c.teacher_name, c.teacher_names \
+        "SELECT c.id, c.code, c.name, c.credit, c.nature_id, c.calendar_id, c.campus_id, c.teacher_name, c.teacher_names \
          FROM selection.courses c \
          JOIN selection.major_courses mc ON mc.course_id = c.id \
-         WHERE mc.major_id = $1 AND mc.grade = $2 \
+         WHERE c.calendar_id = $1 AND mc.major_id = $2 AND mc.grade = $3 \
          ORDER BY c.code",
     )
+    .bind(calendar_id)
     .bind(major_id)
     .bind(grade)
     .fetch_all(pool)
@@ -97,34 +109,57 @@ pub async fn list_courses_by_major(
 /// List selection courses for a given nature.
 pub async fn list_courses_by_nature(
     pool: &PgPool,
+    calendar_id: i64,
     nature_id: i64,
 ) -> Result<Vec<SelectionCourseRow>, CoursesError> {
     let rows = sqlx::query_as::<_, SelectionCourseRow>(
-        "SELECT id, code, name, credit, nature_id, campus_id, teacher_name, teacher_names \
+        "SELECT id, code, name, credit, nature_id, calendar_id, campus_id, teacher_name, teacher_names \
          FROM selection.courses \
-         WHERE nature_id = $1 \
+         WHERE calendar_id = $1 AND nature_id = $2 \
          ORDER BY code",
     )
+    .bind(calendar_id)
     .bind(nature_id)
     .fetch_all(pool)
     .await?;
     Ok(rows)
 }
 
-/// Find a single selection course by its code.
-pub async fn find_selection_course_by_code(
+/// Find one teaching class by its stable upstream identifier.
+pub async fn find_selection_course_by_id(
     pool: &PgPool,
-    code: &str,
+    teaching_class_id: i64,
 ) -> Result<Option<SelectionCourseRow>, CoursesError> {
     let row = sqlx::query_as::<_, SelectionCourseRow>(
-        "SELECT id, code, name, credit, nature_id, campus_id, teacher_name, teacher_names \
+        "SELECT id, code, name, credit, nature_id, calendar_id, campus_id, teacher_name, teacher_names \
          FROM selection.courses \
-         WHERE code = $1",
+         WHERE id = $1",
     )
-    .bind(code)
+    .bind(teaching_class_id)
     .fetch_optional(pool)
     .await?;
     Ok(row)
+}
+
+/// Return current teaching-class facts for search candidates in one calendar.
+pub async fn find_selection_courses_by_ids(
+    pool: &PgPool,
+    calendar_id: i64,
+    teaching_class_ids: &[i64],
+) -> Result<Vec<SelectionCourseRow>, CoursesError> {
+    if teaching_class_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let rows = sqlx::query_as::<_, SelectionCourseRow>(
+        "SELECT id, code, name, credit, nature_id, calendar_id, campus_id, teacher_name, teacher_names \
+         FROM selection.courses \
+         WHERE calendar_id = $1 AND id = ANY($2)",
+    )
+    .bind(calendar_id)
+    .bind(teaching_class_ids)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
 }
 
 /// List all timeslots for a given selection course.

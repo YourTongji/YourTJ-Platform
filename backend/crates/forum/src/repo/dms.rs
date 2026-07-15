@@ -3,6 +3,7 @@
 use chrono::{DateTime, Utc};
 use shared::{AppError, AppResult};
 use sqlx::{FromRow, PgPool, Postgres, QueryBuilder, Transaction};
+use uuid::Uuid;
 
 use crate::models::{DmConversationListRow, DmMessageReportRow, DmMessageRow};
 
@@ -11,6 +12,33 @@ use crate::models::{DmConversationListRow, DmMessageReportRow, DmMessageRow};
 pub struct InsertedMessage {
     pub id: i64,
     pub created_at: DateTime<Utc>,
+}
+
+/// Return a prior send only when the client identity still describes the same message.
+pub async fn find_send_replay(
+    pool: &PgPool,
+    sender_id: i64,
+    client_message_id: Uuid,
+    conversation_id: i64,
+    body: &str,
+) -> AppResult<Option<InsertedMessage>> {
+    let existing: Option<(i64, i64, String, DateTime<Utc>)> = sqlx::query_as(
+        "SELECT id, conversation_id, body, created_at FROM forum.dm_messages \
+         WHERE sender_id = $1 AND client_message_id = $2",
+    )
+    .bind(sender_id)
+    .bind(client_message_id)
+    .fetch_optional(pool)
+    .await?;
+    let Some((id, stored_conversation_id, stored_body, created_at)) = existing else {
+        return Ok(None);
+    };
+    if stored_conversation_id != conversation_id || stored_body != body {
+        return Err(AppError::Conflict(
+            "client message identity was already used for another message".into(),
+        ));
+    }
+    Ok(Some(InsertedMessage { id, created_at }))
 }
 
 /// How a newly initiated conversation is authorized by the recipient's policy.
@@ -868,13 +896,14 @@ pub async fn find_available_other_participant(
     Ok(other_account_id)
 }
 
-/// Insert a message after the handler has checked membership and blocking.
+/// Insert a message after transactionally rechecking the canonical participant pair.
 pub async fn send_message(
     pool: &PgPool,
     conversation_id: i64,
     sender_id: i64,
     recipient_id: i64,
     body: &str,
+    client_message_id: Option<Uuid>,
 ) -> AppResult<(i64, DateTime<Utc>)> {
     let mut transaction = pool.begin().await?;
     if !identity::public_accounts::lock_active_interaction_accounts(
@@ -886,9 +915,54 @@ pub async fn send_message(
         return Err(AppError::Forbidden);
     }
     super::relationships::lock_pair_unblocked(&mut transaction, sender_id, recipient_id).await?;
+    let is_canonical_pair: bool = sqlx::query_scalar(
+        "SELECT EXISTS ( \
+           SELECT 1 FROM forum.dm_conversations AS conversation \
+           JOIN forum.dm_participants AS sender \
+             ON sender.conversation_id = conversation.id AND sender.account_id = $2 \
+           JOIN forum.dm_participants AS recipient \
+             ON recipient.conversation_id = conversation.id AND recipient.account_id = $3 \
+           WHERE conversation.id = $1 AND conversation.request_status = 'accepted' \
+             AND sender.deleted_at IS NULL \
+         )",
+    )
+    .bind(conversation_id)
+    .bind(sender_id)
+    .bind(recipient_id)
+    .fetch_one(&mut *transaction)
+    .await?;
+    if !is_canonical_pair {
+        return Err(AppError::Forbidden);
+    }
+
+    if let Some(client_message_id) = client_message_id {
+        let lock_key = format!("dm-message:{sender_id}:{client_message_id}");
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+            .bind(lock_key)
+            .execute(&mut *transaction)
+            .await?;
+        let existing: Option<(i64, i64, String, DateTime<Utc>)> = sqlx::query_as(
+            "SELECT id, conversation_id, body, created_at FROM forum.dm_messages \
+             WHERE sender_id = $1 AND client_message_id = $2",
+        )
+        .bind(sender_id)
+        .bind(client_message_id)
+        .fetch_optional(&mut *transaction)
+        .await?;
+        if let Some((id, stored_conversation_id, stored_body, created_at)) = existing {
+            if stored_conversation_id != conversation_id || stored_body != body {
+                return Err(AppError::Conflict(
+                    "client message identity was already used for another message".into(),
+                ));
+            }
+            transaction.commit().await?;
+            return Ok((id, created_at));
+        }
+    }
+
     let row: InsertedMessage = sqlx::query_as(
-        "INSERT INTO forum.dm_messages (conversation_id, sender_id, body) \
-         SELECT $1, $2, $3 \
+        "INSERT INTO forum.dm_messages (conversation_id, sender_id, body, client_message_id) \
+         SELECT $1, $2, $3, $4 \
          WHERE EXISTS ( \
            SELECT 1 FROM forum.dm_participants AS participant \
            JOIN forum.dm_conversations AS conversation \
@@ -902,6 +976,7 @@ pub async fn send_message(
     .bind(conversation_id)
     .bind(sender_id)
     .bind(body)
+    .bind(client_message_id)
     .fetch_optional(&mut *transaction)
     .await?
     .ok_or(AppError::Forbidden)?;
