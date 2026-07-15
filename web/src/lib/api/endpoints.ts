@@ -96,6 +96,8 @@ import type {
   SearchResult,
   SigningIntent,
   SelectionCourse,
+  SelectionOfferingPage,
+  SelectionSyncJob,
   Setting,
   SettingUpdateInput,
   Tag,
@@ -658,6 +660,46 @@ export const api = {
 
   courseNatures() {
     return apiRequest<CourseNature[]>("/selection/course-natures", { auth: false });
+  },
+
+  selectionOfferings(
+    query: {
+      q?: string;
+      calendarId?: string;
+      majorId?: string;
+      grade?: string;
+      natureId?: string;
+      campusId?: string;
+      courseCode?: string;
+      weekday?: number;
+      startSlot?: number;
+      endSlot?: number;
+      week?: number;
+      includeUnknownSchedule?: boolean;
+      cursor?: string | null;
+      limit?: number;
+    },
+    signal?: AbortSignal,
+  ) {
+    return apiRequest<SelectionOfferingPage>("/selection/offerings", {
+      query: { ...query, limit: query.limit ?? 20 },
+      signal,
+      auth: false,
+    });
+  },
+
+  selectionOffering(offeringId: string) {
+    return apiRequest<SelectionCourse>(
+      `/selection/offerings/${encodeURIComponent(offeringId)}`,
+      { auth: false },
+    );
+  },
+
+  selectionOfferingTimeslots(offeringId: string, signal?: AbortSignal) {
+    return apiRequest<TimeSlot[]>(
+      `/selection/offerings/${encodeURIComponent(offeringId)}/timeslots`,
+      { auth: false, signal },
+    );
   },
 
   selectionByMajor(majorId: string, grade: string) {
@@ -1783,8 +1825,31 @@ export const api = {
     });
   },
 
-  triggerSelectionSync(reason: string) {
-    return apiRequest<void>("/admin/selection/sync", { method: "POST", body: { reason } });
+  triggerSelectionSync(reason: string, idempotencyKey: string) {
+    return apiRequest<SelectionSyncJob>("/admin/selection/sync", {
+      method: "POST",
+      headers: { "Idempotency-Key": idempotencyKey },
+      body: { reason },
+    });
+  },
+
+  selectionSyncJobs(status?: SelectionSyncJob["status"], cursor?: string | null) {
+    return apiRequest<Page<SelectionSyncJob>>("/admin/selection/sync-jobs", {
+      query: { status, cursor, limit: 20 },
+    });
+  },
+
+  selectionSyncJob(id: string) {
+    return apiRequest<SelectionSyncJob>(
+      `/admin/selection/sync-jobs/${encodeURIComponent(id)}`,
+    );
+  },
+
+  retrySelectionSyncJob(id: string, reason: string) {
+    return apiRequest<SelectionSyncJob>(
+      `/admin/selection/sync-jobs/${encodeURIComponent(id)}/retry`,
+      { method: "POST", body: { reason } },
+    );
   },
 
   reindexCourses(reason: string) {

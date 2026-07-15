@@ -24,3 +24,9 @@ Migrations are append-only, numbered DDL that the init system executes automatic
 All scripts are wrapped in `BEGIN...COMMIT` and are designed to be safe to re-run. Validate row counts
 and API/search output after every operational execution; a committed transaction does not prove the
 source snapshot or mapping was correct.
+
+`materialize_selection.sql` is intentionally a full transactional reconcile at the current data size.
+It retains stable dimension IDs, replaces dependent offering facts under an advisory lock, and folds
+identical day/slot/week/location rows repeated once per teacher into one schedule fact. Incremental
+materialization is not an implicit optimization; it requires a separate deletion/replay design and the
+go/no-go thresholds in the import runbook.

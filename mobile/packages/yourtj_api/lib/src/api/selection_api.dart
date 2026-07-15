@@ -9,6 +9,7 @@ import 'dart:convert';
 import 'package:yourtj_api/src/deserialize.dart';
 import 'package:dio/dio.dart';
 
+import 'package:yourtj_api/src/model/admin_reason_input.dart';
 import 'package:yourtj_api/src/model/calendar.dart';
 import 'package:yourtj_api/src/model/campus.dart';
 import 'package:yourtj_api/src/model/course_nature.dart';
@@ -16,12 +17,382 @@ import 'package:yourtj_api/src/model/faculty.dart';
 import 'package:yourtj_api/src/model/latest_update.dart';
 import 'package:yourtj_api/src/model/major.dart';
 import 'package:yourtj_api/src/model/selection_course.dart';
+import 'package:yourtj_api/src/model/selection_offering.dart';
+import 'package:yourtj_api/src/model/selection_offering_page.dart';
+import 'package:yourtj_api/src/model/selection_sync_job.dart';
+import 'package:yourtj_api/src/model/selection_sync_job_page.dart';
 import 'package:yourtj_api/src/model/time_slot.dart';
 
 class SelectionApi {
   final Dio _dio;
 
   const SelectionApi(this._dio);
+
+  /// List durable selection sync jobs
+  /// Requires operations.jobs; reasons and raw source data are excluded from this operational projection.
+  ///
+  /// Parameters:
+  /// * [status]
+  /// * [cursor] - Opaque pagination cursor
+  /// * [limit]
+  /// * [cancelToken] - A [CancelToken] that can be used to cancel the operation
+  /// * [headers] - Can be used to add additional headers to the request
+  /// * [extras] - Can be used to add flags to the request
+  /// * [validateStatus] - A [ValidateStatus] callback that can be used to determine request success based on the HTTP status of the response
+  /// * [onSendProgress] - A [ProgressCallback] that can be used to get the send progress
+  /// * [onReceiveProgress] - A [ProgressCallback] that can be used to get the receive progress
+  ///
+  /// Returns a [Future] containing a [Response] with a [SelectionSyncJobPage] as data
+  /// Throws [DioException] if API call or serialization fails
+  Future<Response<SelectionSyncJobPage>> adminSelectionSyncJobsGet({
+    String? status,
+    String? cursor,
+    int? limit = 20,
+    CancelToken? cancelToken,
+    Map<String, dynamic>? headers,
+    Map<String, dynamic>? extra,
+    ValidateStatus? validateStatus,
+    ProgressCallback? onSendProgress,
+    ProgressCallback? onReceiveProgress,
+  }) async {
+    final _path = r'/admin/selection/sync-jobs';
+    final _options = Options(
+      method: r'GET',
+      headers: <String, dynamic>{...?headers},
+      extra: <String, dynamic>{
+        'secure': <Map<String, String>>[
+          {'type': 'http', 'scheme': 'bearer', 'name': 'bearer'},
+        ],
+        ...?extra,
+      },
+      validateStatus: validateStatus,
+    );
+
+    final _queryParameters = <String, dynamic>{
+      if (status != null) r'status': status,
+      if (cursor != null) r'cursor': cursor,
+      if (limit != null) r'limit': limit,
+    };
+
+    final _response = await _dio.request<Object>(
+      _path,
+      options: _options,
+      queryParameters: _queryParameters,
+      cancelToken: cancelToken,
+      onSendProgress: onSendProgress,
+      onReceiveProgress: onReceiveProgress,
+    );
+
+    SelectionSyncJobPage? _responseData;
+
+    try {
+      final rawData = _response.data;
+      _responseData = rawData == null
+          ? null
+          : deserialize<SelectionSyncJobPage, SelectionSyncJobPage>(
+              rawData,
+              'SelectionSyncJobPage',
+              growable: true,
+            );
+    } catch (error, stackTrace) {
+      throw DioException(
+        requestOptions: _response.requestOptions,
+        response: _response,
+        type: DioExceptionType.unknown,
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
+
+    return Response<SelectionSyncJobPage>(
+      data: _responseData,
+      headers: _response.headers,
+      isRedirect: _response.isRedirect,
+      requestOptions: _response.requestOptions,
+      redirects: _response.redirects,
+      statusCode: _response.statusCode,
+      statusMessage: _response.statusMessage,
+      extra: _response.extra,
+    );
+  }
+
+  /// Read one durable selection sync job
+  ///
+  ///
+  /// Parameters:
+  /// * [id]
+  /// * [cancelToken] - A [CancelToken] that can be used to cancel the operation
+  /// * [headers] - Can be used to add additional headers to the request
+  /// * [extras] - Can be used to add flags to the request
+  /// * [validateStatus] - A [ValidateStatus] callback that can be used to determine request success based on the HTTP status of the response
+  /// * [onSendProgress] - A [ProgressCallback] that can be used to get the send progress
+  /// * [onReceiveProgress] - A [ProgressCallback] that can be used to get the receive progress
+  ///
+  /// Returns a [Future] containing a [Response] with a [SelectionSyncJob] as data
+  /// Throws [DioException] if API call or serialization fails
+  Future<Response<SelectionSyncJob>> adminSelectionSyncJobsIdGet({
+    required String id,
+    CancelToken? cancelToken,
+    Map<String, dynamic>? headers,
+    Map<String, dynamic>? extra,
+    ValidateStatus? validateStatus,
+    ProgressCallback? onSendProgress,
+    ProgressCallback? onReceiveProgress,
+  }) async {
+    final _path = r'/admin/selection/sync-jobs/{id}'.replaceAll(
+      '{'
+      r'id'
+      '}',
+      id.toString(),
+    );
+    final _options = Options(
+      method: r'GET',
+      headers: <String, dynamic>{...?headers},
+      extra: <String, dynamic>{
+        'secure': <Map<String, String>>[
+          {'type': 'http', 'scheme': 'bearer', 'name': 'bearer'},
+        ],
+        ...?extra,
+      },
+      validateStatus: validateStatus,
+    );
+
+    final _response = await _dio.request<Object>(
+      _path,
+      options: _options,
+      cancelToken: cancelToken,
+      onSendProgress: onSendProgress,
+      onReceiveProgress: onReceiveProgress,
+    );
+
+    SelectionSyncJob? _responseData;
+
+    try {
+      final rawData = _response.data;
+      _responseData = rawData == null
+          ? null
+          : deserialize<SelectionSyncJob, SelectionSyncJob>(
+              rawData,
+              'SelectionSyncJob',
+              growable: true,
+            );
+    } catch (error, stackTrace) {
+      throw DioException(
+        requestOptions: _response.requestOptions,
+        response: _response,
+        type: DioExceptionType.unknown,
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
+
+    return Response<SelectionSyncJob>(
+      data: _responseData,
+      headers: _response.headers,
+      isRedirect: _response.isRedirect,
+      requestOptions: _response.requestOptions,
+      redirects: _response.redirects,
+      statusCode: _response.statusCode,
+      statusMessage: _response.statusMessage,
+      extra: _response.extra,
+    );
+  }
+
+  /// Requeue one dead selection sync job with a reason
+  /// Requires operations.jobs. The transition and operator reason are written to the immutable account audit log.
+  ///
+  /// Parameters:
+  /// * [id]
+  /// * [adminReasonInput]
+  /// * [cancelToken] - A [CancelToken] that can be used to cancel the operation
+  /// * [headers] - Can be used to add additional headers to the request
+  /// * [extras] - Can be used to add flags to the request
+  /// * [validateStatus] - A [ValidateStatus] callback that can be used to determine request success based on the HTTP status of the response
+  /// * [onSendProgress] - A [ProgressCallback] that can be used to get the send progress
+  /// * [onReceiveProgress] - A [ProgressCallback] that can be used to get the receive progress
+  ///
+  /// Returns a [Future] containing a [Response] with a [SelectionSyncJob] as data
+  /// Throws [DioException] if API call or serialization fails
+  Future<Response<SelectionSyncJob>> adminSelectionSyncJobsIdRetryPost({
+    required String id,
+    required AdminReasonInput adminReasonInput,
+    CancelToken? cancelToken,
+    Map<String, dynamic>? headers,
+    Map<String, dynamic>? extra,
+    ValidateStatus? validateStatus,
+    ProgressCallback? onSendProgress,
+    ProgressCallback? onReceiveProgress,
+  }) async {
+    final _path = r'/admin/selection/sync-jobs/{id}/retry'.replaceAll(
+      '{'
+      r'id'
+      '}',
+      id.toString(),
+    );
+    final _options = Options(
+      method: r'POST',
+      headers: <String, dynamic>{...?headers},
+      extra: <String, dynamic>{
+        'secure': <Map<String, String>>[
+          {'type': 'http', 'scheme': 'bearer', 'name': 'bearer'},
+        ],
+        ...?extra,
+      },
+      contentType: 'application/json',
+      validateStatus: validateStatus,
+    );
+
+    dynamic _bodyData;
+
+    try {
+      _bodyData = jsonEncode(adminReasonInput);
+    } catch (error, stackTrace) {
+      throw DioException(
+        requestOptions: _options.compose(_dio.options, _path),
+        type: DioExceptionType.unknown,
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
+
+    final _response = await _dio.request<Object>(
+      _path,
+      data: _bodyData,
+      options: _options,
+      cancelToken: cancelToken,
+      onSendProgress: onSendProgress,
+      onReceiveProgress: onReceiveProgress,
+    );
+
+    SelectionSyncJob? _responseData;
+
+    try {
+      final rawData = _response.data;
+      _responseData = rawData == null
+          ? null
+          : deserialize<SelectionSyncJob, SelectionSyncJob>(
+              rawData,
+              'SelectionSyncJob',
+              growable: true,
+            );
+    } catch (error, stackTrace) {
+      throw DioException(
+        requestOptions: _response.requestOptions,
+        response: _response,
+        type: DioExceptionType.unknown,
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
+
+    return Response<SelectionSyncJob>(
+      data: _responseData,
+      headers: _response.headers,
+      isRedirect: _response.isRedirect,
+      requestOptions: _response.requestOptions,
+      redirects: _response.redirects,
+      statusCode: _response.statusCode,
+      statusMessage: _response.statusMessage,
+      extra: _response.extra,
+    );
+  }
+
+  /// Idempotently enqueue one durable selection materialization job
+  /// Requires operations.jobs. A partial unique guard permits only one queued/running job; execution is lease-fenced with bounded retries.
+  ///
+  /// Parameters:
+  /// * [idempotencyKey]
+  /// * [adminReasonInput]
+  /// * [cancelToken] - A [CancelToken] that can be used to cancel the operation
+  /// * [headers] - Can be used to add additional headers to the request
+  /// * [extras] - Can be used to add flags to the request
+  /// * [validateStatus] - A [ValidateStatus] callback that can be used to determine request success based on the HTTP status of the response
+  /// * [onSendProgress] - A [ProgressCallback] that can be used to get the send progress
+  /// * [onReceiveProgress] - A [ProgressCallback] that can be used to get the receive progress
+  ///
+  /// Returns a [Future] containing a [Response] with a [SelectionSyncJob] as data
+  /// Throws [DioException] if API call or serialization fails
+  Future<Response<SelectionSyncJob>> adminSelectionSyncPost({
+    required String idempotencyKey,
+    required AdminReasonInput adminReasonInput,
+    CancelToken? cancelToken,
+    Map<String, dynamic>? headers,
+    Map<String, dynamic>? extra,
+    ValidateStatus? validateStatus,
+    ProgressCallback? onSendProgress,
+    ProgressCallback? onReceiveProgress,
+  }) async {
+    final _path = r'/admin/selection/sync';
+    final _options = Options(
+      method: r'POST',
+      headers: <String, dynamic>{
+        r'Idempotency-Key': idempotencyKey,
+        ...?headers,
+      },
+      extra: <String, dynamic>{
+        'secure': <Map<String, String>>[
+          {'type': 'http', 'scheme': 'bearer', 'name': 'bearer'},
+        ],
+        ...?extra,
+      },
+      contentType: 'application/json',
+      validateStatus: validateStatus,
+    );
+
+    dynamic _bodyData;
+
+    try {
+      _bodyData = jsonEncode(adminReasonInput);
+    } catch (error, stackTrace) {
+      throw DioException(
+        requestOptions: _options.compose(_dio.options, _path),
+        type: DioExceptionType.unknown,
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
+
+    final _response = await _dio.request<Object>(
+      _path,
+      data: _bodyData,
+      options: _options,
+      cancelToken: cancelToken,
+      onSendProgress: onSendProgress,
+      onReceiveProgress: onReceiveProgress,
+    );
+
+    SelectionSyncJob? _responseData;
+
+    try {
+      final rawData = _response.data;
+      _responseData = rawData == null
+          ? null
+          : deserialize<SelectionSyncJob, SelectionSyncJob>(
+              rawData,
+              'SelectionSyncJob',
+              growable: true,
+            );
+    } catch (error, stackTrace) {
+      throw DioException(
+        requestOptions: _response.requestOptions,
+        response: _response,
+        type: DioExceptionType.unknown,
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
+
+    return Response<SelectionSyncJob>(
+      data: _responseData,
+      headers: _response.headers,
+      isRedirect: _response.isRedirect,
+      requestOptions: _response.requestOptions,
+      redirects: _response.redirects,
+      statusCode: _response.statusCode,
+      statusMessage: _response.statusMessage,
+      extra: _response.extra,
+    );
+  }
 
   /// All calendars
   ///
@@ -248,6 +619,7 @@ class SelectionApi {
   ///
   /// Returns a [Future] containing a [Response] with a [List<SelectionCourse>] as data
   /// Throws [DioException] if API call or serialization fails
+  @Deprecated('This operation has been deprecated')
   Future<Response<List<SelectionCourse>>> selectionCoursesByMajorGet({
     required String majorId,
     required String grade,
@@ -327,6 +699,7 @@ class SelectionApi {
   ///
   /// Returns a [Future] containing a [Response] with a [List<SelectionCourse>] as data
   /// Throws [DioException] if API call or serialization fails
+  @Deprecated('This operation has been deprecated')
   Future<Response<List<SelectionCourse>>> selectionCoursesByNatureGet({
     required String natureId,
     CancelToken? cancelToken,
@@ -388,8 +761,8 @@ class SelectionApi {
     );
   }
 
-  /// Selection course detail by code
-  ///
+  /// Compatibility representative by course code
+  /// Deterministically returns the current/newest offering. Course code is not teaching-class identity; new clients use &#x60;/selection/offerings?courseCode&#x3D;...&#x60;.
   ///
   /// Parameters:
   /// * [code]
@@ -402,6 +775,7 @@ class SelectionApi {
   ///
   /// Returns a [Future] containing a [Response] with a [SelectionCourse] as data
   /// Throws [DioException] if API call or serialization fails
+  @Deprecated('This operation has been deprecated')
   Future<Response<SelectionCourse>> selectionCoursesCodeGet({
     required String code,
     CancelToken? cancelToken,
@@ -465,7 +839,7 @@ class SelectionApi {
     );
   }
 
-  /// Timeslots for a selection course code
+  /// Timeslots for the deterministic compatibility representative by code
   ///
   ///
   /// Parameters:
@@ -479,6 +853,7 @@ class SelectionApi {
   ///
   /// Returns a [Future] containing a [Response] with a [List<TimeSlot>] as data
   /// Throws [DioException] if API call or serialization fails
+  @Deprecated('This operation has been deprecated')
   Future<Response<List<TimeSlot>>> selectionCoursesCodeTimeslotsGet({
     required String code,
     CancelToken? cancelToken,
@@ -542,7 +917,7 @@ class SelectionApi {
     );
   }
 
-  /// Search selection courses
+  /// Bounded compatibility search
   ///
   ///
   /// Parameters:
@@ -556,6 +931,7 @@ class SelectionApi {
   ///
   /// Returns a [Future] containing a [Response] with a [List<SelectionCourse>] as data
   /// Throws [DioException] if API call or serialization fails
+  @Deprecated('This operation has been deprecated')
   Future<Response<List<SelectionCourse>>> selectionCoursesSearchGet({
     required String q,
     CancelToken? cancelToken,
@@ -896,6 +1272,277 @@ class SelectionApi {
     }
 
     return Response<List<Major>>(
+      data: _responseData,
+      headers: _response.headers,
+      isRedirect: _response.isRedirect,
+      requestOptions: _response.requestOptions,
+      redirects: _response.redirects,
+      statusCode: _response.statusCode,
+      statusMessage: _response.statusMessage,
+      extra: _response.extra,
+    );
+  }
+
+  /// Browse, search, and time-filter concrete teaching-class offerings
+  /// PostgreSQL remains authoritative. Non-empty q is ranked by Meilisearch, then every candidate is rehydrated and filtered from PostgreSQL. Unknown schedules are retained by default so missing upstream data is never misrepresented as no conflict.
+  ///
+  /// Parameters:
+  /// * [q]
+  /// * [calendarId]
+  /// * [majorId]
+  /// * [grade]
+  /// * [natureId]
+  /// * [campusId]
+  /// * [courseCode]
+  /// * [weekday]
+  /// * [startSlot]
+  /// * [endSlot]
+  /// * [week]
+  /// * [includeUnknownSchedule]
+  /// * [cursor] - Opaque pagination cursor
+  /// * [limit]
+  /// * [cancelToken] - A [CancelToken] that can be used to cancel the operation
+  /// * [headers] - Can be used to add additional headers to the request
+  /// * [extras] - Can be used to add flags to the request
+  /// * [validateStatus] - A [ValidateStatus] callback that can be used to determine request success based on the HTTP status of the response
+  /// * [onSendProgress] - A [ProgressCallback] that can be used to get the send progress
+  /// * [onReceiveProgress] - A [ProgressCallback] that can be used to get the receive progress
+  ///
+  /// Returns a [Future] containing a [Response] with a [SelectionOfferingPage] as data
+  /// Throws [DioException] if API call or serialization fails
+  Future<Response<SelectionOfferingPage>> selectionOfferingsGet({
+    String? q,
+    String? calendarId,
+    String? majorId,
+    String? grade,
+    String? natureId,
+    String? campusId,
+    String? courseCode,
+    int? weekday,
+    int? startSlot,
+    int? endSlot,
+    int? week,
+    bool? includeUnknownSchedule = true,
+    String? cursor,
+    int? limit = 20,
+    CancelToken? cancelToken,
+    Map<String, dynamic>? headers,
+    Map<String, dynamic>? extra,
+    ValidateStatus? validateStatus,
+    ProgressCallback? onSendProgress,
+    ProgressCallback? onReceiveProgress,
+  }) async {
+    final _path = r'/selection/offerings';
+    final _options = Options(
+      method: r'GET',
+      headers: <String, dynamic>{...?headers},
+      extra: <String, dynamic>{'secure': <Map<String, String>>[], ...?extra},
+      validateStatus: validateStatus,
+    );
+
+    final _queryParameters = <String, dynamic>{
+      if (q != null) r'q': q,
+      if (calendarId != null) r'calendarId': calendarId,
+      if (majorId != null) r'majorId': majorId,
+      if (grade != null) r'grade': grade,
+      if (natureId != null) r'natureId': natureId,
+      if (campusId != null) r'campusId': campusId,
+      if (courseCode != null) r'courseCode': courseCode,
+      if (weekday != null) r'weekday': weekday,
+      if (startSlot != null) r'startSlot': startSlot,
+      if (endSlot != null) r'endSlot': endSlot,
+      if (week != null) r'week': week,
+      if (includeUnknownSchedule != null)
+        r'includeUnknownSchedule': includeUnknownSchedule,
+      if (cursor != null) r'cursor': cursor,
+      if (limit != null) r'limit': limit,
+    };
+
+    final _response = await _dio.request<Object>(
+      _path,
+      options: _options,
+      queryParameters: _queryParameters,
+      cancelToken: cancelToken,
+      onSendProgress: onSendProgress,
+      onReceiveProgress: onReceiveProgress,
+    );
+
+    SelectionOfferingPage? _responseData;
+
+    try {
+      final rawData = _response.data;
+      _responseData = rawData == null
+          ? null
+          : deserialize<SelectionOfferingPage, SelectionOfferingPage>(
+              rawData,
+              'SelectionOfferingPage',
+              growable: true,
+            );
+    } catch (error, stackTrace) {
+      throw DioException(
+        requestOptions: _response.requestOptions,
+        response: _response,
+        type: DioExceptionType.unknown,
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
+
+    return Response<SelectionOfferingPage>(
+      data: _responseData,
+      headers: _response.headers,
+      isRedirect: _response.isRedirect,
+      requestOptions: _response.requestOptions,
+      redirects: _response.redirects,
+      statusCode: _response.statusCode,
+      statusMessage: _response.statusMessage,
+      extra: _response.extra,
+    );
+  }
+
+  /// Read one teaching-class offering by stable offeringId
+  ///
+  ///
+  /// Parameters:
+  /// * [offeringId]
+  /// * [cancelToken] - A [CancelToken] that can be used to cancel the operation
+  /// * [headers] - Can be used to add additional headers to the request
+  /// * [extras] - Can be used to add flags to the request
+  /// * [validateStatus] - A [ValidateStatus] callback that can be used to determine request success based on the HTTP status of the response
+  /// * [onSendProgress] - A [ProgressCallback] that can be used to get the send progress
+  /// * [onReceiveProgress] - A [ProgressCallback] that can be used to get the receive progress
+  ///
+  /// Returns a [Future] containing a [Response] with a [SelectionOffering] as data
+  /// Throws [DioException] if API call or serialization fails
+  Future<Response<SelectionOffering>> selectionOfferingsOfferingIdGet({
+    required String offeringId,
+    CancelToken? cancelToken,
+    Map<String, dynamic>? headers,
+    Map<String, dynamic>? extra,
+    ValidateStatus? validateStatus,
+    ProgressCallback? onSendProgress,
+    ProgressCallback? onReceiveProgress,
+  }) async {
+    final _path = r'/selection/offerings/{offeringId}'.replaceAll(
+      '{'
+      r'offeringId'
+      '}',
+      offeringId.toString(),
+    );
+    final _options = Options(
+      method: r'GET',
+      headers: <String, dynamic>{...?headers},
+      extra: <String, dynamic>{'secure': <Map<String, String>>[], ...?extra},
+      validateStatus: validateStatus,
+    );
+
+    final _response = await _dio.request<Object>(
+      _path,
+      options: _options,
+      cancelToken: cancelToken,
+      onSendProgress: onSendProgress,
+      onReceiveProgress: onReceiveProgress,
+    );
+
+    SelectionOffering? _responseData;
+
+    try {
+      final rawData = _response.data;
+      _responseData = rawData == null
+          ? null
+          : deserialize<SelectionOffering, SelectionOffering>(
+              rawData,
+              'SelectionOffering',
+              growable: true,
+            );
+    } catch (error, stackTrace) {
+      throw DioException(
+        requestOptions: _response.requestOptions,
+        response: _response,
+        type: DioExceptionType.unknown,
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
+
+    return Response<SelectionOffering>(
+      data: _responseData,
+      headers: _response.headers,
+      isRedirect: _response.isRedirect,
+      requestOptions: _response.requestOptions,
+      redirects: _response.redirects,
+      statusCode: _response.statusCode,
+      statusMessage: _response.statusMessage,
+      extra: _response.extra,
+    );
+  }
+
+  /// Read the materialized schedule for one teaching-class offering
+  /// An empty array is authoritative only when the parent offering has scheduleUnknown&#x3D;false; clients must inspect the offering otherwise.
+  ///
+  /// Parameters:
+  /// * [offeringId]
+  /// * [cancelToken] - A [CancelToken] that can be used to cancel the operation
+  /// * [headers] - Can be used to add additional headers to the request
+  /// * [extras] - Can be used to add flags to the request
+  /// * [validateStatus] - A [ValidateStatus] callback that can be used to determine request success based on the HTTP status of the response
+  /// * [onSendProgress] - A [ProgressCallback] that can be used to get the send progress
+  /// * [onReceiveProgress] - A [ProgressCallback] that can be used to get the receive progress
+  ///
+  /// Returns a [Future] containing a [Response] with a [List<TimeSlot>] as data
+  /// Throws [DioException] if API call or serialization fails
+  Future<Response<List<TimeSlot>>> selectionOfferingsOfferingIdTimeslotsGet({
+    required String offeringId,
+    CancelToken? cancelToken,
+    Map<String, dynamic>? headers,
+    Map<String, dynamic>? extra,
+    ValidateStatus? validateStatus,
+    ProgressCallback? onSendProgress,
+    ProgressCallback? onReceiveProgress,
+  }) async {
+    final _path = r'/selection/offerings/{offeringId}/timeslots'.replaceAll(
+      '{'
+      r'offeringId'
+      '}',
+      offeringId.toString(),
+    );
+    final _options = Options(
+      method: r'GET',
+      headers: <String, dynamic>{...?headers},
+      extra: <String, dynamic>{'secure': <Map<String, String>>[], ...?extra},
+      validateStatus: validateStatus,
+    );
+
+    final _response = await _dio.request<Object>(
+      _path,
+      options: _options,
+      cancelToken: cancelToken,
+      onSendProgress: onSendProgress,
+      onReceiveProgress: onReceiveProgress,
+    );
+
+    List<TimeSlot>? _responseData;
+
+    try {
+      final rawData = _response.data;
+      _responseData = rawData == null
+          ? null
+          : deserialize<List<TimeSlot>, TimeSlot>(
+              rawData,
+              'List<TimeSlot>',
+              growable: true,
+            );
+    } catch (error, stackTrace) {
+      throw DioException(
+        requestOptions: _response.requestOptions,
+        response: _response,
+        type: DioExceptionType.unknown,
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
+
+    return Response<List<TimeSlot>>(
       data: _responseData,
       headers: _response.headers,
       isRedirect: _response.isRedirect,

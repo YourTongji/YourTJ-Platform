@@ -15,6 +15,10 @@ Cargo.lock.orig
 /web/dist
 /web/.vite
 
+# Local tool state
+/.wrangler/
+/openapitools.json
+
 # Database dumps
 *.db
 *.sqlite

@@ -142,22 +142,32 @@ class _ScheduleJourneyState extends ConsumerState<_ScheduleJourney> {
   }
 
   Widget _header(BuildContext context) {
-    final DateTime? updatedAt = _controller.latestUpdate?.updatedAt;
+    final LatestUpdate? latest = _controller.latestUpdate;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
-        Text('选课排课', style: Theme.of(context).textTheme.headlineSmall),
+        Text('教学班排课', style: Theme.of(context).textTheme.headlineSmall),
         const SizedBox(height: 6),
         Text(
-          '浏览培养方案课程，完成本机待选、周次提示与冲突检查。',
+          '浏览具体教学班，完成本机待选、周次提示与冲突检查。',
           style: Theme.of(context).textTheme.bodyMedium?.copyWith(
             color: Theme.of(context).colorScheme.onSurfaceVariant,
           ),
         ),
         const SizedBox(height: 4),
         Text(
-          '课程镜像最近同步：${_formatDateTime(updatedAt)}',
+          '上游课程最近更新：${_formatDateTime(latest?.updatedAt)}',
           style: Theme.of(context).textTheme.bodySmall,
+        ),
+        const SizedBox(height: 2),
+        Text(
+          '当前镜像导入：${_formatDateTime(latest?.importedAt)}'
+          '${latest?.stale == true ? ' · 数据可能已过期' : ''}',
+          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+            color: latest?.stale == true
+                ? Theme.of(context).colorScheme.error
+                : null,
+          ),
         ),
       ],
     );
@@ -348,34 +358,62 @@ class _ScheduleJourneyState extends ConsumerState<_ScheduleJourney> {
     }
     if (_controller.mode == SelectionBrowseMode.search &&
         _controller.query.length < 2 &&
-        _controller.coursesFailure == null) {
+        _controller.offeringsFailure == null) {
       return const _InlineEmpty(title: '输入关键词搜索', message: '至少输入 2 个字符。');
     }
-    if (_controller.areCoursesLoading) {
+    if (_controller.areOfferingsLoading) {
       return const Padding(
         padding: EdgeInsets.symmetric(vertical: 36),
         child: Center(child: CircularProgressIndicator()),
       );
     }
-    if (_controller.coursesFailure case final ApiFailure failure) {
-      return _InlineFailure(message: failure.message);
+    if (_controller.offeringsFailure case final ApiFailure failure
+        when _controller.offerings.isEmpty) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          _InlineFailure(message: failure.message),
+          const SizedBox(height: 8),
+          OutlinedButton.icon(
+            onPressed: _controller.retryOfferings,
+            icon: const Icon(Icons.refresh_rounded),
+            label: const Text('重试'),
+          ),
+        ],
+      );
     }
-    if (_controller.courses.isEmpty) {
-      return const _InlineEmpty(title: '没有找到课程', message: '更换筛选条件或关键词后再试。');
+    if (_controller.offerings.isEmpty) {
+      return const _InlineEmpty(title: '没有找到教学班', message: '更换筛选条件或关键词后再试。');
     }
     return Column(
-      children: _controller.courses
-          .map((SelectionCourse course) {
-            return Padding(
-              padding: const EdgeInsets.only(bottom: 8),
-              child: _SelectionCourseRow(
-                course: course,
-                isBusy: _controller.isCourseBusy(course.code),
-                onAdd: () => _addCourse(course),
-              ),
-            );
-          })
-          .toList(growable: false),
+      children: <Widget>[
+        if (_controller.offeringsFailure
+            case final ApiFailure failure) ...<Widget>[
+          _InlineFailure(message: failure.message),
+          const SizedBox(height: 8),
+        ],
+        ..._controller.offerings.map((SelectionOffering offering) {
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: _SelectionOfferingRow(
+              offering: offering,
+              isBusy: _controller.isOfferingBusy(offering.offeringId),
+              onAdd: () => _addOffering(offering),
+            ),
+          );
+        }),
+        if (_controller.hasMore)
+          OutlinedButton.icon(
+            onPressed: _controller.isLoadingMore ? null : _controller.loadMore,
+            icon: _controller.isLoadingMore
+                ? const SizedBox.square(
+                    dimension: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.expand_more_rounded),
+            label: Text(_controller.isLoadingMore ? '加载中' : '加载更多教学班'),
+          ),
+      ],
     );
   }
 
@@ -393,7 +431,7 @@ class _ScheduleJourneyState extends ConsumerState<_ScheduleJourney> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: <Widget>[
                       Text(
-                        '待选课程',
+                        '待选教学班',
                         style: Theme.of(context).textTheme.titleMedium,
                       ),
                       const SizedBox(height: 3),
@@ -415,14 +453,15 @@ class _ScheduleJourneyState extends ConsumerState<_ScheduleJourney> {
             ),
             const SizedBox(height: 12),
             if (_controller.scheduled.isEmpty)
-              const _InlineEmpty(title: '还没有加入课程', message: '从左侧课程列表加入后会在这里显示。')
+              const _InlineEmpty(title: '还没有加入教学班', message: '从教学班列表加入后会在这里显示。')
             else
               ..._controller.scheduled.map((ScheduledCourse scheduled) {
                 return Padding(
                   padding: const EdgeInsets.only(bottom: 8),
                   child: _ScheduledCourseCard(
                     scheduled: scheduled,
-                    onRemove: () => _removeCourse(scheduled.course.code),
+                    onRemove: () =>
+                        _removeOffering(scheduled.offering.offeringId),
                   ),
                 );
               }),
@@ -460,17 +499,17 @@ class _ScheduleJourneyState extends ConsumerState<_ScheduleJourney> {
     );
   }
 
-  Future<void> _addCourse(SelectionCourse course) async {
+  Future<void> _addOffering(SelectionOffering offering) async {
     try {
-      final ScheduleAddResult result = await _controller.addCourse(course);
+      final ScheduleAddResult result = await _controller.addOffering(offering);
       if (!mounted) {
         return;
       }
       switch (result.status) {
         case ScheduleAddStatus.added:
-          _showMessage('${course.name} 已加入本机课表');
+          _showMessage('${offering.name} 已加入本机课表');
         case ScheduleAddStatus.duplicate:
-          _showMessage('${course.name} 已在本机课表中');
+          _showMessage('${offering.name} 已在本机课表中');
         case ScheduleAddStatus.conflict:
           await _showConflict(result);
       }
@@ -483,7 +522,7 @@ class _ScheduleJourneyState extends ConsumerState<_ScheduleJourney> {
 
   Future<void> _showConflict(ScheduleAddResult result) async {
     final ScheduleConflict conflict = result.conflict!;
-    final String withName = conflict.withCourse.course.name;
+    final String withName = conflict.withCourse.offering.name;
     final String slot =
         '${_weekday(conflict.candidateSlot.weekday)} '
         '${conflict.candidateSlot.startSlot}–${conflict.candidateSlot.endSlot} 节';
@@ -530,11 +569,11 @@ class _ScheduleJourneyState extends ConsumerState<_ScheduleJourney> {
     }
     try {
       await _controller.confirmAdd(
-        result.pendingCourse!,
+        result.pendingOffering!,
         result.pendingTimeslots!,
       );
       if (mounted) {
-        _showMessage('${result.pendingCourse!.name} 已加入，并保留可能冲突提示');
+        _showMessage('${result.pendingOffering!.name} 已加入，并保留可能冲突提示');
       }
     } on ApiFailure catch (failure) {
       if (mounted) {
@@ -543,9 +582,9 @@ class _ScheduleJourneyState extends ConsumerState<_ScheduleJourney> {
     }
   }
 
-  Future<void> _removeCourse(String courseCode) async {
+  Future<void> _removeOffering(String offeringId) async {
     try {
-      await _controller.removeCourse(courseCode);
+      await _controller.removeOffering(offeringId);
     } on ApiFailure catch (failure) {
       if (mounted) {
         _showMessage(failure.message);
@@ -609,7 +648,7 @@ class _ScopeNotice extends StatelessWidget {
             SizedBox(width: 10),
             Expanded(
               child: Text(
-                '当前是课程级本机排课：不代表已选择具体教学班，不监测停开或换班，'
+                '当前按具体教学班在本机排课；这不是官方选课结果，不监测停开或换班，'
                 '也不会跨设备同步或写回教务系统。',
               ),
             ),
@@ -620,14 +659,14 @@ class _ScopeNotice extends StatelessWidget {
   }
 }
 
-class _SelectionCourseRow extends StatelessWidget {
-  const _SelectionCourseRow({
-    required this.course,
+class _SelectionOfferingRow extends StatelessWidget {
+  const _SelectionOfferingRow({
+    required this.offering,
     required this.isBusy,
     required this.onAdd,
   });
 
-  final SelectionCourse course;
+  final SelectionOffering offering;
   final bool isBusy;
   final VoidCallback onAdd;
 
@@ -647,13 +686,25 @@ class _SelectionCourseRow extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: <Widget>[
                   Text(
-                    course.name,
+                    offering.name,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
                     style: Theme.of(context).textTheme.titleSmall,
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    '${course.code} · ${_teachers(course)} · '
-                    '${_number(course.credit)} 学分',
+                    '${offering.code} · ${_teachingClassLabel(offering)} · '
+                    '${_number(offering.credit)} 学分',
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    '${_teachers(offering)} · ${_weeksLabel(offering)}'
+                    '${offering.scheduleUnknown ? ' · 排课待同步' : ''}',
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
                     style: Theme.of(context).textTheme.bodySmall,
                   ),
                 ],
@@ -699,21 +750,29 @@ class _ScheduledCourseCard extends StatelessWidget {
               children: <Widget>[
                 Expanded(
                   child: Text(
-                    scheduled.course.name,
+                    scheduled.offering.name,
                     style: Theme.of(context).textTheme.titleSmall,
                   ),
                 ),
                 IconButton(
-                  tooltip: '移除 ${scheduled.course.name}',
+                  tooltip: '移除 ${scheduled.offering.name}',
                   onPressed: onRemove,
                   icon: const Icon(Icons.close_rounded),
                 ),
               ],
             ),
-            Text('${scheduled.course.code} · ${_teachers(scheduled.course)}'),
+            Text(
+              '${scheduled.offering.code} · '
+              '${_teachingClassLabel(scheduled.offering)} · '
+              '${_teachers(scheduled.offering)}',
+            ),
             const SizedBox(height: 6),
             if (scheduled.timeslots.isEmpty)
-              const Text('课程镜像暂无时段，无法执行冲突检查。')
+              Text(
+                scheduled.offering.scheduleUnknown
+                    ? '该教学班排课未知，无法执行冲突检查。'
+                    : '该教学班当前无上课时段。',
+              )
             else
               ...scheduled.timeslots.map((TimeSlot timeslot) {
                 return Padding(
@@ -721,8 +780,12 @@ class _ScheduledCourseCard extends StatelessWidget {
                   child: Text(
                     '${_weekday(timeslot.weekday)} '
                     '${timeslot.startSlot}–${timeslot.endSlot} 节 · '
-                    '${timeslot.weeks?.trim().isNotEmpty == true ? timeslot.weeks : '周次未知'}'
-                    '${timeslot.location?.trim().isNotEmpty == true ? ' · ${timeslot.location}' : ''}',
+                    '${_timeslotWeeks(timeslot)}'
+                    '${timeslot.locationUnknown
+                        ? ' · 地点未知'
+                        : timeslot.location?.trim().isNotEmpty == true
+                        ? ' · ${timeslot.location}'
+                        : ''}',
                     style: Theme.of(context).textTheme.bodySmall,
                   ),
                 );
@@ -827,11 +890,15 @@ class _CompactTimetableState extends State<_CompactTimetable> {
                 return ListTile(
                   contentPadding: EdgeInsets.zero,
                   leading: CircleAvatar(child: Text('${entry.slot.startSlot}')),
-                  title: Text(entry.course.course.name),
+                  title: Text(entry.course.offering.name),
                   subtitle: Text(
                     '${entry.slot.startSlot}–${entry.slot.endSlot} 节 · '
-                    '${entry.slot.weeks?.trim().isNotEmpty == true ? entry.slot.weeks : '周次未知'}'
-                    '${entry.slot.location?.trim().isNotEmpty == true ? ' · ${entry.slot.location}' : ''}',
+                    '${_timeslotWeeks(entry.slot)}'
+                    '${entry.slot.locationUnknown
+                        ? ' · 地点未知'
+                        : entry.slot.location?.trim().isNotEmpty == true
+                        ? ' · ${entry.slot.location}'
+                        : ''}',
                   ),
                 );
               }),
@@ -910,7 +977,9 @@ class _ExpandedTimetable extends StatelessWidget {
                                     child: Padding(
                                       padding: const EdgeInsets.all(5),
                                       child: Text(
-                                        item.course.name,
+                                        item.offering.name,
+                                        maxLines: 3,
+                                        overflow: TextOverflow.ellipsis,
                                         style: Theme.of(
                                           context,
                                         ).textTheme.labelSmall,
@@ -1019,13 +1088,41 @@ String _weekday(int weekday) {
   ][weekday.clamp(1, 7) - 1];
 }
 
-String _teachers(SelectionCourse course) {
-  if (course.teacherNames.isNotEmpty) {
-    return course.teacherNames.join(' / ');
+String _teachers(SelectionOffering offering) {
+  if (offering.teacherNames.isNotEmpty) {
+    return offering.teacherNames.join(' / ');
   }
-  return course.teacherName?.trim().isNotEmpty == true
-      ? course.teacherName!
+  return offering.teacherName?.trim().isNotEmpty == true
+      ? offering.teacherName!
       : '教师待同步';
+}
+
+String _teachingClassLabel(SelectionOffering offering) {
+  final String? teachingClassCode = offering.teachingClassCode?.trim();
+  return teachingClassCode?.isNotEmpty == true
+      ? '教学班 $teachingClassCode'
+      : '教学班 ${offering.offeringId}';
+}
+
+String _weeksLabel(SelectionOffering offering) {
+  if (offering.weeksUnknown) {
+    return '周次未知';
+  }
+  if (offering.startWeek != null && offering.endWeek != null) {
+    return '${offering.startWeek}–${offering.endWeek} 周';
+  }
+  return '周次见时段';
+}
+
+String _timeslotWeeks(TimeSlot timeslot) {
+  if (timeslot.weeksUnknown || timeslot.weekNumbers.isEmpty) {
+    return '周次未知';
+  }
+  if (timeslot.weeks?.trim().isNotEmpty == true) {
+    return timeslot.weeks!;
+  }
+  final List<int> weeks = timeslot.weekNumbers.toList()..sort();
+  return '${weeks.join(',')} 周';
 }
 
 String _number(num? value) {

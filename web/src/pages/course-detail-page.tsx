@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Flag, Heart, Send } from "lucide-react";
+import { CalendarPlus, Flag, Heart, Send } from "lucide-react";
 import * as React from "react";
-import { useParams } from "react-router";
+import { Link, useParams } from "react-router";
 import { toast } from "sonner";
 
 import { EmptyState, ErrorState, LoadingState } from "@/components/common/states";
@@ -209,7 +209,18 @@ export function CourseDetailPage() {
         eyebrow={item.code}
         title={item.name ?? "课程详情"}
         description={`${item.department ?? "院系待同步"} · ${item.teachers?.map((teacher) => teacher.name).join(" / ") || item.teacherName || "教师待同步"}`}
-        actions={<Badge variant="secondary">{item.credit ?? 0} 学分</Badge>}
+        actions={
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant="secondary">{item.credit ?? 0} 学分</Badge>
+            {item.code ? (
+              <Button asChild variant="outline">
+                <Link to={`/schedule?courseCode=${encodeURIComponent(item.code)}`}>
+                  <CalendarPlus className="h-4 w-4" />在排课中查看
+                </Link>
+              </Button>
+            ) : null}
+          </div>
+        }
       />
 
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_20rem]">

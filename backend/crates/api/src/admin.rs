@@ -158,49 +158,6 @@ pub async fn audit_events_handler(
     Ok(Json(page))
 }
 
-/// POST /api/v2/admin/selection/sync — trigger selection data sync pipeline
-pub async fn selection_sync_handler(
-    headers: HeaderMap,
-    State(state): State<AppState>,
-    Json(body): Json<AdminJobInput>,
-) -> AppResult<(StatusCode, Json<serde_json::Value>)> {
-    let auth = identity::auth_middleware::authenticate(
-        &headers,
-        &state.db,
-        &state.jwt_secret,
-        state.redis.as_ref(),
-    )
-    .await
-    .map_err(|_| shared::AppError::Unauthorized)?;
-    auth.require_capability(Capability::RunOperations).map_err(|_| shared::AppError::Forbidden)?;
-
-    let job_id = Uuid::new_v4().to_string();
-    audit_job_request(&state, &auth, &job_id, "selection_sync", validate_reason(&body.reason)?)
-        .await?;
-    let job_id_resp = job_id.clone();
-    let meili_url = state.meili_url.clone();
-    let meili_key = state.meili_master_key.clone();
-    let pool = state.db.clone();
-    let redis = state.redis.clone();
-
-    tokio::spawn(async move {
-        if let Err(e) =
-            courses::sync::run_selection_sync(&pool, &meili_url, &meili_key, redis.as_ref()).await
-        {
-            tracing::error!(error = %e, job_id, "selection sync failed");
-        }
-    });
-
-    Ok((
-        StatusCode::ACCEPTED,
-        Json(serde_json::json!({
-            "status": "queued",
-            "message": "selection sync started",
-            "jobId": job_id_resp,
-        })),
-    ))
-}
-
 /// POST /api/v2/admin/courses/reindex — rebuild courses in Meilisearch.
 pub async fn courses_reindex_handler(
     headers: HeaderMap,
@@ -328,7 +285,6 @@ pub fn routes(state: AppState) -> Router {
     Router::new()
         .route("/api/v2/admin/overview", get(overview_handler))
         .route("/api/v2/admin/audit-events", get(audit_events_handler))
-        .route("/api/v2/admin/selection/sync", post(selection_sync_handler))
         .route("/api/v2/admin/courses/reindex", post(courses_reindex_handler))
         .route("/api/v2/admin/reviews/reindex", post(reviews_reindex_handler))
         .route("/api/v2/admin/forum/reindex", post(forum_reindex_handler))

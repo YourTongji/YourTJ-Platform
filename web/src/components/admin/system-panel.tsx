@@ -9,13 +9,15 @@ import {
   ReasonDialog,
 } from "@/components/admin/admin-primitives";
 import { EmptyState, ErrorState, LoadingState } from "@/components/common/states";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { api } from "@/lib/api/endpoints";
-import type { NotificationOutboxEvent } from "@/lib/api/types";
-import { formatUnixTime } from "@/lib/format";
+import type { NotificationOutboxEvent, SelectionSyncJob } from "@/lib/api/types";
+import { formatUnixTime, idempotencyKey } from "@/lib/format";
+import { cn } from "@/lib/utils";
 
 type JobKind = "selection" | "courses" | "reviews" | "forum";
 
@@ -89,19 +91,39 @@ function SettingsPanel() {
 }
 
 function JobsPanel() {
+  const queryClient = useQueryClient();
   const [selected, setSelected] = React.useState<JobKind | null>(null);
+  const [retryTarget, setRetryTarget] = React.useState<SelectionSyncJob | null>(null);
+  const selectionJobs = useInfiniteQuery({
+    queryKey: ["admin", "selection-sync-jobs"],
+    queryFn: ({ pageParam }) => api.selectionSyncJobs(undefined, pageParam),
+    initialPageParam: null as string | null,
+    getNextPageParam: (page) => page.hasMore ? page.nextCursor ?? undefined : undefined,
+    refetchInterval: 5_000,
+  });
   const job = useMutation({
-    mutationFn: ({ kind, reason }: { kind: JobKind; reason: string }) => {
-      if (kind === "selection") return api.triggerSelectionSync(reason);
-      if (kind === "courses") return api.reindexCourses(reason);
-      if (kind === "reviews") return api.reindexReviews(reason);
-      return api.reindexForum(reason);
+    mutationFn: async ({ kind, reason }: { kind: JobKind; reason: string }) => {
+      if (kind === "selection") await api.triggerSelectionSync(reason, idempotencyKey("selection-sync"));
+      else if (kind === "courses") await api.reindexCourses(reason);
+      else if (kind === "reviews") await api.reindexReviews(reason);
+      else await api.reindexForum(reason);
     },
-    onSuccess: () => {
+    onSuccess: async () => {
       toast.success("任务已提交到后端队列");
       setSelected(null);
+      await queryClient.invalidateQueries({ queryKey: ["admin", "selection-sync-jobs"] });
     },
     onError: (error) => toast.error(error instanceof Error ? error.message : "任务触发失败"),
+  });
+  const retry = useMutation({
+    mutationFn: ({ id, reason }: { id: string; reason: string }) =>
+      api.retrySelectionSyncJob(id, reason),
+    onSuccess: async () => {
+      toast.success("选课同步任务已重新排队");
+      setRetryTarget(null);
+      await queryClient.invalidateQueries({ queryKey: ["admin", "selection-sync-jobs"] });
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : "重新排队失败"),
   });
   const jobs = [
     { kind: "selection" as const, title: "选课数据同步", description: "从一系统镜像选课目录。", icon: DatabaseZap },
@@ -110,10 +132,11 @@ function JobsPanel() {
     { kind: "forum" as const, title: "论坛索引重建", description: "重建论坛搜索索引。", icon: RefreshCcw },
   ];
   const selectedJob = jobs.find((item) => item.kind === selected);
+  const syncItems = selectionJobs.data?.pages.flatMap((page) => page.items ?? []) ?? [];
 
   return (
     <div className="space-y-3">
-      <p className="text-xs text-muted-foreground">当前接口只返回 202，没有持久任务 ID、进度、失败日志或安全重试状态。确认仅表示已提交，不表示已完成。</p>
+      <p className="text-xs text-muted-foreground">选课同步使用 PostgreSQL 持久队列、租约和有界重试；提交后请以任务状态为准。其他索引任务仍只确认已接收。</p>
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
         {jobs.map((item) => (
           <Card key={item.kind} className="rounded-xl">
@@ -127,6 +150,44 @@ function JobsPanel() {
           </Card>
         ))}
       </div>
+      <div className="space-y-2" aria-live="polite">
+        <div className="flex items-center justify-between gap-3">
+          <h4 className="font-medium">选课同步任务</h4>
+          <Button type="button" size="sm" variant="ghost" onClick={() => void selectionJobs.refetch()} disabled={selectionJobs.isFetching}>
+            <RefreshCcw className={cn("size-4", selectionJobs.isFetching && "animate-spin")} />刷新
+          </Button>
+        </div>
+        {selectionJobs.isLoading ? <LoadingState label="加载选课同步任务" /> : null}
+        {selectionJobs.isError ? <ErrorState error={selectionJobs.error} onRetry={() => void selectionJobs.refetch()} /> : null}
+        {!selectionJobs.isLoading && !selectionJobs.isError && syncItems.length === 0 ? <EmptyState title="还没有选课同步任务" /> : null}
+        {syncItems.map((item) => (
+          <Card key={item.id}>
+            <CardContent className="flex flex-col gap-3 p-4 md:flex-row md:items-center">
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <p className="font-mono text-sm">{item.id}</p>
+                  <AdminStatusBadge value={item.status} />
+                  <Badge variant="outline">{item.step}</Badge>
+                </div>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  进度 {item.progressCurrent}/{item.progressTotal} · 尝试 {item.attempts}/8 · 更新于 {formatUnixTime(item.updatedAt)}
+                </p>
+                {item.lastErrorCode ? <p className="mt-1 text-xs text-destructive">错误码：{item.lastErrorCode}</p> : null}
+              </div>
+              {item.status === "dead" ? (
+                <Button type="button" variant="outline" onClick={() => setRetryTarget(item)}>说明原因并重试</Button>
+              ) : null}
+            </CardContent>
+          </Card>
+        ))}
+        {selectionJobs.hasNextPage ? (
+          <div className="flex justify-center">
+            <Button type="button" variant="outline" onClick={() => void selectionJobs.fetchNextPage()} disabled={selectionJobs.isFetchingNextPage}>
+              {selectionJobs.isFetchingNextPage ? "加载中…" : "加载更多"}
+            </Button>
+          </div>
+        ) : null}
+      </div>
       <ReasonDialog
         open={Boolean(selected)}
         onOpenChange={(open) => !open && setSelected(null)}
@@ -135,6 +196,15 @@ function JobsPanel() {
         confirmLabel="确认触发"
         isPending={job.isPending}
         onConfirm={(reason) => selected && job.mutate({ kind: selected, reason })}
+      />
+      <ReasonDialog
+        open={Boolean(retryTarget)}
+        onOpenChange={(open) => !open && setRetryTarget(null)}
+        title={`重试选课同步任务 ${retryTarget?.id ?? ""}`}
+        description="仅停止重试的任务可重新排队；操作原因会进入不可变审计记录。"
+        confirmLabel="重新排队"
+        isPending={retry.isPending}
+        onConfirm={(reason) => retryTarget && retry.mutate({ id: retryTarget.id, reason })}
       />
     </div>
   );

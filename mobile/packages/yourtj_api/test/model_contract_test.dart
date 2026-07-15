@@ -5,17 +5,30 @@ import 'package:yourtj_api/yourtj_api.dart';
 void main() {
   group('selection contract', () {
     test('decodes required nullable fields when they are explicitly null', () {
-      final course = SelectionCourse.fromJson(<String, dynamic>{
-        'id': 'course-1',
+      final course = SelectionOffering.fromJson(<String, dynamic>{
+        'id': 'offering-1',
+        'offeringId': 'offering-1',
         'code': 'CS1001',
+        'teachingClassCode': null,
         'name': '程序设计',
         'credit': null,
         'natureId': null,
+        'calendarId': '122',
         'campusId': null,
+        'facultyName': null,
+        'teachingLanguage': null,
         'teacherName': null,
         'teacherNames': <String>[],
+        'startWeek': null,
+        'endWeek': null,
+        'weeksUnknown': true,
+        'scheduleUnknown': true,
+        'status': 'unknown',
+        'catalogueCourseId': null,
       });
 
+      expect(course.offeringId, 'offering-1');
+      expect(course.calendarId, '122');
       expect(course.credit, isNull);
       expect(course.natureId, isNull);
       expect(course.campusId, isNull);
@@ -26,33 +39,49 @@ void main() {
 
     test('rejects a missing required nullable field', () {
       final json = <String, dynamic>{
-        'id': 'course-1',
+        'id': 'offering-1',
+        'offeringId': 'offering-1',
         'code': 'CS1001',
+        'teachingClassCode': null,
         'name': '程序设计',
         'natureId': null,
+        'calendarId': '122',
         'campusId': null,
+        'facultyName': null,
+        'teachingLanguage': null,
         'teacherName': null,
         'teacherNames': <String>[],
+        'startWeek': null,
+        'endWeek': null,
+        'weeksUnknown': true,
+        'scheduleUnknown': true,
+        'status': 'unknown',
+        'catalogueCourseId': null,
       };
 
       expect(
-        () => SelectionCourse.fromJson(json),
+        () => SelectionOffering.fromJson(json),
         throwsA(isA<CheckedFromJsonException>()),
       );
     });
 
     test('decodes a time slot whose weeks value is null', () {
       final timeSlot = TimeSlot.fromJson(<String, dynamic>{
-        'courseId': 'course-1',
+        'offeringId': 'offering-1',
+        'courseId': 'offering-1',
         'teacherName': '张老师',
         'weekday': 2,
         'startSlot': 1,
         'endSlot': 2,
         'weeks': null,
+        'weekNumbers': <int>[],
+        'weeksUnknown': true,
         'location': '四平路校区',
+        'locationUnknown': false,
       });
 
       expect(timeSlot.weeks, isNull);
+      expect(timeSlot.weeksUnknown, isTrue);
       expect(timeSlot.toJson(), containsPair('weeks', null));
     });
   });
@@ -61,6 +90,9 @@ void main() {
     test('decodes an RFC 3339 timestamp as a nullable DateTime', () {
       final latestUpdate = LatestUpdate.fromJson(<String, dynamic>{
         'updatedAt': '2026-07-14T09:10:11.123+08:00',
+        'importedAt': '2026-07-15T01:00:00Z',
+        'stale': false,
+        'staleAfterHours': 168,
       });
 
       expect(
@@ -73,6 +105,9 @@ void main() {
     test('preserves an explicit null timestamp', () {
       final latestUpdate = LatestUpdate.fromJson(<String, dynamic>{
         'updatedAt': null,
+        'importedAt': null,
+        'stale': true,
+        'staleAfterHours': 168,
       });
 
       expect(latestUpdate.updatedAt, isNull);
@@ -83,6 +118,9 @@ void main() {
       expect(
         () => LatestUpdate.fromJson(<String, dynamic>{
           'updatedAt': '14/07/2026 09:10',
+          'importedAt': null,
+          'stale': true,
+          'staleAfterHours': 168,
         }),
         throwsA(isA<CheckedFromJsonException>()),
       );

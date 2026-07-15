@@ -5,7 +5,7 @@
 // ignore_for_file: unused_element
 import 'package:json_annotation/json_annotation.dart';
 
-part 'selection_course.g.dart';
+part 'selection_offering.g.dart';
 
 @JsonSerializable(
   checked: true,
@@ -13,9 +13,9 @@ part 'selection_course.g.dart';
   disallowUnrecognizedKeys: false,
   explicitToJson: true,
 )
-class SelectionCourse {
-  /// Returns a new [SelectionCourse] instance.
-  SelectionCourse({
+class SelectionOffering {
+  /// Returns a new [SelectionOffering] instance.
+  SelectionOffering({
     required this.id,
 
     required this.offeringId,
@@ -119,9 +119,9 @@ class SelectionCourse {
     name: r'status',
     required: true,
     includeIfNull: false,
-    unknownEnumValue: SelectionCourseStatusEnum.unknownDefaultOpenApi,
+    unknownEnumValue: SelectionOfferingStatusEnum.unknownDefaultOpenApi,
   )
-  final SelectionCourseStatusEnum status;
+  final SelectionOfferingStatusEnum status;
 
   /// Optional deep-link target in the community course catalogue.
   @JsonKey(name: r'catalogueCourseId', required: true, includeIfNull: true)
@@ -130,7 +130,7 @@ class SelectionCourse {
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      other is SelectionCourse &&
+      other is SelectionOffering &&
           other.id == id &&
           other.offeringId == offeringId &&
           other.code == code &&
@@ -173,10 +173,10 @@ class SelectionCourse {
       status.hashCode +
       (catalogueCourseId == null ? 0 : catalogueCourseId.hashCode);
 
-  factory SelectionCourse.fromJson(Map<String, dynamic> json) =>
-      _$SelectionCourseFromJson(json);
+  factory SelectionOffering.fromJson(Map<String, dynamic> json) =>
+      _$SelectionOfferingFromJson(json);
 
-  Map<String, dynamic> toJson() => _$SelectionCourseToJson(this);
+  Map<String, dynamic> toJson() => _$SelectionOfferingToJson(this);
 
   @override
   String toString() {
@@ -185,7 +185,7 @@ class SelectionCourse {
 }
 
 /// Upstream currently supplies no lifecycle status, so unknown is expected.
-enum SelectionCourseStatusEnum {
+enum SelectionOfferingStatusEnum {
   /// Upstream currently supplies no lifecycle status, so unknown is expected.
   @JsonValue(r'unknown')
   unknown(r'unknown'),
@@ -202,7 +202,7 @@ enum SelectionCourseStatusEnum {
   @JsonValue(r'unknown_default_open_api')
   unknownDefaultOpenApi(r'unknown_default_open_api');
 
-  const SelectionCourseStatusEnum(this.value);
+  const SelectionOfferingStatusEnum(this.value);
 
   final String value;
 

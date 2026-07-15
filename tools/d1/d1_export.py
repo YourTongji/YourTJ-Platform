@@ -1,45 +1,90 @@
 #!/usr/bin/env python3
-"""Export all tables from Cloudflare D1 to a local SQLite database.
+"""Export the jcourse-db-backup D1 database to a fresh local SQLite file.
 
 Environment variables:
   CLOUDFLARE_ACCOUNT_ID   — Cloudflare account ID
   CLOUDFLARE_D1_DATABASE_ID — D1 database UUID
   CLOUDFLARE_API_TOKEN    — API token with d1:read permission
 
-Output: d1_export.db in the current directory.
+The configured database id is resolved through the Cloudflare API and must be
+named jcourse-db-backup. Existing output files are never overwritten.
 """
 
-import json
+import argparse
 import os
 import sqlite3
 import sys
+import tempfile
+from pathlib import Path
+
 import requests
 
-D1_URL = (
-    "https://api.cloudflare.com/client/v4/accounts"
-    f"/{os.environ['CLOUDFLARE_ACCOUNT_ID']}"
-    f"/d1/database/{os.environ['CLOUDFLARE_D1_DATABASE_ID']}"
-)
-
-HEADERS = {
-    "Authorization": f"Bearer {os.environ['CLOUDFLARE_API_TOKEN']}",
-    "Content-Type": "application/json",
-}
+BACKUP_DATABASE_NAME = "jcourse-db-backup"
+REQUEST_TIMEOUT_SECONDS = 60
 
 # Cloudflare internal tables to skip
 SKIP_TABLES = {"_cf_KV"}
 
 
+def cloudflare_config() -> tuple[str, dict[str, str]]:
+    """Build the D1 API endpoint without resolving secrets during --help."""
+    required = (
+        "CLOUDFLARE_ACCOUNT_ID",
+        "CLOUDFLARE_D1_DATABASE_ID",
+        "CLOUDFLARE_API_TOKEN",
+    )
+    missing = [name for name in required if not os.environ.get(name)]
+    if missing:
+        raise RuntimeError(f"missing required environment variables: {', '.join(missing)}")
+    url = (
+        "https://api.cloudflare.com/client/v4/accounts"
+        f"/{os.environ['CLOUDFLARE_ACCOUNT_ID']}"
+        f"/d1/database/{os.environ['CLOUDFLARE_D1_DATABASE_ID']}"
+    )
+    headers = {
+        "Authorization": f"Bearer {os.environ['CLOUDFLARE_API_TOKEN']}",
+        "Content-Type": "application/json",
+    }
+    return url, headers
+
+
+def checked_response(response: requests.Response) -> dict:
+    if not response.ok:
+        raise RuntimeError(f"Cloudflare D1 API returned HTTP {response.status_code}")
+    data = response.json()
+    if not data.get("success"):
+        raise RuntimeError(f"D1 error: {data.get('errors')}")
+    return data
+
+
+def configured_database_name() -> str:
+    """Resolve the configured id and fail closed unless it is the backup."""
+    url, headers = cloudflare_config()
+    try:
+        response = requests.get(url, headers=headers, timeout=REQUEST_TIMEOUT_SECONDS)
+    except requests.RequestException as error:
+        raise RuntimeError("Cloudflare D1 API request failed") from error
+    data = checked_response(response)
+    result = data.get("result") or {}
+    return str(result.get("name") or "")
+
+
 def d1_query(sql: str, params: list | None = None) -> list[dict]:
     """Run a D1 query and return the result rows."""
+    url, headers = cloudflare_config()
     body: dict = {"sql": sql}
     if params:
         body["params"] = params
-    resp = requests.post(f"{D1_URL}/query", headers=HEADERS, json=body)
-    resp.raise_for_status()
-    data = resp.json()
-    if not data.get("success"):
-        raise RuntimeError(f"D1 error: {data.get('errors')}")
+    try:
+        response = requests.post(
+            f"{url}/query",
+            headers=headers,
+            json=body,
+            timeout=REQUEST_TIMEOUT_SECONDS,
+        )
+    except requests.RequestException as error:
+        raise RuntimeError("Cloudflare D1 query failed") from error
+    data = checked_response(response)
     result = data.get("result", [])
     if not result:
         return []
@@ -97,27 +142,71 @@ def export_table(cur, table: str):
     return len(rows)
 
 
-def main():
-    db_path = "d1_export.db"
-    print(f"Exporting D1 to {db_path} ...")
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=Path("d1_export.db"),
+        help="fresh SQLite destination; an existing path is rejected",
+    )
+    return parser.parse_args()
 
-    db = sqlite3.connect(db_path)
-    cur = db.cursor()
-    cur.execute("PRAGMA journal_mode=WAL")
 
-    tables = list_tables()
-    print(f"Found {len(tables)} tables: {', '.join(tables)}")
+def main() -> int:
+    args = parse_args()
+    output = args.output
+    if output.exists():
+        raise RuntimeError(f"refusing to overwrite existing snapshot: {output}")
+    if not output.parent.is_dir():
+        raise RuntimeError(f"output directory does not exist: {output.parent}")
 
-    total = 0
-    for table in tables:
-        count = export_table(cur, table)
-        total += count
-        print(f"  {table}: {count} rows")
+    database_name = configured_database_name()
+    if database_name != BACKUP_DATABASE_NAME:
+        raise RuntimeError(
+            "refusing export: configured D1 database is "
+            f"{database_name or '<unknown>'!r}, expected {BACKUP_DATABASE_NAME!r}"
+        )
 
-    db.commit()
-    db.close()
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{output.name}.",
+        suffix=".tmp",
+        dir=output.parent,
+    )
+    os.close(descriptor)
+    temporary = Path(temporary_name)
+    db: sqlite3.Connection | None = None
+    try:
+        print(f"Exporting {database_name} to {output} ...")
+        db = sqlite3.connect(temporary)
+        cur = db.cursor()
+        tables = list_tables()
+        print(f"Found {len(tables)} tables: {', '.join(tables)}")
+
+        total = 0
+        for table in tables:
+            count = export_table(cur, table)
+            total += count
+            print(f"  {table}: {count} rows")
+
+        db.commit()
+        db.close()
+        db = None
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, output)
+    except Exception:
+        if db is not None:
+            db.rollback()
+            db.close()
+        temporary.unlink(missing_ok=True)
+        raise
     print(f"Done. {total} rows across {len(tables)} tables.")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        raise SystemExit(main())
+    except Exception as error:
+        print(f"ERROR: {error}", file=sys.stderr)
+        raise SystemExit(1) from None

@@ -1,13 +1,13 @@
 // GENERATED CODE - DO NOT MODIFY BY HAND
 
-part of 'selection_course.dart';
+part of 'selection_offering.dart';
 
 // **************************************************************************
 // JsonSerializableGenerator
 // **************************************************************************
 
-SelectionCourse _$SelectionCourseFromJson(Map<String, dynamic> json) =>
-    $checkedCreate('SelectionCourse', json, ($checkedConvert) {
+SelectionOffering _$SelectionOfferingFromJson(Map<String, dynamic> json) =>
+    $checkedCreate('SelectionOffering', json, ($checkedConvert) {
       $checkKeys(
         json,
         requiredKeys: const [
@@ -32,7 +32,7 @@ SelectionCourse _$SelectionCourseFromJson(Map<String, dynamic> json) =>
           'catalogueCourseId',
         ],
       );
-      final val = SelectionCourse(
+      final val = SelectionOffering(
         id: $checkedConvert('id', (v) => v as String),
         offeringId: $checkedConvert('offeringId', (v) => v as String),
         code: $checkedConvert('code', (v) => v as String),
@@ -62,9 +62,9 @@ SelectionCourse _$SelectionCourseFromJson(Map<String, dynamic> json) =>
         status: $checkedConvert(
           'status',
           (v) => $enumDecode(
-            _$SelectionCourseStatusEnumEnumMap,
+            _$SelectionOfferingStatusEnumEnumMap,
             v,
-            unknownValue: SelectionCourseStatusEnum.unknownDefaultOpenApi,
+            unknownValue: SelectionOfferingStatusEnum.unknownDefaultOpenApi,
           ),
         ),
         catalogueCourseId: $checkedConvert(
@@ -75,7 +75,7 @@ SelectionCourse _$SelectionCourseFromJson(Map<String, dynamic> json) =>
       return val;
     });
 
-Map<String, dynamic> _$SelectionCourseToJson(SelectionCourse instance) =>
+Map<String, dynamic> _$SelectionOfferingToJson(SelectionOffering instance) =>
     <String, dynamic>{
       'id': instance.id,
       'offeringId': instance.offeringId,
@@ -94,13 +94,13 @@ Map<String, dynamic> _$SelectionCourseToJson(SelectionCourse instance) =>
       'endWeek': instance.endWeek,
       'weeksUnknown': instance.weeksUnknown,
       'scheduleUnknown': instance.scheduleUnknown,
-      'status': _$SelectionCourseStatusEnumEnumMap[instance.status]!,
+      'status': _$SelectionOfferingStatusEnumEnumMap[instance.status]!,
       'catalogueCourseId': instance.catalogueCourseId,
     };
 
-const _$SelectionCourseStatusEnumEnumMap = {
-  SelectionCourseStatusEnum.unknown: 'unknown',
-  SelectionCourseStatusEnum.active: 'active',
-  SelectionCourseStatusEnum.cancelled: 'cancelled',
-  SelectionCourseStatusEnum.unknownDefaultOpenApi: 'unknown_default_open_api',
+const _$SelectionOfferingStatusEnumEnumMap = {
+  SelectionOfferingStatusEnum.unknown: 'unknown',
+  SelectionOfferingStatusEnum.active: 'active',
+  SelectionOfferingStatusEnum.cancelled: 'cancelled',
+  SelectionOfferingStatusEnum.unknownDefaultOpenApi: 'unknown_default_open_api',
 };

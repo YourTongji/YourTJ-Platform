@@ -682,6 +682,7 @@ class AdminMutationExecutor {
         );
       case AdminMutationKind.triggerSelectionSync:
         await _api.adminSelectionSyncPost(
+          idempotencyKey: const Uuid().v4(),
           adminReasonInput: AdminReasonInput(reason: reason),
         );
       case AdminMutationKind.reindexCourses:

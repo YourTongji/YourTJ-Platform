@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
 import type { SelectionCourse, TimeSlot } from "@/lib/api/types";
+import { API_BASE_URL } from "@/lib/api/client";
 
 export interface ScheduledCourse {
   course: SelectionCourse;
@@ -9,75 +10,146 @@ export interface ScheduledCourse {
   color: string;
 }
 
-interface Conflict {
+export interface ScheduleConflict {
+  withOfferingId: string;
   withCode: string;
   withName: string;
+  certainty: "confirmed" | "possible";
 }
 
+export type AddCourseResult =
+  | { status: "added"; conflicts: ScheduleConflict[] }
+  | { status: "duplicate"; conflicts: [] }
+  | { status: "conflict"; conflicts: ScheduleConflict[] };
+
 interface ScheduleState {
-  staged: ScheduledCourse[];
-  addCourse: (course: SelectionCourse, timeslots: TimeSlot[]) => Conflict | null;
-  removeCourse: (code: string) => void;
-  clear: () => void;
+  schedules: Record<string, ScheduledCourse[]>;
+  addCourse: (
+    scope: string,
+    course: SelectionCourse,
+    timeslots: TimeSlot[],
+    allowConflicts?: boolean,
+  ) => AddCourseResult;
+  removeCourse: (scope: string, offeringId: string) => void;
+  clear: (scope: string) => void;
 }
 
 const palette = [
-  "#00a08a",
-  "#c9a227",
-  "#4f87a0",
-  "#7ca86e",
-  "#b85c38",
-  "#8067c6",
-  "#c0513a",
-  "#3d9970",
+  "#007f73",
+  "#9a7412",
+  "#3f7187",
+  "#527d46",
+  "#a2482d",
+  "#6650a4",
+  "#9c3c2f",
+  "#287455",
 ];
 
-function courseCode(course: SelectionCourse) {
-  return course.code ?? course.id ?? "";
+export function offeringKey(course: SelectionCourse) {
+  return course.offeringId || course.id;
 }
 
-function overlaps(left: TimeSlot, right: TimeSlot) {
-  if (left.weekday !== right.weekday) {
-    return false;
+export function scheduleScopeKey(
+  calendarId: string,
+  accountId?: string | null,
+  apiBaseUrl = API_BASE_URL,
+) {
+  const origin = typeof window === "undefined" ? "server" : window.location.origin;
+  return JSON.stringify({
+    environment: new URL(apiBaseUrl, origin).toString(),
+    principal: accountId || "anonymous",
+    calendarId,
+  });
+}
+
+function occupiedAtSameTime(left: TimeSlot, right: TimeSlot) {
+  return left.weekday === right.weekday
+    && left.startSlot <= right.endSlot
+    && right.startSlot <= left.endSlot;
+}
+
+function slotConflict(left: TimeSlot, right: TimeSlot): ScheduleConflict["certainty"] | null {
+  if (!occupiedAtSameTime(left, right)) return null;
+  if (left.weeksUnknown || right.weeksUnknown) return "possible";
+  if (left.weekNumbers.length === 0 || right.weekNumbers.length === 0) return "possible";
+  const leftWeeks = new Set(left.weekNumbers);
+  return right.weekNumbers.some((week) => leftWeeks.has(week)) ? "confirmed" : null;
+}
+
+export function findScheduleConflicts(
+  staged: ScheduledCourse[],
+  course: SelectionCourse,
+  timeslots: TimeSlot[],
+) {
+  const conflicts: ScheduleConflict[] = [];
+  for (const item of staged) {
+    let certainty: ScheduleConflict["certainty"] | null = null;
+    if (course.scheduleUnknown || item.course.scheduleUnknown) {
+      certainty = "possible";
+    } else {
+      for (const existing of item.timeslots) {
+        for (const candidate of timeslots) {
+          const next = slotConflict(existing, candidate);
+          if (next === "confirmed") {
+            certainty = "confirmed";
+            break;
+          }
+          if (next === "possible") certainty = "possible";
+        }
+        if (certainty === "confirmed") break;
+      }
+    }
+    if (certainty) {
+      conflicts.push({
+        withOfferingId: offeringKey(item.course),
+        withCode: item.course.code,
+        withName: item.course.name,
+        certainty,
+      });
+    }
   }
-  const leftStart = left.startSlot ?? 0;
-  const leftEnd = left.endSlot ?? leftStart;
-  const rightStart = right.startSlot ?? 0;
-  const rightEnd = right.endSlot ?? rightStart;
-  return leftStart <= rightEnd && rightStart <= leftEnd;
+  return conflicts;
 }
 
 export const useScheduleStore = create<ScheduleState>()(
   persist(
     (set, get) => ({
-      staged: [],
-      addCourse: (course, timeslots) => {
-        const code = courseCode(course);
-        const existing = get().staged;
-        const duplicate = existing.find((item) => courseCode(item.course) === code);
-        if (duplicate) {
-          return null;
+      schedules: {},
+      addCourse: (scope, course, timeslots, allowConflicts = false) => {
+        const existing = get().schedules[scope] ?? [];
+        const offeringId = offeringKey(course);
+        if (existing.some((item) => offeringKey(item.course) === offeringId)) {
+          return { status: "duplicate", conflicts: [] };
         }
-        for (const item of existing) {
-          for (const slot of item.timeslots) {
-            if (timeslots.some((nextSlot) => overlaps(slot, nextSlot))) {
-              return {
-                withCode: courseCode(item.course),
-                withName: item.course.name ?? courseCode(item.course),
-              };
-            }
-          }
+        const conflicts = findScheduleConflicts(existing, course, timeslots);
+        if (conflicts.length > 0 && !allowConflicts) {
+          return { status: "conflict", conflicts };
         }
         const color = palette[existing.length % palette.length] ?? palette[0];
-        set({ staged: [...existing, { course, timeslots, color }] });
-        return null;
+        set({
+          schedules: {
+            ...get().schedules,
+            [scope]: [...existing, { course, timeslots, color }],
+          },
+        });
+        return { status: "added", conflicts };
       },
-      removeCourse: (code) => {
-        set({ staged: get().staged.filter((item) => courseCode(item.course) !== code) });
+      removeCourse: (scope, offeringId) => {
+        const existing = get().schedules[scope] ?? [];
+        set({
+          schedules: {
+            ...get().schedules,
+            [scope]: existing.filter((item) => offeringKey(item.course) !== offeringId),
+          },
+        });
       },
-      clear: () => set({ staged: [] }),
+      clear: (scope) => {
+        const schedules = { ...get().schedules };
+        delete schedules[scope];
+        set({ schedules });
+      },
     }),
-    { name: "yourtj.schedule.v1" },
+    { name: "yourtj.schedule.v2", version: 2 },
   ),
 );
 
@@ -85,11 +157,8 @@ export function timetableCells(staged: ScheduledCourse[], maxSlot = 13) {
   const cells: Record<string, ScheduledCourse[]> = {};
   for (const item of staged) {
     for (const slot of item.timeslots) {
-      const weekday = slot.weekday ?? 0;
-      const start = slot.startSlot ?? 0;
-      const end = slot.endSlot ?? start;
-      for (let section = start; section <= Math.min(end, maxSlot); section += 1) {
-        const key = `${weekday}-${section}`;
+      for (let section = slot.startSlot; section <= Math.min(slot.endSlot, maxSlot); section += 1) {
+        const key = `${slot.weekday}-${section}`;
         cells[key] = [...(cells[key] ?? []), item];
       }
     }

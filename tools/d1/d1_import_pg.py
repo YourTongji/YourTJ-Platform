@@ -14,13 +14,18 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import io
+import json
 import os
 import sqlite3
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TextIO
+from typing import Any, TextIO
+
+BACKUP_DATABASE_NAME = "jcourse-db-backup"
 
 
 @dataclass(frozen=True)
@@ -215,6 +220,117 @@ def validate_source(database: sqlite3.Connection) -> None:
             raise ValueError(f"{spec.source} is missing columns: {', '.join(missing)}")
 
 
+def source_counts(database: sqlite3.Connection) -> dict[str, int]:
+    return {
+        spec.source: int(
+            database.execute(
+                f"SELECT COUNT(*) FROM {quote_identifier(spec.source)}"
+            ).fetchone()[0]
+        )
+        for spec in TABLES
+    }
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        while chunk := source.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def build_manifest(args: argparse.Namespace, counts: dict[str, int]) -> dict[str, Any]:
+    return {
+        "schemaVersion": 1,
+        "sourceDatabase": args.source_database,
+        "snapshotSha256": sha256_file(args.source),
+        "snapshotBytes": args.source.stat().st_size,
+        "snapshotExportedAt": args.snapshot_exported_at,
+        "sourceTableCounts": counts,
+    }
+
+
+def write_manifest(path: Path, manifest: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+    )
+    temporary = Path(temporary_name)
+    try:
+        os.fchmod(descriptor, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as output:
+            descriptor = -1
+            json.dump(manifest, output, ensure_ascii=False, indent=2, sort_keys=True)
+            output.write("\n")
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary, path)
+        os.chmod(path, 0o600)
+    except Exception:
+        if descriptor >= 0:
+            os.close(descriptor)
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+        raise
+
+
+def report_manifest_diff(path: Path, manifest: dict[str, Any]) -> None:
+    previous = json.loads(path.read_text(encoding="utf-8"))
+    previous_counts = previous.get("sourceTableCounts")
+    if not isinstance(previous_counts, dict):
+        raise ValueError("comparison manifest is missing sourceTableCounts")
+    current_counts = manifest["sourceTableCounts"]
+    print("Snapshot row-count delta:", file=sys.stderr)
+    for spec in TABLES:
+        before = int(previous_counts.get(spec.source, 0))
+        after = int(current_counts[spec.source])
+        print(f"  {spec.source}: {after - before:+d} ({before} -> {after})", file=sys.stderr)
+
+
+def sql_literal(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
+
+
+def target_count_guard(counts: dict[str, int]) -> str:
+    checks = []
+    for spec in TABLES:
+        expected = counts[spec.source]
+        checks.append(
+            f"  IF (SELECT COUNT(*) FROM {spec.target}) <> {expected} THEN\n"
+            f"    RAISE EXCEPTION 'row-count mismatch for {spec.target}';\n"
+            "  END IF;"
+        )
+    return "DO $validate$\nBEGIN\n" + "\n".join(checks) + "\nEND\n$validate$;"
+
+
+def import_run_insert(manifest: dict[str, Any], imported_by: str) -> str:
+    exported_at = manifest["snapshotExportedAt"]
+    exported_sql = (
+        "NULL"
+        if exported_at is None
+        else f"{sql_literal(exported_at)}::timestamptz"
+    )
+    counts = json.dumps(manifest["sourceTableCounts"], separators=(",", ":"), sort_keys=True)
+    validation = json.dumps(
+        {"rowCountsMatched": True, "sourceSchemaValidated": True},
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    return (
+        "INSERT INTO selection.import_runs ("
+        "snapshot_sha256, snapshot_bytes, source_database, snapshot_exported_at, "
+        "imported_by, source_table_counts, target_table_counts, validation"
+        ") VALUES ("
+        f"{sql_literal(manifest['snapshotSha256'])}, {manifest['snapshotBytes']}, "
+        f"{sql_literal(manifest['sourceDatabase'])}, {exported_sql}, "
+        f"{sql_literal(imported_by)}, {sql_literal(counts)}::jsonb, "
+        f"{sql_literal(counts)}::jsonb, {sql_literal(validation)}::jsonb"
+        ");"
+    )
+
+
 def write_rows(database: sqlite3.Connection, spec: TableSpec, output: TextIO) -> int:
     writer = csv.writer(output, lineterminator="\n", quoting=csv.QUOTE_NONNUMERIC)
     count = 0
@@ -248,7 +364,12 @@ def target_empty_guard() -> str:
     )
 
 
-def emit_copy_stream(database: sqlite3.Connection, output: TextIO) -> int:
+def emit_copy_stream(
+    database: sqlite3.Connection,
+    output: TextIO,
+    manifest: dict[str, Any],
+    imported_by: str,
+) -> int:
     targets = ", ".join(spec.target for spec in TABLES)
     print(r"\set ON_ERROR_STOP on", file=output)
     print("BEGIN;", file=output)
@@ -261,11 +382,18 @@ def emit_copy_stream(database: sqlite3.Connection, output: TextIO) -> int:
         print(r"\.", file=output)
         print(f"{spec.source}: {count} rows", file=sys.stderr)
         total += count
+    print(target_count_guard(manifest["sourceTableCounts"]), file=output)
+    print(import_run_insert(manifest, imported_by), file=output)
     print("COMMIT;", file=output)
     return total
 
 
-def import_direct(database: sqlite3.Connection, database_url: str) -> int:
+def import_direct(
+    database: sqlite3.Connection,
+    database_url: str,
+    manifest: dict[str, Any],
+    imported_by: str,
+) -> int:
     try:
         import psycopg2
     except ImportError as error:
@@ -285,6 +413,31 @@ def import_direct(database: sqlite3.Connection, database_url: str) -> int:
                 cursor.copy_expert(copy_statement(spec), buffer)
                 print(f"{spec.source}: {count} rows")
                 total += count
+            target_counts: dict[str, int] = {}
+            for spec in TABLES:
+                cursor.execute(f"SELECT COUNT(*) FROM {spec.target}")
+                target_counts[spec.source] = int(cursor.fetchone()[0])
+            if target_counts != manifest["sourceTableCounts"]:
+                raise ValueError("PostgreSQL target row counts do not match the D1 snapshot")
+            cursor.execute(
+                "INSERT INTO selection.import_runs ("
+                "snapshot_sha256, snapshot_bytes, source_database, snapshot_exported_at, "
+                "imported_by, source_table_counts, target_table_counts, validation"
+                ") VALUES (%s, %s, %s, %s::timestamptz, %s, %s::jsonb, %s::jsonb, %s::jsonb)",
+                (
+                    manifest["snapshotSha256"],
+                    manifest["snapshotBytes"],
+                    manifest["sourceDatabase"],
+                    manifest["snapshotExportedAt"],
+                    imported_by,
+                    json.dumps(manifest["sourceTableCounts"], sort_keys=True),
+                    json.dumps(target_counts, sort_keys=True),
+                    json.dumps(
+                        {"rowCountsMatched": True, "sourceSchemaValidated": True},
+                        sort_keys=True,
+                    ),
+                ),
+            )
         connection.commit()
         return total
     except Exception:
@@ -302,6 +455,31 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="emit an atomic psql COPY stream instead of connecting with psycopg2",
     )
+    parser.add_argument(
+        "--source-database",
+        choices=(BACKUP_DATABASE_NAME,),
+        required=True,
+        help="operator-attested backup database name stored with the import audit record",
+    )
+    parser.add_argument(
+        "--snapshot-exported-at",
+        help="optional RFC 3339 export timestamp stored separately from source freshness",
+    )
+    parser.add_argument(
+        "--imported-by",
+        default=os.environ.get("USER", "unknown"),
+        help="operator label stored with the import audit record",
+    )
+    parser.add_argument(
+        "--manifest-out",
+        type=Path,
+        help="atomically write the pre-import source manifest as JSON",
+    )
+    parser.add_argument(
+        "--compare-manifest",
+        type=Path,
+        help="print per-table row-count deltas against an earlier manifest",
+    )
     return parser.parse_args()
 
 
@@ -313,14 +491,20 @@ def main() -> int:
     database = sqlite3.connect(f"file:{args.source}?mode=ro", uri=True)
     try:
         validate_source(database)
+        counts = source_counts(database)
+        manifest = build_manifest(args, counts)
+        if args.manifest_out:
+            write_manifest(args.manifest_out, manifest)
+        if args.compare_manifest:
+            report_manifest_diff(args.compare_manifest, manifest)
         if args.emit_copy:
-            total = emit_copy_stream(database, sys.stdout)
+            total = emit_copy_stream(database, sys.stdout, manifest, args.imported_by)
         else:
             database_url = os.environ.get("DATABASE_URL")
             if not database_url:
                 print("ERROR: DATABASE_URL is not set", file=sys.stderr)
                 return 1
-            total = import_direct(database, database_url)
+            total = import_direct(database, database_url, manifest, args.imported_by)
     except Exception as error:
         print(f"ERROR: {error}", file=sys.stderr)
         return 1

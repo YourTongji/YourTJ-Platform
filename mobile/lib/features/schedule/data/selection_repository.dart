@@ -11,21 +11,18 @@ abstract interface class SelectionRepository {
   Future<LatestUpdate?> latestUpdate({CancelToken? cancelToken});
   Future<List<String>> grades(String calendarId, {CancelToken? cancelToken});
   Future<List<Major>> majors(String grade, {CancelToken? cancelToken});
-  Future<List<SelectionCourse>> byMajor({
-    required String majorId,
-    required String grade,
-    CancelToken? cancelToken,
-  });
-  Future<List<SelectionCourse>> byNature(
-    String natureId, {
-    CancelToken? cancelToken,
-  });
-  Future<List<SelectionCourse>> search(
-    String query, {
+  Future<SelectionOfferingPage> offerings({
+    required String calendarId,
+    String? query,
+    String? majorId,
+    String? grade,
+    String? natureId,
+    String? cursor,
+    int limit = 20,
     CancelToken? cancelToken,
   });
   Future<List<TimeSlot>> timeslots(
-    String courseCode, {
+    String offeringId, {
     CancelToken? cancelToken,
   });
 }
@@ -76,50 +73,56 @@ class GeneratedSelectionRepository implements SelectionRepository {
       );
 
   @override
-  Future<List<SelectionCourse>> byMajor({
-    required String majorId,
-    required String grade,
+  Future<SelectionOfferingPage> offerings({
+    required String calendarId,
+    String? query,
+    String? majorId,
+    String? grade,
+    String? natureId,
+    String? cursor,
+    int limit = 20,
     CancelToken? cancelToken,
-  }) => _request(
-    () => _api.selectionCoursesByMajorGet(
-      majorId: majorId,
-      grade: grade,
-      cancelToken: cancelToken,
-    ),
-    '培养方案课程',
-  );
-
-  @override
-  Future<List<SelectionCourse>> byNature(
-    String natureId, {
-    CancelToken? cancelToken,
-  }) => _request(
-    () => _api.selectionCoursesByNatureGet(
-      natureId: natureId,
-      cancelToken: cancelToken,
-    ),
-    '课程性质列表',
-  );
-
-  @override
-  Future<List<SelectionCourse>> search(
-    String query, {
-    CancelToken? cancelToken,
-  }) => _request(
-    () => _api.selectionCoursesSearchGet(q: query, cancelToken: cancelToken),
-    '选课搜索',
-  );
+  }) async {
+    try {
+      final Response<SelectionOfferingPage> response = await _api
+          .selectionOfferingsGet(
+            q: query,
+            calendarId: calendarId,
+            majorId: majorId,
+            grade: grade,
+            natureId: natureId,
+            cursor: cursor,
+            limit: limit,
+            cancelToken: cancelToken,
+          );
+      final SelectionOfferingPage? page = response.data;
+      if (page == null) {
+        throw const ApiFailure(
+          kind: ApiFailureKind.unexpected,
+          message: '教学班列表响应不完整，请稍后重试',
+        );
+      }
+      return page;
+    } on DioException catch (exception) {
+      throw ApiFailure.fromDio(exception);
+    } on TypeError {
+      throw const ApiFailure(
+        kind: ApiFailureKind.unexpected,
+        message: '教学班列表响应不完整，请稍后重试',
+      );
+    }
+  }
 
   @override
   Future<List<TimeSlot>> timeslots(
-    String courseCode, {
+    String offeringId, {
     CancelToken? cancelToken,
   }) => _request(
-    () => _api.selectionCoursesCodeTimeslotsGet(
-      code: courseCode,
+    () => _api.selectionOfferingsOfferingIdTimeslotsGet(
+      offeringId: offeringId,
       cancelToken: cancelToken,
     ),
-    '课程时段',
+    '教学班时段',
   );
 
   Future<List<T>> _request<T>(

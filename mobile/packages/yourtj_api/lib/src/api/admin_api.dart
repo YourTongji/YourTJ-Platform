@@ -90,6 +90,8 @@ import 'package:yourtj_api/src/model/review_page.dart';
 import 'package:yourtj_api/src/model/review_report_resolution_input.dart';
 import 'package:yourtj_api/src/model/sanction.dart';
 import 'package:yourtj_api/src/model/sanction_input.dart';
+import 'package:yourtj_api/src/model/selection_sync_job.dart';
+import 'package:yourtj_api/src/model/selection_sync_job_page.dart';
 import 'package:yourtj_api/src/model/setting.dart';
 import 'package:yourtj_api/src/model/setting_update_input.dart';
 import 'package:yourtj_api/src/model/submit_appeal_input.dart';
@@ -6598,10 +6600,181 @@ class AdminApi {
     return _response;
   }
 
-  /// Trigger 一系统 sync job
+  /// List durable selection sync jobs
+  /// Requires operations.jobs; reasons and raw source data are excluded from this operational projection.
+  ///
+  /// Parameters:
+  /// * [status]
+  /// * [cursor] - Opaque pagination cursor
+  /// * [limit]
+  /// * [cancelToken] - A [CancelToken] that can be used to cancel the operation
+  /// * [headers] - Can be used to add additional headers to the request
+  /// * [extras] - Can be used to add flags to the request
+  /// * [validateStatus] - A [ValidateStatus] callback that can be used to determine request success based on the HTTP status of the response
+  /// * [onSendProgress] - A [ProgressCallback] that can be used to get the send progress
+  /// * [onReceiveProgress] - A [ProgressCallback] that can be used to get the receive progress
+  ///
+  /// Returns a [Future] containing a [Response] with a [SelectionSyncJobPage] as data
+  /// Throws [DioException] if API call or serialization fails
+  Future<Response<SelectionSyncJobPage>> adminSelectionSyncJobsGet({
+    String? status,
+    String? cursor,
+    int? limit = 20,
+    CancelToken? cancelToken,
+    Map<String, dynamic>? headers,
+    Map<String, dynamic>? extra,
+    ValidateStatus? validateStatus,
+    ProgressCallback? onSendProgress,
+    ProgressCallback? onReceiveProgress,
+  }) async {
+    final _path = r'/admin/selection/sync-jobs';
+    final _options = Options(
+      method: r'GET',
+      headers: <String, dynamic>{...?headers},
+      extra: <String, dynamic>{
+        'secure': <Map<String, String>>[
+          {'type': 'http', 'scheme': 'bearer', 'name': 'bearer'},
+        ],
+        ...?extra,
+      },
+      validateStatus: validateStatus,
+    );
+
+    final _queryParameters = <String, dynamic>{
+      if (status != null) r'status': status,
+      if (cursor != null) r'cursor': cursor,
+      if (limit != null) r'limit': limit,
+    };
+
+    final _response = await _dio.request<Object>(
+      _path,
+      options: _options,
+      queryParameters: _queryParameters,
+      cancelToken: cancelToken,
+      onSendProgress: onSendProgress,
+      onReceiveProgress: onReceiveProgress,
+    );
+
+    SelectionSyncJobPage? _responseData;
+
+    try {
+      final rawData = _response.data;
+      _responseData = rawData == null
+          ? null
+          : deserialize<SelectionSyncJobPage, SelectionSyncJobPage>(
+              rawData,
+              'SelectionSyncJobPage',
+              growable: true,
+            );
+    } catch (error, stackTrace) {
+      throw DioException(
+        requestOptions: _response.requestOptions,
+        response: _response,
+        type: DioExceptionType.unknown,
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
+
+    return Response<SelectionSyncJobPage>(
+      data: _responseData,
+      headers: _response.headers,
+      isRedirect: _response.isRedirect,
+      requestOptions: _response.requestOptions,
+      redirects: _response.redirects,
+      statusCode: _response.statusCode,
+      statusMessage: _response.statusMessage,
+      extra: _response.extra,
+    );
+  }
+
+  /// Read one durable selection sync job
   ///
   ///
   /// Parameters:
+  /// * [id]
+  /// * [cancelToken] - A [CancelToken] that can be used to cancel the operation
+  /// * [headers] - Can be used to add additional headers to the request
+  /// * [extras] - Can be used to add flags to the request
+  /// * [validateStatus] - A [ValidateStatus] callback that can be used to determine request success based on the HTTP status of the response
+  /// * [onSendProgress] - A [ProgressCallback] that can be used to get the send progress
+  /// * [onReceiveProgress] - A [ProgressCallback] that can be used to get the receive progress
+  ///
+  /// Returns a [Future] containing a [Response] with a [SelectionSyncJob] as data
+  /// Throws [DioException] if API call or serialization fails
+  Future<Response<SelectionSyncJob>> adminSelectionSyncJobsIdGet({
+    required String id,
+    CancelToken? cancelToken,
+    Map<String, dynamic>? headers,
+    Map<String, dynamic>? extra,
+    ValidateStatus? validateStatus,
+    ProgressCallback? onSendProgress,
+    ProgressCallback? onReceiveProgress,
+  }) async {
+    final _path = r'/admin/selection/sync-jobs/{id}'.replaceAll(
+      '{'
+      r'id'
+      '}',
+      id.toString(),
+    );
+    final _options = Options(
+      method: r'GET',
+      headers: <String, dynamic>{...?headers},
+      extra: <String, dynamic>{
+        'secure': <Map<String, String>>[
+          {'type': 'http', 'scheme': 'bearer', 'name': 'bearer'},
+        ],
+        ...?extra,
+      },
+      validateStatus: validateStatus,
+    );
+
+    final _response = await _dio.request<Object>(
+      _path,
+      options: _options,
+      cancelToken: cancelToken,
+      onSendProgress: onSendProgress,
+      onReceiveProgress: onReceiveProgress,
+    );
+
+    SelectionSyncJob? _responseData;
+
+    try {
+      final rawData = _response.data;
+      _responseData = rawData == null
+          ? null
+          : deserialize<SelectionSyncJob, SelectionSyncJob>(
+              rawData,
+              'SelectionSyncJob',
+              growable: true,
+            );
+    } catch (error, stackTrace) {
+      throw DioException(
+        requestOptions: _response.requestOptions,
+        response: _response,
+        type: DioExceptionType.unknown,
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
+
+    return Response<SelectionSyncJob>(
+      data: _responseData,
+      headers: _response.headers,
+      isRedirect: _response.isRedirect,
+      requestOptions: _response.requestOptions,
+      redirects: _response.redirects,
+      statusCode: _response.statusCode,
+      statusMessage: _response.statusMessage,
+      extra: _response.extra,
+    );
+  }
+
+  /// Requeue one dead selection sync job with a reason
+  /// Requires operations.jobs. The transition and operator reason are written to the immutable account audit log.
+  ///
+  /// Parameters:
+  /// * [id]
   /// * [adminReasonInput]
   /// * [cancelToken] - A [CancelToken] that can be used to cancel the operation
   /// * [headers] - Can be used to add additional headers to the request
@@ -6610,9 +6783,10 @@ class AdminApi {
   /// * [onSendProgress] - A [ProgressCallback] that can be used to get the send progress
   /// * [onReceiveProgress] - A [ProgressCallback] that can be used to get the receive progress
   ///
-  /// Returns a [Future]
+  /// Returns a [Future] containing a [Response] with a [SelectionSyncJob] as data
   /// Throws [DioException] if API call or serialization fails
-  Future<Response<void>> adminSelectionSyncPost({
+  Future<Response<SelectionSyncJob>> adminSelectionSyncJobsIdRetryPost({
+    required String id,
     required AdminReasonInput adminReasonInput,
     CancelToken? cancelToken,
     Map<String, dynamic>? headers,
@@ -6621,7 +6795,12 @@ class AdminApi {
     ProgressCallback? onSendProgress,
     ProgressCallback? onReceiveProgress,
   }) async {
-    final _path = r'/admin/selection/sync';
+    final _path = r'/admin/selection/sync-jobs/{id}/retry'.replaceAll(
+      '{'
+      r'id'
+      '}',
+      id.toString(),
+    );
     final _options = Options(
       method: r'POST',
       headers: <String, dynamic>{...?headers},
@@ -6657,7 +6836,134 @@ class AdminApi {
       onReceiveProgress: onReceiveProgress,
     );
 
-    return _response;
+    SelectionSyncJob? _responseData;
+
+    try {
+      final rawData = _response.data;
+      _responseData = rawData == null
+          ? null
+          : deserialize<SelectionSyncJob, SelectionSyncJob>(
+              rawData,
+              'SelectionSyncJob',
+              growable: true,
+            );
+    } catch (error, stackTrace) {
+      throw DioException(
+        requestOptions: _response.requestOptions,
+        response: _response,
+        type: DioExceptionType.unknown,
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
+
+    return Response<SelectionSyncJob>(
+      data: _responseData,
+      headers: _response.headers,
+      isRedirect: _response.isRedirect,
+      requestOptions: _response.requestOptions,
+      redirects: _response.redirects,
+      statusCode: _response.statusCode,
+      statusMessage: _response.statusMessage,
+      extra: _response.extra,
+    );
+  }
+
+  /// Idempotently enqueue one durable selection materialization job
+  /// Requires operations.jobs. A partial unique guard permits only one queued/running job; execution is lease-fenced with bounded retries.
+  ///
+  /// Parameters:
+  /// * [idempotencyKey]
+  /// * [adminReasonInput]
+  /// * [cancelToken] - A [CancelToken] that can be used to cancel the operation
+  /// * [headers] - Can be used to add additional headers to the request
+  /// * [extras] - Can be used to add flags to the request
+  /// * [validateStatus] - A [ValidateStatus] callback that can be used to determine request success based on the HTTP status of the response
+  /// * [onSendProgress] - A [ProgressCallback] that can be used to get the send progress
+  /// * [onReceiveProgress] - A [ProgressCallback] that can be used to get the receive progress
+  ///
+  /// Returns a [Future] containing a [Response] with a [SelectionSyncJob] as data
+  /// Throws [DioException] if API call or serialization fails
+  Future<Response<SelectionSyncJob>> adminSelectionSyncPost({
+    required String idempotencyKey,
+    required AdminReasonInput adminReasonInput,
+    CancelToken? cancelToken,
+    Map<String, dynamic>? headers,
+    Map<String, dynamic>? extra,
+    ValidateStatus? validateStatus,
+    ProgressCallback? onSendProgress,
+    ProgressCallback? onReceiveProgress,
+  }) async {
+    final _path = r'/admin/selection/sync';
+    final _options = Options(
+      method: r'POST',
+      headers: <String, dynamic>{
+        r'Idempotency-Key': idempotencyKey,
+        ...?headers,
+      },
+      extra: <String, dynamic>{
+        'secure': <Map<String, String>>[
+          {'type': 'http', 'scheme': 'bearer', 'name': 'bearer'},
+        ],
+        ...?extra,
+      },
+      contentType: 'application/json',
+      validateStatus: validateStatus,
+    );
+
+    dynamic _bodyData;
+
+    try {
+      _bodyData = jsonEncode(adminReasonInput);
+    } catch (error, stackTrace) {
+      throw DioException(
+        requestOptions: _options.compose(_dio.options, _path),
+        type: DioExceptionType.unknown,
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
+
+    final _response = await _dio.request<Object>(
+      _path,
+      data: _bodyData,
+      options: _options,
+      cancelToken: cancelToken,
+      onSendProgress: onSendProgress,
+      onReceiveProgress: onReceiveProgress,
+    );
+
+    SelectionSyncJob? _responseData;
+
+    try {
+      final rawData = _response.data;
+      _responseData = rawData == null
+          ? null
+          : deserialize<SelectionSyncJob, SelectionSyncJob>(
+              rawData,
+              'SelectionSyncJob',
+              growable: true,
+            );
+    } catch (error, stackTrace) {
+      throw DioException(
+        requestOptions: _response.requestOptions,
+        response: _response,
+        type: DioExceptionType.unknown,
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
+
+    return Response<SelectionSyncJob>(
+      data: _responseData,
+      headers: _response.headers,
+      isRedirect: _response.isRedirect,
+      requestOptions: _response.requestOptions,
+      redirects: _response.redirects,
+      statusCode: _response.statusCode,
+      statusMessage: _response.statusMessage,
+      extra: _response.extra,
+    );
   }
 
   /// All settings

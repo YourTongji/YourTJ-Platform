@@ -264,6 +264,12 @@ security 和 operations 都不受影响。
 | S9 Final reconciliation | counters、activity、search、unread、jobs、audit 与 source-of-truth 终态一致 |
 | S10 Mobile parity | Android/iOS 相同 capability matrix；匿名→登录返回、secure refresh、账号隔离、deep link、离线恢复、媒体 expiry、Markdown corpus、wallet signing vectors、动态字体与读屏 |
 
+S3 的最低证据不是“SQL 能跑”：必须在隔离 fresh database 通过 sqlx ledger 到最新 migration，用 13 张 raw
+table fixture 验证 materialize 重跑、teaching-class identity、跨教师重复排课折叠、unknown week/location、
+catalogue 人工数据保留与 import audit。真实快照验收再抽样至少 50 条 weekday/slot/week，通过公开 HTTP
+结果反查 PostgreSQL 真值；Meilisearch 必须实测 code、教师、拼音、calendar/major/time filter 与 PG
+rehydration，而不是只测序列化函数。
+
 当前 `crates/e2e` 没有覆盖这张完整矩阵，也未进入 CI；Web 只有最小 component/axe harness，Flutter
 有跨 feature unit/widget、共享 corpus/signing fixture 与 build gates，但仍没有真实环境 integration/device
 journey suite。不要在文档或 PR

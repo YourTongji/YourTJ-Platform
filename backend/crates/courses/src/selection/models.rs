@@ -47,12 +47,22 @@ pub struct CourseNatureRow {
 pub struct SelectionCourseRow {
     pub id: i64,
     pub code: String,
+    pub teaching_class_code: Option<String>,
     pub name: String,
     pub credit: Option<f64>,
     pub nature_id: Option<i64>,
+    pub calendar_id: i64,
     pub campus_id: Option<i64>,
+    pub faculty_name: Option<String>,
+    pub teaching_language: Option<String>,
     pub teacher_name: Option<String>,
     pub teacher_names: Option<Vec<String>>,
+    pub start_week: Option<i32>,
+    pub end_week: Option<i32>,
+    pub weeks_unknown: bool,
+    pub schedule_unknown: bool,
+    pub status: String,
+    pub catalogue_course_id: Option<i64>,
 }
 
 /// A row from `selection.timeslots`.
@@ -64,5 +74,15 @@ pub struct TimeslotRow {
     pub start_slot: i32,
     pub end_slot: i32,
     pub weeks: Option<String>,
+    pub week_numbers: Vec<i32>,
+    pub weeks_unknown: bool,
     pub location: Option<String>,
+    pub location_unknown: bool,
+}
+
+/// Source-data and snapshot-import freshness are deliberately separate clocks.
+#[derive(Debug, Clone, FromRow)]
+pub struct SelectionFreshnessRow {
+    pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub imported_at: Option<chrono::DateTime<chrono::Utc>>,
 }

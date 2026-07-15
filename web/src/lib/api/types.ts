@@ -184,6 +184,7 @@ export type Major = Schema["Major"];
 export type SelectionCourse = Schema["SelectionCourse"];
 export type TimeSlot = Schema["TimeSlot"];
 export type LatestUpdate = Schema["LatestUpdate"];
+export type SelectionSyncJob = Schema["SelectionSyncJob"];
 
 export type PollOption = Schema["PollOption"];
 export type Poll = Schema["Poll"];
@@ -215,6 +216,8 @@ export interface Page<T> {
   nextCursor: string | null;
   hasMore: boolean;
 }
+
+export type SelectionOfferingPage = Page<SelectionCourse>;
 
 export interface ApiErrorBody {
   error?: {

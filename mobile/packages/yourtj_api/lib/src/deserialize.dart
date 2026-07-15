@@ -220,6 +220,10 @@ import 'package:yourtj_api/src/model/search_highlight.dart';
 import 'package:yourtj_api/src/model/search_highlight_range.dart';
 import 'package:yourtj_api/src/model/search_result.dart';
 import 'package:yourtj_api/src/model/selection_course.dart';
+import 'package:yourtj_api/src/model/selection_offering.dart';
+import 'package:yourtj_api/src/model/selection_offering_page.dart';
+import 'package:yourtj_api/src/model/selection_sync_job.dart';
+import 'package:yourtj_api/src/model/selection_sync_job_page.dart';
 import 'package:yourtj_api/src/model/session.dart';
 import 'package:yourtj_api/src/model/session_page.dart';
 import 'package:yourtj_api/src/model/setting.dart';
@@ -951,6 +955,18 @@ ReturnType deserialize<ReturnType, BaseType>(
     case 'SearchResultScope':
     case 'SelectionCourse':
       return SelectionCourse.fromJson(value as Map<String, dynamic>)
+          as ReturnType;
+    case 'SelectionOffering':
+      return SelectionOffering.fromJson(value as Map<String, dynamic>)
+          as ReturnType;
+    case 'SelectionOfferingPage':
+      return SelectionOfferingPage.fromJson(value as Map<String, dynamic>)
+          as ReturnType;
+    case 'SelectionSyncJob':
+      return SelectionSyncJob.fromJson(value as Map<String, dynamic>)
+          as ReturnType;
+    case 'SelectionSyncJobPage':
+      return SelectionSyncJobPage.fromJson(value as Map<String, dynamic>)
           as ReturnType;
     case 'Session':
       return Session.fromJson(value as Map<String, dynamic>) as ReturnType;
