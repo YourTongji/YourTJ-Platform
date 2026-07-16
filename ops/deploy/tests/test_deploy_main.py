@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import fcntl
 import os
 import subprocess
 import tempfile
@@ -164,6 +165,23 @@ exit 0
 FAKE_SLEEP = r"""#!/usr/bin/env bash
 set -eu
 printf '%s\n' "$1" >> "${FAKE_DOCKER_STATE:?}/sleep-calls"
+if [[ -n "${FAKE_SLEEP_SIGNAL_PARENT:-}" ]]; then
+  kill -s "$FAKE_SLEEP_SIGNAL_PARENT" "$PPID"
+fi
+"""
+
+
+FAKE_FLOCK = r"""#!/usr/bin/env python3
+import fcntl
+import sys
+
+
+nonblocking = "-n" in sys.argv[1:-1]
+operation = fcntl.LOCK_EX | (fcntl.LOCK_NB if nonblocking else 0)
+try:
+    fcntl.flock(int(sys.argv[-1]), operation)
+except BlockingIOError:
+    raise SystemExit(1)
 """
 
 
@@ -179,6 +197,7 @@ class DeployMainTests(unittest.TestCase):
         self.write_executable(self.fake_bin / "docker", FAKE_DOCKER)
         self.write_executable(self.fake_bin / "curl", FAKE_CURL)
         self.write_executable(self.fake_bin / "sleep", FAKE_SLEEP)
+        self.write_executable(self.fake_bin / "flock", FAKE_FLOCK)
 
         self.frontend_root = self.root / "releases"
         self.frontend = self.frontend_root / f"{REVISION}-123-1" / "frontend"
@@ -205,6 +224,7 @@ class DeployMainTests(unittest.TestCase):
         self.wallet_cutover_marker = self.root / "wallet-cutover.complete"
         self.wallet_cutover_marker.write_text("migration=0067\nrevision=previous\n")
         os.chmod(self.wallet_cutover_marker, 0o600)
+        self.deploy_lock = self.root / "deploy-main.lock"
 
         image = tempfile.NamedTemporaryFile(prefix="api-image-main-", suffix=".tar", dir="/tmp", delete=False)
         image.close()
@@ -251,6 +271,7 @@ class DeployMainTests(unittest.TestCase):
         fake_revision: str = REVISION,
         unsafe_preview: int | None = None,
         fail_backend_start: bool = False,
+        signal_during_sleep: str | None = None,
         cutover_approval: str = "not-approved",
     ) -> subprocess.CompletedProcess[str]:
         environment = os.environ.copy()
@@ -261,6 +282,7 @@ class DeployMainTests(unittest.TestCase):
                 "MAIN_RUNTIME_ENV_FILE": str(self.runtime_env),
                 "MAIN_EMAIL_ENV_FILE": str(self.email_env),
                 "WALLET_KEY_CUTOVER_MARKER": str(self.wallet_cutover_marker),
+                "DEPLOY_LOCK_FILE": str(self.deploy_lock),
                 "DEPLOY_HEALTH_ATTEMPTS": "2",
                 "DEPLOY_HEALTH_DELAY_SECONDS": "0",
                 "FAKE_DOCKER_STATE": str(self.state),
@@ -273,6 +295,8 @@ class DeployMainTests(unittest.TestCase):
             environment["FAKE_UNSAFE_PREVIEW"] = str(unsafe_preview)
         if fail_backend_start:
             environment["FAKE_DOCKER_FAIL_BACKEND_START"] = "1"
+        if signal_during_sleep is not None:
+            environment["FAKE_SLEEP_SIGNAL_PARENT"] = signal_during_sleep
         return subprocess.run(
             [
                 str(DEPLOY_SCRIPT),
@@ -322,7 +346,18 @@ class DeployMainTests(unittest.TestCase):
             "migration and pre-serve ledger verification complete",
             result.stdout,
         )
-        self.assertIn("360", (self.state / "sleep-calls").read_text().splitlines())
+        sleep_calls = [
+            int(seconds)
+            for seconds in (self.state / "sleep-calls").read_text().splitlines()
+        ]
+        self.assertEqual(sleep_calls, [30] * 12)
+        self.assertEqual(sum(sleep_calls), 360)
+        progress_lines = [
+            line for line in result.stdout.splitlines() if "drain progress" in line
+        ]
+        self.assertEqual(len(progress_lines), 12)
+        self.assertIn("drain progress 30/360s", progress_lines[0])
+        self.assertIn("drain progress 360/360s", progress_lines[-1])
         marker = self.wallet_cutover_marker.read_text()
         self.assertIn("migration=0067", marker)
         self.assertIn(f"revision={REVISION}", marker)
@@ -336,6 +371,32 @@ class DeployMainTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertNotIn("draining signing intents", result.stdout)
+
+    def test_rejects_concurrent_deploy_before_stopping_backend(self):
+        self.seed_current_containers()
+        with self.deploy_lock.open("w") as lock_file:
+            fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            result = self.run_deploy(cutover_approval=REVISION)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("another main deployment is still active", result.stderr)
+        self.assertFalse((self.state / "stopped-main-be").exists())
+
+    def test_termination_during_wallet_drain_restores_previous_backend(self):
+        self.seed_current_containers()
+        self.wallet_cutover_marker.unlink()
+
+        result = self.run_deploy(
+            signal_during_sleep="TERM",
+            cutover_approval=REVISION,
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertTrue((self.state / "container-main-be").exists())
+        self.assertFalse((self.state / "stopped-main-be").exists())
+        self.assertFalse(list(self.state.glob("container-main-be-rollback-*")))
+        self.assertFalse(self.wallet_cutover_marker.exists())
+        self.assertIn("restoring compatible frontend state", result.stderr)
 
     def test_missing_wallet_key_marker_rejects_no_approval_before_stopping_backend(self):
         self.seed_current_containers()

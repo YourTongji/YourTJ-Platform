@@ -15,6 +15,7 @@ class WorkflowBoundaryTests(unittest.TestCase):
         self.assertIn("github.ref == 'refs/heads/main'", workflow)
         self.assertNotIn("/opt/yourtj-preview/deploy-main.sh", workflow)
         self.assertIn("cancel-in-progress: false", workflow)
+        self.assertIn("timeout-minutes: 60", workflow)
         self.assertIn("MAIN_PUBLIC_BASE_URL", workflow)
         self.assertIn("verify canonical public HTTPS routes", workflow)
         self.assertIn("verify shared-host private ports are not public", workflow)
@@ -29,6 +30,9 @@ class WorkflowBoundaryTests(unittest.TestCase):
         self.assertIn("--enforce-controlled-wallet-migration", deploy)
         self.assertIn("--wallet-key-cutover-drained", deploy)
         self.assertIn("WALLET_KEY_CUTOVER_DRAIN_SECONDS=360", deploy)
+        self.assertIn("WALLET_KEY_CUTOVER_PROGRESS_INTERVAL_SECONDS=30", deploy)
+        self.assertIn("flock -n 9", deploy)
+        self.assertIn("trap 'exit 143' TERM", deploy)
         self.assertIn("WALLET_KEY_CUTOVER_APPROVED_REVISION", workflow)
         self.assertIn(
             'wallet_cutover_approval="${WALLET_KEY_CUTOVER_APPROVED_REVISION:-not-approved}"',
@@ -36,6 +40,17 @@ class WorkflowBoundaryTests(unittest.TestCase):
         )
         self.assertIn('"$wallet_cutover_approval" =~ ^[0-9a-f]{40}$', workflow)
         self.assertIn('"${wallet_cutover_approval}"', workflow)
+
+    def test_main_deployment_keeps_the_ssh_session_alive(self):
+        workflow = (ROOT / ".github/workflows/deploy-main.yml").read_text()
+        ssh_config = workflow.split("Host preview", maxsplit=1)[1].split("EOF", maxsplit=1)[0]
+        self.assertIn("ServerAliveInterval 30", ssh_config)
+        self.assertIn("ServerAliveCountMax 3", ssh_config)
+        self.assertIn("timeout --signal=TERM --kill-after=30s 45m bash", workflow)
+        self.assertIn("deployment remains active; preserving staged files", workflow)
+        self.assertIn("proxy update: another main deployment is still active", workflow)
+        self.assertIn("active frontend uses staged release; preserving it", workflow)
+        self.assertIn("{{range .Mounts}}{{println .Source}}{{end}}", workflow)
 
     def test_preview_never_references_production_oss_secrets(self):
         workflow = (ROOT / ".github/workflows/pr-preview.yml").read_text()
