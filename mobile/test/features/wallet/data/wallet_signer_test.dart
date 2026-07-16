@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:yourtj_mobile/features/wallet/data/wallet_seed_store.dart';
 import 'package:yourtj_mobile/features/wallet/data/wallet_signer.dart';
@@ -28,7 +29,7 @@ void main() {
       for (final dynamic rawVector in vectors) {
         final Map<String, dynamic> vector = rawVector as Map<String, dynamic>;
         final String vectorId = vector['id']! as String;
-        await store.write(
+        store.replaceForTest(
           'fixture-account',
           _decodeHex(vector['seedHex']! as String),
         );
@@ -38,6 +39,7 @@ void main() {
         );
         final String signature = await signer.signExactBytes(
           'fixture-account',
+          vector['publicKeyBase64']! as String,
           vector['signingBytes']! as String,
         );
 
@@ -56,7 +58,8 @@ void main() {
       expect(await signer.readPublicKey('account-one'), isNotNull);
       expect(await signer.readPublicKey('account-two'), isNull);
       expect(
-        () => signer.signExactBytes('account-two', 'intent'),
+        () =>
+            signer.signExactBytes('account-two', 'unused-public-key', 'intent'),
         throwsA(isA<WalletKeyUnavailable>()),
       );
 
@@ -64,10 +67,50 @@ void main() {
 
       expect(await signer.readPublicKey('account-one'), isNull);
       expect(
-        () => signer.signExactBytes('account-one', 'intent'),
+        () =>
+            signer.signExactBytes('account-one', 'unused-public-key', 'intent'),
         throwsA(isA<WalletKeyUnavailable>()),
       );
     });
+
+    test(
+      'concurrent generation returns the one persisted account key',
+      () async {
+        final List<LocalWalletKey> generated = await Future.wait(
+          <Future<LocalWalletKey>>[
+            signer.generate('account-one'),
+            signer.generate('account-one'),
+          ],
+        );
+
+        expect(
+          generated.map((LocalWalletKey key) => key.publicKeyBase64).toSet(),
+          hasLength(1),
+        );
+        expect(store.persistedWrites, 1);
+        expect(
+          (await signer.readPublicKey('account-one'))?.publicKeyBase64,
+          generated.first.publicKeyBase64,
+        );
+      },
+    );
+
+    test(
+      'refuses to sign when the actual seed no longer matches the expected key',
+      () async {
+        final LocalWalletKey original = await signer.generate('account-one');
+        store.replaceForTest('account-one', List<int>.filled(32, 0x5a));
+
+        await expectLater(
+          signer.signExactBytes(
+            'account-one',
+            original.publicKeyBase64,
+            'intent',
+          ),
+          throwsA(isA<WalletKeyUnavailable>()),
+        );
+      },
+    );
 
     test('maps secure-storage failures to a wallet boundary error', () async {
       final WalletSigner unavailableSigner = WalletSigner(
@@ -88,6 +131,26 @@ void main() {
       );
     });
   });
+
+  test('secure seed store keeps the first concurrent account seed', () async {
+    FlutterSecureStorage.setMockInitialValues(<String, String>{});
+    const FlutterSecureStorage secureStorage = FlutterSecureStorage();
+    final KeychainKeystoreWalletSeedStore store =
+        KeychainKeystoreWalletSeedStore(
+          environmentNamespace: 'environment_a',
+          storage: secureStorage,
+        );
+    final List<int> firstSeed = List<int>.filled(32, 0x11);
+    final List<int> secondSeed = List<int>.filled(32, 0x22);
+
+    final List<List<int>> persisted = await Future.wait(<Future<List<int>>>[
+      store.writeIfAbsent('account-one', firstSeed),
+      store.writeIfAbsent('account-one', secondSeed),
+    ]);
+
+    expect(persisted, everyElement(firstSeed));
+    expect(await store.read('account-one'), firstSeed);
+  });
 }
 
 List<int> _decodeHex(String value) {
@@ -99,6 +162,11 @@ List<int> _decodeHex(String value) {
 
 class _MemoryWalletSeedStore implements WalletSeedStore {
   final Map<String, List<int>> _seeds = <String, List<int>>{};
+  int persistedWrites = 0;
+
+  void replaceForTest(String accountId, List<int> seed) {
+    _seeds[accountId] = List<int>.from(seed);
+  }
 
   @override
   Future<void> delete(String accountId) async {
@@ -112,8 +180,15 @@ class _MemoryWalletSeedStore implements WalletSeedStore {
   }
 
   @override
-  Future<void> write(String accountId, List<int> seed) async {
-    _seeds[accountId] = List<int>.from(seed);
+  Future<List<int>> writeIfAbsent(String accountId, List<int> seed) async {
+    final List<int>? existing = _seeds[accountId];
+    if (existing != null) {
+      return List<int>.from(existing);
+    }
+    final List<int> persisted = List<int>.from(seed);
+    _seeds[accountId] = persisted;
+    persistedWrites += 1;
+    return List<int>.from(persisted);
   }
 }
 
@@ -125,6 +200,6 @@ class _UnavailableWalletSeedStore implements WalletSeedStore {
   Future<List<int>?> read(String accountId) => throw StateError('unavailable');
 
   @override
-  Future<void> write(String accountId, List<int> seed) =>
+  Future<List<int>> writeIfAbsent(String accountId, List<int> seed) =>
       throw StateError('unavailable');
 }

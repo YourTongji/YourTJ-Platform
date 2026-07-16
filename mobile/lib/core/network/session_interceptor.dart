@@ -4,9 +4,52 @@ import '../../features/auth/data/session_manager.dart';
 import '../config/app_environment.dart';
 import 'api_failure.dart';
 
+/// Pins a generated authenticated request to one captured session.
+///
+/// This is reserved for requests whose body is also account-bound. The
+/// interceptor preserves the captured bearer instead of replacing it with a
+/// newer session that may become active before Dio dispatches the request.
+class SessionRequestBinding {
+  SessionRequestBinding({
+    required this.accountId,
+    required String accessToken,
+    required this.generation,
+  }) : _accessToken = _validateAccessToken(accessToken) {
+    if (accountId.trim().isEmpty || generation < 0) {
+      throw ArgumentError('Session request binding is invalid');
+    }
+  }
+
+  static final RegExp _token = RegExp(r'^[^\s\x00-\x1f\x7f]+$');
+
+  final String accountId;
+  final String _accessToken;
+  final int generation;
+
+  Map<String, dynamic> get headers => <String, dynamic>{
+    'Authorization': 'Bearer $_accessToken',
+  };
+
+  Map<String, dynamic> get extra => <String, dynamic>{
+    SessionInterceptor._fixedSessionKey: true,
+    SessionInterceptor._accountIdKey: accountId,
+    SessionInterceptor._generationKey: generation,
+    SessionInterceptor._disableRetryKey: true,
+  };
+
+  static String _validateAccessToken(String value) {
+    if (!_token.hasMatch(value)) {
+      throw ArgumentError('Session access token is invalid');
+    }
+    return value;
+  }
+}
+
 class SessionInterceptor extends Interceptor {
   SessionInterceptor(this._dio, this._environment, this._sessionManager);
 
+  static const String _fixedSessionKey = 'yourtj.fixedSession';
+  static const String _accountIdKey = 'yourtj.sessionAccountId';
   static const String _generationKey = 'yourtj.sessionGeneration';
   static const String _retryKey = 'yourtj.sessionRetry';
   static const String _disableRetryKey = 'yourtj.disableSessionRetry';
@@ -18,9 +61,8 @@ class SessionInterceptor extends Interceptor {
   @override
   void onRequest(RequestOptions options, RequestInterceptorHandler handler) {
     final bool requiresBearer = _requiresBearer(options);
-    final bool carriesAuthorization = options.headers.keys.any(
-      (String key) => key.toLowerCase() == 'authorization',
-    );
+    final bool carriesAuthorization = _authorization(options) != null;
+    final bool hasFixedSession = options.extra[_fixedSessionKey] == true;
     if ((requiresBearer || carriesAuthorization) &&
         !_environment.owns(options.uri)) {
       handler.reject(
@@ -35,11 +77,18 @@ class SessionInterceptor extends Interceptor {
       );
       return;
     }
+    if (hasFixedSession &&
+        (!requiresBearer || !_hasValidFixedSession(options))) {
+      handler.reject(_invalidFixedSession(options));
+      return;
+    }
     if (requiresBearer) {
-      options.extra[_generationKey] = _sessionManager.generation;
-      final String? token = _sessionManager.accessToken;
-      if (token != null) {
-        options.headers['Authorization'] = 'Bearer $token';
+      if (!hasFixedSession) {
+        options.extra[_generationKey] = _sessionManager.generation;
+        final String? token = _sessionManager.accessToken;
+        if (token != null) {
+          options.headers['Authorization'] = 'Bearer $token';
+        }
       }
     }
     handler.next(options);
@@ -126,6 +175,30 @@ class SessionInterceptor extends Interceptor {
     );
   }
 
+  bool _hasValidFixedSession(RequestOptions options) {
+    final Object? accountId = options.extra[_accountIdKey];
+    final Object? generation = options.extra[_generationKey];
+    final String? authorization = _authorization(options);
+    return accountId is String &&
+        accountId.trim().isNotEmpty &&
+        generation is int &&
+        generation >= 0 &&
+        authorization != null &&
+        authorization.startsWith('Bearer ') &&
+        SessionRequestBinding._token.hasMatch(
+          authorization.substring('Bearer '.length),
+        );
+  }
+
+  String? _authorization(RequestOptions options) {
+    for (final MapEntry<String, dynamic> header in options.headers.entries) {
+      if (header.key.toLowerCase() == 'authorization') {
+        return header.value?.toString();
+      }
+    }
+    return null;
+  }
+
   bool _isSafeMethod(String method) {
     return <String>{'GET', 'HEAD', 'OPTIONS'}.contains(method.toUpperCase());
   }
@@ -137,6 +210,17 @@ class SessionInterceptor extends Interceptor {
       error: const ApiFailure(
         kind: ApiFailureKind.cancelled,
         message: '账号已切换，已丢弃旧账号请求结果',
+      ),
+    );
+  }
+
+  DioException _invalidFixedSession(RequestOptions options) {
+    return DioException(
+      requestOptions: options,
+      type: DioExceptionType.unknown,
+      error: const ApiFailure(
+        kind: ApiFailureKind.unexpected,
+        message: '请求缺少完整的账号会话绑定，已停止发送',
       ),
     );
   }

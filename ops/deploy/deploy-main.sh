@@ -6,7 +6,11 @@ readonly MAIN_RUNTIME_ENV_FILE="${MAIN_RUNTIME_ENV_FILE:-/opt/yourtj-preview/sha
 readonly MAIN_EMAIL_ENV_FILE="${MAIN_EMAIL_ENV_FILE:-/opt/yourtj-preview/shared/email-main.env}"
 readonly DEPLOY_LOCK_FILE="${DEPLOY_LOCK_FILE:-/opt/yourtj-preview/shared/deploy-main.lock}"
 readonly WALLET_KEY_CUTOVER_MARKER="${WALLET_KEY_CUTOVER_MARKER:-/opt/yourtj-preview/shared/migration-0067-wallet-key-cutover.complete}"
+readonly WALLET_BIND_ACCOUNT_SCOPE_MARKER="${WALLET_BIND_ACCOUNT_SCOPE_MARKER:-/opt/yourtj-preview/shared/wallet-bind-account-scope-cutover.complete}"
 readonly WALLET_KEY_CUTOVER_NO_APPROVAL="not-approved"
+readonly WALLET_BIND_ACCOUNT_SCOPE_NO_APPROVAL="not-approved"
+readonly WALLET_BIND_ACCOUNT_SCOPE_MOBILE_UNKNOWN="unknown"
+readonly WALLET_BIND_ACCOUNT_SCOPE_MOBILE_NOT_DISTRIBUTED="not-distributed"
 readonly WALLET_KEY_CUTOVER_DRAIN_SECONDS=360
 readonly WALLET_KEY_CUTOVER_PROGRESS_INTERVAL_SECONDS=30
 readonly BACKEND_CONTAINER="main-be"
@@ -27,9 +31,12 @@ FRONTEND_BACKED_UP=0
 FRONTEND_NEW_STARTED=0
 WALLET_KEY_CUTOVER_REQUIRED=0
 WALLET_KEY_CUTOVER_MARKER_TEMP=""
+WALLET_BIND_ACCOUNT_SCOPE_CUTOVER_REQUIRED=0
+WALLET_BIND_ACCOUNT_SCOPE_MARKER_TEMP=""
+WALLET_BIND_ACCOUNT_SCOPE_STRICT_BACKEND_READY=0
 
 usage() {
-  echo "usage: deploy-main.sh <frontend_dist_dir> <backend_image_tar> <media_env_file> <git_revision> <media_verifier> <frontend_nginx_template> <wallet_cutover_approved_revision>" >&2
+  echo "usage: deploy-main.sh <frontend_dist_dir> <backend_image_tar> <media_env_file> <git_revision> <media_verifier> <frontend_nginx_template> <wallet_cutover_approved_revision> <wallet_bind_account_scope_approved_revision> <wallet_bind_account_scope_mobile_status>" >&2
   exit 64
 }
 
@@ -148,6 +155,39 @@ verify_container_revision() {
     fail "${container} revision label does not match the deployment revision"
 }
 
+activate_frontend_release() {
+  if ((FRONTEND_NEW_STARTED == 1)); then
+    return
+  fi
+  if container_exists "$FRONTEND_CONTAINER"; then
+    docker stop "$FRONTEND_CONTAINER" >/dev/null
+    FRONTEND_BACKED_UP=1
+    docker rename "$FRONTEND_CONTAINER" "$FRONTEND_BACKUP"
+  fi
+
+  echo "  Starting main frontend..."
+  docker create \
+    --name "$FRONTEND_CONTAINER" \
+    --restart unless-stopped \
+    --label "org.opencontainers.image.revision=${GIT_REVISION}" \
+    --label "yourtj.environment=main-staging" \
+    -p "127.0.0.1:${FRONTEND_PORT}:80" \
+    -v "${FRONTEND_DIR}:/usr/share/nginx/html:ro" \
+    -v "${RENDERED_NGINX}:/etc/nginx/conf.d/default.conf:ro" \
+    nginx:alpine >/dev/null
+  FRONTEND_NEW_STARTED=1
+  docker start "$FRONTEND_CONTAINER" >/dev/null
+
+  [[ "$(docker port "$FRONTEND_CONTAINER" 80/tcp)" == "127.0.0.1:${FRONTEND_PORT}" ]] ||
+    fail "main frontend host port is not loopback-only"
+}
+
+verify_frontend_release() {
+  wait_for_url "frontend direct health" "http://127.0.0.1:${FRONTEND_PORT}/"
+  wait_for_url "frontend public route" "http://127.0.0.1:8080/"
+  verify_container_revision "$FRONTEND_CONTAINER"
+}
+
 preview_port() {
   local prefix="$1"
   local pr_number="$2"
@@ -203,15 +243,20 @@ rollback_deployment() {
   set +e
   echo "deploy-main: deployment failed; restoring compatible frontend state" >&2
 
-  if ((FRONTEND_NEW_STARTED == 1)) && container_exists "$FRONTEND_CONTAINER"; then
-    docker stop "$FRONTEND_CONTAINER" >/dev/null 2>&1
-    docker rm "$FRONTEND_CONTAINER" >/dev/null 2>&1
-  fi
-  if ((FRONTEND_BACKED_UP == 1)) && container_exists "$FRONTEND_BACKUP"; then
-    docker rename "$FRONTEND_BACKUP" "$FRONTEND_CONTAINER" >/dev/null 2>&1
-    docker start "$FRONTEND_CONTAINER" >/dev/null 2>&1
-  elif ((FRONTEND_NEW_STARTED == 0)) && container_exists "$FRONTEND_CONTAINER"; then
-    docker start "$FRONTEND_CONTAINER" >/dev/null 2>&1
+  if ((WALLET_BIND_ACCOUNT_SCOPE_STRICT_BACKEND_READY == 1 \
+    && FRONTEND_NEW_STARTED == 1)) && container_exists "$FRONTEND_CONTAINER"; then
+    echo "deploy-main: preserving the verified account-scoped frontend for the strict backend" >&2
+  else
+    if ((FRONTEND_NEW_STARTED == 1)) && container_exists "$FRONTEND_CONTAINER"; then
+      docker stop "$FRONTEND_CONTAINER" >/dev/null 2>&1
+      docker rm "$FRONTEND_CONTAINER" >/dev/null 2>&1
+    fi
+    if ((FRONTEND_BACKED_UP == 1)) && container_exists "$FRONTEND_BACKUP"; then
+      docker rename "$FRONTEND_BACKUP" "$FRONTEND_CONTAINER" >/dev/null 2>&1
+      docker start "$FRONTEND_CONTAINER" >/dev/null 2>&1
+    elif ((FRONTEND_NEW_STARTED == 0)) && container_exists "$FRONTEND_CONTAINER"; then
+      docker start "$FRONTEND_CONTAINER" >/dev/null 2>&1
+    fi
   fi
 
   if ((BACKEND_NEW_STARTED == 1)); then
@@ -234,13 +279,16 @@ handle_exit() {
   if [[ -n "$WALLET_KEY_CUTOVER_MARKER_TEMP" ]]; then
     rm -f "$WALLET_KEY_CUTOVER_MARKER_TEMP"
   fi
+  if [[ -n "$WALLET_BIND_ACCOUNT_SCOPE_MARKER_TEMP" ]]; then
+    rm -f "$WALLET_BIND_ACCOUNT_SCOPE_MARKER_TEMP"
+  fi
   if ((DEPLOYMENT_STARTED == 1 && DEPLOYMENT_SUCCEEDED == 0)); then
     rollback_deployment
   fi
   exit "$status"
 }
 
-[[ "$#" -eq 7 ]] || usage
+[[ "$#" -eq 9 ]] || usage
 [[ "$HEALTH_ATTEMPTS" =~ ^[1-9][0-9]*$ ]] || fail "health attempts must be a positive integer"
 [[ "$HEALTH_DELAY_SECONDS" =~ ^[0-9]+([.][0-9]+)?$ ]] || fail "health delay must be numeric"
 
@@ -251,6 +299,8 @@ readonly GIT_REVISION="$4"
 readonly OSS_VERIFIER="$5"
 readonly NGINX_TEMPLATE="$6"
 readonly WALLET_KEY_CUTOVER_APPROVED_REVISION="$7"
+readonly WALLET_BIND_ACCOUNT_SCOPE_APPROVED_REVISION="$8"
+readonly WALLET_BIND_ACCOUNT_SCOPE_MOBILE_STATUS="$9"
 readonly RENDERED_NGINX="${FRONTEND_DIR}/nginx.conf"
 readonly FRONTEND_RELEASE_DIR="${FRONTEND_DIR%/frontend}"
 readonly FRONTEND_RELEASE_NAME="${FRONTEND_RELEASE_DIR##*/}"
@@ -263,6 +313,13 @@ readonly FRONTEND_BACKUP="${FRONTEND_CONTAINER}-rollback-${BACKUP_SUFFIX}"
 [[ "$WALLET_KEY_CUTOVER_APPROVED_REVISION" == "$WALLET_KEY_CUTOVER_NO_APPROVAL" \
   || "$WALLET_KEY_CUTOVER_APPROVED_REVISION" =~ ^[0-9a-f]{40}$ ]] ||
   fail "wallet key cutover approval must be not-approved or a full lowercase commit SHA"
+[[ "$WALLET_BIND_ACCOUNT_SCOPE_APPROVED_REVISION" == "$WALLET_BIND_ACCOUNT_SCOPE_NO_APPROVAL" \
+  || "$WALLET_BIND_ACCOUNT_SCOPE_APPROVED_REVISION" =~ ^[0-9a-f]{40}$ ]] ||
+  fail "wallet bind account-scope approval must be not-approved or a full lowercase commit SHA"
+[[ "$WALLET_BIND_ACCOUNT_SCOPE_MOBILE_STATUS" == "$WALLET_BIND_ACCOUNT_SCOPE_MOBILE_UNKNOWN" \
+  || "$WALLET_BIND_ACCOUNT_SCOPE_MOBILE_STATUS" == \
+    "$WALLET_BIND_ACCOUNT_SCOPE_MOBILE_NOT_DISTRIBUTED" ]] ||
+  fail "wallet bind account-scope mobile status must be unknown or not-distributed"
 [[ "${FRONTEND_RELEASE_DIR%/*}" == "$EXPECTED_FRONTEND_ROOT" \
   && "$FRONTEND_RELEASE_NAME" =~ ^${GIT_REVISION}-[1-9][0-9]*-[1-9][0-9]*$ ]] ||
   fail "frontend path does not match an immutable main release"
@@ -288,6 +345,22 @@ else
   WALLET_KEY_CUTOVER_REQUIRED=1
   [[ "$WALLET_KEY_CUTOVER_APPROVED_REVISION" == "$GIT_REVISION" ]] ||
     fail "wallet key cutover requires approval for the exact deployment revision"
+fi
+if [[ -e "$WALLET_BIND_ACCOUNT_SCOPE_MARKER" || -L "$WALLET_BIND_ACCOUNT_SCOPE_MARKER" ]]; then
+  require_regular_secret_file \
+    "$WALLET_BIND_ACCOUNT_SCOPE_MARKER" \
+    "wallet bind account-scope cutover marker"
+  grep -Fxq "cutover=wallet-bind-account-scope" "$WALLET_BIND_ACCOUNT_SCOPE_MARKER" ||
+    fail "wallet bind account-scope cutover marker is malformed"
+  grep -Eq '^revision=[0-9a-f]{40}$' "$WALLET_BIND_ACCOUNT_SCOPE_MARKER" ||
+    fail "wallet bind account-scope cutover marker revision is malformed"
+else
+  WALLET_BIND_ACCOUNT_SCOPE_CUTOVER_REQUIRED=1
+  [[ "$WALLET_BIND_ACCOUNT_SCOPE_APPROVED_REVISION" == "$GIT_REVISION" ]] ||
+    fail "wallet bind account-scope cutover requires approval for the exact deployment revision"
+  [[ "$WALLET_BIND_ACCOUNT_SCOPE_MOBILE_STATUS" == \
+    "$WALLET_BIND_ACCOUNT_SCOPE_MOBILE_NOT_DISTRIBUTED" ]] ||
+    fail "wallet bind account-scope cutover requires confirmation that mobile is not distributed"
 fi
 
 for key in \
@@ -359,6 +432,13 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 DEPLOYMENT_STARTED=1
 
+if ((WALLET_BIND_ACCOUNT_SCOPE_CUTOVER_REQUIRED == 1)); then
+  echo "  Wallet bind account-scope cutover: activating this revision's frontend first..."
+  activate_frontend_release
+  verify_frontend_release
+  echo "  Wallet bind account-scope cutover: frontend revision verified"
+fi
+
 if container_exists "$BACKEND_CONTAINER"; then
   docker stop "$BACKEND_CONTAINER" >/dev/null
   BACKEND_BACKED_UP=1
@@ -394,6 +474,9 @@ wait_for_url "backend direct readiness" "http://127.0.0.1:${BACKEND_PORT}/ready"
 verify_container_environment
 BACKEND_NEW_READY=1
 verify_container_revision "$BACKEND_CONTAINER"
+if ((WALLET_BIND_ACCOUNT_SCOPE_CUTOVER_REQUIRED == 1)); then
+  WALLET_BIND_ACCOUNT_SCOPE_STRICT_BACKEND_READY=1
+fi
 
 if ((WALLET_KEY_CUTOVER_REQUIRED == 1)); then
   WALLET_KEY_CUTOVER_MARKER_TEMP="${WALLET_KEY_CUTOVER_MARKER}.tmp-${BACKUP_SUFFIX}"
@@ -408,29 +491,22 @@ if ((WALLET_KEY_CUTOVER_REQUIRED == 1)); then
   echo "  Wallet-key cutover: migration and pre-serve ledger verification complete"
 fi
 
-if container_exists "$FRONTEND_CONTAINER"; then
-  docker stop "$FRONTEND_CONTAINER" >/dev/null
-  FRONTEND_BACKED_UP=1
-  docker rename "$FRONTEND_CONTAINER" "$FRONTEND_BACKUP"
+if ((WALLET_BIND_ACCOUNT_SCOPE_CUTOVER_REQUIRED == 1)); then
+  WALLET_BIND_ACCOUNT_SCOPE_MARKER_TEMP="${WALLET_BIND_ACCOUNT_SCOPE_MARKER}.tmp-${BACKUP_SUFFIX}"
+  umask 077
+  {
+    echo "cutover=wallet-bind-account-scope"
+    echo "revision=${GIT_REVISION}"
+    date -u '+completed_at=%Y-%m-%dT%H:%M:%SZ'
+  } > "$WALLET_BIND_ACCOUNT_SCOPE_MARKER_TEMP"
+  chmod 600 "$WALLET_BIND_ACCOUNT_SCOPE_MARKER_TEMP"
+  mv "$WALLET_BIND_ACCOUNT_SCOPE_MARKER_TEMP" "$WALLET_BIND_ACCOUNT_SCOPE_MARKER"
+  echo "  Wallet bind account-scope cutover: strict backend ready and marker recorded"
 fi
 
-echo "  Starting main frontend..."
-docker run -d \
-  --name "$FRONTEND_CONTAINER" \
-  --restart unless-stopped \
-  --label "org.opencontainers.image.revision=${GIT_REVISION}" \
-  --label "yourtj.environment=main-staging" \
-  -p "127.0.0.1:${FRONTEND_PORT}:80" \
-  -v "${FRONTEND_DIR}:/usr/share/nginx/html:ro" \
-  -v "${RENDERED_NGINX}:/etc/nginx/conf.d/default.conf:ro" \
-  nginx:alpine >/dev/null
-FRONTEND_NEW_STARTED=1
+activate_frontend_release
 
-[[ "$(docker port "$FRONTEND_CONTAINER" 80/tcp)" == "127.0.0.1:${FRONTEND_PORT}" ]] ||
-  fail "main frontend host port is not loopback-only"
-
-wait_for_url "frontend direct health" "http://127.0.0.1:${FRONTEND_PORT}/"
-wait_for_url "frontend public route" "http://127.0.0.1:8080/"
+verify_frontend_release
 wait_for_url "backend public route" "http://127.0.0.1:8080/api/v2/health"
 wait_for_url "backend public readiness" "http://127.0.0.1:8080/api/v2/ready"
 

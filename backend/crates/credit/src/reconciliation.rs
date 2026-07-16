@@ -389,6 +389,7 @@ async fn reconcile_in_transaction(
     conn: &mut PgConnection,
     run: &ReconciliationRunRow,
     system_public_key_b64: &str,
+    wallet_key_resolver: &dyn crate::wallet_keys::WalletKeyResolver,
 ) -> AppResult<()> {
     let mut tx = conn.begin().await?;
     sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ").execute(&mut *tx).await?;
@@ -396,7 +397,9 @@ async fn reconcile_in_transaction(
         sqlx::query_as("SELECT seq, hash FROM credit.ledger ORDER BY seq DESC LIMIT 1")
             .fetch_optional(&mut *tx)
             .await?;
-    let verification = crate::repo::verify_full_ledger_conn(&mut tx, system_public_key_b64).await?;
+    let verification =
+        crate::repo::verify_full_ledger_conn(&mut tx, system_public_key_b64, wallet_key_resolver)
+            .await?;
     let (latest_seq, latest_hash) = ledger_tip.unzip();
     let metrics = if verification.ok {
         persist_wallet_results(&mut tx, run.id, latest_seq).await?
@@ -508,6 +511,7 @@ async fn execute_if_available(
     pool: &PgPool,
     run: &ReconciliationRunRow,
     system_public_key_b64: &str,
+    wallet_key_resolver: &dyn crate::wallet_keys::WalletKeyResolver,
     resume: Option<(AccountActor<'_>, &str)>,
 ) -> AppResult<ReconciliationRunRow> {
     if matches!(run.status.as_str(), "succeeded" | "failed") {
@@ -532,8 +536,13 @@ async fn execute_if_available(
             record_resume_request(&mut conn, actor, &current, reason).await?;
         }
         mark_running(&mut conn, &current).await?;
-        if let Err(error) =
-            reconcile_in_transaction(&mut conn, &current, system_public_key_b64).await
+        if let Err(error) = reconcile_in_transaction(
+            &mut conn,
+            &current,
+            system_public_key_b64,
+            wallet_key_resolver,
+        )
+        .await
         {
             let error_code = execution_error_code(&error);
             tracing::warn!(
@@ -569,9 +578,17 @@ pub async fn request_run(
     reason: &str,
     idempotency_key: &str,
     system_public_key_b64: &str,
+    wallet_key_resolver: &dyn crate::wallet_keys::WalletKeyResolver,
 ) -> AppResult<(ReconciliationRunDto, bool)> {
     let scheduled = schedule_run(pool, actor, reason, idempotency_key).await?;
-    let row = execute_if_available(pool, &scheduled.row, system_public_key_b64, None).await?;
+    let row = execute_if_available(
+        pool,
+        &scheduled.row,
+        system_public_key_b64,
+        wallet_key_resolver,
+        None,
+    )
+    .await?;
     Ok((run_dto(row), scheduled.was_created))
 }
 
@@ -582,11 +599,18 @@ pub async fn resume_run(
     public_id: Uuid,
     reason: &str,
     system_public_key_b64: &str,
+    wallet_key_resolver: &dyn crate::wallet_keys::WalletKeyResolver,
 ) -> AppResult<ReconciliationRunDto> {
     let reason = validate_reason(reason)?;
     let run = find_run_by_public_id(pool, public_id).await?.ok_or(AppError::NotFound)?;
-    let row =
-        execute_if_available(pool, &run, system_public_key_b64, Some((actor, reason))).await?;
+    let row = execute_if_available(
+        pool,
+        &run,
+        system_public_key_b64,
+        wallet_key_resolver,
+        Some((actor, reason)),
+    )
+    .await?;
     Ok(run_dto(row))
 }
 

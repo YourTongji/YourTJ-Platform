@@ -22,6 +22,8 @@ import 'package:yourtj_api/src/model/purchase_page.dart';
 import 'package:yourtj_api/src/model/reconciliation_run_input.dart';
 import 'package:yourtj_api/src/model/signing_intent.dart';
 import 'package:yourtj_api/src/model/signing_intent_input.dart';
+import 'package:yourtj_api/src/model/signing_intent_outcome.dart';
+import 'package:yourtj_api/src/model/signing_intent_outcome_input.dart';
 import 'package:yourtj_api/src/model/task.dart';
 import 'package:yourtj_api/src/model/task_action.dart';
 import 'package:yourtj_api/src/model/task_input.dart';
@@ -922,7 +924,7 @@ class CreditApi {
   }
 
   /// Escrow steps — accept / deliver / confirm(release) / cancel(refund)
-  /// confirm and cancel require wallet intent, signature and idempotency headers; accept and deliver are non-value seller transitions.
+  /// confirm and cancel require wallet intent, signature and idempotency headers; accept and deliver are non-value seller transitions. A successful pending/accepted cancellation atomically refunds escrow and restores exactly one product unit; sold_out returns to on_sale, while off_sale remains unchanged.
   ///
   /// Parameters:
   /// * [id]
@@ -999,6 +1001,98 @@ class CreditApi {
     );
 
     return _response;
+  }
+
+  /// Read the authenticated owner&#39;s lock-aware signing intent outcome
+  /// Uses a fixed URL so the sensitive intent correlation identifier is not copied into intermediary access-log paths.
+  ///
+  /// Parameters:
+  /// * [signingIntentOutcomeInput]
+  /// * [cancelToken] - A [CancelToken] that can be used to cancel the operation
+  /// * [headers] - Can be used to add additional headers to the request
+  /// * [extras] - Can be used to add flags to the request
+  /// * [validateStatus] - A [ValidateStatus] callback that can be used to determine request success based on the HTTP status of the response
+  /// * [onSendProgress] - A [ProgressCallback] that can be used to get the send progress
+  /// * [onReceiveProgress] - A [ProgressCallback] that can be used to get the receive progress
+  ///
+  /// Returns a [Future] containing a [Response] with a [SigningIntentOutcome] as data
+  /// Throws [DioException] if API call or serialization fails
+  Future<Response<SigningIntentOutcome>> creditSigningIntentOutcomePost({
+    required SigningIntentOutcomeInput signingIntentOutcomeInput,
+    CancelToken? cancelToken,
+    Map<String, dynamic>? headers,
+    Map<String, dynamic>? extra,
+    ValidateStatus? validateStatus,
+    ProgressCallback? onSendProgress,
+    ProgressCallback? onReceiveProgress,
+  }) async {
+    final _path = r'/credit/signing-intent-outcome';
+    final _options = Options(
+      method: r'POST',
+      headers: <String, dynamic>{...?headers},
+      extra: <String, dynamic>{
+        'secure': <Map<String, String>>[
+          {'type': 'http', 'scheme': 'bearer', 'name': 'bearer'},
+        ],
+        ...?extra,
+      },
+      contentType: 'application/json',
+      validateStatus: validateStatus,
+    );
+
+    dynamic _bodyData;
+
+    try {
+      _bodyData = jsonEncode(signingIntentOutcomeInput);
+    } catch (error, stackTrace) {
+      throw DioException(
+        requestOptions: _options.compose(_dio.options, _path),
+        type: DioExceptionType.unknown,
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
+
+    final _response = await _dio.request<Object>(
+      _path,
+      data: _bodyData,
+      options: _options,
+      cancelToken: cancelToken,
+      onSendProgress: onSendProgress,
+      onReceiveProgress: onReceiveProgress,
+    );
+
+    SigningIntentOutcome? _responseData;
+
+    try {
+      final rawData = _response.data;
+      _responseData = rawData == null
+          ? null
+          : deserialize<SigningIntentOutcome, SigningIntentOutcome>(
+              rawData,
+              'SigningIntentOutcome',
+              growable: true,
+            );
+    } catch (error, stackTrace) {
+      throw DioException(
+        requestOptions: _response.requestOptions,
+        response: _response,
+        type: DioExceptionType.unknown,
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
+
+    return Response<SigningIntentOutcome>(
+      data: _responseData,
+      headers: _response.headers,
+      isRedirect: _response.isRedirect,
+      requestOptions: _response.requestOptions,
+      redirects: _response.redirects,
+      statusCode: _response.statusCode,
+      statusMessage: _response.statusMessage,
+      extra: _response.extra,
+    );
   }
 
   /// Create a request- and snapshot-bound one-time wallet signing intent

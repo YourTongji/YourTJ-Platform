@@ -4,6 +4,8 @@
 //! can use `?` and let Axum render errors. Transaction-aware `_tx`
 //! variants accept `&mut PgConnection` for atomic multi-step flows.
 
+use std::collections::HashMap;
+
 use chrono::Utc;
 use serde_json::Value;
 use shared::{AppError, AppResult, Page};
@@ -15,6 +17,7 @@ use crate::ledger::{compute_hash, sign_with_seed};
 use crate::models::{LedgerEntryRow, ProductRow, PurchaseRow, TaskRow};
 
 const GENESIS_HASH: &str = "0000000000000000000000000000000000000000000000000000000000000000";
+const LEDGER_APPEND_LOCK_KEY: i64 = 42;
 const MAX_PAGE_LIMIT: i64 = 100;
 
 fn fetch_limit(limit: i64) -> AppResult<i64> {
@@ -37,6 +40,34 @@ fn finish_page<T>(mut rows: Vec<T>, limit: i64, cursor_for: impl Fn(&T) -> Strin
 // Ledger: append, list, verify
 // ---------------------------------------------------------------------------
 
+/// Acquire the transaction-scoped lock that serializes ledger appends.
+///
+/// Callers that also need a wallet row lock must acquire this lock first so
+/// release and debit transactions share the same advisory-lock-to-wallet order.
+pub(crate) async fn lock_ledger_append_tx(conn: &mut sqlx::PgConnection) -> AppResult<()> {
+    sqlx::query("SELECT pg_advisory_xact_lock($1)")
+        .bind(LEDGER_APPEND_LOCK_KEY)
+        .execute(&mut *conn)
+        .await?;
+    Ok(())
+}
+
+/// Lock a wallet for a ledger-backed debit after acquiring the ledger append lock.
+pub(crate) async fn lock_wallet_for_debit_tx(
+    conn: &mut sqlx::PgConnection,
+    account_id: i64,
+) -> AppResult<i64> {
+    lock_ledger_append_tx(conn).await?;
+    let balance = sqlx::query_scalar(
+        "SELECT COALESCE((SELECT balance FROM credit.wallets \
+         WHERE account_id = $1 FOR UPDATE), 0)",
+    )
+    .bind(account_id)
+    .fetch_one(&mut *conn)
+    .await?;
+    Ok(balance)
+}
+
 /// Transaction-internal variant: append a ledger entry inside an existing
 /// transaction. Takes the advisory lock, computes `prev_hash`, builds the
 /// canonical payload using the deterministic `created_at`, inserts the row,
@@ -55,7 +86,7 @@ pub async fn append_ledger_entry_tx(
     signature: &str,
     created_at: i64,
 ) -> AppResult<LedgerEntryRow> {
-    sqlx::query("SELECT pg_advisory_xact_lock(42)").execute(&mut *conn).await?;
+    lock_ledger_append_tx(conn).await?;
 
     let prev_hash: Option<String> =
         sqlx::query_scalar("SELECT hash FROM credit.ledger ORDER BY seq DESC LIMIT 1")
@@ -219,30 +250,36 @@ pub async fn list_ledger(
 
 /// Recompute the hash chain and verify every Ed25519 signature for all ledger
 /// entries. System-signed entries are verified against `system_public_key_b64`;
-/// user-signed entries are verified against the account's bound key
-/// (`identity.account_keys`).
+/// user-signed entries are verified against Identity-owned retained keys.
 pub async fn verify_full_ledger(
     pool: &PgPool,
     system_public_key_b64: &str,
+    wallet_key_resolver: &dyn crate::wallet_keys::WalletKeyResolver,
 ) -> AppResult<LedgerVerify> {
     let mut conn = pool.acquire().await?;
-    verify_full_ledger_conn(&mut conn, system_public_key_b64).await
+    verify_full_ledger_conn(&mut conn, system_public_key_b64, wallet_key_resolver).await
 }
 
 /// Connection-scoped ledger verification for callers that need one database snapshot.
 pub(crate) async fn verify_full_ledger_conn(
     conn: &mut sqlx::PgConnection,
     system_public_key_b64: &str,
+    wallet_key_resolver: &dyn crate::wallet_keys::WalletKeyResolver,
 ) -> AppResult<LedgerVerify> {
-    use std::collections::HashMap;
-
     #[derive(sqlx::FromRow)]
     struct IntentVerificationRow {
         id: uuid::Uuid,
         account_id: i64,
         public_key: String,
+        action: String,
+        request_hash: String,
+        snapshot: Value,
+        idempotency_key: String,
         signing_bytes: String,
+        ledger_entry: Option<Value>,
         ledger_canonical: Option<String>,
+        expires_at: chrono::DateTime<Utc>,
+        consumed_at: Option<chrono::DateTime<Utc>>,
     }
 
     let rows: Vec<LedgerEntryRow> = sqlx::query_as(
@@ -265,18 +302,7 @@ pub(crate) async fn verify_full_ledger_conn(
         .into_iter()
         .collect();
 
-    let mut pk_map: HashMap<i64, Vec<String>> = HashMap::new();
-    if !signer_ids.is_empty() {
-        let key_rows: Vec<(i64, String)> = sqlx::query_as(
-            "SELECT account_id, public_key FROM identity.account_keys WHERE account_id = ANY($1)",
-        )
-        .bind(&signer_ids)
-        .fetch_all(&mut *conn)
-        .await?;
-        for (account_id, public_key) in key_rows {
-            pk_map.entry(account_id).or_default().push(public_key);
-        }
-    }
+    let public_keys = wallet_key_resolver.verification_public_keys_on(conn, &signer_ids).await?;
 
     let intent_ids: Vec<uuid::Uuid> = rows
         .iter()
@@ -292,7 +318,9 @@ pub(crate) async fn verify_full_ledger_conn(
         Vec::new()
     } else {
         sqlx::query_as(
-            "SELECT id, account_id, public_key, signing_bytes, ledger_canonical \
+            "SELECT id, account_id, public_key, action, request_hash, snapshot, \
+                    idempotency_key, signing_bytes, ledger_entry, ledger_canonical, \
+                    expires_at, consumed_at \
              FROM credit.signing_intents WHERE id = ANY($1)",
         )
         .bind(&intent_ids)
@@ -360,7 +388,29 @@ pub(crate) async fn verify_full_ledger_conn(
                 };
                 match intent_map.get(&intent_id) {
                     Some(intent) => {
+                        let envelope = crate::signing::SigningEnvelopeExpectation {
+                            intent_id: intent.id,
+                            account_id: intent.account_id,
+                            public_key: &intent.public_key,
+                            action: &intent.action,
+                            request_hash: &intent.request_hash,
+                            snapshot: &intent.snapshot,
+                            ledger_entry: intent.ledger_entry.as_ref(),
+                            idempotency_key: &intent.idempotency_key,
+                            expires_at: intent.expires_at.timestamp(),
+                        };
                         intent.account_id == account_id
+                            && intent.consumed_at.is_some()
+                            && public_keys.get(&account_id).is_some_and(|account_keys| {
+                                account_keys.contains(&intent.public_key)
+                            })
+                            && crate::signing::signing_envelope_matches(
+                                &intent.signing_bytes,
+                                &envelope,
+                            )
+                            && intent.ledger_entry.as_ref().is_some_and(|entry| {
+                                crate::ledger::canonicalize(entry) == canonical
+                            })
                             && intent.ledger_canonical.as_deref() == Some(canonical.as_str())
                             && crate::ledger::verify_signature(
                                 &intent.signing_bytes,
@@ -371,8 +421,8 @@ pub(crate) async fn verify_full_ledger_conn(
                     None => false,
                 }
             } else {
-                pk_map.get(&account_id).is_some_and(|public_keys| {
-                    public_keys.iter().any(|public_key| {
+                public_keys.get(&account_id).is_some_and(|account_keys| {
+                    account_keys.iter().any(|public_key| {
                         crate::ledger::verify_signature(&canonical, &row.signature, public_key)
                     })
                 })
@@ -405,8 +455,12 @@ pub(crate) async fn verify_full_ledger_conn(
 // Wallets
 // ---------------------------------------------------------------------------
 
-/// Read the wallet balance for an account.
-pub async fn get_wallet(pool: &PgPool, account_id: i64) -> AppResult<WalletDto> {
+/// Read the wallet balance for an account and combine it with its Identity-owned active key.
+pub async fn get_wallet(
+    pool: &PgPool,
+    account_id: i64,
+    active_public_key: Option<String>,
+) -> AppResult<WalletDto> {
     let balance: i64 =
         sqlx::query_scalar("SELECT balance FROM credit.wallets WHERE account_id = $1")
             .bind(account_id)
@@ -414,7 +468,7 @@ pub async fn get_wallet(pool: &PgPool, account_id: i64) -> AppResult<WalletDto> 
             .await?
             .unwrap_or(0);
 
-    Ok(WalletDto { account_id: account_id.to_string(), balance })
+    Ok(WalletDto { account_id: account_id.to_string(), balance, active_public_key })
 }
 
 /// Ensure a wallet row exists for `account_id` (idempotent).
@@ -578,6 +632,19 @@ pub async fn insert_task_tx(
     Ok(row)
 }
 
+/// Read a task without taking a business-state lock.
+pub async fn find_task(pool: &PgPool, id: i64) -> AppResult<Option<TaskRow>> {
+    let row = sqlx::query_as(
+        "SELECT id, creator_id, acceptor_id, title, description, \
+                reward_amount, contact_info, status::text, hold_tx_id, created_at \
+         FROM credit.tasks WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row)
+}
+
 /// Lock and return a task inside an existing state-transition transaction.
 pub async fn find_task_for_update_tx(
     conn: &mut sqlx::PgConnection,
@@ -725,9 +792,9 @@ pub async fn list_products(
     Ok(finish_page(rows, limit, |row| row.id.to_string()))
 }
 
-/// Insert a new product row.
-pub async fn insert_product(
-    pool: &PgPool,
+/// Insert a new product inside the actor-lifecycle-locked transaction.
+pub async fn insert_product_tx(
+    conn: &mut sqlx::PgConnection,
     seller_id: i64,
     title: &str,
     description: Option<&str>,
@@ -750,7 +817,7 @@ pub async fn insert_product(
     .bind(price)
     .bind(stock)
     .bind(delivery_info)
-    .fetch_one(pool)
+    .fetch_one(&mut *conn)
     .await?;
 
     Ok(row)
@@ -811,6 +878,36 @@ pub async fn decrement_stock_tx(conn: &mut sqlx::PgConnection, id: i64) -> AppRe
             .rows_affected();
     if affected != 1 {
         return Err(CreditError::InvalidAction("product is sold out".into()).into());
+    }
+
+    Ok(())
+}
+
+/// Restore the unit reserved by a cancelled purchase before appending its escrow refund.
+///
+/// The row update is also the product lock for the cancellation transaction. A listing that sold
+/// out only because its last unit was reserved becomes available again, while an explicitly
+/// off-sale listing remains off sale.
+pub async fn restore_cancelled_purchase_stock_tx(
+    conn: &mut sqlx::PgConnection,
+    product_id: i64,
+) -> AppResult<()> {
+    let affected = sqlx::query(
+        "UPDATE credit.products \
+         SET stock = stock + 1, \
+             status = CASE \
+               WHEN status = 'sold_out'::credit.product_status \
+                 THEN 'on_sale'::credit.product_status \
+               ELSE status \
+             END \
+         WHERE id = $1",
+    )
+    .bind(product_id)
+    .execute(&mut *conn)
+    .await?
+    .rows_affected();
+    if affected != 1 {
+        return Err(CreditError::ProductNotFound.into());
     }
 
     Ok(())

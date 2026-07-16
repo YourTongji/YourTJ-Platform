@@ -6,7 +6,7 @@
 >
 > 负责人：Platform maintainers
 >
-> 最近核验：2026-07-16，main deploy SSH lifecycle、wallet cutover、migrations `0067`–`0069` 与 Flutter release gates
+> 最近核验：2026-07-17，main deploy SSH lifecycle、wallet cutover、account-scope bind gate、migrations `0067`–`0070` 与 Flutter release gates
 
 本文件描述仓库当前 GitHub Actions 行为，不把目标 Aliyun 架构写成已上线生产事实。Workflow
 或服务器脚本变化时必须在同一 PR 更新本 runbook。
@@ -411,6 +411,39 @@ recent-auth 的首次登记，而新 backend 在 migration 前也不能假设每
 继续关闭 bind/value-moving 路由并部署 forward-fix；不得启动旧 backend、删除 unique index、重新激活旧
 key 或记录 raw key 来“恢复”。未来 key rotation/recovery 必须另有 old-key proof、通知、冷却和审计 runbook。
 
+### `/wallet/bind` account-scope 严格 cutover
+
+首次钱包登记要求 body 中的 `accountId` 与已认证账号完全一致，属于客户端与 backend 同时收紧的协议
+cutover，不得复用 `0067` migration marker。旧页面缺少 `accountId` 时只能幂等确认已经 active 的同一把 key；
+它不能登记第一把或不同的 key。当前 Web 会把 account、bearer token 与 session context 固定在同一次授权
+快照中，再发送 account-scoped bind。
+
+首次启用严格 backend 时按以下顺序执行：
+
+1. 先确认移动端从未向用户分发。当前一次性 gate 只接受这一状态；若已有任何 iOS/Flutter build 分发，
+   停止 cutover，先设计最低支持版本、强制升级或独立的客户端迁移 gate，不能把“尚未分发”当作通用批准。
+2. 将 main-staging Environment variables 设置为待部署的同一个 40 位小写 commit SHA 和固定状态：
+   `WALLET_BIND_ACCOUNT_SCOPE_APPROVED_REVISION=<sha>`、
+   `WALLET_BIND_ACCOUNT_SCOPE_MOBILE_STATUS=not-distributed`，再 rerun 该 revision。workflow 会先验证格式；
+   变量未设置时分别传递 `not-approved` 和 `unknown`，不会因 SSH 末尾空参数丢失而绕过 gate。
+3. 当独立 marker 不存在时，版本化脚本在同一 deployment lock 内核对 exact revision 批准与移动端状态，
+   随后切换到该 revision 的 Web container，并通过 loopback、共享入口和 revision label 验证 Web。只有这些
+   检查全部通过，才停止旧 backend 并启动严格 backend。新 Web 向短暂共存的旧 backend 多发
+   `accountId` 是兼容的；旧 backend 会忽略未知字段。
+4. 严格 backend 的 direct health、readiness、运行环境和 revision label 全部通过后，脚本才原子写入
+   mode-`0600` 的
+   `/opt/yourtj-preview/shared/wallet-bind-account-scope-cutover.complete`。该 marker 只记录这次客户端协议
+   cutover，不证明 `0067` migration 状态。成功后清空两个一次性 Environment variables；后续部署由 marker
+   进入正常 backend-first 路径，并继续使用 `not-approved` / `unknown` sentinel。
+5. 严格 backend 验证前失败时 marker 保持不存在，脚本恢复此前 Web；backend 仍遵循既有 forward-only
+   schema rollback 边界。严格 backend 验证后若后续 public smoke 失败，保留已验证的新 Web/backend 与
+   marker 并 forward-fix，不得把旧 Web 恢复到严格 backend 前。浏览器中已加载的旧页面可能继续发出
+   legacy body，但缺 `accountId` 的首次登记会 fail closed，不能为它开放兼容首绑。
+
+恢复入口后用合成账号验证：匹配 `accountId` 的首次登记为 204、错账号为 403、缺 `accountId` 的首次
+登记失败、缺 `accountId` 的 exact active-key 幂等确认仍为 204、不同 key 为 409。检查日志时只记录结果码
+和合成 account id，不记录 public key、bearer token、签名或请求 body。
+
 ### Migration `0068` DM 消息幂等
 
 `0068` 为普通私信消息增加 nullable、sender-scoped client UUID 和 partial unique index。历史消息不需要
@@ -429,6 +462,32 @@ sender-scoped duplicate；再启动新版 backend。发布 smoke 用合成 parti
 产生一条 message 和一条 `dm-message:<id>` outbox source key；坏 UUID 为平台 `BAD_REQUEST`，同 UUID
 改 conversation/body 为 `CONFLICT`。失败时保持新 backend 不接流量并做 forward-fix，不在已有新版写入后
 回滚 column/index。
+
+### Migration `0070` legacy wallet claim 隐私收紧
+
+`0070` 会改写已认领 review 的迁移凭据、清理 challenge 并建立约束，按短维护窗口发布，不能让旧版
+claim writer 长期混跑：
+
+1. 在 disposable fresh database 跑完整 migration up-path，并在从 `0069` 升级的 populated fixture 验证：
+   已认领 review 的 `wallet_user_hash`/`edit_token` 被清空、未认领 review 保留；expired/used challenge 被删除，
+   同账号重复 active challenge 只保留 `created_at DESC, id DESC` 的第一条。
+2. 停止 `/wallet/claim-challenge` 与 `/wallet/claim` 写入并排空旧请求；迁移只盘点 opaque account/review id
+   和计数，不记录 wallet hash、edit token、challenge、public key 或请求正文。
+3. 由 migration owner 执行 `0070`，核对 validated
+   `reviews_claimed_legacy_credentials_cleared` constraint 与
+   `wallet_claim_challenges_one_per_account_idx` 均有效，再启动新版 backend。新版 challenge issuance 必须
+   每账号 10 次/10 分钟限流，并在 account `FOR UPDATE` barrier 内替换旧 row；claim 必须原子清空 review
+   迁移凭据。Claim 还必须执行 account 10 次/10 分钟和 opaque network/global bucket、canonical fixed-size
+   input validation、neutral proof error 与缺 link/key dummy verification；有效 challenge 的第一次 proof
+   attempt 无论成功失败都写入 `used_at`，客户端失败后必须重新获取并签名。
+4. 恢复入口后只用合成账号 smoke：连续签发留下恰好一条 challenge，旧 challenge 不能 claim；一次错误
+   proof 返回 generic error 且消费新 challenge，同 challenge 改正后仍失败，重新签发/签名才可成功；第 11 次
+   account-window attempt 返回 429。成功 claim 后 review owner 已赋值且旧 hash/token 均为空，随后 lifecycle
+   purge 不留下 challenge/已归属 link。
+
+旧 backend 在 migration 后的重复 insert 或保留已认领凭据会被数据库安全拒绝，不应为兼容而移除约束。
+失败时保持 claim 路由关闭并 forward-fix；不得恢复已清空凭据、删除 unique index/check constraint，或把未认领
+authority 当作应急删除对象。未认领 legacy claim 的产品截止与通知仍需单独决策。
 
 ## PostgreSQL migration owner 与 runtime role
 

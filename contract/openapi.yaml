@@ -655,7 +655,16 @@ components:
         note: { type: string, minLength: 3, maxLength: 1000 }
 
     # ---- wallet / credit (Web2.5) ----
-    Wallet: { type: object, properties: { accountId: { type: string }, balance: { type: integer } } }
+    Wallet:
+      type: object
+      required: [accountId, balance, activePublicKey]
+      properties:
+        accountId: { type: string }
+        balance: { type: integer }
+        activePublicKey:
+          type: string
+          nullable: true
+          description: Standard base64 encoding of the account's active 32-byte Ed25519 public key; null until the first key is enrolled.
     WalletClaimChallenge:
       type: object
       required: [challengeId, nonce]
@@ -738,7 +747,10 @@ components:
         action:
           type: string
           enum: [credit.tip, credit.task.create, credit.task.action, credit.product.purchase, credit.purchase.action]
-        request: { type: object }
+        request:
+          type: object
+          additionalProperties: true
+          description: Action-specific JSON object whose exact normalized content is bound into requestHash.
     SigningIntent:
       type: object
       required: [intentId, signingBytes, expiresAt]
@@ -746,6 +758,22 @@ components:
         intentId: { type: string, format: uuid }
         signingBytes: { type: string }
         expiresAt: { type: integer, format: int64 }
+    SigningIntentOutcome:
+      type: object
+      required: [intentId, status, expiresAt]
+      properties:
+        intentId: { type: string, format: uuid }
+        status:
+          type: string
+          enum: [pending, committed, expired]
+          description: Committed is visible only after the consuming business transaction commits; expired means no consumer holds the intent row lock and the intent was not consumed before expiry.
+        expiresAt: { type: integer, format: int64 }
+    SigningIntentOutcomeInput:
+      type: object
+      required: [intentId]
+      additionalProperties: false
+      properties:
+        intentId: { type: string, format: uuid }
     TipInput:
       type: object
       required: [toAccountId, amount, targetType, targetId]
@@ -757,6 +785,7 @@ components:
         targetId: { type: string }
     Task:
       type: object
+      required: [id, creatorId, acceptorId, title, description, rewardAmount, contactInfo, status, createdAt]
       properties:
         id: { type: string }
         creatorId: { type: string }
@@ -783,6 +812,7 @@ components:
     Product:
       type: object
       description: Public listing data. Private delivery instructions are never exposed here.
+      required: [id, sellerId, title, description, price, stock, status, createdAt]
       properties:
         id: { type: string }
         sellerId: { type: string }
@@ -803,6 +833,7 @@ components:
         deliveryInfo: { type: string }
     Purchase:
       type: object
+      required: [id, productId, buyerId, sellerId, amount, status, deliveryInfo, createdAt]
       properties:
         id: { type: string }
         productId: { type: string }
@@ -3526,31 +3557,52 @@ paths:
     post:
       tags: [wallet]
       summary: Enroll the first client-generated Ed25519 public key
-      description: Requires fresh session-bound authentication. Repeating the canonical active key is idempotent; enrolling a different key while one is active is rejected because key rotation requires a separately designed old-key proof or audited recovery flow.
+      description: Requires fresh session-bound authentication. Initial enrollment requires an accountId that exactly matches the authenticated account. During the client cutover, a legacy body without accountId is accepted only when it repeats the already-active canonical key; it can never enroll a first or different key. Key rotation requires a separately designed old-key proof or audited recovery flow.
       requestBody:
         required: true
-        content: { application/json: { schema: { type: object, required: [publicKey], properties: { publicKey: { type: string, description: Standard base64 encoding of a 32-byte Ed25519 public key } } } } }
+        content: { application/json: { schema: { type: object, required: [publicKey], additionalProperties: false, properties: { accountId: { type: string, description: Canonical account identifier captured with the authenticated session; required for initial enrollment and optional only for legacy idempotent confirmation of the exact active key }, publicKey: { type: string, description: Standard base64 encoding of a 32-byte Ed25519 public key } } } } }
       responses:
         "204": { description: enrolled or already the canonical active key }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
         "409": { $ref: "#/components/responses/Conflict" }
         "428": { $ref: "#/components/responses/RecentAuthRequired" }
   /wallet/claim-challenge:
     get:
       tags: [wallet]
       summary: Get a one-time claim challenge
-      responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/WalletClaimChallenge" } } } } }
+      description: Replaces any prior challenge for the authenticated account. Issuance is account-rate-limited and the returned challenge becomes permanently unusable after the first well-formed proof attempt, whether that proof succeeds or fails.
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/WalletClaimChallenge" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
   /wallet/claim:
     post:
       tags: [wallet]
       summary: Claim a legacy wallet by signing the challenge (re-derive userHash from 学号+PIN)
+      description: The request is bounded by account, opaque client-network, and global abuse-control buckets. A valid account-owned challenge is consumed by the first well-formed legacy proof attempt even when the link is missing, already claimed, lacks a key, or the signature is invalid. Canonical-field, challenge, link, and proof failures handled by the endpoint return the same generic bad-request error; clients must request and sign a new challenge after any unsuccessful attempt.
       requestBody:
         required: true
-        content: { application/json: { schema: { type: object, required: [legacyUserHash, challengeId, signature], properties: { legacyUserHash: { type: string }, challengeId: { type: string }, signature: { type: string } } } } }
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [legacyUserHash, challengeId, signature]
+              additionalProperties: false
+              properties:
+                legacyUserHash: { type: string, minLength: 64, maxLength: 64, pattern: '^[0-9a-f]{64}$', description: Canonical lowercase hexadecimal SHA-256 legacy user hash }
+                challengeId: { type: string, format: uuid, description: Canonical lowercase UUID v4 returned by the latest claim-challenge request }
+                signature: { type: string, minLength: 88, maxLength: 88, pattern: '^[A-Za-z0-9+/]{86}==$', description: Canonical standard-base64 encoding of a 64-byte Ed25519 signature }
       responses:
         "200": { description: merged, content: { application/json: { schema: { $ref: "#/components/schemas/Wallet" } } } }
-        "409": { $ref: "#/components/responses/Conflict" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
   /wallet/ledger:
     get:
       tags: [wallet]
@@ -3574,6 +3626,25 @@ paths:
       responses:
         "200": { description: exact bytes to sign, content: { application/json: { schema: { $ref: "#/components/schemas/SigningIntent" } } } }
         "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /credit/signing-intent-outcome:
+    post:
+      tags: [credit]
+      summary: Read the authenticated owner's lock-aware signing intent outcome
+      description: Uses a fixed URL so the sensitive intent correlation identifier is not copied into intermediary access-log paths.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SigningIntentOutcomeInput" }
+      responses:
+        "200": { description: bounded intent outcome without signing material, content: { application/json: { schema: { $ref: "#/components/schemas/SigningIntentOutcome" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /credit/tip:
     post:
       tags: [credit]
@@ -3697,7 +3768,7 @@ paths:
       description: confirm/cancel/reject and an open-task delete require wallet intent, signature and idempotency headers; submit and deletion after cancellation do not move value.
       parameters: [{ name: id, in: path, required: true, schema: { type: string } }, { $ref: "#/components/parameters/OptionalWalletIntent" }, { $ref: "#/components/parameters/OptionalWalletSig" }, { $ref: "#/components/parameters/IdempotencyKey" }]
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/TaskAction" } } } }
-      responses: { "204": { description: updated }, "400": { $ref: "#/components/responses/BadRequest" }, "409": { $ref: "#/components/responses/Conflict" } }
+      responses: { "204": { description: updated }, "400": { $ref: "#/components/responses/BadRequest" }, "404": { $ref: "#/components/responses/NotFound" }, "409": { $ref: "#/components/responses/Conflict" } }
 
   # ---- escrow market: products / purchases ----
   /credit/products:
@@ -3719,6 +3790,7 @@ paths:
       responses:
         "201": { description: created, content: { application/json: { schema: { $ref: "#/components/schemas/Purchase" } } } }
         "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /credit/purchases:
     get:
       tags: [credit]
@@ -3729,10 +3801,10 @@ paths:
     post:
       tags: [credit]
       summary: Escrow steps — accept / deliver / confirm(release) / cancel(refund)
-      description: confirm and cancel require wallet intent, signature and idempotency headers; accept and deliver are non-value seller transitions.
+      description: confirm and cancel require wallet intent, signature and idempotency headers; accept and deliver are non-value seller transitions. A successful pending/accepted cancellation atomically refunds escrow and restores exactly one product unit; sold_out returns to on_sale, while off_sale remains unchanged.
       parameters: [{ name: id, in: path, required: true, schema: { type: string } }, { $ref: "#/components/parameters/OptionalWalletIntent" }, { $ref: "#/components/parameters/OptionalWalletSig" }, { $ref: "#/components/parameters/IdempotencyKey" }]
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/PurchaseAction" } } } }
-      responses: { "204": { description: updated }, "400": { $ref: "#/components/responses/BadRequest" }, "409": { $ref: "#/components/responses/Conflict" } }
+      responses: { "204": { description: updated }, "400": { $ref: "#/components/responses/BadRequest" }, "404": { $ref: "#/components/responses/NotFound" }, "409": { $ref: "#/components/responses/Conflict" } }
 
   # ============ search ============
   /search:

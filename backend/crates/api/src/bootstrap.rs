@@ -2,7 +2,7 @@
 
 use std::net::SocketAddr;
 
-use axum::extract::{Request, State};
+use axum::extract::{MatchedPath, Request, State};
 use axum::http::header::{ACCEPT, AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE, PRAGMA};
 use axum::http::{HeaderName, HeaderValue, Method};
 use axum::routing::get;
@@ -21,7 +21,7 @@ static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("../../migrations");
 const SINGLE_ACTIVE_WALLET_KEY_MIGRATION: i64 = 67;
 
 fn request_log_path(request: &Request) -> &str {
-    request.uri().path()
+    request.extensions().get::<MatchedPath>().map(MatchedPath::as_str).unwrap_or("<unmatched>")
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -75,7 +75,12 @@ pub async fn run() -> anyhow::Result<()> {
     let (system_private_key, system_public_key_b64) =
         derive_system_key(&config.credit_system_private_key)?;
     if startup_options.wallet_key_cutover_drained {
-        let verification = credit::repo::verify_full_ledger(&db, &system_public_key_b64).await?;
+        let verification = credit::repo::verify_full_ledger(
+            &db,
+            &system_public_key_b64,
+            &crate::wallet_keys::AccountWalletKeyResolver,
+        )
+        .await?;
         if !verification.ok {
             anyhow::bail!("credit ledger verification failed after wallet key cutover");
         }
@@ -349,7 +354,10 @@ pub async fn run() -> anyhow::Result<()> {
 
 /// Compose the full application router from per-domain routers.
 fn build_router(state: AppState) -> anyhow::Result<Router> {
+    let account_eligibility_resolver =
+        std::sync::Arc::new(crate::account_eligibility::IdentityAccountEligibilityResolver);
     let tip_target_resolver = std::sync::Arc::new(crate::tip_targets::ContentTipTargetResolver);
+    let wallet_key_resolver = std::sync::Arc::new(crate::wallet_keys::AccountWalletKeyResolver);
     let allowed_origins = state
         .config
         .cors_allowed_origins
@@ -404,7 +412,12 @@ fn build_router(state: AppState) -> anyhow::Result<Router> {
         .merge(search::routes(state.clone()))
         .merge(courses::routes(state.clone()))
         .merge(reviews::routes(state.clone()))
-        .merge(credit::routes(state.clone(), tip_target_resolver))
+        .merge(credit::routes(
+            state.clone(),
+            account_eligibility_resolver,
+            tip_target_resolver,
+            wallet_key_resolver,
+        ))
         .merge(forum::routes(state.clone()))
         .merge(media::routes(state.clone()))
         .merge(crate::onebox::routes(state.clone()))
@@ -638,13 +651,34 @@ mod tests {
     }
 
     #[test]
-    fn request_trace_path_excludes_query_string() {
+    fn unmatched_request_trace_does_not_record_raw_path_or_query() {
         let request = Request::builder()
-            .uri("/api/v2/selection/courses/search?calendarId=1&q=private-input")
+            .uri("/private/path-value?query=private-input")
             .body(Body::empty())
             .expect("request builds");
 
-        assert_eq!(request_log_path(&request), "/api/v2/selection/courses/search");
+        assert_eq!(request_log_path(&request), "<unmatched>");
+    }
+
+    #[tokio::test]
+    async fn request_trace_uses_route_template_instead_of_dynamic_path_value() {
+        async fn assert_template(request: axum::extract::Request) -> StatusCode {
+            assert_eq!(request_log_path(&request), "/items/{id}");
+            StatusCode::NO_CONTENT
+        }
+
+        let response = axum::Router::new()
+            .route("/items/{id}", axum::routing::get(assert_template))
+            .oneshot(
+                Request::builder()
+                    .uri("/items/private-intent-id?query=private-input")
+                    .body(Body::empty())
+                    .expect("request builds"),
+            )
+            .await
+            .expect("request succeeds");
+
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
     }
 
     #[tokio::test]

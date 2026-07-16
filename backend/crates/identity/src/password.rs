@@ -80,7 +80,11 @@ fn verify_blocking(password: &str, phc: &str) -> bool {
 
 /// Hash a password without blocking a Tokio worker thread.
 pub async fn hash(password: &str) -> Result<String, AppError> {
-    let permit = ARGON2_LIMITER.try_acquire()?;
+    hash_with_limiter(password, &ARGON2_LIMITER).await
+}
+
+async fn hash_with_limiter(password: &str, limiter: &Argon2Limiter) -> Result<String, AppError> {
+    let permit = limiter.try_acquire()?;
     let password = password.to_owned();
     tokio::task::spawn_blocking(move || {
         let _permit = permit;
@@ -156,6 +160,18 @@ pub fn validate(password: &str, email: &str) -> Result<(), AppError> {
 mod tests {
     use super::*;
 
+    async fn hash_for_test(password: &str) -> Result<String, AppError> {
+        hash_with_limiter(password, &Argon2Limiter::new(1)).await
+    }
+
+    async fn verify_for_test(password: &str, phc: &str) -> Result<bool, AppError> {
+        verify_with_limiter(password, phc, &Argon2Limiter::new(1)).await
+    }
+
+    async fn verify_or_dummy_for_test(password: &str, phc: Option<&str>) -> Result<bool, AppError> {
+        verify_or_dummy_with_limiter(password, phc, &Argon2Limiter::new(1)).await
+    }
+
     #[test]
     fn limiter_rejects_work_beyond_its_memory_bound() {
         let limiter = Argon2Limiter::new(1);
@@ -172,36 +188,36 @@ mod tests {
     #[tokio::test]
     async fn hash_roundtrip() {
         let pw = "MyStr0ngP4ssword!";
-        let phc = hash(pw).await.expect("hash should succeed");
+        let phc = hash_for_test(pw).await.expect("hash should succeed");
         assert!(phc.starts_with("$argon2id$"));
-        assert!(verify(pw, &phc).await.expect("verify password"));
+        assert!(verify_for_test(pw, &phc).await.expect("verify password"));
     }
 
     #[tokio::test]
     async fn wrong_password_rejects() {
-        let phc = hash("correct-horse-battery-staple").await.expect("hash password");
-        assert!(!verify("wrong-password", &phc).await.expect("verify password"));
+        let phc = hash_for_test("correct-horse-battery-staple").await.expect("hash password");
+        assert!(!verify_for_test("wrong-password", &phc).await.expect("verify password"));
     }
 
     #[tokio::test]
     async fn empty_password_rejects() {
-        assert!(hash("").await.is_err());
+        assert!(hash_for_test("").await.is_err());
     }
 
     #[tokio::test]
     async fn empty_password_verify_fails() {
-        let phc = hash("something").await.expect("hash password");
-        assert!(!verify("", &phc).await.expect("verify password"));
+        let phc = hash_for_test("something").await.expect("hash password");
+        assert!(!verify_for_test("", &phc).await.expect("verify password"));
     }
 
     #[tokio::test]
     async fn each_hash_is_unique() {
         let pw = "same-password-twice";
-        let h1 = hash(pw).await.expect("hash password");
-        let h2 = hash(pw).await.expect("hash password");
+        let h1 = hash_for_test(pw).await.expect("hash password");
+        let h2 = hash_for_test(pw).await.expect("hash password");
         assert_ne!(h1, h2, "different salts should produce different hashes");
-        assert!(verify(pw, &h1).await.expect("verify password"));
-        assert!(verify(pw, &h2).await.expect("verify password"));
+        assert!(verify_for_test(pw, &h1).await.expect("verify password"));
+        assert!(verify_for_test(pw, &h2).await.expect("verify password"));
     }
 
     // -----------------------------------------------------------------------
@@ -265,20 +281,22 @@ mod tests {
 
     #[tokio::test]
     async fn verify_garbage_phc_returns_false() {
-        assert!(!verify("anything", "not-a-valid-phc-string").await.expect("verify password"));
+        assert!(!verify_for_test("anything", "not-a-valid-phc-string")
+            .await
+            .expect("verify password"));
     }
 
     #[tokio::test]
     async fn verify_empty_phc_returns_false() {
-        assert!(!verify("anything", "").await.expect("verify password"));
+        assert!(!verify_for_test("anything", "").await.expect("verify password"));
     }
 
     #[tokio::test]
     async fn dummy_hash_can_never_authenticate() {
-        assert!(!verify_or_dummy("yourtj-constant-dummy-password", None)
+        assert!(!verify_or_dummy_for_test("yourtj-constant-dummy-password", None)
             .await
             .expect("verify dummy password"));
-        assert!(!verify_or_dummy("yourtj-constant-dummy-password", Some("invalid-phc"))
+        assert!(!verify_or_dummy_for_test("yourtj-constant-dummy-password", Some("invalid-phc"))
             .await
             .expect("verify invalid stored hash"));
     }

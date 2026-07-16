@@ -6,12 +6,62 @@ use std::sync::Arc;
 
 use axum::body::{to_bytes, Body};
 use axum::http::{Request, Response, StatusCode};
+use credit::account_eligibility::{AccountEligibilityFuture, AccountEligibilityResolver};
 use credit::tip_targets::{ResolvedTipTarget, TipTargetResolver};
+use credit::wallet_keys::{VerificationPublicKeys, WalletKeyFuture, WalletKeyResolver};
 use serde_json::Value;
 use shared::{AppResult, AppState};
 use sqlx::{PgConnection, PgPool};
 
 struct ContentTipTargetResolver;
+
+pub struct IdentityAccountEligibilityResolver;
+
+impl AccountEligibilityResolver for IdentityAccountEligibilityResolver {
+    fn is_eligible_on<'a>(
+        &'a self,
+        conn: &'a mut PgConnection,
+        account_id: i64,
+    ) -> AccountEligibilityFuture<'a> {
+        Box::pin(identity::public_accounts::is_credit_recipient_eligible(conn, account_id))
+    }
+
+    fn are_eligible_on<'a>(
+        &'a self,
+        conn: &'a mut PgConnection,
+        account_ids: &'a [i64],
+    ) -> AccountEligibilityFuture<'a> {
+        Box::pin(identity::public_accounts::lock_active_interaction_accounts(conn, account_ids))
+    }
+}
+
+pub struct AccountWalletKeyResolver;
+
+impl WalletKeyResolver for AccountWalletKeyResolver {
+    fn active_public_key<'a>(
+        &'a self,
+        pool: &'a PgPool,
+        account_id: i64,
+    ) -> WalletKeyFuture<'a, Option<String>> {
+        Box::pin(identity::wallet_keys::active_public_key(pool, account_id))
+    }
+
+    fn active_public_key_on<'a>(
+        &'a self,
+        conn: &'a mut PgConnection,
+        account_id: i64,
+    ) -> WalletKeyFuture<'a, Option<String>> {
+        Box::pin(identity::wallet_keys::active_public_key_on(conn, account_id))
+    }
+
+    fn verification_public_keys_on<'a>(
+        &'a self,
+        conn: &'a mut PgConnection,
+        account_ids: &'a [i64],
+    ) -> WalletKeyFuture<'a, VerificationPublicKeys> {
+        Box::pin(identity::wallet_keys::verification_public_keys_on(conn, account_ids))
+    }
+}
 
 impl TipTargetResolver for ContentTipTargetResolver {
     fn resolve<'a>(
@@ -56,6 +106,13 @@ impl TipTargetResolver for ContentTipTargetResolver {
 
 /// Create a complete test application with credit routes.
 pub async fn create_test_app() -> (PgPool, axum::Router) {
+    create_test_app_with_account_eligibility(Arc::new(IdentityAccountEligibilityResolver)).await
+}
+
+/// Create a test application with a caller-controlled account lifecycle barrier.
+pub async fn create_test_app_with_account_eligibility(
+    account_eligibility_resolver: Arc<dyn AccountEligibilityResolver>,
+) -> (PgPool, axum::Router) {
     let url = std::env::var("DATABASE_URL")
         .unwrap_or_else(|_| "postgres://postgres:postgres@localhost:5432/yourtj_test".to_string());
 
@@ -87,7 +144,12 @@ pub async fn create_test_app() -> (PgPool, axum::Router) {
         sse_tx: None,
     };
 
-    let router = credit::routes(state, Arc::new(ContentTipTargetResolver));
+    let router = credit::routes(
+        state,
+        account_eligibility_resolver,
+        Arc::new(ContentTipTargetResolver),
+        Arc::new(AccountWalletKeyResolver),
+    );
     (pool, router)
 }
 

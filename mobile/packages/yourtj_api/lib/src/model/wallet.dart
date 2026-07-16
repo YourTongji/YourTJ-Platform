@@ -15,23 +15,37 @@ part 'wallet.g.dart';
 )
 class Wallet {
   /// Returns a new [Wallet] instance.
-  Wallet({this.accountId, this.balance});
+  Wallet({
+    required this.accountId,
 
-  @JsonKey(name: r'accountId', required: false, includeIfNull: false)
-  final String? accountId;
+    required this.balance,
 
-  @JsonKey(name: r'balance', required: false, includeIfNull: false)
-  final int? balance;
+    required this.activePublicKey,
+  });
+
+  @JsonKey(name: r'accountId', required: true, includeIfNull: false)
+  final String accountId;
+
+  @JsonKey(name: r'balance', required: true, includeIfNull: false)
+  final int balance;
+
+  /// Standard base64 encoding of the account's active 32-byte Ed25519 public key; null until the first key is enrolled.
+  @JsonKey(name: r'activePublicKey', required: true, includeIfNull: true)
+  final String? activePublicKey;
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
       other is Wallet &&
           other.accountId == accountId &&
-          other.balance == balance;
+          other.balance == balance &&
+          other.activePublicKey == activePublicKey;
 
   @override
-  int get hashCode => accountId.hashCode + balance.hashCode;
+  int get hashCode =>
+      accountId.hashCode +
+      balance.hashCode +
+      (activePublicKey == null ? 0 : activePublicKey.hashCode);
 
   factory Wallet.fromJson(Map<String, dynamic> json) => _$WalletFromJson(json);
 

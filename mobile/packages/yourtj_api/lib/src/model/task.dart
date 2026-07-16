@@ -16,57 +16,57 @@ part 'task.g.dart';
 class Task {
   /// Returns a new [Task] instance.
   Task({
-    this.id,
+    required this.id,
 
-    this.creatorId,
+    required this.creatorId,
 
-    this.acceptorId,
+    required this.acceptorId,
 
-    this.title,
+    required this.title,
 
-    this.description,
+    required this.description,
 
-    this.rewardAmount,
+    required this.rewardAmount,
 
-    this.contactInfo,
+    required this.contactInfo,
 
-    this.status,
+    required this.status,
 
-    this.createdAt,
+    required this.createdAt,
   });
 
-  @JsonKey(name: r'id', required: false, includeIfNull: false)
-  final String? id;
+  @JsonKey(name: r'id', required: true, includeIfNull: false)
+  final String id;
 
-  @JsonKey(name: r'creatorId', required: false, includeIfNull: false)
-  final String? creatorId;
+  @JsonKey(name: r'creatorId', required: true, includeIfNull: false)
+  final String creatorId;
 
-  @JsonKey(name: r'acceptorId', required: false, includeIfNull: false)
+  @JsonKey(name: r'acceptorId', required: true, includeIfNull: true)
   final String? acceptorId;
 
-  @JsonKey(name: r'title', required: false, includeIfNull: false)
-  final String? title;
+  @JsonKey(name: r'title', required: true, includeIfNull: false)
+  final String title;
 
-  @JsonKey(name: r'description', required: false, includeIfNull: false)
+  @JsonKey(name: r'description', required: true, includeIfNull: true)
   final String? description;
 
-  @JsonKey(name: r'rewardAmount', required: false, includeIfNull: false)
-  final int? rewardAmount;
+  @JsonKey(name: r'rewardAmount', required: true, includeIfNull: false)
+  final int rewardAmount;
 
   /// Visible only to controlled parties
-  @JsonKey(name: r'contactInfo', required: false, includeIfNull: false)
+  @JsonKey(name: r'contactInfo', required: true, includeIfNull: true)
   final String? contactInfo;
 
   @JsonKey(
     name: r'status',
-    required: false,
+    required: true,
     includeIfNull: false,
     unknownEnumValue: TaskStatusEnum.unknownDefaultOpenApi,
   )
-  final TaskStatusEnum? status;
+  final TaskStatusEnum status;
 
-  @JsonKey(name: r'createdAt', required: false, includeIfNull: false)
-  final int? createdAt;
+  @JsonKey(name: r'createdAt', required: true, includeIfNull: false)
+  final int createdAt;
 
   @override
   bool operator ==(Object other) =>

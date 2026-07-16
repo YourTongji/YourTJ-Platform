@@ -25,8 +25,9 @@ class SigningIntentInput {
   )
   final SigningIntentInputActionEnum action;
 
+  /// Action-specific JSON object whose exact normalized content is bound into requestHash.
   @JsonKey(name: r'request', required: true, includeIfNull: false)
-  final Object request;
+  final Map<String, Object> request;
 
   @override
   bool operator ==(Object other) =>

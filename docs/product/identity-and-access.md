@@ -6,7 +6,7 @@
 >
 > 负责人：Identity maintainers、Security owner、Product owner
 >
-> 最近核验：2026-07-14，migrations `0062`/`0066`、identity auth hardening tests 与 Web account journeys
+> 最近核验：2026-07-17，Identity wallet key projection、Credit owner lifecycle 与 Web wallet recovery
 
 身份域证明“谁在使用平台”和“是否具备校园资格”，但不把校园邮箱变成公开身份。本规范定义
 登录、注册、密码、会话、onboarding、handle 与账号生命周期的目标语义。
@@ -62,6 +62,26 @@
 - Owner data export 使用 durable 24 小时 job；创建 job 和签发 5 分钟一次性 download grant 都要求
   recent-auth，并记录下载时间。Artifact 由各领域的公开 owner projection 组成，不由 gateway 跨域读取
   私有表。
+- Identity 拥有账号至多一把 active Ed25519 public key，并通过 typed owner API 让 Credit 组合到认证账号
+  本人的 `/wallet`；首次登记前返回 null。该 projection 不进入公开 profile/account surface，也不提供
+  rotation、恢复或换绑 authority。
+- `/wallet/bind` 在登记事务内独占锁定 actor account，并在等待 lifecycle/sanction 写后重新验证
+  active/no-effective-suspend。`/wallet/claim-challenge` 以每账号 10 次/10 分钟的 Redis bucket 限流，随后
+  `FOR UPDATE` 锁 actor，并在同一事务用新 challenge 替换旧 challenge；数据库 unique index 兜底保证每账号
+  最多一条。`/wallet/claim` 另有 account 10 次/10 分钟与 opaque network/global bucket，把排序后的 actor
+  `FOR SHARE` eligibility barrier 作为事务第一组数据库锁。UUID、lowercase SHA-256 hash 和 64-byte Ed25519
+  signature 在 claim 查询前按 canonical 格式拒绝；一条有效 actor challenge 第一次进入 proof 校验即永久
+  消费，即使 link 缺失/已认领/无 key 或签名错误，外部都只返回同一 generic proof error，客户端失败后必须
+  重新获取并签名。缺 link/key 仍执行 dummy Ed25519 verify，避免明显的 crypto/no-crypto timing 分支。
+  Lifecycle 先取得账号锁时，这些路径不写 key、challenge、legacy link/review owner 或 claim mint；wallet
+  writer 先取得锁时，lifecycle `FOR UPDATE` 等待其提交后再清理。成功 claim 会在赋予 review owner 的同时
+  清空旧 `wallet_user_hash` 与 `edit_token`，不把迁移凭据继续当作已认领内容的第二套 authority。
+- Web wallet private key 是按规范 API environment + account 隔离的 non-extractable WebCrypto key；每次
+  签名前都与 `/wallet.activePublicKey` 精确匹配。旧 `localStorage` seed 只有在派生公钥匹配、且 IndexedDB
+  durable commit 成功后才删除；环境/账号不匹配、record 损坏或存储不可用都 fail closed。
+- Web 在任何钱包网络调用前以 IndexedDB 原子认领 environment+account scoped operation digest，只有同一
+  claim id 能转为 submitted/committed；未知响应只接受 owner intent 的 lock-aware committed/expired outcome。
+  记录不保存 raw request、access/idempotency token、signature 或 signing bytes。
 
 ### Partial
 
@@ -72,6 +92,9 @@
 - Web 已提供 focused onboarding、明确条款勾选、profile/activity privacy 默认值，以及 recent-auth
   保护的数据导出、停用和删除确认。关闭响应中的 recovery credential 只放 sessionStorage。
 - access 与 refresh token 都保存在 localStorage；富文本上线前必须重新评估 XSS 后果。
+- non-extractable WebCrypto key 不能被标准 API 导出，但成功执行的同源 XSS 仍可调用它签名；账号 purge
+  也不能远程擦除离线浏览器 profile。本机清钥、legacy mismatch、密钥丢失恢复和 unresolved pending 的
+  最终 UX 仍为 `Partial`，不能把本机存储等同于服务端 owner lifecycle。
 - Web 尚无完整的跨标签页 refresh single-flight 协调，但旧 refresh 失败不会清除另一标签页刚写入的新
   token；条款内容仍由应用常量版本驱动，尚无 policy publish/历史阅读界面，onboarding 也还没有兴趣
   板块、头像上传和通知偏好的可恢复分步体验。
@@ -183,9 +206,16 @@ active + suspend = 登录、refresh 和受保护请求被拒绝
 - `deactivated` 是用户可恢复停用，不等同于处罚。
 - `deletion_requested` 立即撤销所有 session、停止公开展示和新互动，同时排入 `mark_deleted` 与
   deadline-based `purge` durable job；`deleted` 仍处于同一 30 天恢复窗。
-- `purged` 删除可变 Identity PII、password/session/recovery/export artifact，清理各域 owner-private
-  projection，但保留并撤销验证历史 ledger 所必需的 Ed25519 public key，以及政策要求的公共内容、
-  治理历史和不可改写积分账本。账号行只剩随机 tombstone handle/id 与必要外键锚点，不能反查原邮箱。
+- `purged` 删除可变 Identity PII、password/session/recovery/export artifact、wallet claim challenge 与已归属
+  legacy-wallet link，并兜底清空已归属 legacy review 的 `wallet_user_hash`/`edit_token`，清理各域 owner-private
+  projection，但保留并撤销验证历史 ledger 所必需的 Ed25519
+  public key，以及政策要求的公共内容、治理历史和不可改写积分账本。账号行只剩随机 tombstone handle/id
+  与必要外键锚点，不能反查原邮箱。
+- Credit owner cleanup 幂等清空该账号创建的 task contact、售卖 product delivery instructions 和未消费
+  signing intent；不删除交易对手拥有的私密字段，也不改写 task/product/purchase 状态、已消费 intent、
+  ledger 或 escrow 事实。删除前 owner export 覆盖本人创建/接受的 task、创建的 product 与本人参与的 purchase。
+  已开始 escrow 在账号失去认证能力前的阻断/结清策略尚未决策；本轮只防止 inactive/suspended
+  creator/seller 的新 accept/purchase，无法代替 `SYS-AUDIT-11` 的跨域 lifecycle settlement。
 - Lifecycle/export worker 使用 `FOR UPDATE SKIP LOCKED`、lease expiry、attempt/backoff 和 bounded error
   code。恢复 transaction 锁定 purge job；job 为 running/failed 或账号已有 `purge_started_at` 时一律
   fail closed。达到 20 次上限的 lifecycle dead letter 可由具备 `operations.jobs` capability 且完成
@@ -198,7 +228,9 @@ active + suspend = 登录、refresh 和受保护请求被拒绝
 Identity crate 拥有 accounts、email codes、password hash、sessions、安全事实、邮件投递 jobs、account keys、onboarding、recovery
 credentials、lifecycle/export jobs、profile/privacy 和未来 handle history。Forum、Reviews、Governance、
 Credit、Activity、Platform 与 Media 各自公开 owner export/purge API；gateway 只组合这些 typed API，
-不跨域编写私有 SQL。
+不跨域编写私有 SQL。Identity 的 account-key owner API 提供当前 active public key，以及 full-ledger
+verification 所需的 retained historical keys；Credit 只通过注入的 resolver 读取，intent consume 在业务
+transaction 的同一连接上复核 active key，不能跨 schema 选择、登记或撤销 key。
 其他域通过 identity 的公开 API 获取最小身份/角色视图，不直接查询或返回校园邮箱。HTTP 结构以
 `contract/openapi.yaml` 为准，本文不复制字段清单。
 
@@ -209,6 +241,8 @@ Credit、Activity、Platform 与 Media 各自公开 owner export/purge API；gat
 - 毕业用户的资格、恢复和邮箱换绑政策。
 - refresh cookie 的跨端迁移、CSRF 防护和旧 token 撤销计划。
 - Staff WebAuthn/passkey、recovery code 和 break-glass 的注册、丢失与撤销政策。
+- 从未认领的 legacy wallet link 与 review 迁移凭据何时停止提供 claim、何时删除；在产品给出迁移截止日和
+  用户通知前保留其最小 claim authority，但不得公开、写日志或复用于画像。
 
 ## 验收基线
 
@@ -226,6 +260,8 @@ Credit、Activity、Platform 与 Media 各自公开 owner export/purge API；gat
   不能覆盖已提交的新密码。业务状态、替代 session、security fact 和 email job 任一失败都整体回滚。
 - 安全邮件 provider 失败会在不重放凭据 mutation 的情况下退避重试；邮箱解密/数据库短暂失败不得误判为永久无收件人。
 - Owner export 只包含尚在保留期的 security `eventType/createdAt`，不包含 session id 和内部邮件 job。
+- `/wallet.activePublicKey` 只向认证账号本人返回，公开身份 surface 不携带；Web 环境/账号错配、legacy
+  seed 不匹配、non-extractable key durable-write 失败和签名前 public-key mismatch 都有 fail-closed 回归。
 - 高风险 identity staff mutation 必须用当前 server-side session 的未过期 recent-auth；legacy JWT、
   过期时间、撤销 session、错误/跨 purpose/replay code 和并发验证都有负向覆盖。
 - 公共 API、日志、通知和审计不泄露邮箱、code、password hash 或 refresh secret。
@@ -242,3 +278,6 @@ Credit、Activity、Platform 与 Media 各自公开 owner export/purge API；gat
   unique job 的状态、attempt、lease、error 和新 deadline，不能因 `ON CONFLICT` 把第二轮 worker 静默丢失。
 - Owner export 跨域 projection 不泄露 inbound DM、举报人、reviewer、staff/evidence 或 provider secret；
   job 可从过期 worker lease 恢复，download grant account-bound、短期且只消费一次。
+- Credit owner export 包含本人创建或接受的 task、本人创建的 product 和本人参与的 purchase 私密投影；
+  task contact 仍属于 creator。重复 purge 后只清空被删除账号拥有的 contact/delivery 字段与未消费
+  intent，交易对手字段、ledger 和 escrow 事实保持不变。

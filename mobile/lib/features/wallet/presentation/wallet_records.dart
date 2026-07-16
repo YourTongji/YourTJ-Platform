@@ -22,14 +22,9 @@ class WalletRecordTabs extends StatefulWidget {
   final String accountId;
   final bool isMutating;
   final ValueChanged<String> onAcceptTask;
-  final void Function(
-    String taskId,
-    TaskActionActionEnum action,
-    TaskStatusEnum status,
-  )
-  onTaskAction;
-  final ValueChanged<String> onPurchase;
-  final void Function(String purchaseId, PurchaseActionActionEnum action)
+  final void Function(Task task, TaskActionActionEnum action) onTaskAction;
+  final ValueChanged<Product> onPurchase;
+  final void Function(Purchase purchase, PurchaseActionActionEnum action)
   onPurchaseAction;
 
   @override
@@ -113,12 +108,7 @@ class _TaskList extends StatelessWidget {
   final String accountId;
   final bool isMutating;
   final ValueChanged<String> onAccept;
-  final void Function(
-    String taskId,
-    TaskActionActionEnum action,
-    TaskStatusEnum status,
-  )
-  onAction;
+  final void Function(Task task, TaskActionActionEnum action) onAction;
 
   @override
   Widget build(BuildContext context) {
@@ -160,17 +150,12 @@ class _TaskCard extends StatelessWidget {
   final String accountId;
   final bool isMutating;
   final ValueChanged<String> onAccept;
-  final void Function(
-    String taskId,
-    TaskActionActionEnum action,
-    TaskStatusEnum status,
-  )
-  onAction;
+  final void Function(Task task, TaskActionActionEnum action) onAction;
 
   @override
   Widget build(BuildContext context) {
-    final String? taskId = task.id;
-    final TaskStatusEnum? status = task.status;
+    final String taskId = task.id;
+    final TaskStatusEnum status = task.status;
     final bool isCreator = task.creatorId == accountId;
     final bool isAcceptor = task.acceptorId == accountId;
     return Card(
@@ -188,7 +173,7 @@ class _TaskCard extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: <Widget>[
                       Text(
-                        task.title ?? '未命名任务',
+                        task.title,
                         style: Theme.of(context).textTheme.titleMedium,
                       ),
                       const SizedBox(height: 4),
@@ -197,7 +182,7 @@ class _TaskCard extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(width: 10),
-                Chip(label: Text('${task.rewardAmount ?? 0} 积分')),
+                Chip(label: Text('${task.rewardAmount} 积分')),
               ],
             ),
             const SizedBox(height: 10),
@@ -211,90 +196,74 @@ class _TaskCard extends StatelessWidget {
                 if (task.contactInfo != null) Text('联系方式：${task.contactInfo}'),
               ],
             ),
-            if (taskId != null && status != null) ...<Widget>[
-              const SizedBox(height: 10),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: <Widget>[
-                  if (status == TaskStatusEnum.open && !isCreator)
-                    FilledButton.tonal(
-                      onPressed: isMutating ? null : () => onAccept(taskId),
-                      child: const Text('接单'),
-                    ),
-                  if (status == TaskStatusEnum.inProgress && isAcceptor)
-                    FilledButton.tonal(
-                      onPressed: isMutating
-                          ? null
-                          : () => onAction(
-                              taskId,
-                              TaskActionActionEnum.submit,
-                              status,
-                            ),
-                      child: const Text('提交完成'),
-                    ),
-                  if (status == TaskStatusEnum.submitted && isCreator)
-                    FilledButton(
-                      onPressed: isMutating
-                          ? null
-                          : () => _confirmTaskAction(
-                              context,
-                              taskId,
-                              TaskActionActionEnum.confirm,
-                              status,
-                              '确认完成并释放托管积分？',
-                              '确认后奖励将进入接单者钱包，签名操作不会自动重试。',
-                            ),
-                      child: const Text('确认放款'),
-                    ),
-                  if (isCreator &&
-                      status != TaskStatusEnum.completed &&
-                      status != TaskStatusEnum.cancelled)
-                    OutlinedButton(
-                      onPressed: isMutating
-                          ? null
-                          : () => _confirmTaskAction(
-                              context,
-                              taskId,
-                              TaskActionActionEnum.cancel,
-                              status,
-                              '取消任务并退款？',
-                              '服务端会按任务状态验证退款；该签名操作不会自动重试。',
-                            ),
-                      child: const Text('取消并退款'),
-                    ),
-                  if (isAcceptor &&
-                      (status == TaskStatusEnum.inProgress ||
-                          status == TaskStatusEnum.submitted))
-                    OutlinedButton(
-                      onPressed: isMutating
-                          ? null
-                          : () => _confirmTaskAction(
-                              context,
-                              taskId,
-                              TaskActionActionEnum.reject,
-                              status,
-                              '拒绝任务并退款？',
-                              '拒绝后任务进入服务端定义的退款状态。',
-                            ),
-                      child: const Text('拒绝并退款'),
-                    ),
-                  if (isCreator &&
-                      (status == TaskStatusEnum.open ||
-                          status == TaskStatusEnum.cancelled))
-                    TextButton(
-                      onPressed: isMutating
-                          ? null
-                          : () => onAction(
-                              taskId,
-                              TaskActionActionEnum.delete,
-                              status,
-                            ),
-                      child: const Text('删除任务'),
-                    ),
-                ],
-              ),
-            ],
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: <Widget>[
+                if (status == TaskStatusEnum.open && !isCreator)
+                  FilledButton.tonal(
+                    onPressed: isMutating ? null : () => onAccept(taskId),
+                    child: const Text('接单'),
+                  ),
+                if (status == TaskStatusEnum.inProgress && isAcceptor)
+                  FilledButton.tonal(
+                    onPressed: isMutating
+                        ? null
+                        : () => onAction(task, TaskActionActionEnum.submit),
+                    child: const Text('提交完成'),
+                  ),
+                if (status == TaskStatusEnum.submitted && isCreator)
+                  FilledButton(
+                    onPressed: isMutating
+                        ? null
+                        : () => _confirmTaskAction(
+                            context,
+                            TaskActionActionEnum.confirm,
+                            '确认完成并释放托管积分？',
+                            '确认后奖励将进入接单者钱包，签名操作不会自动重试。',
+                          ),
+                    child: const Text('确认放款'),
+                  ),
+                if (isCreator &&
+                    status != TaskStatusEnum.completed &&
+                    status != TaskStatusEnum.cancelled)
+                  OutlinedButton(
+                    onPressed: isMutating
+                        ? null
+                        : () => _confirmTaskAction(
+                            context,
+                            TaskActionActionEnum.cancel,
+                            '取消任务并退款？',
+                            '服务端会按任务状态验证退款；该签名操作不会自动重试。',
+                          ),
+                    child: const Text('取消并退款'),
+                  ),
+                if (isAcceptor &&
+                    (status == TaskStatusEnum.inProgress ||
+                        status == TaskStatusEnum.submitted))
+                  OutlinedButton(
+                    onPressed: isMutating
+                        ? null
+                        : () => _confirmTaskAction(
+                            context,
+                            TaskActionActionEnum.reject,
+                            '拒绝任务并退款？',
+                            '拒绝后任务进入服务端定义的退款状态。',
+                          ),
+                    child: const Text('拒绝并退款'),
+                  ),
+                if (isCreator &&
+                    (status == TaskStatusEnum.open ||
+                        status == TaskStatusEnum.cancelled))
+                  TextButton(
+                    onPressed: isMutating
+                        ? null
+                        : () => onAction(task, TaskActionActionEnum.delete),
+                    child: const Text('删除任务'),
+                  ),
+              ],
+            ),
           ],
         ),
       ),
@@ -303,14 +272,12 @@ class _TaskCard extends StatelessWidget {
 
   Future<void> _confirmTaskAction(
     BuildContext context,
-    String taskId,
     TaskActionActionEnum action,
-    TaskStatusEnum status,
     String title,
     String message,
   ) async {
     if (await _confirm(context, title, message) && context.mounted) {
-      onAction(taskId, action, status);
+      onAction(task, action);
     }
   }
 }
@@ -326,7 +293,7 @@ class _ProductList extends StatelessWidget {
   final List<Product> items;
   final String accountId;
   final bool isMutating;
-  final ValueChanged<String> onPurchase;
+  final ValueChanged<Product> onPurchase;
 
   @override
   Widget build(BuildContext context) {
@@ -371,15 +338,17 @@ class _ProductCard extends StatelessWidget {
   final Product product;
   final String accountId;
   final bool isMutating;
-  final ValueChanged<String> onPurchase;
+  final ValueChanged<Product> onPurchase;
 
   @override
   Widget build(BuildContext context) {
     final bool canBuy =
-        product.id != null &&
+        product.id.isNotEmpty &&
         product.status == ProductStatusEnum.onSale &&
+        product.sellerId.isNotEmpty &&
         product.sellerId != accountId &&
-        (product.stock ?? 0) > 0;
+        product.price > 0 &&
+        product.stock > 0;
     return Card(
       margin: EdgeInsets.zero,
       child: Padding(
@@ -391,18 +360,18 @@ class _ProductCard extends StatelessWidget {
               children: <Widget>[
                 Expanded(
                   child: Text(
-                    product.title ?? '未命名商品',
+                    product.title,
                     style: Theme.of(context).textTheme.titleMedium,
                   ),
                 ),
-                Chip(label: Text('${product.price ?? 0} 积分')),
+                Chip(label: Text('${product.price} 积分')),
               ],
             ),
             const SizedBox(height: 4),
             Text(product.description ?? '无描述'),
             const SizedBox(height: 10),
             Text(
-              '${_productStatus(product.status)} · 库存 ${product.stock ?? 0} · ${_formatTime(product.createdAt)}',
+              '${_productStatus(product.status)} · 库存 ${product.stock} · ${_formatTime(product.createdAt)}',
             ),
             const SizedBox(height: 10),
             FilledButton.tonal(
@@ -411,11 +380,11 @@ class _ProductCard extends StatelessWidget {
                   : () async {
                       final bool confirmed = await _confirm(
                         context,
-                        '购买并托管 ${product.price ?? 0} 积分？',
+                        '购买并托管 ${product.price} 积分？',
                         '积分会先进入托管，完成交付后再释放给卖家。签名操作不会自动重试。',
                       );
                       if (confirmed && context.mounted) {
-                        onPurchase(product.id!);
+                        onPurchase(product);
                       }
                     },
               child: const Text('购买并托管'),
@@ -438,7 +407,7 @@ class _PurchaseList extends StatelessWidget {
   final List<Purchase> items;
   final String accountId;
   final bool isMutating;
-  final void Function(String purchaseId, PurchaseActionActionEnum action)
+  final void Function(Purchase purchase, PurchaseActionActionEnum action)
   onAction;
 
   @override
@@ -475,13 +444,12 @@ class _PurchaseCard extends StatelessWidget {
   final Purchase purchase;
   final String accountId;
   final bool isMutating;
-  final void Function(String purchaseId, PurchaseActionActionEnum action)
+  final void Function(Purchase purchase, PurchaseActionActionEnum action)
   onAction;
 
   @override
   Widget build(BuildContext context) {
-    final String? purchaseId = purchase.id;
-    final PurchaseStatusEnum? status = purchase.status;
+    final PurchaseStatusEnum status = purchase.status;
     final bool isBuyer = purchase.buyerId == accountId;
     final bool isSeller = purchase.sellerId == accountId;
     return Card(
@@ -495,77 +463,73 @@ class _PurchaseCard extends StatelessWidget {
               children: <Widget>[
                 Expanded(
                   child: Text(
-                    '订单 ${purchase.id ?? '—'}',
+                    '订单 ${purchase.id}',
                     style: Theme.of(context).textTheme.titleMedium,
                   ),
                 ),
-                Chip(label: Text('${purchase.amount ?? 0} 积分')),
+                Chip(label: Text('${purchase.amount} 积分')),
               ],
             ),
-            Text('商品 ${purchase.productId ?? '—'}'),
+            Text('商品 ${purchase.productId}'),
             if (purchase.deliveryInfo != null)
               Text('交付说明：${purchase.deliveryInfo}'),
             const SizedBox(height: 8),
             Text(
               '${_purchaseStatus(status)} · ${_formatTime(purchase.createdAt)}',
             ),
-            if (purchaseId != null && status != null) ...<Widget>[
-              const SizedBox(height: 10),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: <Widget>[
-                  if (isSeller && status == PurchaseStatusEnum.pending)
-                    FilledButton.tonal(
-                      onPressed: isMutating
-                          ? null
-                          : () => onAction(
-                              purchaseId,
-                              PurchaseActionActionEnum.accept,
-                            ),
-                      child: const Text('卖家接单'),
-                    ),
-                  if (isSeller && status == PurchaseStatusEnum.accepted)
-                    FilledButton.tonal(
-                      onPressed: isMutating
-                          ? null
-                          : () => onAction(
-                              purchaseId,
-                              PurchaseActionActionEnum.deliver,
-                            ),
-                      child: const Text('标记交付'),
-                    ),
-                  if (isBuyer && status == PurchaseStatusEnum.delivered)
-                    FilledButton(
-                      onPressed: isMutating
-                          ? null
-                          : () => _confirmedAction(
-                              context,
-                              purchaseId,
-                              PurchaseActionActionEnum.confirm,
-                              '确认收货并释放积分？',
-                              '确认后托管积分将进入卖家钱包，此签名操作不会自动重试。',
-                            ),
-                      child: const Text('确认完成'),
-                    ),
-                  if (isBuyer &&
-                      (status == PurchaseStatusEnum.pending ||
-                          status == PurchaseStatusEnum.accepted))
-                    OutlinedButton(
-                      onPressed: isMutating
-                          ? null
-                          : () => _confirmedAction(
-                              context,
-                              purchaseId,
-                              PurchaseActionActionEnum.cancel,
-                              '取消订单并退款？',
-                              '服务端会验证订单状态并退回托管积分，此签名操作不会自动重试。',
-                            ),
-                      child: const Text('取消并退款'),
-                    ),
-                ],
-              ),
-            ],
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: <Widget>[
+                if (isSeller && status == PurchaseStatusEnum.pending)
+                  FilledButton.tonal(
+                    onPressed: isMutating
+                        ? null
+                        : () => onAction(
+                            purchase,
+                            PurchaseActionActionEnum.accept,
+                          ),
+                    child: const Text('卖家接单'),
+                  ),
+                if (isSeller && status == PurchaseStatusEnum.accepted)
+                  FilledButton.tonal(
+                    onPressed: isMutating
+                        ? null
+                        : () => onAction(
+                            purchase,
+                            PurchaseActionActionEnum.deliver,
+                          ),
+                    child: const Text('标记交付'),
+                  ),
+                if (isBuyer && status == PurchaseStatusEnum.delivered)
+                  FilledButton(
+                    onPressed: isMutating
+                        ? null
+                        : () => _confirmedAction(
+                            context,
+                            PurchaseActionActionEnum.confirm,
+                            '确认收货并释放积分？',
+                            '确认后托管积分将进入卖家钱包，此签名操作不会自动重试。',
+                          ),
+                    child: const Text('确认完成'),
+                  ),
+                if (isBuyer &&
+                    (status == PurchaseStatusEnum.pending ||
+                        status == PurchaseStatusEnum.accepted))
+                  OutlinedButton(
+                    onPressed: isMutating
+                        ? null
+                        : () => _confirmedAction(
+                            context,
+                            PurchaseActionActionEnum.cancel,
+                            '取消订单并退款？',
+                            '服务端会验证订单状态并退回托管积分，此签名操作不会自动重试。',
+                          ),
+                    child: const Text('取消并退款'),
+                  ),
+              ],
+            ),
           ],
         ),
       ),
@@ -574,13 +538,12 @@ class _PurchaseCard extends StatelessWidget {
 
   Future<void> _confirmedAction(
     BuildContext context,
-    String purchaseId,
     PurchaseActionActionEnum action,
     String title,
     String message,
   ) async {
     if (await _confirm(context, title, message) && context.mounted) {
-      onAction(purchaseId, action);
+      onAction(purchase, action);
     }
   }
 }

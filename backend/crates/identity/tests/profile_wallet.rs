@@ -3,6 +3,8 @@
 #[path = "helpers/mod.rs"]
 mod helpers;
 
+use std::time::{Duration, Instant};
+
 use axum::body::Body;
 use axum::http::{header, Method, Request, StatusCode};
 use base64::Engine;
@@ -11,6 +13,31 @@ use ring::signature::KeyPair;
 use serde_json::{json, Value};
 use sqlx::PgPool;
 use tower::ServiceExt;
+
+async fn wait_for_lock_wait(pool: &PgPool, query_prefix: &str) -> bool {
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let query_pattern = format!("{query_prefix}%");
+    loop {
+        let is_waiting: bool = sqlx::query_scalar(
+            "SELECT EXISTS( \
+               SELECT 1 FROM pg_stat_activity \
+               WHERE datname = current_database() AND pid <> pg_backend_pid() \
+                 AND wait_event_type = 'Lock' AND ltrim(query) LIKE $1 \
+             )",
+        )
+        .bind(&query_pattern)
+        .fetch_one(pool)
+        .await
+        .expect("inspect wallet bind lifecycle wait");
+        if is_waiting {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
 
 async fn create_session_token(pool: &PgPool, account_id: i64, is_recent: bool) -> String {
     let session_id: i64 = sqlx::query_scalar(
@@ -243,7 +270,10 @@ async fn test_bind_key_valid_ed25519_succeeds() {
                 .uri("/api/v2/wallet/bind")
                 .header(header::CONTENT_TYPE, "application/json")
                 .header(header::AUTHORIZATION, format!("Bearer {token}"))
-                .body(Body::from(json!({ "publicKey": public_key_b64 }).to_string()))
+                .body(Body::from(
+                    json!({ "accountId": account_id.to_string(), "publicKey": public_key_b64 })
+                        .to_string(),
+                ))
                 .unwrap(),
         )
         .await
@@ -261,6 +291,119 @@ async fn test_bind_key_valid_ed25519_succeeds() {
 }
 
 #[tokio::test]
+async fn legacy_bind_body_can_only_confirm_the_exact_active_key() {
+    let (pool, _) = create_test_app().await;
+    sqlx::query("INSERT INTO identity.accounts (email, handle) VALUES ($1, $2)")
+        .bind("legacy-wallet-bind@tongji.edu.cn")
+        .bind("legacy-wallet-bind")
+        .execute(&pool)
+        .await
+        .expect("insert legacy wallet account");
+    let (_, account_id) =
+        helpers::create_access_token_for("legacy-wallet-bind@tongji.edu.cn", &pool).await;
+    let token = create_session_token(&pool, account_id, true).await;
+    let app = create_test_app_with_pool(pool.clone()).await;
+    let public_key = base64::engine::general_purpose::STANDARD.encode([21_u8; 32]);
+
+    let missing_scope = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/v2/wallet/bind")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::from(json!({ "publicKey": public_key }).to_string()))
+                .expect("build legacy first-bind request"),
+        )
+        .await
+        .expect("legacy first-bind response");
+    assert_eq!(missing_scope.status(), StatusCode::BAD_REQUEST);
+
+    let enrolled = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/v2/wallet/bind")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::from(
+                    json!({
+                        "accountId": account_id.to_string(),
+                        "publicKey": public_key,
+                    })
+                    .to_string(),
+                ))
+                .expect("build account-scoped bind request"),
+        )
+        .await
+        .expect("account-scoped bind response");
+    assert_eq!(enrolled.status(), StatusCode::NO_CONTENT);
+
+    let legacy_idempotent = app
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/v2/wallet/bind")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::from(json!({ "publicKey": public_key }).to_string()))
+                .expect("build legacy idempotent bind request"),
+        )
+        .await
+        .expect("legacy idempotent bind response");
+    assert_eq!(legacy_idempotent.status(), StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
+async fn test_bind_key_rejects_account_scope_mismatched_with_bearer() {
+    let (pool, _) = create_test_app().await;
+
+    sqlx::query("INSERT INTO identity.accounts (email, handle) VALUES ($1, $2), ($3, $4)")
+        .bind("wallet-scope-a@tongji.edu.cn")
+        .bind("wallet-scope-a")
+        .bind("wallet-scope-b@tongji.edu.cn")
+        .bind("wallet-scope-b")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let (_, account_a) =
+        helpers::create_access_token_for("wallet-scope-a@tongji.edu.cn", &pool).await;
+    let (_, account_b) =
+        helpers::create_access_token_for("wallet-scope-b@tongji.edu.cn", &pool).await;
+    let token_b = create_session_token(&pool, account_b, true).await;
+    let app = create_test_app_with_pool(pool.clone()).await;
+    let public_key = base64::engine::general_purpose::STANDARD.encode([8u8; 32]);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/v2/wallet/bind")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::AUTHORIZATION, format!("Bearer {token_b}"))
+                .body(Body::from(
+                    json!({ "accountId": account_a.to_string(), "publicKey": public_key })
+                        .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM identity.account_keys WHERE account_id = ANY($1)")
+            .bind(vec![account_a, account_b])
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(count, 0);
+}
+
+#[tokio::test]
 async fn test_bind_key_invalid_base64_rejects() {
     let (pool, _) = create_test_app().await;
 
@@ -271,7 +414,7 @@ async fn test_bind_key_invalid_base64_rejects() {
         .await
         .unwrap();
 
-    let (token, _) = helpers::create_access_token_for("vera@tongji.edu.cn", &pool).await;
+    let (token, account_id) = helpers::create_access_token_for("vera@tongji.edu.cn", &pool).await;
     let app = create_test_app_with_pool(pool).await;
 
     let resp = app
@@ -281,7 +424,13 @@ async fn test_bind_key_invalid_base64_rejects() {
                 .uri("/api/v2/wallet/bind")
                 .header(header::CONTENT_TYPE, "application/json")
                 .header(header::AUTHORIZATION, format!("Bearer {token}"))
-                .body(Body::from(json!({ "publicKey": "not-valid-base64!!!" }).to_string()))
+                .body(Body::from(
+                    json!({
+                        "accountId": account_id.to_string(),
+                        "publicKey": "not-valid-base64!!!"
+                    })
+                    .to_string(),
+                ))
                 .unwrap(),
         )
         .await
@@ -301,7 +450,7 @@ async fn test_bind_key_wrong_length_rejects() {
         .await
         .unwrap();
 
-    let (token, _) = helpers::create_access_token_for("wendy@tongji.edu.cn", &pool).await;
+    let (token, account_id) = helpers::create_access_token_for("wendy@tongji.edu.cn", &pool).await;
     let app = create_test_app_with_pool(pool).await;
 
     let short_key = base64::engine::general_purpose::STANDARD.encode([0u8; 16]);
@@ -313,7 +462,10 @@ async fn test_bind_key_wrong_length_rejects() {
                 .uri("/api/v2/wallet/bind")
                 .header(header::CONTENT_TYPE, "application/json")
                 .header(header::AUTHORIZATION, format!("Bearer {token}"))
-                .body(Body::from(json!({ "publicKey": short_key }).to_string()))
+                .body(Body::from(
+                    json!({ "accountId": account_id.to_string(), "publicKey": short_key })
+                        .to_string(),
+                ))
                 .unwrap(),
         )
         .await
@@ -353,7 +505,10 @@ async fn test_bind_key_same_canonical_key_is_idempotent() {
                 .uri("/api/v2/wallet/bind")
                 .header(header::CONTENT_TYPE, "application/json")
                 .header(header::AUTHORIZATION, format!("Bearer {token}"))
-                .body(Body::from(json!({ "publicKey": key_b64 }).to_string()))
+                .body(Body::from(
+                    json!({ "accountId": account_id.to_string(), "publicKey": key_b64 })
+                        .to_string(),
+                ))
                 .unwrap(),
         )
         .await
@@ -385,7 +540,10 @@ async fn test_bind_key_requires_fresh_session_authentication() {
                 .uri("/api/v2/wallet/bind")
                 .header(header::CONTENT_TYPE, "application/json")
                 .header(header::AUTHORIZATION, format!("Bearer {token}"))
-                .body(Body::from(json!({ "publicKey": public_key }).to_string()))
+                .body(Body::from(
+                    json!({ "accountId": account_id.to_string(), "publicKey": public_key })
+                        .to_string(),
+                ))
                 .unwrap(),
         )
         .await
@@ -431,7 +589,10 @@ async fn test_bind_key_rejects_session_only_rotation() {
                 .uri("/api/v2/wallet/bind")
                 .header(header::CONTENT_TYPE, "application/json")
                 .header(header::AUTHORIZATION, format!("Bearer {token}"))
-                .body(Body::from(json!({ "publicKey": different_key }).to_string()))
+                .body(Body::from(
+                    json!({ "accountId": account_id.to_string(), "publicKey": different_key })
+                        .to_string(),
+                ))
                 .unwrap(),
         )
         .await
@@ -471,6 +632,7 @@ async fn test_bind_key_serializes_concurrent_first_enrollment() {
             .header(header::AUTHORIZATION, format!("Bearer {token}"))
             .body(Body::from(
                 json!({
+                    "accountId": account_id.to_string(),
                     "publicKey": base64::engine::general_purpose::STANDARD.encode([key_byte; 32])
                 })
                 .to_string(),
@@ -491,4 +653,68 @@ async fn test_bind_key_serializes_concurrent_first_enrollment() {
             .await
             .unwrap();
     assert_eq!(count, 1);
+}
+
+#[tokio::test]
+async fn test_bind_key_rechecks_account_state_after_waiting_for_lifecycle() {
+    let (pool, _) = create_test_app().await;
+    sqlx::query("INSERT INTO identity.accounts (email, handle) VALUES ($1, $2)")
+        .bind("wallet-bind-lifecycle@tongji.edu.cn")
+        .bind("wallet-bind-lifecycle")
+        .execute(&pool)
+        .await
+        .expect("insert lifecycle wallet account");
+    let (_, account_id) =
+        helpers::create_access_token_for("wallet-bind-lifecycle@tongji.edu.cn", &pool).await;
+    let token = create_session_token(&pool, account_id, true).await;
+    let app = create_test_app_with_pool(pool.clone()).await;
+
+    let mut lifecycle_tx = pool.begin().await.expect("begin wallet lifecycle transition");
+    sqlx::query(
+        "UPDATE identity.accounts SET status = 'deletion_requested', \
+                deletion_requested_at = now(), \
+                deletion_recover_until = now() + interval '30 days' \
+         WHERE id = $1",
+    )
+    .bind(account_id)
+    .execute(&mut *lifecycle_tx)
+    .await
+    .expect("stage wallet lifecycle transition");
+
+    let public_key = base64::engine::general_purpose::STANDARD.encode([29_u8; 32]);
+    let request_task = tokio::spawn(async move {
+        app.oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/v2/wallet/bind")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::from(
+                    json!({ "accountId": account_id.to_string(), "publicKey": public_key })
+                        .to_string(),
+                ))
+                .expect("build lifecycle wallet bind request"),
+        )
+        .await
+        .expect("lifecycle wallet bind response")
+    });
+    assert!(
+        wait_for_lock_wait(
+            &pool,
+            "SELECT status::text FROM identity.accounts WHERE id = $1 FOR UPDATE",
+        )
+        .await,
+        "wallet bind did not wait on the lifecycle account lock"
+    );
+
+    lifecycle_tx.commit().await.expect("commit wallet lifecycle transition");
+    let response = request_task.await.expect("join lifecycle wallet bind request");
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let key_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM identity.account_keys WHERE account_id = $1")
+            .bind(account_id)
+            .fetch_one(&pool)
+            .await
+            .expect("count lifecycle wallet keys");
+    assert_eq!(key_count, 0);
 }

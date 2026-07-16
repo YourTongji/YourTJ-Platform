@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { CheckCircle2, Gift, KeyRound, Plus, ShieldCheck, ShoppingBag, Trash2, Wallet } from "lucide-react";
 import * as React from "react";
 import { toast } from "sonner";
@@ -17,112 +17,402 @@ import { Textarea } from "@/components/ui/textarea";
 import { useAuth } from "@/context/auth-provider";
 import { api } from "@/lib/api/endpoints";
 import type { Product, Purchase, Task } from "@/lib/api/types";
+import {
+  readAccessToken,
+  readAuthContextVersion,
+  readStoredAccount,
+} from "@/lib/auth-storage";
 import { formatDate, formatNumber, shortHash } from "@/lib/format";
-import { randomUuid } from "@/lib/random";
 import {
   clearLocalWallet,
   createLocalWallet,
+  discardLegacyWallet,
   getLocalWallet,
-  signExactBytes,
+  inspectLegacyWallet,
+  resolveWalletServerKeyState,
+  type LocalWallet,
 } from "@/lib/wallet";
+import {
+  performWalletMutation,
+  reconcileWalletMutations,
+  WalletMutationCommittedError,
+  WalletMutationUncertainError,
+} from "@/lib/wallet-mutations";
 
-type CreditSigningAction =
-  | "credit.tip"
-  | "credit.task.create"
-  | "credit.task.action"
-  | "credit.product.purchase"
-  | "credit.purchase.action";
-
-async function authorizeWallet(action: CreditSigningAction, request: Record<string, unknown>) {
-  const idempotencyKey = `credit:${randomUuid()}`;
-  const intent = await api.creditSigningIntent(action, request, idempotencyKey);
-  if (!intent.intentId || !intent.signingBytes) {
-    throw new Error("后端没有返回完整的钱包签名 intent");
-  }
-  return {
-    idempotencyKey,
-    intentId: intent.intentId,
-    signature: signExactBytes(intent.signingBytes),
-  };
+function refreshPendingWalletReconciliation(
+  queryClient: QueryClient,
+  accountId: string | undefined,
+) {
+  if (!accountId) return Promise.resolve();
+  return queryClient.invalidateQueries({
+    queryKey: ["wallet-pending-reconciliation", accountId],
+    exact: true,
+  });
 }
 
-function WalletSetup() {
+function handleWalletMutationError(
+  error: unknown,
+  fallback: string,
+  refreshCommittedState: () => Promise<void>,
+  refreshPendingState: () => Promise<void>,
+) {
+  if (error instanceof WalletMutationCommittedError) {
+    toast.success(error.message);
+    void Promise.all([refreshCommittedState(), refreshPendingState()]);
+    return;
+  }
+  toast.error(error instanceof Error ? error.message : fallback);
+  if (error instanceof WalletMutationUncertainError) void refreshPendingState();
+}
+
+const I64_MAX = 9_223_372_036_854_775_807n;
+
+interface PurchasableProduct {
+  id: string;
+  sellerId: string;
+  price: number;
+  stock: number;
+  status: "on_sale";
+}
+
+function isCanonicalPositiveI64(value: unknown): value is string {
+  if (typeof value !== "string" || !/^[1-9][0-9]*$/.test(value)) return false;
+  try {
+    return BigInt(value) <= I64_MAX;
+  } catch {
+    return false;
+  }
+}
+
+function isPurchasableProduct(
+  product: Product,
+  buyerAccountId: string,
+): product is Product & PurchasableProduct {
+  return isCanonicalPositiveI64(product.id)
+    && isCanonicalPositiveI64(product.sellerId)
+    && product.sellerId !== buyerAccountId
+    && Number.isSafeInteger(product.price)
+    && product.price > 0
+    && Number.isSafeInteger(product.stock)
+    && product.stock > 0
+    && product.status === "on_sale";
+}
+
+interface WalletBindingAuthorization {
+  accountId: string;
+  publicKey: string;
+  authToken: string;
+  contextVersion: number;
+}
+
+function captureWalletBindingAuthorization(accountId: string, publicKey: string) {
+  const contextVersion = readAuthContextVersion();
+  const authToken = readAccessToken();
+  const storedAccountId = readStoredAccount()?.id;
+  if (!authToken
+    || storedAccountId !== accountId
+    || readAuthContextVersion() !== contextVersion) {
+    throw new Error("登录账号已变化，已停止绑定钱包");
+  }
+  return { accountId, publicKey, authToken, contextVersion };
+}
+
+function isWalletBindingAuthorizationCurrent(
+  authorization: WalletBindingAuthorization,
+  renderedAccountId: string | undefined,
+) {
+  const versionBeforeRead = readAuthContextVersion();
+  const isCurrent = renderedAccountId === authorization.accountId
+    && versionBeforeRead === authorization.contextVersion
+    && readAccessToken() === authorization.authToken
+    && readStoredAccount()?.id === authorization.accountId;
+  return isCurrent && readAuthContextVersion() === versionBeforeRead;
+}
+
+function assertWalletBindingAuthorizationCurrent(
+  authorization: WalletBindingAuthorization,
+  renderedAccountId: string | undefined,
+) {
+  if (!isWalletBindingAuthorizationCurrent(authorization, renderedAccountId)) {
+    throw new Error("登录账号已变化，已停止绑定钱包");
+  }
+}
+
+export function WalletSetup({
+  serverPublicKey,
+  isServerStateKnown,
+}: {
+  serverPublicKey: string | null;
+  isServerStateKnown: boolean;
+}) {
   const queryClient = useQueryClient();
-  const [wallet, setWallet] = React.useState(() => getLocalWallet());
+  const { account } = useAuth();
+  const accountIdRef = React.useRef(account?.id);
+  accountIdRef.current = account?.id;
+  const [wallet, setWallet] = React.useState<LocalWallet | null>(null);
+  const [legacyWallet, setLegacyWallet] = React.useState<LocalWallet | null>(null);
+  const [loadedAccountId, setLoadedAccountId] = React.useState<string | null>(null);
+  const [localError, setLocalError] = React.useState<Error | null>(null);
+  const [isLocalWalletLoading, setIsLocalWalletLoading] = React.useState(true);
+  const [reloadVersion, setReloadVersion] = React.useState(0);
   const [recentAuthOpen, setRecentAuthOpen] = React.useState(false);
   const [clearWalletOpen, setClearWalletOpen] = React.useState(false);
-  const [pendingPublicKey, setPendingPublicKey] = React.useState<string | null>(null);
+  const [discardLegacyOpen, setDiscardLegacyOpen] = React.useState(false);
+  const [pendingBinding, setPendingBinding] = React.useState<{
+    accountId: string;
+    publicKey: string;
+  } | null>(null);
+
+  React.useEffect(() => {
+    setRecentAuthOpen(false);
+    setClearWalletOpen(false);
+    setDiscardLegacyOpen(false);
+    setPendingBinding(null);
+  }, [account?.id]);
+
+  React.useEffect(() => {
+    let isCurrent = true;
+    const accountId = account?.id;
+    if (!accountId || !isServerStateKnown) {
+      setLoadedAccountId(accountId ?? null);
+      setWallet(null);
+      setLegacyWallet(null);
+      setLocalError(null);
+      setIsLocalWalletLoading(!isServerStateKnown);
+      return () => {
+        isCurrent = false;
+      };
+    }
+    setLoadedAccountId(accountId);
+    setWallet(null);
+    setLegacyWallet(null);
+    setLocalError(null);
+    setIsLocalWalletLoading(true);
+    void getLocalWallet(accountId, serverPublicKey)
+      .then((nextWallet) => {
+        if (!isCurrent) return;
+        setWallet(nextWallet);
+        setLegacyWallet(inspectLegacyWallet());
+        setLocalError(null);
+      })
+      .catch((error: unknown) => {
+        if (!isCurrent) return;
+        setWallet(null);
+        setLocalError(error instanceof Error ? error : new Error("无法读取本机钱包"));
+        try {
+          setLegacyWallet(inspectLegacyWallet());
+        } catch {
+          setLegacyWallet(null);
+        }
+      })
+      .finally(() => {
+        if (isCurrent) setIsLocalWalletLoading(false);
+      });
+    return () => {
+      isCurrent = false;
+    };
+  }, [account?.id, isServerStateKnown, reloadVersion, serverPublicKey]);
+
   const bind = useMutation({
-    mutationFn: (publicKey: string) => api.bindWallet(publicKey),
-    onSuccess: async () => {
-      setPendingPublicKey(null);
+    mutationFn: async (authorization: WalletBindingAuthorization) => {
+      assertWalletBindingAuthorizationCurrent(authorization, accountIdRef.current);
+      const ownerWallet = await api.wallet(authorization.authToken);
+      assertWalletBindingAuthorizationCurrent(authorization, accountIdRef.current);
+      const serverKeyState = resolveWalletServerKeyState(ownerWallet, authorization.accountId);
+      if (!serverKeyState.isKnown
+        || (serverKeyState.activePublicKey !== null
+          && serverKeyState.activePublicKey !== authorization.publicKey)) {
+        throw new Error("服务端钱包公钥状态已变化，已停止绑定钱包");
+      }
+      await api.bindWallet(
+        authorization.accountId,
+        authorization.publicKey,
+        authorization.authToken,
+      );
+      assertWalletBindingAuthorizationCurrent(authorization, accountIdRef.current);
+      return authorization.accountId;
+    },
+    onSuccess: async (boundAccountId) => {
+      if (accountIdRef.current !== boundAccountId) return;
+      setPendingBinding(null);
       toast.success("钱包公钥已绑定");
-      await queryClient.invalidateQueries({ queryKey: ["wallet"] });
+      await queryClient.refetchQueries({ queryKey: ["wallet"] });
+      setReloadVersion((version) => version + 1);
     },
     onError: (error) => toast.error(error instanceof Error ? error.message : "绑定失败"),
   });
+  const create = useMutation({
+    mutationFn: async (accountId: string) => {
+      if (accountIdRef.current !== accountId || !isServerStateKnown) {
+        throw new Error("账号已切换，已停止生成钱包");
+      }
+      const nextWallet = await createLocalWallet(accountId, serverPublicKey);
+      return { accountId, wallet: nextWallet };
+    },
+    onSuccess: (result) => {
+      if (accountIdRef.current !== result.accountId) return;
+      setLoadedAccountId(result.accountId);
+      setWallet(result.wallet);
+      setLocalError(null);
+      try {
+        setLegacyWallet(inspectLegacyWallet());
+      } catch {
+        setLegacyWallet(null);
+      }
+      toast.success("已生成不可导出的本地钱包密钥");
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : "生成钱包失败"),
+  });
+  const clear = useMutation({
+    mutationFn: async (accountId: string) => {
+      if (accountIdRef.current !== accountId) throw new Error("账号已切换，已停止清除钱包");
+      await clearLocalWallet(accountId);
+      return accountId;
+    },
+    onSuccess: (clearedAccountId) => {
+      if (accountIdRef.current !== clearedAccountId) return;
+      setWallet(null);
+      setLocalError(null);
+      setClearWalletOpen(false);
+      setReloadVersion((version) => version + 1);
+      toast.success("已清除当前环境与账号的本机私钥");
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : "清除钱包失败"),
+  });
+  const discardLegacy = useMutation({
+    mutationFn: async (accountId: string) => {
+      if (accountIdRef.current !== accountId) throw new Error("账号已切换，已停止丢弃旧钱包");
+      discardLegacyWallet();
+      return accountId;
+    },
+    onSuccess: (discardedForAccountId) => {
+      if (accountIdRef.current !== discardedForAccountId) return;
+      setLegacyWallet(null);
+      setDiscardLegacyOpen(false);
+      setReloadVersion((version) => version + 1);
+      toast.success("已丢弃旧版浏览器钱包私钥");
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : "丢弃旧钱包失败"),
+  });
+
+  const scopedWallet = loadedAccountId === account?.id ? wallet : null;
+  const scopedLegacyWallet = loadedAccountId === account?.id ? legacyWallet : null;
+  const isBound = Boolean(scopedWallet && serverPublicKey === scopedWallet.publicKey);
+  const bindCandidate = isServerStateKnown && serverPublicKey === null
+    ? scopedWallet ?? scopedLegacyWallet
+    : null;
 
   return (
     <>
       <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <KeyRound className="h-4 w-4 text-primary" />
-          本地签名钱包
-        </CardTitle>
-        <CardDescription>
-          密钥只保存在你当前使用的浏览器里；平台只保存用于验证的公钥。
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-3">
-        {wallet ? (
-          <div className="rounded-md border bg-muted/60 p-3 text-xs">
-            <p className="font-medium">公钥</p>
-            <p className="mt-1 break-all text-muted-foreground">{wallet.publicKey}</p>
-          </div>
-        ) : (
-          <p className="rounded-md border border-dashed p-3 text-sm text-muted-foreground">本机还没有钱包密钥。</p>
-        )}
-        <div className="flex flex-wrap gap-2">
-          {!wallet ? (
-            <Button
-              variant="secondary"
-              onClick={() => {
-                const next = createLocalWallet();
-                setWallet(next);
-                toast.success("已生成本地钱包");
-              }}
-            >
-              生成本地钱包
-            </Button>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <KeyRound className="h-4 w-4 text-primary" />
+            本地签名钱包
+          </CardTitle>
+          <CardDescription>
+            私钥以不可导出的 WebCrypto 密钥保存，并按 API 环境和账号隔离；平台只保存验证公钥。
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {isLocalWalletLoading ? <LoadingState label="读取本机钱包" /> : null}
+          {!isLocalWalletLoading && scopedWallet ? (
+            <div className="rounded-md border bg-muted/60 p-3 text-xs">
+              <div className="flex items-center justify-between gap-2">
+                <p className="font-medium">本机公钥</p>
+                {isBound ? <Badge variant="secondary">已与服务端匹配</Badge> : null}
+              </div>
+              <p className="mt-1 break-all text-muted-foreground">{scopedWallet.publicKey}</p>
+            </div>
           ) : null}
-          <Button
-            onClick={() => {
-              if (!wallet) return;
-              setPendingPublicKey(wallet.publicKey);
-              setRecentAuthOpen(true);
-            }}
-            disabled={!wallet || bind.isPending}
-          >
-            绑定公钥
-          </Button>
-          <Button
-            variant="outline"
-            onClick={() => setClearWalletOpen(true)}
-            disabled={!wallet}
-          >
-            <Trash2 className="h-4 w-4" />
-            清除本机私钥
-          </Button>
-        </div>
-      </CardContent>
+          {!isLocalWalletLoading && !scopedWallet && serverPublicKey ? (
+            <p className="rounded-md border border-destructive/40 p-3 text-sm text-destructive" role="status">
+              服务端已有钱包公钥，但当前环境与账号没有匹配的本机私钥。系统不会生成替代密钥或仅凭登录态换绑。
+            </p>
+          ) : null}
+          {!isLocalWalletLoading && !scopedWallet && !serverPublicKey && !scopedLegacyWallet ? (
+            <p className="rounded-md border border-dashed p-3 text-sm text-muted-foreground">
+              当前环境与账号还没有钱包密钥。
+            </p>
+          ) : null}
+          {localError ? (
+            <p className="rounded-md border border-destructive/40 p-3 text-sm text-destructive" role="status">
+              {localError.message}
+            </p>
+          ) : null}
+          {scopedLegacyWallet ? (
+            <div className="rounded-md border border-amber-500/40 bg-amber-500/5 p-3 text-sm">
+              <p className="font-medium">检测到旧版浏览器钱包</p>
+              <p className="mt-1 break-all text-xs text-muted-foreground">{scopedLegacyWallet.publicKey}</p>
+              <p className="mt-2 text-xs text-muted-foreground">
+                {serverPublicKey === null
+                  ? "只有你明确绑定该公钥后，系统才会把旧 seed 迁移为不可导出的账号密钥。"
+                  : "它未自动归属当前账号；请切回匹配账号迁移，或确认不再需要后再丢弃。"}
+              </p>
+            </div>
+          ) : null}
+          <div className="flex flex-wrap gap-2">
+            {!scopedWallet && !scopedLegacyWallet && serverPublicKey === null && isServerStateKnown ? (
+              <Button
+                variant="secondary"
+                onClick={() => {
+                  if (account?.id) create.mutate(account.id);
+                }}
+                disabled={create.isPending}
+              >
+                生成本地钱包
+              </Button>
+            ) : null}
+            {bindCandidate ? (
+              <Button
+                onClick={() => {
+                  const accountId = accountIdRef.current;
+                  if (!accountId) return;
+                  setPendingBinding({ accountId, publicKey: bindCandidate.publicKey });
+                  setRecentAuthOpen(true);
+                }}
+                disabled={bind.isPending}
+              >
+                {!scopedWallet && scopedLegacyWallet ? "绑定并迁移旧钱包" : "绑定公钥"}
+              </Button>
+            ) : null}
+            {scopedWallet ? (
+              <Button
+                variant="outline"
+                onClick={() => setClearWalletOpen(true)}
+                disabled={clear.isPending}
+              >
+                <Trash2 className="h-4 w-4" />
+                清除本机私钥
+              </Button>
+            ) : null}
+            {scopedLegacyWallet ? (
+              <Button
+                variant="outline"
+                onClick={() => setDiscardLegacyOpen(true)}
+                disabled={discardLegacy.isPending}
+              >
+                丢弃旧版私钥
+              </Button>
+            ) : null}
+          </div>
+        </CardContent>
       </Card>
       <RecentAuthDialog
         open={recentAuthOpen}
         onOpenChange={setRecentAuthOpen}
         description="首次绑定钱包公钥会授权本机签署积分操作，需要当前会话在最近 10 分钟内重新验证。已有公钥不能仅凭登录态轮换。"
         onVerified={() => {
-          if (pendingPublicKey) bind.mutate(pendingPublicKey);
+          if (pendingBinding && accountIdRef.current === pendingBinding.accountId) {
+            try {
+              bind.mutate(captureWalletBindingAuthorization(
+                pendingBinding.accountId,
+                pendingBinding.publicKey,
+              ));
+            } catch (error) {
+              toast.error(error instanceof Error ? error.message : "绑定失败");
+            }
+          }
         }}
       />
       <Dialog open={clearWalletOpen} onOpenChange={setClearWalletOpen}>
@@ -138,13 +428,33 @@ function WalletSetup() {
             <Button
               variant="destructive"
               onClick={() => {
-                clearLocalWallet();
-                setWallet(null);
-                setClearWalletOpen(false);
-                toast.success("已清除本机钱包私钥");
+                if (loadedAccountId) clear.mutate(loadedAccountId);
               }}
+              disabled={clear.isPending}
             >
               确认清除
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={discardLegacyOpen} onOpenChange={setDiscardLegacyOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>永久丢弃旧版浏览器私钥？</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm leading-6 text-muted-foreground">
+            该操作只删除旧版全局 localStorage seed，无法恢复，也不会修改服务端已绑定的公钥。请先确认它不属于你仍需使用的其他账号。
+          </p>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDiscardLegacyOpen(false)}>取消</Button>
+            <Button
+              variant="destructive"
+              onClick={() => {
+                if (loadedAccountId) discardLegacy.mutate(loadedAccountId);
+              }}
+              disabled={discardLegacy.isPending}
+            >
+              确认永久丢弃
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -162,6 +472,7 @@ function LegacyClaimPanel() {
     mutationFn: api.claimChallenge,
     onSuccess: (data) => {
       setChallenge(data);
+      setSignature("");
       toast.success("认领挑战已生成，10 分钟内有效");
     },
     onError: (error) => toast.error(error instanceof Error ? error.message : "获取挑战失败"),
@@ -171,7 +482,11 @@ function LegacyClaimPanel() {
       if (!challenge?.challengeId) {
         throw new Error("请先获取挑战");
       }
-      return api.claimWallet({ legacyUserHash, challengeId: challenge.challengeId, signature });
+      return api.claimWallet({
+        legacyUserHash: legacyUserHash.trim(),
+        challengeId: challenge.challengeId,
+        signature: signature.trim(),
+      });
     },
     onSuccess: async () => {
       toast.success("旧钱包已认领");
@@ -181,7 +496,11 @@ function LegacyClaimPanel() {
       await queryClient.invalidateQueries({ queryKey: ["wallet"] });
       await queryClient.invalidateQueries({ queryKey: ["ledger"] });
     },
-    onError: (error) => toast.error(error instanceof Error ? error.message : "认领失败"),
+    onError: () => {
+      setChallenge(null);
+      setSignature("");
+      toast.error("认领未完成；本次挑战已失效，请重新获取并签名");
+    },
   });
 
   return (
@@ -206,15 +525,37 @@ function LegacyClaimPanel() {
         </div>
         <div className="grid gap-3 lg:grid-cols-2">
           <div className="space-y-2">
-            <Label>legacyUserHash</Label>
-            <Input value={legacyUserHash} onChange={(event) => setLegacyUserHash(event.target.value)} />
+            <Label htmlFor="legacy-wallet-user-hash">legacyUserHash</Label>
+            <Input
+              id="legacy-wallet-user-hash"
+              value={legacyUserHash}
+              maxLength={64}
+              autoCapitalize="none"
+              spellCheck={false}
+              onChange={(event) => setLegacyUserHash(event.target.value)}
+            />
           </div>
           <div className="space-y-2">
-            <Label>旧钱包签名</Label>
-            <Input value={signature} onChange={(event) => setSignature(event.target.value)} />
+            <Label htmlFor="legacy-wallet-signature">旧钱包签名</Label>
+            <Input
+              id="legacy-wallet-signature"
+              value={signature}
+              maxLength={88}
+              autoCapitalize="none"
+              spellCheck={false}
+              onChange={(event) => setSignature(event.target.value)}
+            />
           </div>
         </div>
-        <Button onClick={() => claim.mutate()} disabled={!challenge || !legacyUserHash || !signature || claim.isPending}>
+        <Button
+          onClick={() => claim.mutate()}
+          disabled={
+            !challenge
+            || !/^[0-9a-f]{64}$/.test(legacyUserHash.trim())
+            || !/^[A-Za-z0-9+/]{86}==$/.test(signature.trim())
+            || claim.isPending
+          }
+        >
           认领并合并余额
         </Button>
       </CardContent>
@@ -224,6 +565,7 @@ function LegacyClaimPanel() {
 
 function CreateTaskDialog() {
   const queryClient = useQueryClient();
+  const { account } = useAuth();
   const [open, setOpen] = React.useState(false);
   const [title, setTitle] = React.useState("");
   const [description, setDescription] = React.useState("");
@@ -231,17 +573,34 @@ function CreateTaskDialog() {
   const [contactInfo, setContactInfo] = React.useState("");
   const mutation = useMutation({
     mutationFn: async () => {
+      if (!account?.id) throw new Error("登录账号尚未就绪");
       const body = { title, description: description || undefined, rewardAmount, contactInfo: contactInfo || undefined };
-      const authorization = await authorizeWallet("credit.task.create", body);
-      return api.createTask(body, authorization);
+      return performWalletMutation(
+        account.id,
+        "credit.task.create",
+        body,
+        { kind: "taskCreate" },
+        (authorization, authToken) => api.createTask(body, authorization, authToken),
+      );
     },
     onSuccess: async () => {
       toast.success("悬赏已发布");
       setOpen(false);
       await queryClient.invalidateQueries({ queryKey: ["tasks"] });
       await queryClient.invalidateQueries({ queryKey: ["wallet"] });
+      await queryClient.invalidateQueries({ queryKey: ["ledger"] });
     },
-    onError: (error) => toast.error(error instanceof Error ? error.message : "发布失败"),
+    onError: (error) => handleWalletMutationError(
+      error,
+      "发布失败",
+      async () => {
+        setOpen(false);
+        await queryClient.invalidateQueries({ queryKey: ["tasks"] });
+        await queryClient.invalidateQueries({ queryKey: ["wallet"] });
+        await queryClient.invalidateQueries({ queryKey: ["ledger"] });
+      },
+      () => refreshPendingWalletReconciliation(queryClient, account?.id),
+    ),
   });
 
   return (
@@ -357,22 +716,37 @@ function CreateProductDialog() {
 
 function TipPanel() {
   const queryClient = useQueryClient();
+  const { account } = useAuth();
   const [toAccountId, setToAccountId] = React.useState("");
   const [amount, setAmount] = React.useState(1);
   const [targetType, setTargetType] = React.useState<"review" | "thread" | "comment">("thread");
   const [targetId, setTargetId] = React.useState("");
   const mutation = useMutation({
     mutationFn: async () => {
+      if (!account?.id) throw new Error("登录账号尚未就绪");
       const body = { toAccountId, amount, targetType, targetId };
-      const authorization = await authorizeWallet("credit.tip", body);
-      return api.tip(body, authorization);
+      return performWalletMutation(
+        account.id,
+        "credit.tip",
+        body,
+        { kind: "tip" },
+        (authorization, authToken) => api.tip(body, authorization, authToken),
+      );
     },
     onSuccess: async () => {
       toast.success("打赏成功");
       await queryClient.invalidateQueries({ queryKey: ["wallet"] });
       await queryClient.invalidateQueries({ queryKey: ["ledger"] });
     },
-    onError: (error) => toast.error(error instanceof Error ? error.message : "打赏失败"),
+    onError: (error) => handleWalletMutationError(
+      error,
+      "打赏失败",
+      async () => {
+        await queryClient.invalidateQueries({ queryKey: ["wallet"] });
+        await queryClient.invalidateQueries({ queryKey: ["ledger"] });
+      },
+      () => refreshPendingWalletReconciliation(queryClient, account?.id),
+    ),
   });
 
   return (
@@ -440,16 +814,43 @@ function TaskCard({ task }: { task: Task }) {
       if (nextAction === "submit" || (nextAction === "delete" && task.status === "cancelled")) {
         return api.taskAction(task.id ?? "", nextAction);
       }
+      if (!account?.id) throw new Error("登录账号尚未就绪");
       const request = { id: task.id ?? "", action: nextAction };
-      const authorization = await authorizeWallet("credit.task.action", request);
-      return api.taskAction(task.id ?? "", nextAction, authorization);
+      return performWalletMutation(
+        account.id,
+        "credit.task.action",
+        request,
+        {
+          kind: "taskAction",
+          task: {
+            id: task.id ?? "",
+            creatorId: task.creatorId ?? "",
+            acceptorId: task.acceptorId ?? null,
+            rewardAmount: task.rewardAmount ?? Number.NaN,
+            status: task.status ?? "",
+          },
+        },
+        (authorization, authToken) => (
+          api.taskAction(task.id ?? "", nextAction, authorization, authToken)
+        ),
+      );
     },
     onSuccess: async () => {
       toast.success("任务状态已更新");
       await queryClient.invalidateQueries({ queryKey: ["tasks"] });
       await queryClient.invalidateQueries({ queryKey: ["wallet"] });
+      await queryClient.invalidateQueries({ queryKey: ["ledger"] });
     },
-    onError: (error) => toast.error(error instanceof Error ? error.message : "操作失败"),
+    onError: (error) => handleWalletMutationError(
+      error,
+      "操作失败",
+      async () => {
+        await queryClient.invalidateQueries({ queryKey: ["tasks"] });
+        await queryClient.invalidateQueries({ queryKey: ["wallet"] });
+        await queryClient.invalidateQueries({ queryKey: ["ledger"] });
+      },
+      () => refreshPendingWalletReconciliation(queryClient, account?.id),
+    ),
   });
   return (
     <Card>
@@ -490,17 +891,48 @@ function ProductCard({ product }: { product: Product }) {
   const { account } = useAuth();
   const buy = useMutation({
     mutationFn: async () => {
-      const request = { productId: product.id ?? "" };
-      const authorization = await authorizeWallet("credit.product.purchase", request);
-      return api.purchaseProduct(product.id ?? "", authorization);
+      if (!account?.id) throw new Error("登录账号尚未就绪");
+      if (!isPurchasableProduct(product, account.id)) {
+        throw new Error("页面展示的商品信息不完整或不可购买");
+      }
+      const request = { productId: product.id };
+      return performWalletMutation(
+        account.id,
+        "credit.product.purchase",
+        request,
+        {
+          kind: "productPurchase",
+          product: {
+            id: product.id,
+            price: product.price,
+            sellerId: product.sellerId,
+            status: product.status,
+            stock: product.stock,
+          },
+        },
+        (authorization, authToken) => (
+          api.purchaseProduct(product.id, authorization, authToken)
+        ),
+      );
     },
     onSuccess: async () => {
       toast.success("已创建托管订单");
       await queryClient.invalidateQueries({ queryKey: ["products"] });
       await queryClient.invalidateQueries({ queryKey: ["purchases"] });
       await queryClient.invalidateQueries({ queryKey: ["wallet"] });
+      await queryClient.invalidateQueries({ queryKey: ["ledger"] });
     },
-    onError: (error) => toast.error(error instanceof Error ? error.message : "购买失败"),
+    onError: (error) => handleWalletMutationError(
+      error,
+      "购买失败",
+      async () => {
+        await queryClient.invalidateQueries({ queryKey: ["products"] });
+        await queryClient.invalidateQueries({ queryKey: ["purchases"] });
+        await queryClient.invalidateQueries({ queryKey: ["wallet"] });
+        await queryClient.invalidateQueries({ queryKey: ["ledger"] });
+      },
+      () => refreshPendingWalletReconciliation(queryClient, account?.id),
+    ),
   });
   return (
     <Card>
@@ -517,7 +949,12 @@ function ProductCard({ product }: { product: Product }) {
           <span>库存 {product.stock ?? 0}</span>
           <span>{formatDate(product.createdAt)}</span>
         </div>
-        <Button size="sm" className="mt-3" onClick={() => buy.mutate()} disabled={buy.isPending || product.status !== "on_sale" || account?.id === product.sellerId}>
+        <Button
+          size="sm"
+          className="mt-3"
+          onClick={() => buy.mutate()}
+          disabled={buy.isPending || !account?.id || !isPurchasableProduct(product, account.id)}
+        >
           购买并托管
         </Button>
       </CardContent>
@@ -535,16 +972,43 @@ function PurchaseCard({ purchase }: { purchase: Purchase }) {
       if (nextAction === "accept" || nextAction === "deliver") {
         return api.purchaseAction(purchase.id ?? "", nextAction);
       }
+      if (!account?.id) throw new Error("登录账号尚未就绪");
       const request = { id: purchase.id ?? "", action: nextAction };
-      const authorization = await authorizeWallet("credit.purchase.action", request);
-      return api.purchaseAction(purchase.id ?? "", nextAction, authorization);
+      return performWalletMutation(
+        account.id,
+        "credit.purchase.action",
+        request,
+        {
+          kind: "purchaseAction",
+          purchase: {
+            id: purchase.id ?? "",
+            buyerId: purchase.buyerId ?? "",
+            sellerId: purchase.sellerId ?? "",
+            amount: purchase.amount ?? Number.NaN,
+            status: purchase.status ?? "",
+          },
+        },
+        (authorization, authToken) => (
+          api.purchaseAction(purchase.id ?? "", nextAction, authorization, authToken)
+        ),
+      );
     },
     onSuccess: async () => {
       toast.success("订单状态已更新");
       await queryClient.invalidateQueries({ queryKey: ["purchases"] });
       await queryClient.invalidateQueries({ queryKey: ["wallet"] });
+      await queryClient.invalidateQueries({ queryKey: ["ledger"] });
     },
-    onError: (error) => toast.error(error instanceof Error ? error.message : "操作失败"),
+    onError: (error) => handleWalletMutationError(
+      error,
+      "操作失败",
+      async () => {
+        await queryClient.invalidateQueries({ queryKey: ["purchases"] });
+        await queryClient.invalidateQueries({ queryKey: ["wallet"] });
+        await queryClient.invalidateQueries({ queryKey: ["ledger"] });
+      },
+      () => refreshPendingWalletReconciliation(queryClient, account?.id),
+    ),
   });
   return (
     <Card>
@@ -573,13 +1037,43 @@ function PurchaseCard({ purchase }: { purchase: Purchase }) {
 }
 
 export function WalletPage() {
-  const { isAuthenticated } = useAuth();
-  const wallet = useQuery({ queryKey: ["wallet"], queryFn: api.wallet, enabled: isAuthenticated });
+  const queryClient = useQueryClient();
+  const { isAuthenticated, account } = useAuth();
+  const wallet = useQuery({
+    queryKey: ["wallet"],
+    queryFn: () => api.wallet(),
+    enabled: isAuthenticated,
+  });
   const ledger = useQuery({ queryKey: ["ledger"], queryFn: () => api.ledger(), enabled: isAuthenticated });
   const verify = useQuery({ queryKey: ["ledger-verify"], queryFn: api.verifyLedger });
   const tasks = useQuery({ queryKey: ["tasks"], queryFn: () => api.tasks("all"), enabled: isAuthenticated });
   const products = useQuery({ queryKey: ["products"], queryFn: () => api.products(), enabled: isAuthenticated });
   const purchases = useQuery({ queryKey: ["purchases"], queryFn: () => api.purchases(), enabled: isAuthenticated });
+  const serverKeyState = resolveWalletServerKeyState(wallet.data, account?.id ?? null);
+  const isServerStateKnown = wallet.isSuccess && serverKeyState.isKnown;
+  const pendingReconciliation = useQuery({
+    queryKey: ["wallet-pending-reconciliation", account?.id],
+    queryFn: () => {
+      if (!account?.id) throw new Error("登录账号尚未就绪");
+      return reconcileWalletMutations(account.id);
+    },
+    enabled: isAuthenticated && Boolean(account?.id),
+    retry: false,
+    staleTime: 0,
+    refetchOnMount: "always",
+  });
+
+  React.useEffect(() => {
+    if (!pendingReconciliation.data?.resolvedCount) return;
+    toast.success("已根据服务端状态核验并清理待确认的积分操作");
+    void Promise.all([
+      queryClient.invalidateQueries({ queryKey: ["wallet"] }),
+      queryClient.invalidateQueries({ queryKey: ["ledger"] }),
+      queryClient.invalidateQueries({ queryKey: ["tasks"] }),
+      queryClient.invalidateQueries({ queryKey: ["products"] }),
+      queryClient.invalidateQueries({ queryKey: ["purchases"] }),
+    ]);
+  }, [pendingReconciliation.data?.resolvedCount, queryClient]);
 
   if (!isAuthenticated) {
     return <EmptyState title="登录后查看积分钱包" description="积分是平台闭环权益，不支持充值、提现或自由转账。" />;
@@ -631,7 +1125,31 @@ export function WalletPage() {
         </Card>
       </div>
 
-      <WalletSetup />
+      {wallet.isError || (wallet.isSuccess && !isServerStateKnown) ? (
+        <Card className="border-destructive/40">
+          <CardContent className="p-4 text-sm text-destructive" role="status">
+            无法确认当前账号的服务端钱包公钥；可能是后端版本尚未完成切换或响应不完整。为避免错签，钱包密钥操作与积分写入已停止。
+          </CardContent>
+        </Card>
+      ) : null}
+
+      {pendingReconciliation.isError || (pendingReconciliation.data?.unresolvedCount ?? 0) > 0 ? (
+        <Card className="border-amber-500/40 bg-amber-500/5">
+          <CardContent className="p-4 text-sm">
+            <p className="font-medium">存在尚未完成核验的积分操作</p>
+            <p className="mt-1 text-muted-foreground">
+              {pendingReconciliation.isError
+                ? "当前浏览器无法读取或核验本地记录。为避免重复扣款，相关操作会保持关闭，刷新后可重试。"
+                : `仍有 ${pendingReconciliation.data?.unresolvedCount ?? 0} 条记录无法从服务端确认；相同操作暂时不会重复发送。`}
+            </p>
+          </CardContent>
+        </Card>
+      ) : null}
+
+      <WalletSetup
+        serverPublicKey={serverKeyState.activePublicKey}
+        isServerStateKnown={isServerStateKnown}
+      />
       <LegacyClaimPanel />
 
       <TipPanel />

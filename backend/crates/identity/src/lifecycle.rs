@@ -707,6 +707,10 @@ pub async fn complete_purge(pool: &PgPool, job: &LifecycleJob) -> AppResult<Opti
         .bind(job.account_id)
         .execute(&mut *tx)
         .await?;
+    sqlx::query("DELETE FROM identity.wallet_claim_challenges WHERE account_id = $1")
+        .bind(job.account_id)
+        .execute(&mut *tx)
+        .await?;
     sqlx::query("DELETE FROM identity.profiles WHERE account_id = $1")
         .bind(job.account_id)
         .execute(&mut *tx)

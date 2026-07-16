@@ -20,7 +20,8 @@ mod compliance_guards {
     /// Verify that `WalletDto` (wallet read) exists — read-only, safe.
     #[test]
     fn wallet_dto_exists() {
-        let _ = credit::dto::WalletDto { account_id: "1".into(), balance: 0 };
+        let _ =
+            credit::dto::WalletDto { account_id: "1".into(), balance: 0, active_public_key: None };
     }
 
     /// Verify that `TipInput` exists — requires wallet-signed sig, validates balance.
@@ -205,7 +206,8 @@ mod compliance_guards {
         //   credit::market    — would enable fiat exchange
 
         // This test passes by accessing approved modules.
-        let _ = credit::dto::WalletDto { account_id: "1".into(), balance: 0 };
+        let _ =
+            credit::dto::WalletDto { account_id: "1".into(), balance: 0, active_public_key: None };
         let _ = credit::error::CreditError::InsufficientBalance;
         let _ = credit::ledger::canonicalize(&serde_json::json!({}));
         let _ = credit::models::WalletRow { account_id: 1, balance: 0, last_seq: 0 };

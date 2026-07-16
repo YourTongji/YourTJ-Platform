@@ -1497,14 +1497,11 @@ pub async fn bind_initial_account_key(
     pool: &PgPool,
     context: &crate::auth_middleware::AuthenticatedContext,
     public_key: &str,
+    allow_initial_enrollment: bool,
 ) -> AppResult<()> {
     let mut tx = pool.begin().await?;
-    let account_id: Option<i64> =
-        sqlx::query_scalar("SELECT id FROM identity.accounts WHERE id = $1 FOR UPDATE")
-            .bind(context.account.id)
-            .fetch_optional(&mut *tx)
-            .await?;
-    account_id.ok_or(AppError::NotFound)?;
+    crate::public_accounts::lock_active_account_for_owned_mutation(&mut tx, context.account.id)
+        .await?;
     crate::auth_middleware::require_recent_auth_tx(context, &mut tx).await?;
 
     let active_key: Option<String> = sqlx::query_scalar(
@@ -1520,6 +1517,11 @@ pub async fn bind_initial_account_key(
             return Ok(());
         }
         return Err(crate::error::IdentityError::KeyAlreadyBound.into());
+    }
+    if !allow_initial_enrollment {
+        return Err(AppError::BadRequest(
+            "accountId is required for initial wallet key enrollment".into(),
+        ));
     }
 
     let inserted = sqlx::query(
@@ -1683,14 +1685,18 @@ pub async fn has_unencrypted_email_rows(pool: &PgPool) -> AppResult<bool> {
 
 use crate::models::{LegacyWalletLinkRow, WalletClaimChallengeRow};
 
-/// Insert a new wallet claim challenge for the given account.
-pub async fn insert_claim_challenge(
-    pool: &PgPool,
+/// Replace the account's prior challenge inside its exclusively account-locked transaction.
+pub async fn replace_claim_challenge_tx(
+    conn: &mut sqlx::PgConnection,
     id: &str,
     account_id: i64,
     nonce: &str,
     expires_at: DateTime<Utc>,
 ) -> AppResult<()> {
+    sqlx::query("DELETE FROM identity.wallet_claim_challenges WHERE account_id = $1")
+        .bind(account_id)
+        .execute(&mut *conn)
+        .await?;
     sqlx::query(
         "INSERT INTO identity.wallet_claim_challenges (id, account_id, nonce, expires_at) \
          VALUES ($1, $2, $3, $4)",
@@ -1699,7 +1705,7 @@ pub async fn insert_claim_challenge(
     .bind(account_id)
     .bind(nonce)
     .bind(expires_at)
-    .execute(pool)
+    .execute(&mut *conn)
     .await?;
     Ok(())
 }

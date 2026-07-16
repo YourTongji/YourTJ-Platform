@@ -11,6 +11,7 @@ WalletBindPostRequest _$WalletBindPostRequestFromJson(
 ) => $checkedCreate('WalletBindPostRequest', json, ($checkedConvert) {
   $checkKeys(json, requiredKeys: const ['publicKey']);
   final val = WalletBindPostRequest(
+    accountId: $checkedConvert('accountId', (v) => v as String?),
     publicKey: $checkedConvert('publicKey', (v) => v as String),
   );
   return val;
@@ -18,4 +19,7 @@ WalletBindPostRequest _$WalletBindPostRequestFromJson(
 
 Map<String, dynamic> _$WalletBindPostRequestToJson(
   WalletBindPostRequest instance,
-) => <String, dynamic>{'publicKey': instance.publicKey};
+) => <String, dynamic>{
+  'accountId': ?instance.accountId,
+  'publicKey': instance.publicKey,
+};

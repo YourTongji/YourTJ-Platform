@@ -96,6 +96,7 @@ import type {
   Sanction,
   SearchResult,
   SigningIntent,
+  SigningIntentOutcome,
   SelectionCourse,
   SelectionOfferingPage,
   SelectionSyncJob,
@@ -145,6 +146,8 @@ export interface WalletAuthorization {
   intentId: string;
   signature: string;
 }
+
+export type CreditSigningIntentOutcome = SigningIntentOutcome;
 
 function walletHeaders(authorization: WalletAuthorization) {
   return {
@@ -1165,12 +1168,16 @@ export const api = {
     });
   },
 
-  wallet() {
-    return apiRequest<Wallet>("/wallet");
+  wallet(authToken?: string) {
+    return apiRequest<Wallet>("/wallet", { authToken });
   },
 
-  bindWallet(publicKey: string) {
-    return apiRequest<void>("/wallet/bind", { method: "POST", body: { publicKey } });
+  bindWallet(accountId: string, publicKey: string, authToken: string) {
+    return apiRequest<void>("/wallet/bind", {
+      method: "POST",
+      body: { accountId, publicKey },
+      authToken,
+    });
   },
 
   claimChallenge() {
@@ -1242,22 +1249,33 @@ export const api = {
       | "credit.purchase.action",
     request: Record<string, unknown>,
     idempotencyKey: string,
+    authToken?: string,
   ) {
     return apiRequest<SigningIntent>("/credit/signing-intents", {
       method: "POST",
       body: { action, request },
       headers: { "Idempotency-Key": idempotencyKey },
+      authToken,
     });
+  },
+
+  creditSigningIntentOutcome(intentId: string, authToken?: string) {
+    return apiRequest<CreditSigningIntentOutcome>(
+      "/credit/signing-intent-outcome",
+      { method: "POST", body: { intentId }, authToken },
+    );
   },
 
   tip(
     body: { toAccountId: string; amount: number; targetType: "review" | "thread" | "comment"; targetId: string },
     authorization: WalletAuthorization,
+    authToken?: string,
   ) {
     return apiRequest<void>("/credit/tip", {
       method: "POST",
       body,
       headers: walletHeaders(authorization),
+      authToken,
     });
   },
 
@@ -1270,11 +1288,13 @@ export const api = {
   createTask(
     body: { title: string; description?: string; rewardAmount: number; contactInfo?: string },
     authorization: WalletAuthorization,
+    authToken?: string,
   ) {
     return apiRequest<Task>("/credit/tasks", {
       method: "POST",
       body,
       headers: walletHeaders(authorization),
+      authToken,
     });
   },
 
@@ -1286,11 +1306,13 @@ export const api = {
     id: string,
     action: "submit" | "confirm" | "cancel" | "reject" | "delete",
     authorization?: WalletAuthorization,
+    authToken?: string,
   ) {
     return apiRequest<void>(`/credit/tasks/${encodeURIComponent(id)}/action`, {
       method: "POST",
       body: { action },
       headers: authorization ? walletHeaders(authorization) : undefined,
+      authToken,
     });
   },
 
@@ -1302,10 +1324,11 @@ export const api = {
     return apiRequest<Product>("/credit/products", { method: "POST", body });
   },
 
-  purchaseProduct(id: string, authorization: WalletAuthorization) {
+  purchaseProduct(id: string, authorization: WalletAuthorization, authToken?: string) {
     return apiRequest<Purchase>(`/credit/products/${encodeURIComponent(id)}/purchase`, {
       method: "POST",
       headers: walletHeaders(authorization),
+      authToken,
     });
   },
 
@@ -1317,11 +1340,13 @@ export const api = {
     id: string,
     action: "accept" | "deliver" | "confirm" | "cancel",
     authorization?: WalletAuthorization,
+    authToken?: string,
   ) {
     return apiRequest<void>(`/credit/purchases/${encodeURIComponent(id)}/action`, {
       method: "POST",
       body: { action },
       headers: authorization ? walletHeaders(authorization) : undefined,
+      authToken,
     });
   },
 

@@ -295,11 +295,13 @@ pub async fn is_suspended(
     }
 
     let suspended: bool = sqlx::query_scalar(
-        "SELECT EXISTS( \
-         SELECT 1 FROM identity.sanctions \
+        "WITH observed AS MATERIALIZED (SELECT clock_timestamp() AS at) \
+         SELECT EXISTS( \
+         SELECT 1 FROM identity.sanctions CROSS JOIN observed \
          WHERE account_id = $1 AND kind = 'suspend' \
          AND revoked_at IS NULL \
-         AND (ends_at IS NULL OR ends_at > now()) \
+         AND starts_at <= observed.at \
+         AND (ends_at IS NULL OR ends_at > observed.at) \
         )",
     )
     .bind(account_id)

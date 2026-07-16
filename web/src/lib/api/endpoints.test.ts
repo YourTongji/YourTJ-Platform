@@ -32,4 +32,38 @@ describe("authentication endpoint metadata", () => {
     );
     expect(requestBodies[1].clientInstallationId).toBe(requestBodies[0].clientInstallationId);
   });
+
+  it("keeps a signing intent id out of the outcome request URL", async () => {
+    const intentId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      intentId,
+      status: "pending",
+      expiresAt: 1_800_000_300,
+    }), { headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.creditSigningIntentOutcome(intentId, "fixed-access-token");
+
+    const [url, init] = fetchMock.mock.calls[0] as [URL, RequestInit];
+    expect(url.pathname).toBe("/api/v2/credit/signing-intent-outcome");
+    expect(url.href).not.toContain(intentId);
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(String(init.body))).toEqual({ intentId });
+    expect(new Headers(init.headers).get("Authorization")).toBe("Bearer fixed-access-token");
+  });
+
+  it("uses the explicitly captured token for wallet key enrollment", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.bindWallet("account-a", "public-key-a", "verified-access-a");
+
+    const [url, init] = fetchMock.mock.calls[0] as [URL, RequestInit];
+    expect(url.pathname).toBe("/api/v2/wallet/bind");
+    expect(new Headers(init.headers).get("Authorization")).toBe("Bearer verified-access-a");
+    expect(JSON.parse(String(init.body))).toEqual({
+      accountId: "account-a",
+      publicKey: "public-key-a",
+    });
+  });
 });

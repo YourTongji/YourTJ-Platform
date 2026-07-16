@@ -18,7 +18,12 @@ SigningIntentInput _$SigningIntentInputFromJson(Map<String, dynamic> json) =>
             unknownValue: SigningIntentInputActionEnum.unknownDefaultOpenApi,
           ),
         ),
-        request: $checkedConvert('request', (v) => v as Object),
+        request: $checkedConvert(
+          'request',
+          (v) => (v as Map<String, dynamic>).map(
+            (k, e) => MapEntry(k, e as Object),
+          ),
+        ),
       );
       return val;
     });
