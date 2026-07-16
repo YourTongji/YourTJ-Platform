@@ -30,6 +30,12 @@ class WorkflowBoundaryTests(unittest.TestCase):
         self.assertIn("--wallet-key-cutover-drained", deploy)
         self.assertIn("WALLET_KEY_CUTOVER_DRAIN_SECONDS=360", deploy)
         self.assertIn("WALLET_KEY_CUTOVER_APPROVED_REVISION", workflow)
+        self.assertIn(
+            'wallet_cutover_approval="${WALLET_KEY_CUTOVER_APPROVED_REVISION:-not-approved}"',
+            workflow,
+        )
+        self.assertIn('"$wallet_cutover_approval" =~ ^[0-9a-f]{40}$', workflow)
+        self.assertIn('"${wallet_cutover_approval}"', workflow)
 
     def test_preview_never_references_production_oss_secrets(self):
         workflow = (ROOT / ".github/workflows/pr-preview.yml").read_text()
