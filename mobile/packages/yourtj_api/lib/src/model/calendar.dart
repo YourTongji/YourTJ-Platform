@@ -15,16 +15,16 @@ part 'calendar.g.dart';
 )
 class Calendar {
   /// Returns a new [Calendar] instance.
-  Calendar({this.id, this.name, this.isCurrent});
+  Calendar({required this.id, required this.name, required this.isCurrent});
 
-  @JsonKey(name: r'id', required: false, includeIfNull: false)
-  final String? id;
+  @JsonKey(name: r'id', required: true, includeIfNull: false)
+  final String id;
 
-  @JsonKey(name: r'name', required: false, includeIfNull: false)
-  final String? name;
+  @JsonKey(name: r'name', required: true, includeIfNull: false)
+  final String name;
 
-  @JsonKey(name: r'isCurrent', required: false, includeIfNull: false)
-  final bool? isCurrent;
+  @JsonKey(name: r'isCurrent', required: true, includeIfNull: false)
+  final bool isCurrent;
 
   @override
   bool operator ==(Object other) =>

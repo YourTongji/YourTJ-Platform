@@ -27,6 +27,9 @@ pub enum CoursesError {
     #[error("course with reviews cannot be deleted")]
     CourseHasReviews,
 
+    #[error("selection schedule exceeds supported limit")]
+    SelectionScheduleTooLarge,
+
     #[error("database error")]
     Database(#[from] sqlx::Error),
 }
@@ -43,6 +46,9 @@ impl From<CoursesError> for AppError {
             CoursesError::CourseHasReviews => AppError::Conflict(
                 "course with reviews cannot be deleted; preserve its community history".into(),
             ),
+            CoursesError::SelectionScheduleTooLarge => {
+                AppError::Internal(anyhow::anyhow!("selection schedule exceeds supported limit"))
+            }
             CoursesError::Database(inner) => AppError::Internal(inner.into()),
         }
     }

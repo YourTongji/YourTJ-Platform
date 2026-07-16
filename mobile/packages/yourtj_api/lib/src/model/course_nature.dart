@@ -15,13 +15,13 @@ part 'course_nature.g.dart';
 )
 class CourseNature {
   /// Returns a new [CourseNature] instance.
-  CourseNature({this.id, this.name});
+  CourseNature({required this.id, required this.name});
 
-  @JsonKey(name: r'id', required: false, includeIfNull: false)
-  final String? id;
+  @JsonKey(name: r'id', required: true, includeIfNull: false)
+  final String id;
 
-  @JsonKey(name: r'name', required: false, includeIfNull: false)
-  final String? name;
+  @JsonKey(name: r'name', required: true, includeIfNull: false)
+  final String name;
 
   @override
   bool operator ==(Object other) =>

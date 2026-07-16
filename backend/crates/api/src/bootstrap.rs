@@ -200,6 +200,11 @@ pub async fn run() -> anyhow::Result<()> {
         tokio::spawn(identity::email_delivery::run_email_delivery_worker(worker_state));
         tracing::info!("identity email delivery worker scheduled");
     }
+    {
+        let worker_state = state.clone();
+        tokio::spawn(courses::sync::run_selection_sync_worker(worker_state));
+        tracing::info!("selection projection sync worker scheduled");
+    }
 
     // 5. Auto-archive stale threads (daily).
     {

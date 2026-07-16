@@ -15,9 +15,15 @@ Cargo.lock.orig
 /web/dist
 /web/.vite
 
+# Local tool state
+/.wrangler/
+/openapitools.json
+
 # Database dumps
 *.db
 *.sqlite
+*.sqlite3
+jcourse-db-backup-manifest*.json
 
 # Python cache
 __pycache__/

@@ -13,6 +13,13 @@ class ScheduleNamespace {
   String storageKey(String calendarId) {
     String encode(String value) =>
         base64Url.encode(utf8.encode(value)).replaceAll('=', '');
+    return 'yourtj.schedule.v3.${encode(environment)}.'
+        '${encode(principal)}.${encode(calendarId)}';
+  }
+
+  String legacyStorageKey(String calendarId) {
+    String encode(String value) =>
+        base64Url.encode(utf8.encode(value)).replaceAll('=', '');
     return 'yourtj.schedule.v2.${encode(environment)}.'
         '${encode(principal)}.${encode(calendarId)}';
   }
@@ -21,18 +28,24 @@ class ScheduleNamespace {
 @immutable
 class ScheduledCourse {
   const ScheduledCourse({
-    required this.course,
+    required this.offering,
     required this.timeslots,
     required this.colorIndex,
   });
 
-  final SelectionCourse course;
+  final SelectionOffering offering;
   final List<TimeSlot> timeslots;
   final int colorIndex;
 
-  bool get hasUnknownWeeks => timeslots.any(
-    (TimeSlot timeslot) => parseCourseWeeks(timeslot.weeks ?? '') == null,
-  );
+  bool get hasUnknownSchedule => offering.scheduleUnknown || timeslots.isEmpty;
+
+  bool get hasUnknownWeeks =>
+      offering.weeksUnknown ||
+      hasUnknownSchedule ||
+      timeslots.any(
+        (TimeSlot timeslot) =>
+            timeslot.weeksUnknown || timeslot.weekNumbers.isEmpty,
+      );
 }
 
 enum ScheduleConflictKind { confirmed, possible }
@@ -42,14 +55,14 @@ class ScheduleConflict {
   const ScheduleConflict({
     required this.kind,
     required this.withCourse,
-    required this.existingSlot,
-    required this.candidateSlot,
+    this.existingSlot,
+    this.candidateSlot,
   });
 
   final ScheduleConflictKind kind;
   final ScheduledCourse withCourse;
-  final TimeSlot existingSlot;
-  final TimeSlot candidateSlot;
+  final TimeSlot? existingSlot;
+  final TimeSlot? candidateSlot;
 }
 
 enum ScheduleAddStatus { added, duplicate, conflict }
@@ -59,7 +72,7 @@ class ScheduleAddResult {
   const ScheduleAddResult._({
     required this.status,
     this.conflict,
-    this.pendingCourse,
+    this.pendingOffering,
     this.pendingTimeslots,
   });
 
@@ -70,35 +83,53 @@ class ScheduleAddResult {
 
   const ScheduleAddResult.conflict({
     required ScheduleConflict conflict,
-    required SelectionCourse pendingCourse,
+    required SelectionOffering pendingOffering,
     required List<TimeSlot> pendingTimeslots,
   }) : this._(
          status: ScheduleAddStatus.conflict,
          conflict: conflict,
-         pendingCourse: pendingCourse,
+         pendingOffering: pendingOffering,
          pendingTimeslots: pendingTimeslots,
        );
 
   final ScheduleAddStatus status;
   final ScheduleConflict? conflict;
-  final SelectionCourse? pendingCourse;
+  final SelectionOffering? pendingOffering;
   final List<TimeSlot>? pendingTimeslots;
 }
 
 ScheduleConflict? findScheduleConflict({
   required List<ScheduledCourse> existing,
   required List<TimeSlot> candidate,
+  bool candidateScheduleUnknown = false,
 }) {
+  if (existing.isEmpty) {
+    return null;
+  }
   ScheduleConflict? possible;
+  if (candidateScheduleUnknown || candidate.isEmpty) {
+    possible = ScheduleConflict(
+      kind: ScheduleConflictKind.possible,
+      withCourse: existing.first,
+      candidateSlot: candidate.isEmpty ? null : candidate.first,
+    );
+  }
   for (final ScheduledCourse scheduled in existing) {
+    if (scheduled.hasUnknownSchedule) {
+      possible ??= ScheduleConflict(
+        kind: ScheduleConflictKind.possible,
+        withCourse: scheduled,
+        candidateSlot: candidate.isEmpty ? null : candidate.first,
+      );
+    }
     for (final TimeSlot existingSlot in scheduled.timeslots) {
       for (final TimeSlot candidateSlot in candidate) {
         if (!_overlapsBySlot(existingSlot, candidateSlot)) {
           continue;
         }
         final ScheduleConflictKind? kind = _weekConflictKind(
-          existingSlot.weeks,
-          candidateSlot.weeks,
+          existingSlot,
+          candidateSlot,
         );
         if (kind == null) {
           continue;
@@ -126,18 +157,14 @@ bool _overlapsBySlot(TimeSlot left, TimeSlot right) {
   return left.startSlot <= right.endSlot && right.startSlot <= left.endSlot;
 }
 
-ScheduleConflictKind? _weekConflictKind(String? left, String? right) {
-  final String leftValue = left?.trim() ?? '';
-  final String rightValue = right?.trim() ?? '';
-  if (leftValue.isEmpty || rightValue.isEmpty) {
+ScheduleConflictKind? _weekConflictKind(TimeSlot left, TimeSlot right) {
+  if (left.weeksUnknown ||
+      right.weeksUnknown ||
+      left.weekNumbers.isEmpty ||
+      right.weekNumbers.isEmpty) {
     return ScheduleConflictKind.possible;
   }
-  final Set<int>? leftWeeks = parseCourseWeeks(leftValue);
-  final Set<int>? rightWeeks = parseCourseWeeks(rightValue);
-  if (leftWeeks == null || rightWeeks == null) {
-    return ScheduleConflictKind.possible;
-  }
-  return leftWeeks.any(rightWeeks.contains)
+  return left.weekNumbers.any(right.weekNumbers.contains)
       ? ScheduleConflictKind.confirmed
       : null;
 }
@@ -185,7 +212,7 @@ Set<int>? parseCourseWeeks(String value) {
     }
     final int? start = int.tryParse(match.group(1)!);
     final int? end = int.tryParse(match.group(2) ?? match.group(1)!);
-    if (start == null || end == null || start < 1 || end > 60 || start > end) {
+    if (start == null || end == null || start < 1 || end > 30 || start > end) {
       return null;
     }
     for (int week = start; week <= end; week += 1) {

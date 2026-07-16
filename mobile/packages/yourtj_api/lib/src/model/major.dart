@@ -15,18 +15,26 @@ part 'major.g.dart';
 )
 class Major {
   /// Returns a new [Major] instance.
-  Major({this.id, this.name, this.facultyId, this.grade});
+  Major({
+    required this.id,
 
-  @JsonKey(name: r'id', required: false, includeIfNull: false)
-  final String? id;
+    required this.name,
 
-  @JsonKey(name: r'name', required: false, includeIfNull: false)
-  final String? name;
+    required this.facultyId,
 
-  @JsonKey(name: r'facultyId', required: false, includeIfNull: false)
+    required this.grade,
+  });
+
+  @JsonKey(name: r'id', required: true, includeIfNull: false)
+  final String id;
+
+  @JsonKey(name: r'name', required: true, includeIfNull: false)
+  final String name;
+
+  @JsonKey(name: r'facultyId', required: true, includeIfNull: true)
   final String? facultyId;
 
-  @JsonKey(name: r'grade', required: false, includeIfNull: false)
+  @JsonKey(name: r'grade', required: true, includeIfNull: true)
   final String? grade;
 
   @override

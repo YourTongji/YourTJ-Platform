@@ -43,3 +43,15 @@ Object.defineProperty(HTMLCanvasElement.prototype, "getContext", {
   configurable: true,
   value: vi.fn(() => null),
 });
+
+for (const method of ["setPointerCapture", "releasePointerCapture", "hasPointerCapture"] as const) {
+  Object.defineProperty(HTMLElement.prototype, method, {
+    configurable: true,
+    value: method === "hasPointerCapture" ? vi.fn(() => false) : vi.fn(),
+  });
+}
+
+Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+  configurable: true,
+  value: vi.fn(),
+});

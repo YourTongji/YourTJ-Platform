@@ -16,6 +16,7 @@ pub mod pinyin;
 pub mod public_search;
 pub mod repo;
 pub mod selection;
+pub mod selection_admin;
 pub(crate) mod selection_handlers;
 pub mod selection_repo;
 pub mod sync;
@@ -46,6 +47,15 @@ pub fn routes(state: AppState) -> Router {
             "/api/v2/selection/course-natures",
             get(selection_handlers::selection_course_natures),
         )
+        .route("/api/v2/selection/offerings", get(selection_handlers::selection_offerings))
+        .route(
+            "/api/v2/selection/offerings/{offering_id}",
+            get(selection_handlers::selection_offering),
+        )
+        .route(
+            "/api/v2/selection/offerings/{offering_id}/timeslots",
+            get(selection_handlers::selection_offering_timeslots),
+        )
         .route(
             "/api/v2/selection/courses-by-major",
             get(selection_handlers::selection_courses_by_major),
@@ -67,6 +77,14 @@ pub fn routes(state: AppState) -> Router {
             get(selection_handlers::selection_course_timeslots),
         )
         .route("/api/v2/selection/latest-update", get(selection_handlers::selection_latest_update))
+        // --- durable selection operations ---
+        .route("/api/v2/admin/selection/sync", axum::routing::post(selection_admin::enqueue_sync))
+        .route("/api/v2/admin/selection/sync-jobs", get(selection_admin::list_sync_jobs))
+        .route("/api/v2/admin/selection/sync-jobs/{id}", get(selection_admin::get_sync_job))
+        .route(
+            "/api/v2/admin/selection/sync-jobs/{id}/retry",
+            axum::routing::post(selection_admin::retry_sync_job),
+        )
         // --- admin course CRUD ---
         .route(
             "/api/v2/admin/courses",

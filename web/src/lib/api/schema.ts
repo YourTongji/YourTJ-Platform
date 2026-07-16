@@ -3655,7 +3655,7 @@ export interface paths {
                 query: {
                     /** @description Selection calendar that bounds every returned teaching class. */
                     calendarId: components["parameters"]["SelectionCalendarId"];
-                    grade: string;
+                    grade: components["schemas"]["SelectionGrade"];
                 };
                 header?: never;
                 path?: never;
@@ -3690,10 +3690,13 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Optional course types/natures */
+        /** Course types/natures represented in one calendar */
         get: {
             parameters: {
-                query?: never;
+                query: {
+                    /** @description Selection calendar that bounds every returned teaching class. */
+                    calendarId: components["parameters"]["SelectionCalendarId"];
+                };
                 header?: never;
                 path?: never;
                 cookie?: never;
@@ -3709,6 +3712,154 @@ export interface paths {
                         "application/json": components["schemas"]["CourseNature"][];
                     };
                 };
+                400: components["responses"]["BadRequest"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/selection/offerings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Browse, search, and time-filter concrete teaching-class offerings
+         * @description PostgreSQL remains authoritative. When q is supplied it must remain non-blank after trimming; valid search is ranked by Meilisearch, then every candidate is rehydrated and filtered from PostgreSQL. weekday, startSlot, and endSlot must be supplied together; week and includeUnknownSchedule=false require that complete trio. Unknown schedules and unknown-week slots are retained by default so missing upstream data is never misrepresented as no conflict; false excludes both from time-filter results.
+         */
+        get: {
+            parameters: {
+                query: {
+                    /** @description Selection calendar that bounds every returned teaching class. */
+                    calendarId: components["parameters"]["SelectionCalendarId"];
+                    q?: components["schemas"]["SelectionSearchQuery"];
+                    majorId?: components["schemas"]["SelectionEntityId"];
+                    grade?: components["schemas"]["SelectionGrade"];
+                    natureId?: components["schemas"]["SelectionEntityId"];
+                    campusId?: components["schemas"]["SelectionEntityId"];
+                    courseCode?: string;
+                    /** @description Must be supplied with startSlot and endSlot. */
+                    weekday?: number;
+                    /** @description Inclusive 1-based slot; must be supplied with weekday and endSlot. */
+                    startSlot?: number;
+                    /** @description Inclusive 1-based slot not before startSlot; must be supplied with weekday and startSlot. */
+                    endSlot?: number;
+                    /** @description Optional week within a complete weekday/startSlot/endSlot filter. */
+                    week?: number;
+                    /** @description Applies only to a complete time filter; false excludes offerings marked scheduleUnknown and matching slots marked weeksUnknown. */
+                    includeUnknownSchedule?: boolean;
+                    /** @description Opaque pagination cursor */
+                    cursor?: components["parameters"]["Cursor"];
+                    limit?: components["parameters"]["Limit"];
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description bounded offering page */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["SelectionOfferingPage"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                429: components["responses"]["RateLimited"];
+                503: components["responses"]["ServiceUnavailable"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/selection/offerings/{offeringId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read one teaching-class offering by stable offeringId */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    offeringId: components["schemas"]["SelectionEntityId"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description offering */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["SelectionOffering"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                404: components["responses"]["NotFound"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/selection/offerings/{offeringId}/timeslots": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read the materialized schedule for one teaching-class offering
+         * @description An empty array is authoritative only when the parent offering has scheduleUnknown=false; clients must inspect the offering otherwise.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    offeringId: components["schemas"]["SelectionEntityId"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description bounded offering timeslots */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["TimeSlot"][];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                404: components["responses"]["NotFound"];
             };
         };
         put?: never;
@@ -3726,14 +3877,17 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Teaching classes for a major in a calendar */
+        /**
+         * Teaching classes for a major in one calendar
+         * @deprecated
+         */
         get: {
             parameters: {
                 query: {
                     /** @description Selection calendar that bounds every returned teaching class. */
                     calendarId: components["parameters"]["SelectionCalendarId"];
-                    majorId: string;
-                    grade: string;
+                    majorId: components["schemas"]["SelectionEntityId"];
+                    grade: components["schemas"]["SelectionGrade"];
                 };
                 header?: never;
                 path?: never;
@@ -3741,7 +3895,7 @@ export interface paths {
             };
             requestBody?: never;
             responses: {
-                /** @description ok */
+                /** @description bounded compatibility list; migrate to /selection/offerings */
                 200: {
                     headers: {
                         [name: string]: unknown;
@@ -3768,13 +3922,16 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Teaching classes by nature/type in a calendar */
+        /**
+         * Teaching classes by nature/type in one calendar
+         * @deprecated
+         */
         get: {
             parameters: {
                 query: {
                     /** @description Selection calendar that bounds every returned teaching class. */
                     calendarId: components["parameters"]["SelectionCalendarId"];
-                    natureId: string;
+                    natureId: components["schemas"]["SelectionEntityId"];
                 };
                 header?: never;
                 path?: never;
@@ -3782,7 +3939,7 @@ export interface paths {
             };
             requestBody?: never;
             responses: {
-                /** @description ok */
+                /** @description bounded compatibility list; migrate to /selection/offerings */
                 200: {
                     headers: {
                         [name: string]: unknown;
@@ -3809,7 +3966,11 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Selection teaching-class detail by stable identifier */
+        /**
+         * Compatibility teaching-class detail by stable identifier
+         * @deprecated
+         * @description Preserves the teachingClassId route semantics used before the canonical `/selection/offerings/{offeringId}` path was added.
+         */
         get: {
             parameters: {
                 query?: never;
@@ -3850,13 +4011,16 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Search selection teaching classes in a calendar */
+        /**
+         * Bounded compatibility search
+         * @deprecated
+         */
         get: {
             parameters: {
                 query: {
                     /** @description Selection calendar that bounds every returned teaching class. */
                     calendarId: components["parameters"]["SelectionCalendarId"];
-                    q: string;
+                    q: components["schemas"]["SelectionSearchQuery"];
                 };
                 header?: never;
                 path?: never;
@@ -3864,7 +4028,7 @@ export interface paths {
             };
             requestBody?: never;
             responses: {
-                /** @description ok */
+                /** @description migrate to /selection/offerings?q=... */
                 200: {
                     headers: {
                         [name: string]: unknown;
@@ -3874,6 +4038,8 @@ export interface paths {
                     };
                 };
                 400: components["responses"]["BadRequest"];
+                429: components["responses"]["RateLimited"];
+                503: components["responses"]["ServiceUnavailable"];
             };
         };
         put?: never;
@@ -3891,7 +4057,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Timeslots for a stable teaching-class identifier */
+        /**
+         * Timeslots for a stable teaching-class identifier
+         * @deprecated
+         */
         get: {
             parameters: {
                 query?: never;
@@ -3904,7 +4073,7 @@ export interface paths {
             };
             requestBody?: never;
             responses: {
-                /** @description ok */
+                /** @description migrate to offeringId route */
                 200: {
                     headers: {
                         [name: string]: unknown;
@@ -9552,11 +9721,16 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Trigger 一系统 sync job */
+        /**
+         * Idempotently enqueue one durable selection materialization job
+         * @description Requires operations.jobs. A partial unique guard permits only one queued/running job; execution is lease-fenced with bounded retries.
+         */
         post: {
             parameters: {
                 query?: never;
-                header?: never;
+                header: {
+                    "Idempotency-Key": components["parameters"]["ReconciliationIdempotencyKey"];
+                };
                 path?: never;
                 cookie?: never;
             };
@@ -9566,13 +9740,168 @@ export interface paths {
                 };
             };
             responses: {
+                /** @description idempotent replay */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["SelectionSyncJob"];
+                    };
+                };
                 /** @description queued */
                 202: {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["SelectionSyncJob"];
+                    };
                 };
+                400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
+                403: components["responses"]["Forbidden"];
+                409: components["responses"]["Conflict"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/selection/sync-jobs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List durable selection sync jobs
+         * @description Requires operations.jobs; reasons and raw source data are excluded from this operational projection.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    status?: "queued" | "running" | "succeeded" | "dead" | "cancelled";
+                    /** @description Opaque pagination cursor */
+                    cursor?: components["parameters"]["Cursor"];
+                    limit?: components["parameters"]["Limit"];
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description job history */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["SelectionSyncJobPage"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/selection/sync-jobs/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read one durable selection sync job */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description job */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["SelectionSyncJob"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/selection/sync-jobs/{id}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Requeue one dead selection sync job with a reason
+         * @description Requires operations.jobs. The transition and operator reason are written to the immutable account audit log.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["AdminReasonInput"];
+                };
+            };
+            responses: {
+                /** @description requeued */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["SelectionSyncJob"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+                409: components["responses"]["Conflict"];
             };
         };
         delete?: never;
@@ -11747,57 +12076,125 @@ export interface components {
             /** @description Conservative spelling suggestion inferred only from words in the visible, owner-rehydrated result set; null when ambiguous. */
             suggestedQuery: string | null;
         };
+        SelectionEntityId: string;
+        SelectionGrade: string;
+        SelectionSearchQuery: string;
         Calendar: {
-            id?: string;
-            name?: string;
-            isCurrent?: boolean;
+            id: components["schemas"]["SelectionEntityId"];
+            name: string;
+            isCurrent: boolean;
         };
         Campus: {
-            id?: string;
-            name?: string;
+            id: components["schemas"]["SelectionEntityId"];
+            name: string;
         };
         Faculty: {
-            id?: string;
-            name?: string;
-            campusId?: string | null;
+            id: components["schemas"]["SelectionEntityId"];
+            name: string;
+            campusId: string | null;
         };
         Major: {
-            id?: string;
-            name?: string;
-            facultyId?: string | null;
-            grade?: string | null;
+            id: components["schemas"]["SelectionEntityId"];
+            name: string;
+            facultyId: string | null;
+            grade: string | null;
         };
         CourseNature: {
-            id?: string;
-            name?: string;
+            id: components["schemas"]["SelectionEntityId"];
+            name: string;
         };
-        /** @description One teaching class in the selection mirror. Multiple teaching classes may share a course code. */
+        /** @description One concrete teaching-class offering. `id` remains only as a rolling compatibility alias for `offeringId`. */
         SelectionCourse: {
-            /** @description Stable upstream teaching-class identifier. */
+            /**
+             * @deprecated
+             * @description Compatibility alias for offeringId.
+             */
             id: string;
-            /** @description Canonical course code; not unique across teaching classes or calendars. */
+            /** @description Stable teachingClassId-backed identity used by schedules and detail routes. */
+            offeringId: string;
             code: string;
+            teachingClassCode: string | null;
             name: string;
             credit: number | null;
             natureId: string | null;
-            calendarId: string | null;
+            calendarId: string;
             campusId: string | null;
+            facultyName: string | null;
+            teachingLanguage: string | null;
             teacherName: string | null;
             teacherNames: string[];
+            startWeek: number | null;
+            endWeek: number | null;
+            weeksUnknown: boolean;
+            /** @description True when a complete trustworthy schedule could not be materialized, including mixed parseable and unparseable arrangement input even if partial slots are available. */
+            scheduleUnknown: boolean;
+            /**
+             * @description Upstream currently supplies no lifecycle status, so unknown is expected.
+             * @enum {string}
+             */
+            status: "unknown" | "active" | "cancelled";
+            /** @description Optional deep-link target in the community course catalogue. */
+            catalogueCourseId: string | null;
         };
+        /** @description Canonical teaching-class offering returned by `/selection/offerings`. */
+        SelectionOffering: components["schemas"]["SelectionCourse"];
         TimeSlot: {
-            /** @description Stable teaching-class identifier matching SelectionCourse.id. */
+            offeringId: string;
+            /**
+             * @deprecated
+             * @description Compatibility alias for offeringId.
+             */
             courseId: string;
             teacherName: string | null;
             weekday: number;
             startSlot: number;
             endSlot: number;
             weeks: string | null;
+            weekNumbers: number[];
+            weeksUnknown: boolean;
             location: string | null;
+            locationUnknown: boolean;
         };
         LatestUpdate: {
             /** Format: date-time */
             updatedAt: string | null;
+            /**
+             * Format: date-time
+             * @description Snapshot import time; never a substitute for upstream selection freshness.
+             */
+            importedAt: string | null;
+            /** @description True when updatedAt is absent or older than staleAfterHours. */
+            stale: boolean;
+            /** @enum {integer} */
+            staleAfterHours: 168;
+        };
+        SelectionSyncJob: {
+            /** Format: uuid */
+            id: string;
+            requestedBy: string;
+            /** @enum {string} */
+            status: "queued" | "running" | "succeeded" | "dead" | "cancelled";
+            /** @enum {string} */
+            step: "queued" | "materialize" | "catalogue" | "search" | "cache" | "complete";
+            attempts: number;
+            progressCurrent: number;
+            /** @enum {integer} */
+            progressTotal: 4;
+            /** Format: int64 */
+            nextAttemptAt: number;
+            lastErrorCode: string | null;
+            /** @description Bounded aggregate counts only; no raw timetable records. */
+            result: {
+                [key: string]: unknown;
+            };
+            /** Format: int64 */
+            startedAt: number | null;
+            /** Format: int64 */
+            completedAt: number | null;
+            /** Format: int64 */
+            createdAt: number;
+            /** Format: int64 */
+            updatedAt: number;
         };
         Board: {
             id: string;
@@ -12426,6 +12823,12 @@ export interface components {
         };
         CoursePage: components["schemas"]["Page"] & {
             items?: components["schemas"]["Course"][];
+        };
+        SelectionOfferingPage: components["schemas"]["Page"] & {
+            items?: components["schemas"]["SelectionOffering"][];
+        };
+        SelectionSyncJobPage: components["schemas"]["Page"] & {
+            items?: components["schemas"]["SelectionSyncJob"][];
         };
         ReviewPage: components["schemas"]["Page"] & {
             items?: components["schemas"]["Review"][];
@@ -13532,9 +13935,9 @@ export interface components {
         Cursor: string;
         Limit: number;
         /** @description Selection calendar that bounds every returned teaching class. */
-        SelectionCalendarId: string;
+        SelectionCalendarId: components["schemas"]["SelectionEntityId"];
         /** @description Stable upstream teaching-class identifier, not a canonical course code. */
-        TeachingClassId: string;
+        TeachingClassId: components["schemas"]["SelectionEntityId"];
         /** @description One-time signing intent returned by POST /credit/signing-intents */
         WalletIntent: string;
         /** @description Base64 Ed25519 signature over the intent's exact signingBytes */

@@ -42,13 +42,13 @@ components:
       name: calendarId
       in: query
       required: true
-      schema: { type: string, pattern: '^[1-9][0-9]*$' }
+      schema: { $ref: "#/components/schemas/SelectionEntityId" }
       description: Selection calendar that bounds every returned teaching class.
     TeachingClassId:
       name: teachingClassId
       in: path
       required: true
-      schema: { type: string, pattern: '^[1-9][0-9]*$' }
+      schema: { $ref: "#/components/schemas/SelectionEntityId" }
       description: Stable upstream teaching-class identifier, not a canonical course code.
     WalletIntent:
       name: X-Wallet-Intent
@@ -940,47 +940,113 @@ components:
           description: Conservative spelling suggestion inferred only from words in the visible, owner-rehydrated result set; null when ambiguous.
 
     # ---- selection (选课/PK) ----
-    Calendar: { type: object, properties: { id: { type: string }, name: { type: string }, isCurrent: { type: boolean } } }
-    Campus: { type: object, properties: { id: { type: string }, name: { type: string } } }
-    Faculty: { type: object, properties: { id: { type: string }, name: { type: string }, campusId: { type: string, nullable: true } } }
+    SelectionEntityId: { type: string, pattern: '^[1-9][0-9]*$' }
+    SelectionGrade: { type: string, minLength: 1, maxLength: 16, pattern: '^[^\u0000-\u001F\u007F]+$' }
+    SelectionSearchQuery: { type: string, minLength: 1, maxLength: 100, pattern: '^[^\u0000-\u001F\u007F]+$' }
+    Calendar:
+      type: object
+      required: [id, name, isCurrent]
+      properties:
+        id: { $ref: "#/components/schemas/SelectionEntityId" }
+        name: { type: string }
+        isCurrent: { type: boolean }
+    Campus:
+      type: object
+      required: [id, name]
+      properties:
+        id: { $ref: "#/components/schemas/SelectionEntityId" }
+        name: { type: string }
+    Faculty:
+      type: object
+      required: [id, name, campusId]
+      properties:
+        id: { $ref: "#/components/schemas/SelectionEntityId" }
+        name: { type: string }
+        campusId: { type: string, pattern: '^[1-9][0-9]*$', nullable: true }
     Major:
       type: object
+      required: [id, name, facultyId, grade]
       properties:
-        id: { type: string }
+        id: { $ref: "#/components/schemas/SelectionEntityId" }
         name: { type: string }
-        facultyId: { type: string, nullable: true }
-        grade: { type: string, nullable: true }
-    CourseNature: { type: object, properties: { id: { type: string }, name: { type: string } } }
+        facultyId: { type: string, pattern: '^[1-9][0-9]*$', nullable: true }
+        grade: { type: string, minLength: 1, maxLength: 16, nullable: true }
+    CourseNature:
+      type: object
+      required: [id, name]
+      properties:
+        id: { $ref: "#/components/schemas/SelectionEntityId" }
+        name: { type: string }
     SelectionCourse:
       type: object
-      description: One teaching class in the selection mirror. Multiple teaching classes may share a course code.
-      required: [id, code, name, credit, natureId, calendarId, campusId, teacherName, teacherNames]
+      description: One concrete teaching-class offering. `id` remains only as a rolling compatibility alias for `offeringId`.
+      required: [id, offeringId, code, teachingClassCode, name, credit, natureId, calendarId, campusId, facultyName, teachingLanguage, teacherName, teacherNames, startWeek, endWeek, weeksUnknown, scheduleUnknown, status, catalogueCourseId]
       properties:
-        id: { type: string, description: Stable upstream teaching-class identifier. }
-        code: { type: string, description: Canonical course code; not unique across teaching classes or calendars. }
+        id: { type: string, deprecated: true, description: Compatibility alias for offeringId. }
+        offeringId: { type: string, description: Stable teachingClassId-backed identity used by schedules and detail routes. }
+        code: { type: string }
+        teachingClassCode: { type: string, nullable: true }
         name: { type: string }
         credit: { type: number, nullable: true }
         natureId: { type: string, nullable: true }
-        calendarId: { type: string, nullable: true }
+        calendarId: { type: string }
         campusId: { type: string, nullable: true }
+        facultyName: { type: string, nullable: true }
+        teachingLanguage: { type: string, nullable: true }
         teacherName: { type: string, nullable: true }
         teacherNames: { type: array, items: { type: string } }
+        startWeek: { type: integer, minimum: 1, maximum: 30, nullable: true }
+        endWeek: { type: integer, minimum: 1, maximum: 30, nullable: true }
+        weeksUnknown: { type: boolean }
+        scheduleUnknown: { type: boolean, description: "True when a complete trustworthy schedule could not be materialized, including mixed parseable and unparseable arrangement input even if partial slots are available." }
+        status: { type: string, enum: [unknown, active, cancelled], description: "Upstream currently supplies no lifecycle status, so unknown is expected." }
+        catalogueCourseId: { type: string, nullable: true, description: Optional deep-link target in the community course catalogue. }
+    SelectionOffering:
+      allOf:
+        - $ref: "#/components/schemas/SelectionCourse"
+      description: Canonical teaching-class offering returned by `/selection/offerings`.
     TimeSlot:
       type: object
-      required: [courseId, teacherName, weekday, startSlot, endSlot, weeks, location]
+      required: [offeringId, courseId, teacherName, weekday, startSlot, endSlot, weeks, weekNumbers, weeksUnknown, location, locationUnknown]
       properties:
-        courseId: { type: string, description: Stable teaching-class identifier matching SelectionCourse.id. }
+        offeringId: { type: string }
+        courseId: { type: string, deprecated: true, description: Compatibility alias for offeringId. }
         teacherName: { type: string, nullable: true }
-        weekday: { type: integer }
-        startSlot: { type: integer }
-        endSlot: { type: integer }
+        weekday: { type: integer, minimum: 1, maximum: 7 }
+        startSlot: { type: integer, minimum: 1, maximum: 20 }
+        endSlot: { type: integer, minimum: 1, maximum: 20 }
         weeks: { type: string, nullable: true }
+        weekNumbers: { type: array, uniqueItems: true, items: { type: integer, minimum: 1, maximum: 30 } }
+        weeksUnknown: { type: boolean }
         location: { type: string, nullable: true }
+        locationUnknown: { type: boolean }
     LatestUpdate:
       type: object
-      required: [updatedAt]
+      required: [updatedAt, importedAt, stale, staleAfterHours]
       properties:
         updatedAt: { type: string, format: date-time, nullable: true }
+        importedAt: { type: string, format: date-time, nullable: true, description: Snapshot import time; never a substitute for upstream selection freshness. }
+        stale: { type: boolean, description: True when updatedAt is absent or older than staleAfterHours. }
+        staleAfterHours: { type: integer, enum: [168] }
+    SelectionSyncJob:
+      type: object
+      additionalProperties: false
+      required: [id, requestedBy, status, step, attempts, progressCurrent, progressTotal, nextAttemptAt, lastErrorCode, result, startedAt, completedAt, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        requestedBy: { type: string }
+        status: { type: string, enum: [queued, running, succeeded, dead, cancelled] }
+        step: { type: string, enum: [queued, materialize, catalogue, search, cache, complete] }
+        attempts: { type: integer, minimum: 0, maximum: 8 }
+        progressCurrent: { type: integer, minimum: 0, maximum: 4 }
+        progressTotal: { type: integer, enum: [4] }
+        nextAttemptAt: { type: integer, format: int64 }
+        lastErrorCode: { type: string, nullable: true }
+        result: { type: object, additionalProperties: true, description: Bounded aggregate counts only; no raw timetable records. }
+        startedAt: { type: integer, format: int64, nullable: true }
+        completedAt: { type: integer, format: int64, nullable: true }
+        createdAt: { type: integer, format: int64 }
+        updatedAt: { type: integer, format: int64 }
 
     # ---- forum (F1) ----
     Board:
@@ -1652,6 +1718,14 @@ components:
       allOf:
         - $ref: "#/components/schemas/Page"
         - { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/Course" } } } }
+    SelectionOfferingPage:
+      allOf:
+        - $ref: "#/components/schemas/Page"
+        - { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/SelectionOffering" } } } }
+    SelectionSyncJobPage:
+      allOf:
+        - $ref: "#/components/schemas/Page"
+        - { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/SelectionSyncJob" } } } }
     ReviewPage:
       allOf:
         - $ref: "#/components/schemas/Page"
@@ -3750,35 +3824,93 @@ paths:
       tags: [selection]
       security: []
       summary: Majors with teaching classes in a calendar and grade
-      parameters: [{ $ref: "#/components/parameters/SelectionCalendarId" }, { name: grade, in: query, required: true, schema: { type: string } }]
+      parameters: [{ $ref: "#/components/parameters/SelectionCalendarId" }, { name: grade, in: query, required: true, schema: { $ref: "#/components/schemas/SelectionGrade" } }]
       responses:
         "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Major" } } } } }
         "400": { $ref: "#/components/responses/BadRequest" }
   /selection/course-natures:
-    get: { tags: [selection], security: [], summary: Optional course types/natures, responses: { "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/CourseNature" } } } } } } }
+    get:
+      tags: [selection]
+      security: []
+      summary: Course types/natures represented in one calendar
+      parameters: [{ $ref: "#/components/parameters/SelectionCalendarId" }]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/CourseNature" } } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+  /selection/offerings:
+    get:
+      tags: [selection]
+      security: []
+      summary: Browse, search, and time-filter concrete teaching-class offerings
+      description: PostgreSQL remains authoritative. When q is supplied it must remain non-blank after trimming; valid search is ranked by Meilisearch, then every candidate is rehydrated and filtered from PostgreSQL. weekday, startSlot, and endSlot must be supplied together; week and includeUnknownSchedule=false require that complete trio. Unknown schedules and unknown-week slots are retained by default so missing upstream data is never misrepresented as no conflict; false excludes both from time-filter results.
+      parameters:
+        - { $ref: "#/components/parameters/SelectionCalendarId" }
+        - { name: q, in: query, schema: { $ref: "#/components/schemas/SelectionSearchQuery" } }
+        - { name: majorId, in: query, schema: { $ref: "#/components/schemas/SelectionEntityId" } }
+        - { name: grade, in: query, schema: { $ref: "#/components/schemas/SelectionGrade" } }
+        - { name: natureId, in: query, schema: { $ref: "#/components/schemas/SelectionEntityId" } }
+        - { name: campusId, in: query, schema: { $ref: "#/components/schemas/SelectionEntityId" } }
+        - { name: courseCode, in: query, schema: { type: string, minLength: 1, maxLength: 64 } }
+        - { name: weekday, in: query, description: Must be supplied with startSlot and endSlot., schema: { type: integer, minimum: 1, maximum: 7 } }
+        - { name: startSlot, in: query, description: Inclusive 1-based slot; must be supplied with weekday and endSlot., schema: { type: integer, minimum: 1, maximum: 20 } }
+        - { name: endSlot, in: query, description: Inclusive 1-based slot not before startSlot; must be supplied with weekday and startSlot., schema: { type: integer, minimum: 1, maximum: 20 } }
+        - { name: week, in: query, description: Optional week within a complete weekday/startSlot/endSlot filter., schema: { type: integer, minimum: 1, maximum: 30 } }
+        - { name: includeUnknownSchedule, in: query, description: Applies only to a complete time filter; false excludes offerings marked scheduleUnknown and matching slots marked weeksUnknown., schema: { type: boolean, default: true } }
+        - { $ref: "#/components/parameters/Cursor" }
+        - { $ref: "#/components/parameters/Limit" }
+      responses:
+        "200": { description: bounded offering page, content: { application/json: { schema: { $ref: "#/components/schemas/SelectionOfferingPage" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+  /selection/offerings/{offeringId}:
+    get:
+      tags: [selection]
+      security: []
+      summary: Read one teaching-class offering by stable offeringId
+      parameters: [{ name: offeringId, in: path, required: true, schema: { $ref: "#/components/schemas/SelectionEntityId" } }]
+      responses:
+        "200": { description: offering, content: { application/json: { schema: { $ref: "#/components/schemas/SelectionOffering" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /selection/offerings/{offeringId}/timeslots:
+    get:
+      tags: [selection]
+      security: []
+      summary: Read the materialized schedule for one teaching-class offering
+      description: An empty array is authoritative only when the parent offering has scheduleUnknown=false; clients must inspect the offering otherwise.
+      parameters: [{ name: offeringId, in: path, required: true, schema: { $ref: "#/components/schemas/SelectionEntityId" } }]
+      responses:
+        "200": { description: bounded offering timeslots, content: { application/json: { schema: { type: array, maxItems: 100, items: { $ref: "#/components/schemas/TimeSlot" } } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /selection/courses-by-major:
     get:
       tags: [selection]
       security: []
-      summary: Teaching classes for a major in a calendar
-      parameters: [{ $ref: "#/components/parameters/SelectionCalendarId" }, { name: majorId, in: query, required: true, schema: { type: string } }, { name: grade, in: query, required: true, schema: { type: string } }]
+      deprecated: true
+      summary: Teaching classes for a major in one calendar
+      parameters: [{ $ref: "#/components/parameters/SelectionCalendarId" }, { name: majorId, in: query, required: true, schema: { $ref: "#/components/schemas/SelectionEntityId" } }, { name: grade, in: query, required: true, schema: { $ref: "#/components/schemas/SelectionGrade" } }]
       responses:
-        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/SelectionCourse" } } } } }
+        "200": { description: bounded compatibility list; migrate to /selection/offerings, content: { application/json: { schema: { type: array, maxItems: 100, items: { $ref: "#/components/schemas/SelectionCourse" } } } } }
         "400": { $ref: "#/components/responses/BadRequest" }
   /selection/courses-by-nature:
     get:
       tags: [selection]
       security: []
-      summary: Teaching classes by nature/type in a calendar
-      parameters: [{ $ref: "#/components/parameters/SelectionCalendarId" }, { name: natureId, in: query, required: true, schema: { type: string } }]
+      deprecated: true
+      summary: Teaching classes by nature/type in one calendar
+      parameters: [{ $ref: "#/components/parameters/SelectionCalendarId" }, { name: natureId, in: query, required: true, schema: { $ref: "#/components/schemas/SelectionEntityId" } }]
       responses:
-        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/SelectionCourse" } } } } }
+        "200": { description: bounded compatibility list; migrate to /selection/offerings, content: { application/json: { schema: { type: array, maxItems: 100, items: { $ref: "#/components/schemas/SelectionCourse" } } } } }
         "400": { $ref: "#/components/responses/BadRequest" }
   /selection/courses/{teachingClassId}:
     get:
       tags: [selection]
       security: []
-      summary: Selection teaching-class detail by stable identifier
+      deprecated: true
+      summary: Compatibility teaching-class detail by stable identifier
+      description: Preserves the teachingClassId route semantics used before the canonical `/selection/offerings/{offeringId}` path was added.
       parameters: [{ $ref: "#/components/parameters/TeachingClassId" }]
       responses:
         "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/SelectionCourse" } } } }
@@ -3788,19 +3920,23 @@ paths:
     get:
       tags: [selection]
       security: []
-      summary: Search selection teaching classes in a calendar
-      parameters: [{ $ref: "#/components/parameters/SelectionCalendarId" }, { name: q, in: query, required: true, schema: { type: string } }]
+      deprecated: true
+      summary: Bounded compatibility search
+      parameters: [{ $ref: "#/components/parameters/SelectionCalendarId" }, { name: q, in: query, required: true, schema: { $ref: "#/components/schemas/SelectionSearchQuery" } }]
       responses:
-        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/SelectionCourse" } } } } }
+        "200": { description: "migrate to /selection/offerings?q=...", content: { application/json: { schema: { type: array, maxItems: 20, items: { $ref: "#/components/schemas/SelectionCourse" } } } } }
         "400": { $ref: "#/components/responses/BadRequest" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
   /selection/courses/{teachingClassId}/timeslots:
     get:
       tags: [selection]
       security: []
+      deprecated: true
       summary: Timeslots for a stable teaching-class identifier
       parameters: [{ $ref: "#/components/parameters/TeachingClassId" }]
       responses:
-        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/TimeSlot" } } } } }
+        "200": { description: migrate to offeringId route, content: { application/json: { schema: { type: array, maxItems: 100, items: { $ref: "#/components/schemas/TimeSlot" } } } } }
         "400": { $ref: "#/components/responses/BadRequest" }
         "404": { $ref: "#/components/responses/NotFound" }
   /selection/latest-update:
@@ -4965,7 +5101,59 @@ paths:
         "409": { $ref: "#/components/responses/Conflict" }
         "428": { $ref: "#/components/responses/RecentAuthRequired" }
   /admin/selection/sync:
-    post: { tags: [admin], summary: Trigger 一系统 sync job, requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/AdminReasonInput" } } } }, responses: { "202": { description: queued } } }
+    post:
+      tags: [admin, selection]
+      summary: Idempotently enqueue one durable selection materialization job
+      description: Requires operations.jobs. A partial unique guard permits only one queued/running job; execution is lease-fenced with bounded retries.
+      parameters: [{ $ref: "#/components/parameters/ReconciliationIdempotencyKey" }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/AdminReasonInput" } } } }
+      responses:
+        "202": { description: queued, content: { application/json: { schema: { $ref: "#/components/schemas/SelectionSyncJob" } } } }
+        "200": { description: idempotent replay, content: { application/json: { schema: { $ref: "#/components/schemas/SelectionSyncJob" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /admin/selection/sync-jobs:
+    get:
+      tags: [admin, selection]
+      summary: List durable selection sync jobs
+      description: Requires operations.jobs; reasons and raw source data are excluded from this operational projection.
+      parameters:
+        - { name: status, in: query, schema: { type: string, enum: [queued, running, succeeded, dead, cancelled] } }
+        - { $ref: "#/components/parameters/Cursor" }
+        - { $ref: "#/components/parameters/Limit" }
+      responses:
+        "200": { description: job history, content: { application/json: { schema: { $ref: "#/components/schemas/SelectionSyncJobPage" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /admin/selection/sync-jobs/{id}:
+    get:
+      tags: [admin, selection]
+      summary: Read one durable selection sync job
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "200": { description: job, content: { application/json: { schema: { $ref: "#/components/schemas/SelectionSyncJob" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /admin/selection/sync-jobs/{id}/retry:
+    post:
+      tags: [admin, selection]
+      summary: Requeue one dead selection sync job with a reason
+      description: Requires operations.jobs. The transition and operator reason are written to the immutable account audit log.
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/AdminReasonInput" } } } }
+      responses:
+        "200": { description: requeued, content: { application/json: { schema: { $ref: "#/components/schemas/SelectionSyncJob" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
   /admin/courses/reindex:
     post: { tags: [admin], summary: Rebuild the Meilisearch course documents, requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/AdminReasonInput" } } } }, responses: { "202": { description: queued } } }
   /admin/reviews/reindex:

@@ -132,8 +132,15 @@ pub async fn seed_selection_data(pool: &PgPool) {
 
     sqlx::query(
         r#"
-        INSERT INTO selection.courses (id, code, name, credit, nature_id, calendar_id, campus_id, teacher_name)
-        VALUES (1, 'SEL101', '选课测试课', 2.0, 1, 1, 1, '李老师')
+        INSERT INTO selection.courses (
+            id, code, teaching_class_code, name, credit, nature_id, calendar_id,
+            campus_id, teacher_name, teacher_names, start_week, end_week,
+            weeks_unknown, schedule_unknown
+        )
+        VALUES (
+            1, 'SEL101', 'SEL101.01', '选课测试课', 2.0, 1, 1, 1,
+            '李老师', ARRAY['李老师'], 1, 16, false, false
+        )
         ON CONFLICT DO NOTHING
         "#,
     )
@@ -154,8 +161,14 @@ pub async fn seed_selection_data(pool: &PgPool) {
 
     sqlx::query(
         r#"
-        INSERT INTO selection.timeslots (course_id, teacher_name, weekday, start_slot, end_slot, weeks, location)
-        VALUES (1, '李老师', 1, 1, 2, '1-16', '四平路校区 南楼101')
+        INSERT INTO selection.timeslots (
+            course_id, teacher_name, weekday, start_slot, end_slot, weeks,
+            week_numbers, weeks_unknown, location, location_unknown
+        )
+        VALUES (
+            1, '李老师', 1, 1, 2, '1-16',
+            ARRAY(SELECT generate_series(1, 16)), false, '四平路校区 南楼101', false
+        )
         ON CONFLICT DO NOTHING
         "#,
     )
