@@ -75,7 +75,7 @@ jobs:
     if: github.ref == 'refs/heads/main'
     needs: [backend, frontend]
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 60
     environment: main-staging
     steps:
       - uses: actions/checkout@v4
@@ -101,6 +101,8 @@ jobs:
             IdentityFile ~/.ssh/preview_key
             StrictHostKeyChecking accept-new
             UserKnownHostsFile ~/.ssh/preview_known_hosts
+            ServerAliveInterval 30
+            ServerAliveCountMax 3
           EOF
 
       - name: validate and stage media secrets
@@ -226,16 +228,66 @@ jobs:
           remote_preview_proxy="/tmp/preview-proxy-${GITHUB_RUN_ID}.conf"
           remote_oss_env="/tmp/yourtj-main-oss-${GITHUB_RUN_ID}.env"
           remote_image="/tmp/api-image-main-${GITHUB_RUN_ID}.tar"
+          remote_deploy_lock="/opt/yourtj-preview/shared/deploy-main.lock"
           release="${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           release_dir="/opt/yourtj-preview/releases/main/${release}/frontend"
           deployed=0
 
           cleanup() {
             rm -f "${RUNNER_TEMP}/yourtj-main-oss.env"
-            ssh preview "rm -f '${remote_script}' '${remote_verifier}' '${remote_frontend_nginx}' '${remote_preview_proxy}' '${remote_oss_env}' '${remote_image}'" || true
-            if ((deployed == 0)); then
-              ssh preview "rm -rf '${release_dir}'" || true
-            fi
+            ssh preview bash -s -- \
+              "$remote_deploy_lock" \
+              "$remote_script" \
+              "$remote_verifier" \
+              "$remote_frontend_nginx" \
+              "$remote_preview_proxy" \
+              "$remote_oss_env" \
+              "$remote_image" \
+              "$release_dir" \
+              "$deployed" <<'EOF' || true
+              set -Eeuo pipefail
+              lock_file="$1"
+              shift
+              if [[ -L "$lock_file" || (-e "$lock_file" && ! -f "$lock_file") ]]; then
+                echo "deploy cleanup: refusing an unsafe lock file" >&2
+                exit 1
+              fi
+              umask 077
+              exec 9>"$lock_file"
+              chmod 600 "$lock_file"
+              if ! flock -n 9; then
+                echo "deploy cleanup: deployment remains active; preserving staged files" >&2
+                exit 0
+              fi
+              remote_script="$1"
+              remote_verifier="$2"
+              remote_frontend_nginx="$3"
+              remote_preview_proxy="$4"
+              remote_oss_env="$5"
+              remote_image="$6"
+              release_dir="$7"
+              deployed="$8"
+              rm -f \
+                "$remote_script" \
+                "$remote_verifier" \
+                "$remote_frontend_nginx" \
+                "$remote_preview_proxy" \
+                "$remote_oss_env" \
+                "$remote_image"
+              if [[ "$deployed" == "0" ]]; then
+                if ! active_frontend_mounts="$(
+                  docker inspect --format '{{range .Mounts}}{{println .Source}}{{end}}' main-fe 2>/dev/null
+                )"; then
+                  echo "deploy cleanup: frontend state is unknown; preserving staged release" >&2
+                  exit 0
+                fi
+                if grep -Fxq "$release_dir" <<<"$active_frontend_mounts"; then
+                  echo "deploy cleanup: active frontend uses staged release; preserving it" >&2
+                  exit 0
+                fi
+                rm -rf "$release_dir"
+              fi
+          EOF
           }
           trap cleanup EXIT
 
@@ -245,9 +297,21 @@ jobs:
           scp ops/deploy/preview-proxy.conf "preview:${remote_preview_proxy}"
           ssh preview "chmod 700 '${remote_script}' && chmod 600 '${remote_verifier}' '${remote_frontend_nginx}' '${remote_preview_proxy}' && umask 077 && : > '${remote_oss_env}'"
           ssh preview "cat > '${remote_oss_env}'" < "${RUNNER_TEMP}/yourtj-main-oss.env"
-          ssh preview bash -s -- "$remote_preview_proxy" <<'EOF'
+          ssh preview bash -s -- "$remote_deploy_lock" "$remote_preview_proxy" <<'EOF'
             set -Eeuo pipefail
-            source_path="$1"
+            lock_file="$1"
+            source_path="$2"
+            if [[ -L "$lock_file" || (-e "$lock_file" && ! -f "$lock_file") ]]; then
+              echo "proxy update: refusing an unsafe deployment lock" >&2
+              exit 1
+            fi
+            umask 077
+            exec 9>"$lock_file"
+            chmod 600 "$lock_file"
+            flock -n 9 || {
+              echo "proxy update: another main deployment is still active" >&2
+              exit 1
+            }
             target_path="/etc/nginx/conf.d/yourtj-preview.conf"
             backup_path="${target_path}.deploy-backup"
             had_existing=0
@@ -283,7 +347,7 @@ jobs:
             echo "WALLET_KEY_CUTOVER_APPROVED_REVISION must be empty or a full lowercase commit SHA" >&2
             exit 64
           fi
-          ssh preview bash "${remote_script}" \
+          ssh preview timeout --signal=TERM --kill-after=30s 45m bash "${remote_script}" \
             "${release_dir}" \
             "${remote_image}" \
             "${remote_oss_env}" \
@@ -327,11 +391,14 @@ jobs:
           PY
           )"
           echo "base=${base}" >> "$GITHUB_OUTPUT"
-          curl --fail --silent --show-error --retry 12 --retry-delay 5 --retry-all-errors \
+          curl --fail --silent --show-error --connect-timeout 5 --max-time 10 \
+            --retry 12 --retry-delay 5 --retry-all-errors \
             "${base}/" >/dev/null
-          curl --fail --silent --show-error --retry 12 --retry-delay 5 --retry-all-errors \
+          curl --fail --silent --show-error --connect-timeout 5 --max-time 10 \
+            --retry 12 --retry-delay 5 --retry-all-errors \
             "${base}/api/v2/health" >/dev/null
-          curl --fail --silent --show-error --retry 12 --retry-delay 5 --retry-all-errors \
+          curl --fail --silent --show-error --connect-timeout 5 --max-time 10 \
+            --retry 12 --retry-delay 5 --retry-all-errors \
             "${base}/api/v2/ready" >/dev/null
 
       - name: verify shared-host private ports are not public

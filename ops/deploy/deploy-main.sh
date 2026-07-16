@@ -4,9 +4,11 @@ set -Eeuo pipefail
 readonly EXPECTED_FRONTEND_ROOT="${EXPECTED_FRONTEND_ROOT:-/opt/yourtj-preview/releases/main}"
 readonly MAIN_RUNTIME_ENV_FILE="${MAIN_RUNTIME_ENV_FILE:-/opt/yourtj-preview/shared/main-runtime.env}"
 readonly MAIN_EMAIL_ENV_FILE="${MAIN_EMAIL_ENV_FILE:-/opt/yourtj-preview/shared/email-main.env}"
+readonly DEPLOY_LOCK_FILE="${DEPLOY_LOCK_FILE:-/opt/yourtj-preview/shared/deploy-main.lock}"
 readonly WALLET_KEY_CUTOVER_MARKER="${WALLET_KEY_CUTOVER_MARKER:-/opt/yourtj-preview/shared/migration-0067-wallet-key-cutover.complete}"
 readonly WALLET_KEY_CUTOVER_NO_APPROVAL="not-approved"
 readonly WALLET_KEY_CUTOVER_DRAIN_SECONDS=360
+readonly WALLET_KEY_CUTOVER_PROGRESS_INTERVAL_SECONDS=30
 readonly BACKEND_CONTAINER="main-be"
 readonly FRONTEND_CONTAINER="main-fe"
 readonly BACKEND_IMAGE="yourtj-api:main"
@@ -36,6 +38,17 @@ fail() {
   exit 1
 }
 
+acquire_deployment_lock() {
+  command -v flock >/dev/null 2>&1 || fail "flock is required for deployment locking"
+  if [[ -L "$DEPLOY_LOCK_FILE" || (-e "$DEPLOY_LOCK_FILE" && ! -f "$DEPLOY_LOCK_FILE") ]]; then
+    fail "deployment lock must be a regular, non-symlink file"
+  fi
+  umask 077
+  exec 9>"$DEPLOY_LOCK_FILE"
+  chmod 600 "$DEPLOY_LOCK_FILE"
+  flock -n 9 || fail "another main deployment is still active"
+}
+
 container_exists() {
   docker container inspect "$1" >/dev/null 2>&1
 }
@@ -55,6 +68,23 @@ wait_for_url() {
 
   echo "  ${description}: failed after ${HEALTH_ATTEMPTS} attempts" >&2
   return 1
+}
+
+drain_wallet_signing_intents() {
+  local elapsed_seconds=0
+  local remaining_seconds
+  local sleep_seconds
+
+  while ((elapsed_seconds < WALLET_KEY_CUTOVER_DRAIN_SECONDS)); do
+    remaining_seconds=$((WALLET_KEY_CUTOVER_DRAIN_SECONDS - elapsed_seconds))
+    sleep_seconds="$WALLET_KEY_CUTOVER_PROGRESS_INTERVAL_SECONDS"
+    if ((remaining_seconds < sleep_seconds)); then
+      sleep_seconds="$remaining_seconds"
+    fi
+    sleep "$sleep_seconds"
+    elapsed_seconds=$((elapsed_seconds + sleep_seconds))
+    echo "  Wallet-key cutover: drain progress ${elapsed_seconds}/${WALLET_KEY_CUTOVER_DRAIN_SECONDS}s"
+  done
 }
 
 require_regular_secret_file() {
@@ -200,7 +230,7 @@ rollback_deployment() {
 
 handle_exit() {
   local status="$?"
-  trap - EXIT
+  trap - EXIT HUP INT TERM
   if [[ -n "$WALLET_KEY_CUTOVER_MARKER_TEMP" ]]; then
     rm -f "$WALLET_KEY_CUTOVER_MARKER_TEMP"
   fi
@@ -246,6 +276,7 @@ readonly FRONTEND_BACKUP="${FRONTEND_CONTAINER}-rollback-${BACKUP_SUFFIX}"
   && -f "$NGINX_TEMPLATE" && ! -L "$NGINX_TEMPLATE" ]] ||
   fail "frontend Nginx template is missing or outside the allowed path"
 
+acquire_deployment_lock
 require_regular_secret_file "$MAIN_RUNTIME_ENV_FILE" "main runtime env file"
 require_regular_secret_file "$MAIN_EMAIL_ENV_FILE" "main email env file"
 require_regular_secret_file "$OSS_ENV_FILE" "OSS env file"
@@ -323,6 +354,9 @@ docker load <"$BACKEND_IMAGE_TAR" >/dev/null
 docker image inspect "$BACKEND_IMAGE" >/dev/null 2>&1 || fail "loaded archive did not provide ${BACKEND_IMAGE}"
 
 trap handle_exit EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 DEPLOYMENT_STARTED=1
 
 if container_exists "$BACKEND_CONTAINER"; then
@@ -334,7 +368,7 @@ fi
 backend_command=(api --enforce-controlled-wallet-migration)
 if ((WALLET_KEY_CUTOVER_REQUIRED == 1)); then
   echo "  Wallet-key cutover: writers stopped; draining signing intents for ${WALLET_KEY_CUTOVER_DRAIN_SECONDS}s..."
-  sleep "$WALLET_KEY_CUTOVER_DRAIN_SECONDS"
+  drain_wallet_signing_intents
   backend_command+=(--wallet-key-cutover-drained)
 fi
 

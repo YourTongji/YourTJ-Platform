@@ -6,7 +6,7 @@
 >
 > 负责人：Platform maintainers
 >
-> 最近核验：2026-07-16，main deploy wallet cutover approval transport、migrations `0067`–`0069` 与 Flutter release gates
+> 最近核验：2026-07-16，main deploy SSH lifecycle、wallet cutover、migrations `0067`–`0069` 与 Flutter release gates
 
 本文件描述仓库当前 GitHub Actions 行为，不把目标 Aliyun 架构写成已上线生产事实。Workflow
 或服务器脚本变化时必须在同一 PR 更新本 runbook。
@@ -153,6 +153,14 @@ main staging。Deploy job 还绑定 GitHub `main-staging` Environment；其 depl
 Main deployment concurrency 按 revision 串行排队，禁止 `cancel-in-progress`。当前脚本在新 backend ready
 前停止旧 container，并且一旦尝试启动可能执行 migration 的新 backend 就只允许 fail-forward；取消处于
 该窗口的 run 会留下无 serving backend，因此不能用“只保留最新 run”优化 main 发布等待时间。
+Workflow 的 SSH client 每 30 秒发送 protocol keepalive，连续 3 次未收到响应时失败；受控钱包 drain
+另每 30 秒输出一次进度。两者用于及时发现断链并保持发布窗口可观测，不放宽 host-key 检查，也不缩短
+任何 migration drain。Deploy job 的总上限是 60 分钟，远端脚本由 45 分钟 TERM deadline 和 30 秒
+KILL grace 约束，为 runner cleanup 留出独立窗口；public HTTPS probe 也有 connect/transfer deadline。
+服务器上的 mode-`0600` `deploy-main.lock` 同时保护共享 proxy 更新与整个远端 preflight/cutover；两段
+操作都先取得 non-blocking `flock`，因此 runner 失联后仍在运行的旧脚本会阻止新 run 修改 proxy 或容器。
+TERM、INT 或 HUP 在新 backend 启动前会走与普通失败相同的旧 backend 恢复路径；一旦尝试启动新
+backend，仍保持 forward-only 语义。
 
 Main 使用仓库内版本化的 `ops/deploy/deploy-main.sh`、OSS verifier、frontend Nginx template 和 host
 `preview-proxy.conf`。Workflow 每次把当前 revision 传到受限临时路径，不依赖
@@ -165,7 +173,10 @@ Main 使用仓库内版本化的 `ops/deploy/deploy-main.sh`、OSS verifier、fr
 `EMAIL_ENCRYPTION_STRICT=true`；后者保存邮件 provider secret。Main preflight 拒绝缺失、非 32-byte hex、
 重复的邮箱加密 key 或 strict=false，应用启动后还会 backfill 并确认不存在明文邮箱。Ingest、Delivery、
 CDN signing/purge 配置由 runner 写入本次 run 专用的 `0600` 临时 env file，通过 stdin/文件传输而不是
-SSH command line 传递，并在退出时删除。Raster 自动审核策略也由 main runtime file 覆盖：当前缺省为
+SSH command line 传递。Runner 只有在取得同一 deployment lock 后才删除远端临时文件；若远端脚本仍
+持锁则保留，避免 cleanup 删除运行中脚本尚未消费的输入。SSH 结果不确定时，cleanup 还会检查 `main-fe`
+的实际 bind mount；正在使用的 release 或无法确认的 frontend 状态一律保留。Raster 自动审核策略也由
+main runtime file 覆盖：当前缺省为
 `MEDIA_IMAGE_AUTO_APPROVAL_ENABLED=true`；设置 `false` 并重启/滚动 backend 可恢复 pending + 人工可信
 preview，既有 clean/processing/published row 不做反向迁移。
 
@@ -381,7 +392,8 @@ recent-auth 的首次登记，而新 backend 在 migration 前也不能假设每
    都只接受该值或 40 位小写 commit SHA，因此这项传输兼容不会绕过首次 cutover 的精确 revision 批准。
 2. 版本化脚本停止整个旧 API container，因此 `/wallet/bind`、`/credit/signing-intents` 和全部
    tip/task/purchase value-moving writer 一起关闭；从停止完成起固定等待 300 秒 TTL 加 60 秒 buffer。
-   只隐藏客户端按钮或只停 frontend 不构成 drain。
+   脚本每 30 秒输出 drain 进度，SSH client 同时使用 protocol keepalive；这些心跳只维持链路和可观测性，
+   不改变完整 360 秒等待。只隐藏客户端按钮或只停 frontend 不构成 drain。
 3. 新 backend 始终带 `--enforce-controlled-wallet-migration`。它直接查询数据库 migration ledger；若
    `0067` 尚未执行而进程没有版本化脚本在 drain 后添加的 `--wallet-key-cutover-drained`，会在 migration
    前 fail closed。带 drain proof 的首次启动执行 `0067`，并在绑定端口前跑完整 ledger verify；失败时
