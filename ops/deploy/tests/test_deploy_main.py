@@ -251,7 +251,7 @@ class DeployMainTests(unittest.TestCase):
         fake_revision: str = REVISION,
         unsafe_preview: int | None = None,
         fail_backend_start: bool = False,
-        cutover_approval: str | None = None,
+        cutover_approval: str = "not-approved",
     ) -> subprocess.CompletedProcess[str]:
         environment = os.environ.copy()
         environment.update(
@@ -282,7 +282,7 @@ class DeployMainTests(unittest.TestCase):
                 REVISION,
                 str(self.verifier),
                 str(self.nginx),
-                cutover_approval or "",
+                cutover_approval,
             ],
             env=environment,
             capture_output=True,
@@ -330,6 +330,33 @@ class DeployMainTests(unittest.TestCase):
             "--wallet-key-cutover-drained",
             (self.state / "docker-calls").read_text(),
         )
+
+    def test_completed_wallet_key_cutover_accepts_no_approval_sentinel(self):
+        result = self.run_deploy()
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("draining signing intents", result.stdout)
+
+    def test_missing_wallet_key_marker_rejects_no_approval_before_stopping_backend(self):
+        self.seed_current_containers()
+        self.wallet_cutover_marker.unlink()
+
+        result = self.run_deploy()
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("requires approval for the exact deployment revision", result.stderr)
+        self.assertTrue((self.state / "container-main-be").exists())
+        self.assertFalse((self.state / "stopped-main-be").exists())
+
+    def test_rejects_malformed_wallet_key_cutover_approval(self):
+        result = self.run_deploy(cutover_approval="not-approved; uname")
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "approval must be not-approved or a full lowercase commit SHA",
+            result.stderr,
+        )
+        self.assertFalse((self.state / "container-main-be").exists())
 
     def test_wallet_key_cutover_requires_exact_revision_approval_before_stopping_backend(self):
         self.seed_current_containers()

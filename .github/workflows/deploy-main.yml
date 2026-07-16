@@ -277,6 +277,12 @@ jobs:
             fi
             sudo rm -f "$backup_path"
           EOF
+          wallet_cutover_approval="${WALLET_KEY_CUTOVER_APPROVED_REVISION:-not-approved}"
+          if [[ "$wallet_cutover_approval" != "not-approved" \
+            && ! "$wallet_cutover_approval" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "WALLET_KEY_CUTOVER_APPROVED_REVISION must be empty or a full lowercase commit SHA" >&2
+            exit 64
+          fi
           ssh preview bash "${remote_script}" \
             "${release_dir}" \
             "${remote_image}" \
@@ -284,7 +290,7 @@ jobs:
             "${GITHUB_SHA}" \
             "${remote_verifier}" \
             "${remote_frontend_nginx}" \
-            "${WALLET_KEY_CUTOVER_APPROVED_REVISION:-}"
+            "${wallet_cutover_approval}"
           deployed=1
 
       - name: verify canonical public HTTPS routes

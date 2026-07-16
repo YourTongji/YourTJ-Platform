@@ -5,6 +5,7 @@ readonly EXPECTED_FRONTEND_ROOT="${EXPECTED_FRONTEND_ROOT:-/opt/yourtj-preview/r
 readonly MAIN_RUNTIME_ENV_FILE="${MAIN_RUNTIME_ENV_FILE:-/opt/yourtj-preview/shared/main-runtime.env}"
 readonly MAIN_EMAIL_ENV_FILE="${MAIN_EMAIL_ENV_FILE:-/opt/yourtj-preview/shared/email-main.env}"
 readonly WALLET_KEY_CUTOVER_MARKER="${WALLET_KEY_CUTOVER_MARKER:-/opt/yourtj-preview/shared/migration-0067-wallet-key-cutover.complete}"
+readonly WALLET_KEY_CUTOVER_NO_APPROVAL="not-approved"
 readonly WALLET_KEY_CUTOVER_DRAIN_SECONDS=360
 readonly BACKEND_CONTAINER="main-be"
 readonly FRONTEND_CONTAINER="main-fe"
@@ -229,6 +230,9 @@ readonly BACKEND_BACKUP="${BACKEND_CONTAINER}-rollback-${BACKUP_SUFFIX}"
 readonly FRONTEND_BACKUP="${FRONTEND_CONTAINER}-rollback-${BACKUP_SUFFIX}"
 
 [[ "$GIT_REVISION" =~ ^[0-9a-f]{40}$ ]] || fail "git revision must be a full commit SHA"
+[[ "$WALLET_KEY_CUTOVER_APPROVED_REVISION" == "$WALLET_KEY_CUTOVER_NO_APPROVAL" \
+  || "$WALLET_KEY_CUTOVER_APPROVED_REVISION" =~ ^[0-9a-f]{40}$ ]] ||
+  fail "wallet key cutover approval must be not-approved or a full lowercase commit SHA"
 [[ "${FRONTEND_RELEASE_DIR%/*}" == "$EXPECTED_FRONTEND_ROOT" \
   && "$FRONTEND_RELEASE_NAME" =~ ^${GIT_REVISION}-[1-9][0-9]*-[1-9][0-9]*$ ]] ||
   fail "frontend path does not match an immutable main release"
