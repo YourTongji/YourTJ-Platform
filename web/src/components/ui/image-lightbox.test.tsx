@@ -28,8 +28,16 @@ describe("LightboxableImage", () => {
     await user.click(trigger);
     const dialog = screen.getByRole("dialog", { name: /第一张/ });
     expect(within(dialog).getByRole("img", { name: "第一张" })).toBeVisible();
+    expect(within(dialog).getByText("1/2 · 100%")).toBeVisible();
+    await user.click(within(dialog).getByRole("button", { name: "放大图片" }));
+    expect(within(dialog).getByText("1/2 · 150%")).toBeVisible();
+    expect(within(dialog).getByRole("link", { name: "下载原图" })).toHaveAttribute(
+      "href",
+      images[0].src,
+    );
     await user.keyboard("{ArrowRight}");
     expect(within(dialog).getByRole("img", { name: "第二张" })).toBeVisible();
+    expect(within(dialog).getByText("2/2 · 100%")).toBeVisible();
     await expectNoAccessibilityViolations(view.container);
 
     await user.keyboard("{Escape}");

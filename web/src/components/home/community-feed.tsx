@@ -1,11 +1,15 @@
 import {
-  Loader2,
+  Bookmark,
   MessageCircle,
+  Share2,
+  ThumbsDown,
   ThumbsUp,
 } from "lucide-react";
 import { Link } from "react-router";
+import { toast } from "sonner";
 
-import { EmptyState, ErrorState } from "@/components/common/states";
+import { PaginatedListState } from "@/components/common/paginated-list-state";
+import { EmptyState } from "@/components/common/states";
 import { ForumDeliveryImage } from "@/components/content/forum-delivery-image";
 import { ForumAuthorAvatar } from "@/components/forum/forum-author-avatar";
 import { Badge } from "@/components/ui/badge";
@@ -15,6 +19,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { ThreadFeed } from "@/lib/api/types";
 import { formatNumber, formatRelativeTime } from "@/lib/format";
+import { shareForumThread } from "@/lib/forum-share";
 
 export type CommunityFeedMode = "hot" | "new" | "following" | "subscriptions";
 
@@ -51,14 +56,30 @@ function FeedSkeleton() {
 function PostCard({
   thread,
   onAttachmentDeliveryRefresh,
+  onVote,
+  onToggleBookmark,
+  isVotePending,
+  isBookmarkPending,
 }: {
   thread: ThreadFeed;
   onAttachmentDeliveryRefresh: () => void;
+  onVote: (thread: ThreadFeed, value: "up" | "down") => void;
+  onToggleBookmark: (thread: ThreadFeed) => void;
+  isVotePending: boolean;
+  isBookmarkPending: boolean;
 }) {
   const threadUrl = thread.id ? `/forum/threads/${thread.id}` : "/forum";
   const authorHandle = thread.authorHandle || "YourTJ 用户";
   const authorName = thread.authorDisplayName || authorHandle;
   const tag = thread.tags?.[0];
+  const share = async () => {
+    try {
+      const result = await shareForumThread(thread.title || "YourTJ 社区讨论", thread.id);
+      if (result === "copied") toast.success("帖子链接已复制");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "分享失败");
+    }
+  };
 
   return (
     <Card className="group rounded-xl transition-colors hover:border-primary/25 hover:bg-[#eef1ef] dark:hover:bg-accent/50">
@@ -113,15 +134,65 @@ function PostCard({
           />
         ) : null}
 
-        <div className="mt-3 flex items-center gap-5 border-t border-border/70 pt-3 text-xs text-muted-foreground">
-          <span className="inline-flex items-center gap-1.5">
+        <div className="mt-3 flex flex-wrap items-center gap-1 border-t border-border/70 pt-3 text-xs text-muted-foreground">
+          <Link
+            to={threadUrl}
+            className="mr-2 inline-flex h-8 items-center gap-1.5 rounded-md px-2 hover:bg-accent hover:text-foreground"
+            aria-label={`${formatNumber(thread.replyCount)} 条回复`}
+          >
             <MessageCircle className="size-4" />
             {formatNumber(thread.replyCount)}
-          </span>
-          <span className="inline-flex items-center gap-1.5">
+          </Link>
+          <Button
+            type="button"
+            variant={thread.viewerVote === "up" ? "secondary" : "ghost"}
+            size="sm"
+            className="h-8 px-2"
+            aria-label={thread.viewerVote === "up" ? "取消赞同" : "赞同"}
+            aria-pressed={thread.viewerVote === "up"}
+            disabled={isVotePending}
+            onClick={() => onVote(thread, "up")}
+          >
             <ThumbsUp className="size-4" />
             {formatNumber(thread.voteCount)}
-          </span>
+          </Button>
+          <Button
+            type="button"
+            variant={thread.viewerVote === "down" ? "secondary" : "ghost"}
+            size="icon"
+            className="size-8"
+            aria-label={thread.viewerVote === "down" ? "取消反对" : "反对"}
+            aria-pressed={thread.viewerVote === "down"}
+            disabled={isVotePending}
+            onClick={() => onVote(thread, "down")}
+          >
+            <ThumbsDown className="size-4" />
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="ml-auto size-8"
+            aria-label={`分享：${thread.title}`}
+            onClick={() => void share()}
+          >
+            <Share2 className="size-4" />
+          </Button>
+          <Button
+            type="button"
+            variant={thread.isBookmarked ? "secondary" : "ghost"}
+            size="icon"
+            className="size-8"
+            aria-label={thread.isBookmarked ? "取消收藏" : "收藏"}
+            aria-pressed={thread.isBookmarked}
+            disabled={isBookmarkPending}
+            onClick={() => onToggleBookmark(thread)}
+          >
+            <Bookmark
+              className="size-4"
+              fill={thread.isBookmarked ? "currentColor" : "none"}
+            />
+          </Button>
         </div>
       </CardContent>
     </Card>
@@ -140,6 +211,10 @@ export function CommunityFeed({
   onLoadMore,
   isAuthenticated,
   onAttachmentDeliveryRefresh,
+  onVote,
+  onToggleBookmark,
+  isVotePending,
+  isBookmarkPending,
 }: {
   mode: CommunityFeedMode;
   onModeChange: (mode: CommunityFeedMode) => void;
@@ -152,6 +227,10 @@ export function CommunityFeed({
   onLoadMore?: () => void;
   isAuthenticated: boolean;
   onAttachmentDeliveryRefresh: () => void;
+  onVote: (thread: ThreadFeed, value: "up" | "down") => void;
+  onToggleBookmark: (thread: ThreadFeed) => void;
+  isVotePending?: (thread: ThreadFeed) => boolean;
+  isBookmarkPending?: (thread: ThreadFeed) => boolean;
 }) {
   return (
     <section aria-label="社区信息流">
@@ -166,7 +245,7 @@ export function CommunityFeed({
               value="hot"
               className="h-10 rounded-none border-b-2 border-transparent px-0 pb-3 pt-0 text-sm shadow-none data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none"
             >
-              推荐
+              热门
             </TabsTrigger>
             <TabsTrigger
               value="new"
@@ -192,12 +271,17 @@ export function CommunityFeed({
         </div>
 
         <TabsContent value={mode}>
-          {isLoading ? (
-            <FeedSkeleton />
-          ) : error ? (
-            <ErrorState title="社区动态加载失败" error={error} onRetry={onRetry} />
-          ) : items.length === 0 ? (
-            <EmptyState
+          <PaginatedListState
+            isLoading={isLoading}
+            error={error}
+            errorTitle="社区动态加载失败"
+            isEmpty={items.length === 0}
+            onRetry={onRetry}
+            hasMore={hasMore}
+            isLoadingMore={isLoadingMore}
+            onLoadMore={onLoadMore}
+            loading={<FeedSkeleton />}
+            empty={<EmptyState
               title="还没有社区动态"
               description="去社区发布第一条讨论吧。"
               action={
@@ -205,32 +289,24 @@ export function CommunityFeed({
                   <Link to="/forum">进入社区</Link>
                 </Button>
               }
-            />
-          ) : (
+            />}
+            loadMoreLabel="加载更多动态"
+            buttonClassName="rounded-full"
+          >
             <div className="space-y-4">
-              <div className="space-y-4">
-                {items.map((thread, index) => (
-                  <PostCard
-                    key={thread.id ?? `${thread.title}-${index}`}
-                    thread={thread}
-                    onAttachmentDeliveryRefresh={onAttachmentDeliveryRefresh}
-                  />
-                ))}
-              </div>
-              {hasMore && onLoadMore ? (
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="w-full rounded-full"
-                  disabled={isLoadingMore}
-                  onClick={onLoadMore}
-                >
-                  {isLoadingMore ? <Loader2 className="size-4 animate-spin" /> : null}
-                  {isLoadingMore ? "正在加载" : "加载更多动态"}
-                </Button>
-              ) : null}
+              {items.map((thread, index) => (
+                <PostCard
+                  key={thread.id ?? `${thread.title}-${index}`}
+                  thread={thread}
+                  onAttachmentDeliveryRefresh={onAttachmentDeliveryRefresh}
+                  onVote={onVote}
+                  onToggleBookmark={onToggleBookmark}
+                  isVotePending={isVotePending?.(thread) ?? false}
+                  isBookmarkPending={isBookmarkPending?.(thread) ?? false}
+                />
+              ))}
             </div>
-          )}
+          </PaginatedListState>
         </TabsContent>
       </Tabs>
     </section>

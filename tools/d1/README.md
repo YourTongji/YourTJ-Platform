@@ -33,7 +33,8 @@ python3 d1_import_pg.py \
   --source /tmp/jcourse-db-backup.sqlite3 \
   --source-database jcourse-db-backup \
   --snapshot-exported-at '<RFC3339 export time>' \
-  --imported-by '<bounded operator label>' \
+  --imported-by 'selection-import:on-call' \
+  --compare-manifest /secure/approved-previous-manifest.json \
   --manifest-out /tmp/jcourse-db-backup-manifest.json
 
 # 3. Materialize courses
@@ -52,7 +53,8 @@ python3 d1_import_pg.py \
   --source /tmp/jcourse-db-backup.sqlite3 \
   --source-database jcourse-db-backup \
   --snapshot-exported-at '<RFC3339 export time>' \
-  --imported-by '<bounded operator label>' \
+  --imported-by 'selection-import:on-call' \
+  --compare-manifest /secure/approved-previous-manifest.json \
   --emit-copy | psql "$DATABASE_URL"
 ```
 
@@ -61,9 +63,26 @@ SQLite file came from that D1 database. Trust it only when the file is produced 
 name-verifying exporter in the same controlled workflow. The importer accepts only
 `jcourse-db-backup`, hashes the SQLite snapshot, validates the source schema, and records source/target
 counts in `selection.import_runs`. The optional `--manifest-out` is written atomically with mode `0600`
-as a pre-import source manifest; the transactional `selection.import_runs` row is the success record.
-A new manifest can be compared with an earlier `--compare-manifest`. Import time and the upstream
-`selection.fetchlog` clock are intentionally separate.
+as a pre-import source manifest and refuses to replace an existing path. `--source`, `--manifest-out`,
+and `--compare-manifest` must resolve to three different files, including through symlinks/hard links.
+The approved comparison manifest must have the same schema/source and all 13 exact count keys. Every
+essential table must remain non-empty, and any count decrease fails closed. A reviewed legitimate decrease
+requires `--approve-count-decrease --approval-reason '<10-500 chars>'`. Only the first trusted snapshot may
+omit a baseline, using `--approve-unbaselined-snapshot --approval-reason '<10-500 chars>'`; this does not
+bypass the non-empty guard. Validation and comparison happen before a new manifest is created or any target
+write begins. The transactional `selection.import_runs` row records the approval mode, baseline evidence,
+and import success; import time and the upstream `selection.fetchlog` clock are intentionally separate.
+
+Both materializers compare every live raw table count, required teaching-class relationship, non-empty
+essential set, and completeness approval metadata with the latest validated `selection.import_runs` row
+before writing. A legacy raw snapshot without that evidence must be re-established through the approved
+importer/recovery flow, not blessed with a hand-written row.
+
+Run the importer safety tests from the repository root:
+
+```bash
+python3 -m unittest discover -s tools/d1/tests
+```
 
 Historical reviews, likes, reports, wallet hashes, and anonymous edit tokens are not part of the
 selection first-load. Do not run `gen_reviews_sql.py` against a shared environment without the

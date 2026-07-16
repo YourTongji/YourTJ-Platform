@@ -4,6 +4,24 @@ BEGIN;
 
 SELECT pg_advisory_xact_lock(hashtextextended('selection.materialize', 0));
 
+LOCK TABLE
+  selection.pk_calendars,
+  selection.pk_languages,
+  selection.pk_course_natures,
+  selection.pk_course_natures_by_calendar,
+  selection.pk_assessments,
+  selection.pk_campuses,
+  selection.pk_faculties,
+  selection.pk_majors,
+  selection.pk_course_details,
+  selection.pk_teachers_raw,
+  selection.pk_teacher_timeslots,
+  selection.pk_major_courses,
+  selection.pk_fetch_logs
+IN SHARE MODE;
+
+SELECT selection.assert_materialization_source();
+
 -- Teachers have no natural-key constraint in the legacy schema, so explicitly
 -- insert only names that are not already represented.
 WITH canonical_teachers AS (
@@ -40,11 +58,9 @@ WITH normalized_courses AS (
   WHERE COALESCE(NULLIF(BTRIM(detail.course_code), ''), NULLIF(BTRIM(detail.code), ''))
         IS NOT NULL
 ), canonical_courses AS (
-  SELECT code,
-         (ARRAY_AGG(name ORDER BY calendar_id DESC NULLS LAST, id DESC))[1] AS name,
-         AVG(credit) FILTER (WHERE credit IS NOT NULL) AS credit
+  SELECT DISTINCT ON (code) code, name, credit
   FROM normalized_courses
-  GROUP BY code
+  ORDER BY code, calendar_id DESC NULLS LAST, id DESC
 )
 UPDATE courses.courses AS course
 SET name = source.name,
@@ -71,11 +87,9 @@ WITH normalized_courses AS (
   WHERE COALESCE(NULLIF(BTRIM(detail.course_code), ''), NULLIF(BTRIM(detail.code), ''))
         IS NOT NULL
 ), canonical_courses AS (
-  SELECT code,
-         (ARRAY_AGG(name ORDER BY calendar_id DESC NULLS LAST, id DESC))[1] AS name,
-         AVG(credit) FILTER (WHERE credit IS NOT NULL) AS credit
+  SELECT DISTINCT ON (code) code, name, credit
   FROM normalized_courses
-  GROUP BY code
+  ORDER BY code, calendar_id DESC NULLS LAST, id DESC
 )
 INSERT INTO courses.courses (
   code, name, credit, department, review_count, review_avg,
@@ -88,29 +102,9 @@ WHERE NOT EXISTS (
   WHERE existing.code = source.code
 );
 
--- Retire stale imported catalogue rows only when no review history owns them.
-DELETE FROM courses.course_aliases AS alias
-USING courses.courses AS course
-WHERE alias.course_id = course.id
-  AND course.is_legacy = 1
-  AND NOT EXISTS (
-    SELECT 1 FROM selection.pk_course_details AS detail
-    WHERE COALESCE(NULLIF(BTRIM(detail.course_code), ''), NULLIF(BTRIM(detail.code), ''))
-          = course.code
-  )
-  AND NOT EXISTS (
-    SELECT 1 FROM reviews.reviews AS review WHERE review.course_id = course.id
-  );
-DELETE FROM courses.courses AS course
-WHERE course.is_legacy = 1
-  AND NOT EXISTS (
-    SELECT 1 FROM selection.pk_course_details AS detail
-    WHERE COALESCE(NULLIF(BTRIM(detail.course_code), ''), NULLIF(BTRIM(detail.code), ''))
-          = course.code
-  )
-  AND NOT EXISTS (
-    SELECT 1 FROM reviews.reviews AS review WHERE review.course_id = course.id
-  );
+-- Catalogue rows and aliases outlive any one selection snapshot. This reconcile
+-- only upserts; retirement requires an explicit Courses-owned lifecycle and may
+-- not depend on Reviews-private SQL.
 
 -- Resolve every alias to one deterministic catalogue owner, preferring a
 -- curated/community row over a legacy projection with the same code.

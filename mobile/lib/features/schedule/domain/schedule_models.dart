@@ -37,8 +37,11 @@ class ScheduledCourse {
   final List<TimeSlot> timeslots;
   final int colorIndex;
 
+  bool get hasUnknownSchedule => offering.scheduleUnknown || timeslots.isEmpty;
+
   bool get hasUnknownWeeks =>
       offering.weeksUnknown ||
+      hasUnknownSchedule ||
       timeslots.any(
         (TimeSlot timeslot) =>
             timeslot.weeksUnknown || timeslot.weekNumbers.isEmpty,
@@ -52,14 +55,14 @@ class ScheduleConflict {
   const ScheduleConflict({
     required this.kind,
     required this.withCourse,
-    required this.existingSlot,
-    required this.candidateSlot,
+    this.existingSlot,
+    this.candidateSlot,
   });
 
   final ScheduleConflictKind kind;
   final ScheduledCourse withCourse;
-  final TimeSlot existingSlot;
-  final TimeSlot candidateSlot;
+  final TimeSlot? existingSlot;
+  final TimeSlot? candidateSlot;
 }
 
 enum ScheduleAddStatus { added, duplicate, conflict }
@@ -98,9 +101,27 @@ class ScheduleAddResult {
 ScheduleConflict? findScheduleConflict({
   required List<ScheduledCourse> existing,
   required List<TimeSlot> candidate,
+  bool candidateScheduleUnknown = false,
 }) {
+  if (existing.isEmpty) {
+    return null;
+  }
   ScheduleConflict? possible;
+  if (candidateScheduleUnknown || candidate.isEmpty) {
+    possible = ScheduleConflict(
+      kind: ScheduleConflictKind.possible,
+      withCourse: existing.first,
+      candidateSlot: candidate.isEmpty ? null : candidate.first,
+    );
+  }
   for (final ScheduledCourse scheduled in existing) {
+    if (scheduled.hasUnknownSchedule) {
+      possible ??= ScheduleConflict(
+        kind: ScheduleConflictKind.possible,
+        withCourse: scheduled,
+        candidateSlot: candidate.isEmpty ? null : candidate.first,
+      );
+    }
     for (final TimeSlot existingSlot in scheduled.timeslots) {
       for (final TimeSlot candidateSlot in candidate) {
         if (!_overlapsBySlot(existingSlot, candidateSlot)) {
@@ -191,7 +212,7 @@ Set<int>? parseCourseWeeks(String value) {
     }
     final int? start = int.tryParse(match.group(1)!);
     final int? end = int.tryParse(match.group(2) ?? match.group(1)!);
-    if (start == null || end == null || start < 1 || end > 60 || start > end) {
+    if (start == null || end == null || start < 1 || end > 30 || start > end) {
       return null;
     }
     for (int week = start; week <= end; week += 1) {

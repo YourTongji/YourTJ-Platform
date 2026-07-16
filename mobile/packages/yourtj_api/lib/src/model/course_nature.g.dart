@@ -8,12 +8,13 @@ part of 'course_nature.dart';
 
 CourseNature _$CourseNatureFromJson(Map<String, dynamic> json) =>
     $checkedCreate('CourseNature', json, ($checkedConvert) {
+      $checkKeys(json, requiredKeys: const ['id', 'name']);
       final val = CourseNature(
-        id: $checkedConvert('id', (v) => v as String?),
-        name: $checkedConvert('name', (v) => v as String?),
+        id: $checkedConvert('id', (v) => v as String),
+        name: $checkedConvert('name', (v) => v as String),
       );
       return val;
     });
 
 Map<String, dynamic> _$CourseNatureToJson(CourseNature instance) =>
-    <String, dynamic>{'id': ?instance.id, 'name': ?instance.name};
+    <String, dynamic>{'id': instance.id, 'name': instance.name};

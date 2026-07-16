@@ -54,6 +54,7 @@
 - [Flutter 移动端产品规范](product/mobile-client.md)
 - [身份、登录与账号生命周期](product/identity-and-access.md)
 - [个人资料、社交图与隐私](product/social-profile-and-privacy.md)
+- [课程、选课、课表与评课](product/courses-selection-and-reviews.md)
 - [内容、媒体与发现](product/content-media-and-discovery.md)
 - [通知、公告与私信](product/notifications-announcements-and-messaging.md)
 - [信任安全、治理与管理后台](product/trust-safety-and-administration.md)

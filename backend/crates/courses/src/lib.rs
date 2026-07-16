@@ -69,12 +69,12 @@ pub fn routes(state: AppState) -> Router {
             get(selection_handlers::selection_courses_search),
         )
         .route(
-            "/api/v2/selection/courses/{code}",
-            get(selection_handlers::selection_course_by_code),
+            "/api/v2/selection/courses/{teachingClassId}",
+            get(selection_handlers::selection_course_by_id),
         )
         .route(
-            "/api/v2/selection/courses/{code}/timeslots",
-            get(selection_handlers::selection_courses_by_time),
+            "/api/v2/selection/courses/{teachingClassId}/timeslots",
+            get(selection_handlers::selection_course_timeslots),
         )
         .route("/api/v2/selection/latest-update", get(selection_handlers::selection_latest_update))
         // --- durable selection operations ---

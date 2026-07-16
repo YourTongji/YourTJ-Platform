@@ -36,9 +36,9 @@ class SelectionSyncJob {
 
     required this.result,
 
-    this.startedAt,
+    required this.startedAt,
 
-    this.completedAt,
+    required this.completedAt,
 
     required this.createdAt,
 
@@ -95,10 +95,10 @@ class SelectionSyncJob {
   @JsonKey(name: r'result', required: true, includeIfNull: false)
   final Map<String, Object> result;
 
-  @JsonKey(name: r'startedAt', required: false, includeIfNull: false)
+  @JsonKey(name: r'startedAt', required: true, includeIfNull: true)
   final int? startedAt;
 
-  @JsonKey(name: r'completedAt', required: false, includeIfNull: false)
+  @JsonKey(name: r'completedAt', required: true, includeIfNull: true)
   final int? completedAt;
 
   @JsonKey(name: r'createdAt', required: true, includeIfNull: false)

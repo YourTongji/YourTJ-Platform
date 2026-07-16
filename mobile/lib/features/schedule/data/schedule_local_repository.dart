@@ -36,7 +36,8 @@ class ScheduleLocalRepository {
   const ScheduleLocalRepository(this._storage);
 
   static const int _schemaVersion = 3;
-  static const int _legacySchemaVersion = 2;
+  static const Set<int> _legacySchemaVersions = <int>{2, 3};
+  static const int _maxTimeslotsPerOffering = 100;
   final ScheduleStorage _storage;
 
   Future<List<ScheduledCourse>> load({
@@ -67,7 +68,8 @@ class ScheduleLocalRepository {
           _tryDecodeEnvelope(
             legacy,
             calendarId: calendarId,
-            expectedSchemaVersion: _legacySchemaVersion,
+            expectedSchemaVersions: _legacySchemaVersions,
+            decodeLegacyItems: true,
           ) ??
           const <ScheduledCourse>[];
       if (migrated.isNotEmpty) {
@@ -97,6 +99,14 @@ class ScheduleLocalRepository {
       throw const ApiFailure(
         kind: ApiFailureKind.invalidInput,
         message: '本机课表最多保存 100 门课程',
+      );
+    }
+    if (courses.any(
+      (ScheduledCourse item) => !_isValidCourse(item, calendarId: calendarId),
+    )) {
+      throw const ApiFailure(
+        kind: ApiFailureKind.invalidInput,
+        message: '本机课表包含无效的教学班或时段',
       );
     }
     final String encoded = jsonEncode(<String, Object>{
@@ -141,12 +151,13 @@ class ScheduleLocalRepository {
   List<ScheduledCourse>? _tryDecodeEnvelope(
     String encoded, {
     required String calendarId,
-    int expectedSchemaVersion = _schemaVersion,
+    Set<int> expectedSchemaVersions = const <int>{_schemaVersion},
+    bool decodeLegacyItems = false,
   }) {
     try {
       final Object? decoded = jsonDecode(encoded);
       if (decoded is! Map ||
-          decoded['schemaVersion'] != expectedSchemaVersion) {
+          !expectedSchemaVersions.contains(decoded['schemaVersion'])) {
         return null;
       }
       final Object? rawItems = decoded['items'];
@@ -155,18 +166,19 @@ class ScheduleLocalRepository {
       }
       final List<ScheduledCourse> items = <ScheduledCourse>[];
       for (final Object? rawItem in rawItems) {
-        final ScheduledCourse? item = expectedSchemaVersion == _schemaVersion
-            ? _decodeItem(rawItem, calendarId: calendarId)
-            : _decodeLegacyItem(rawItem, calendarId: calendarId);
-        if (item != null &&
-            !items.any(
+        final ScheduledCourse? item = decodeLegacyItems
+            ? _decodeLegacyItem(rawItem, calendarId: calendarId)
+            : _decodeItem(rawItem, calendarId: calendarId);
+        if (item == null ||
+            items.any(
               (ScheduledCourse existing) =>
                   existing.offering.offeringId == item.offering.offeringId,
             )) {
-          items.add(item);
+          return null;
         }
+        items.add(item);
       }
-      return rawItems.isNotEmpty && items.isEmpty ? null : items;
+      return items;
     } on FormatException {
       return null;
     }
@@ -181,7 +193,7 @@ class ScheduleLocalRepository {
     final Object? rawColorIndex = rawItem['colorIndex'];
     if (rawOffering is! Map ||
         rawTimeslots is! List ||
-        rawTimeslots.length > 64) {
+        rawTimeslots.length > _maxTimeslotsPerOffering) {
       return null;
     }
     try {
@@ -191,17 +203,24 @@ class ScheduleLocalRepository {
       if (offering.offeringId.isEmpty ||
           offering.code.isEmpty ||
           offering.name.isEmpty ||
-          offering.calendarId != calendarId) {
+          offering.calendarId != calendarId ||
+          !_hasValidOfferingWeeks(offering)) {
         return null;
       }
-      final List<TimeSlot> timeslots = rawTimeslots
-          .whereType<Map<Object?, Object?>>()
-          .map(
-            (Map<Object?, Object?> rawTimeslot) =>
-                TimeSlot.fromJson(Map<String, dynamic>.from(rawTimeslot)),
-          )
-          .where(_isValidTimeslot)
-          .toList(growable: false);
+      final List<TimeSlot> timeslots = <TimeSlot>[];
+      for (final Object? rawTimeslot in rawTimeslots) {
+        if (rawTimeslot is! Map<Object?, Object?>) {
+          return null;
+        }
+        final TimeSlot timeslot = TimeSlot.fromJson(
+          Map<String, dynamic>.from(rawTimeslot),
+        );
+        if (!_matchesOffering(timeslot, offering.offeringId) ||
+            !_isValidTimeslot(timeslot)) {
+          return null;
+        }
+        timeslots.add(timeslot);
+      }
       return ScheduledCourse(
         offering: offering,
         timeslots: timeslots,
@@ -224,7 +243,7 @@ class ScheduleLocalRepository {
     final Object? rawColorIndex = rawItem['colorIndex'];
     if (rawCourse is! Map ||
         rawTimeslots is! List ||
-        rawTimeslots.length > 64) {
+        rawTimeslots.length > _maxTimeslotsPerOffering) {
       return null;
     }
     try {
@@ -232,18 +251,29 @@ class ScheduleLocalRepository {
       final String offeringId = course['id'] as String;
       final String code = course['code'] as String;
       final String name = course['name'] as String;
-      if (offeringId.isEmpty || code.isEmpty || name.isEmpty) {
+      final Object? sourceCalendarId = course['calendarId'];
+      if (offeringId.isEmpty ||
+          code.isEmpty ||
+          name.isEmpty ||
+          sourceCalendarId is String &&
+              sourceCalendarId.isNotEmpty &&
+              sourceCalendarId != calendarId) {
         return null;
       }
-      final List<TimeSlot> timeslots = rawTimeslots
-          .whereType<Map<Object?, Object?>>()
-          .map(
-            (Map<Object?, Object?> rawTimeslot) =>
-                _migrateLegacyTimeslot(rawTimeslot, offeringId: offeringId),
-          )
-          .whereType<TimeSlot>()
-          .where(_isValidTimeslot)
-          .toList(growable: false);
+      final List<TimeSlot> timeslots = <TimeSlot>[];
+      for (final Object? rawTimeslot in rawTimeslots) {
+        if (rawTimeslot is! Map<Object?, Object?>) {
+          return null;
+        }
+        final TimeSlot? timeslot = _migrateLegacyTimeslot(
+          rawTimeslot,
+          offeringId: offeringId,
+        );
+        if (timeslot == null || !_isValidTimeslot(timeslot)) {
+          return null;
+        }
+        timeslots.add(timeslot);
+      }
       final Iterable<int> knownWeeks = timeslots
           .where((TimeSlot item) => !item.weeksUnknown)
           .expand((TimeSlot item) => item.weekNumbers);
@@ -292,6 +322,9 @@ class ScheduleLocalRepository {
   }) {
     try {
       final Map<String, dynamic> value = Map<String, dynamic>.from(rawTimeslot);
+      if (value['courseId'] != offeringId) {
+        return null;
+      }
       final String? weeks = value['weeks'] as String?;
       final Set<int>? parsedWeeks = weeks == null
           ? null
@@ -319,9 +352,48 @@ class ScheduleLocalRepository {
     return timeslot.weekday >= 1 &&
         timeslot.weekday <= 7 &&
         timeslot.startSlot >= 1 &&
-        timeslot.startSlot <= 13 &&
+        timeslot.startSlot <= 20 &&
         timeslot.endSlot >= timeslot.startSlot &&
-        timeslot.endSlot <= 13;
+        timeslot.endSlot <= 20 &&
+        timeslot.weekNumbers.every((int value) => value >= 1 && value <= 30) &&
+        (timeslot.weeksUnknown
+            ? timeslot.weekNumbers.isEmpty
+            : timeslot.weekNumbers.isNotEmpty) &&
+        (timeslot.locationUnknown ||
+            timeslot.location?.trim().isNotEmpty == true);
+  }
+
+  bool _matchesOffering(TimeSlot timeslot, String offeringId) {
+    return timeslot.offeringId == offeringId &&
+        timeslot.toJson()['courseId'] == offeringId;
+  }
+
+  bool _isValidCourse(ScheduledCourse course, {required String calendarId}) {
+    final SelectionOffering offering = course.offering;
+    return offering.offeringId.isNotEmpty &&
+        offering.code.isNotEmpty &&
+        offering.name.isNotEmpty &&
+        offering.calendarId == calendarId &&
+        _hasValidOfferingWeeks(offering) &&
+        course.timeslots.length <= _maxTimeslotsPerOffering &&
+        course.timeslots.every(
+          (TimeSlot timeslot) =>
+              _matchesOffering(timeslot, offering.offeringId) &&
+              _isValidTimeslot(timeslot),
+        );
+  }
+
+  bool _hasValidOfferingWeeks(SelectionOffering offering) {
+    final int? startWeek = offering.startWeek;
+    final int? endWeek = offering.endWeek;
+    if (offering.weeksUnknown) {
+      return startWeek == null && endWeek == null;
+    }
+    return startWeek != null &&
+        endWeek != null &&
+        startWeek >= 1 &&
+        endWeek >= startWeek &&
+        endWeek <= 30;
   }
 }
 

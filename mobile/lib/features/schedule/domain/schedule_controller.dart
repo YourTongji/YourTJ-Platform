@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:yourtj_api/yourtj_api.dart';
 
 import '../../../core/network/api_failure.dart';
+import '../data/schedule_export.dart';
 import '../data/schedule_local_repository.dart';
 import '../data/selection_repository.dart';
 import 'schedule_models.dart';
@@ -12,6 +13,8 @@ import 'schedule_models.dart';
 enum SelectionBrowseMode { major, nature, search }
 
 class ScheduleController extends ChangeNotifier {
+  static const int _maxTimeslotsPerOffering = 100;
+
   ScheduleController({
     required ScheduleNamespace scope,
     required SelectionRepository selectionSource,
@@ -37,6 +40,11 @@ class ScheduleController extends ChangeNotifier {
   String? _natureId;
   String _query = '';
   SelectionBrowseMode _mode = SelectionBrowseMode.major;
+  int? _weekday;
+  int? _startSlot;
+  int? _endSlot;
+  int? _week;
+  bool _includeUnknownSchedule = true;
   bool _isLoading = true;
   bool _areContextOptionsLoading = false;
   bool _areOfferingsLoading = false;
@@ -45,7 +53,6 @@ class ScheduleController extends ChangeNotifier {
   bool _hasMore = false;
   final Set<String> _busyOfferingIds = <String>{};
   final Map<String, CancelToken> _addRequests = <String, CancelToken>{};
-  Future<void> _scheduleMutation = Future<void>.value();
   ApiFailure? _failure;
   ApiFailure? _contextFailure;
   ApiFailure? _offeringsFailure;
@@ -56,6 +63,8 @@ class ScheduleController extends ChangeNotifier {
   int _metadataGeneration = 0;
   int _contextGeneration = 0;
   int _offeringsGeneration = 0;
+  int _scheduleHydrationGeneration = 0;
+  Future<void> _scheduleMutationTail = Future<void>.value();
   bool _isDisposed = false;
 
   List<Calendar> get calendars => _calendars;
@@ -71,6 +80,11 @@ class ScheduleController extends ChangeNotifier {
   String? get natureId => _natureId;
   String get query => _query;
   SelectionBrowseMode get mode => _mode;
+  int? get weekday => _weekday;
+  int? get startSlot => _startSlot;
+  int? get endSlot => _endSlot;
+  int? get week => _week;
+  bool get includeUnknownSchedule => _includeUnknownSchedule;
   bool get isLoading => _isLoading;
   bool get areContextOptionsLoading => _areContextOptionsLoading;
   bool get areOfferingsLoading => _areOfferingsLoading;
@@ -100,25 +114,21 @@ class ScheduleController extends ChangeNotifier {
     try {
       final List<Object?> values = await Future.wait<Object?>(<Future<Object?>>[
         _selectionRepository.calendars(cancelToken: request),
-        _selectionRepository.natures(cancelToken: request),
         _selectionRepository.latestUpdate(cancelToken: request),
       ]);
       if (!_isCurrentMetadata(generation, request)) {
         return;
       }
       _calendars = (values[0]! as List<Calendar>)
-          .where((Calendar item) => item.id?.isNotEmpty == true)
+          .where((Calendar item) => item.id.isNotEmpty)
           .toList(growable: false);
-      _natures = (values[1]! as List<CourseNature>)
-          .where((CourseNature item) => item.id?.isNotEmpty == true)
-          .toList(growable: false);
-      _latestUpdate = values[2] as LatestUpdate?;
+      _latestUpdate = values[1] as LatestUpdate?;
       if (_calendars.isNotEmpty) {
         final Calendar selected = _calendars.firstWhere(
           (Calendar item) => item.isCurrent == true,
           orElse: () => _calendars.first,
         );
-        await selectCalendar(selected.id!);
+        await selectCalendar(selected.id);
       }
     } on ApiFailure catch (failure) {
       if (_isCurrentMetadata(generation, request) &&
@@ -138,6 +148,7 @@ class ScheduleController extends ChangeNotifier {
       return;
     }
     final int generation = ++_contextGeneration;
+    final int hydrationGeneration = ++_scheduleHydrationGeneration;
     _contextRequest?.cancel('selection calendar replaced');
     final CancelToken request = CancelToken();
     _contextRequest = request;
@@ -146,6 +157,11 @@ class ScheduleController extends ChangeNotifier {
     _calendarId = calendarId;
     _grade = null;
     _majorId = null;
+    _natureId = null;
+    _query = '';
+    _mode = SelectionBrowseMode.major;
+    _resetTimeFilters();
+    _natures = const <CourseNature>[];
     _grades = const <String>[];
     _majors = const <Major>[];
     _resetOfferingResults();
@@ -157,12 +173,36 @@ class ScheduleController extends ChangeNotifier {
     try {
       await Future.wait<void>(<Future<void>>[
         _loadGrades(calendarId, generation, request),
-        _loadLocalSchedule(calendarId, generation, request),
+        _loadNatures(calendarId, generation, request),
+        _loadLocalSchedule(calendarId, hydrationGeneration),
       ]);
     } finally {
       if (_isCurrentContext(generation, request)) {
         _areContextOptionsLoading = false;
         notifyListeners();
+      }
+    }
+  }
+
+  Future<void> _loadNatures(
+    String calendarId,
+    int generation,
+    CancelToken request,
+  ) async {
+    try {
+      final List<CourseNature> natures = await _selectionRepository.natures(
+        calendarId,
+        cancelToken: request,
+      );
+      if (_isCurrentContext(generation, request)) {
+        _natures = natures
+            .where((CourseNature item) => item.id.isNotEmpty)
+            .toList(growable: false);
+      }
+    } on ApiFailure catch (failure) {
+      if (_isCurrentContext(generation, request) &&
+          failure.kind != ApiFailureKind.cancelled) {
+        _contextFailure = failure;
       }
     }
   }
@@ -192,48 +232,63 @@ class ScheduleController extends ChangeNotifier {
 
   Future<void> _loadLocalSchedule(
     String calendarId,
-    int generation,
-    CancelToken request,
+    int hydrationGeneration,
   ) async {
     try {
-      final List<ScheduledCourse> scheduled = await _localRepository.load(
-        namespace: _namespace,
-        calendarId: calendarId,
-      );
-      if (_isCurrentContext(generation, request)) {
-        _scheduled = scheduled;
-      }
+      await _runScheduleMutation<void>(() async {
+        final List<ScheduledCourse> scheduled = await _localRepository.load(
+          namespace: _namespace,
+          calendarId: calendarId,
+        );
+        if (!_isDisposed &&
+            hydrationGeneration == _scheduleHydrationGeneration &&
+            _calendarId == calendarId) {
+          _scheduled = scheduled;
+          _storageFailure = null;
+          notifyListeners();
+        }
+      });
     } on ApiFailure catch (failure) {
-      if (_isCurrentContext(generation, request)) {
+      if (!_isDisposed &&
+          hydrationGeneration == _scheduleHydrationGeneration &&
+          _calendarId == calendarId) {
         _storageFailure = failure;
+        notifyListeners();
       }
     }
   }
 
   Future<void> selectGrade(String? grade) async {
-    if (grade == null || grade.isEmpty) {
+    final String? selectedCalendarId = _calendarId;
+    if (grade == null || grade.isEmpty || selectedCalendarId == null) {
       return;
     }
     final int generation = ++_contextGeneration;
     _contextRequest?.cancel('selection grade replaced');
     final CancelToken request = CancelToken();
     _contextRequest = request;
-    _cancelOfferingRequest('selection grade replaced');
+    final bool resetsMajorBrowse = _mode == SelectionBrowseMode.major;
+    if (resetsMajorBrowse) {
+      _cancelOfferingRequest('selection grade replaced');
+    }
     _grade = grade;
     _majorId = null;
     _majors = const <Major>[];
-    _resetOfferingResults();
+    if (resetsMajorBrowse) {
+      _resetOfferingResults();
+    }
     _areContextOptionsLoading = true;
     _contextFailure = null;
     notifyListeners();
     try {
       final List<Major> majors = await _selectionRepository.majors(
-        grade,
+        calendarId: selectedCalendarId,
+        grade: grade,
         cancelToken: request,
       );
       if (_isCurrentContext(generation, request)) {
         _majors = majors
-            .where((Major item) => item.id?.isNotEmpty == true)
+            .where((Major item) => item.id.isNotEmpty)
             .toList(growable: false);
       }
     } on ApiFailure catch (failure) {
@@ -250,7 +305,10 @@ class ScheduleController extends ChangeNotifier {
   }
 
   Future<void> selectMajor(String? majorId) async {
-    if (majorId == null || majorId.isEmpty || _grade == null) {
+    if (majorId == null ||
+        majorId.isEmpty ||
+        _calendarId == null ||
+        _grade == null) {
       return;
     }
     _majorId = majorId;
@@ -258,7 +316,7 @@ class ScheduleController extends ChangeNotifier {
   }
 
   Future<void> selectNature(String? natureId) async {
-    if (natureId == null || natureId.isEmpty) {
+    if (natureId == null || natureId.isEmpty || _calendarId == null) {
       return;
     }
     _natureId = natureId;
@@ -289,14 +347,67 @@ class ScheduleController extends ChangeNotifier {
     _mode = mode;
     _resetOfferingResults();
     notifyListeners();
-    if (mode == SelectionBrowseMode.major && _majorId != null) {
-      selectMajor(_majorId);
-    } else if (mode == SelectionBrowseMode.nature && _natureId != null) {
-      selectNature(_natureId);
-    } else if (mode == SelectionBrowseMode.search && _query.length >= 2) {
-      submitSearch(_query);
+    if (_hasActiveBrowse) {
+      unawaited(_loadOfferings());
     }
   }
+
+  Future<void> updateTimeFilters({
+    required int? weekday,
+    required int? startSlot,
+    required int? endSlot,
+    required int? week,
+    required bool includeUnknownSchedule,
+  }) async {
+    final List<bool> slotFields = <bool>[
+      weekday != null,
+      startSlot != null,
+      endSlot != null,
+    ];
+    final bool hasAnySlotField = slotFields.any((bool value) => value);
+    final bool hasEverySlotField = slotFields.every((bool value) => value);
+    if (hasAnySlotField && !hasEverySlotField ||
+        week != null && !hasEverySlotField ||
+        !includeUnknownSchedule && !hasEverySlotField ||
+        weekday != null && (weekday < 1 || weekday > 7) ||
+        startSlot != null && (startSlot < 1 || startSlot > 20) ||
+        endSlot != null && (endSlot < 1 || endSlot > 20) ||
+        week != null && (week < 1 || week > 30) ||
+        startSlot != null && endSlot != null && startSlot > endSlot) {
+      throw const ApiFailure(
+        kind: ApiFailureKind.invalidInput,
+        message: '空闲时间筛选条件无效，请重新选择',
+      );
+    }
+    final bool changed =
+        _weekday != weekday ||
+        _startSlot != startSlot ||
+        _endSlot != endSlot ||
+        _week != week ||
+        _includeUnknownSchedule != includeUnknownSchedule;
+    if (!changed) {
+      return;
+    }
+    _weekday = weekday;
+    _startSlot = startSlot;
+    _endSlot = endSlot;
+    _week = week;
+    _includeUnknownSchedule = includeUnknownSchedule;
+    if (_hasActiveBrowse) {
+      await _loadOfferings();
+    } else {
+      _resetOfferingResults();
+      notifyListeners();
+    }
+  }
+
+  Future<void> clearTimeFilters() => updateTimeFilters(
+    weekday: null,
+    startSlot: null,
+    endSlot: null,
+    week: null,
+    includeUnknownSchedule: true,
+  );
 
   Future<void> loadMore() async {
     if (!_hasMore || _isLoadingMore || _areOfferingsLoading) {
@@ -313,7 +424,7 @@ class ScheduleController extends ChangeNotifier {
 
   Future<void> _loadOfferings({bool append = false}) async {
     final String? selectedCalendarId = _calendarId;
-    if (selectedCalendarId == null) {
+    if (selectedCalendarId == null || !_hasActiveBrowse) {
       return;
     }
     final String? cursor = append ? _nextCursor : null;
@@ -342,6 +453,11 @@ class ScheduleController extends ChangeNotifier {
         majorId: _mode == SelectionBrowseMode.major ? _majorId : null,
         grade: _mode == SelectionBrowseMode.major ? _grade : null,
         natureId: _mode == SelectionBrowseMode.nature ? _natureId : null,
+        weekday: _weekday,
+        startSlot: _startSlot,
+        endSlot: _endSlot,
+        week: _week,
+        includeUnknownSchedule: _includeUnknownSchedule,
         cursor: cursor,
         cancelToken: request,
       );
@@ -415,35 +531,42 @@ class ScheduleController extends ChangeNotifier {
       )) {
         return const ScheduleAddResult.duplicate();
       }
-      final List<TimeSlot> timeslots =
-          (await _selectionRepository.timeslots(
-                offering.offeringId,
-                cancelToken: request,
-              ))
-              .where((TimeSlot item) {
-                return item.offeringId == offering.offeringId &&
-                    _isValidTimeslot(item);
-              })
-              .toList(growable: false);
+      final List<TimeSlot> timeslots = _requireValidTimeslots(
+        await _selectionRepository.timeslots(
+          offering.offeringId,
+          cancelToken: request,
+        ),
+        offeringId: offering.offeringId,
+      );
       if (_calendarId != selectedCalendarId || request.isCancelled) {
         throw const ApiFailure(
           kind: ApiFailureKind.cancelled,
           message: '教学班时段请求已取消',
         );
       }
-      final ScheduleConflict? conflict = findScheduleConflict(
-        existing: _scheduled,
-        candidate: timeslots,
-      );
-      if (conflict != null) {
-        return ScheduleAddResult.conflict(
-          conflict: conflict,
-          pendingOffering: offering,
-          pendingTimeslots: timeslots,
+      return await _runScheduleMutation<ScheduleAddResult>(() async {
+        _requireCurrentOfferingScope(selectedCalendarId, offering);
+        if (_scheduled.any(
+          (ScheduledCourse item) =>
+              item.offering.offeringId == offering.offeringId,
+        )) {
+          return const ScheduleAddResult.duplicate();
+        }
+        final ScheduleConflict? conflict = findScheduleConflict(
+          existing: _scheduled,
+          candidate: timeslots,
+          candidateScheduleUnknown: offering.scheduleUnknown,
         );
-      }
-      await confirmAdd(offering, timeslots);
-      return const ScheduleAddResult.added();
+        if (conflict != null) {
+          return ScheduleAddResult.conflict(
+            conflict: conflict,
+            pendingOffering: offering,
+            pendingTimeslots: timeslots,
+          );
+        }
+        await _appendOffering(offering, timeslots, selectedCalendarId);
+        return const ScheduleAddResult.added();
+      });
     } finally {
       if (!_isDisposed) {
         if (identical(_addRequests[offering.offeringId], request)) {
@@ -458,101 +581,202 @@ class ScheduleController extends ChangeNotifier {
   Future<void> confirmAdd(
     SelectionOffering offering,
     List<TimeSlot> timeslots,
-  ) => _serializeScheduleMutation(() async {
+  ) async {
     final String? selectedCalendarId = _calendarId;
-    if (selectedCalendarId == null ||
-        offering.calendarId != selectedCalendarId) {
+    if (selectedCalendarId == null) {
       throw const ApiFailure(
         kind: ApiFailureKind.invalidInput,
-        message: '该教学班不属于当前学期，请刷新后重试',
+        message: '请先选择学期',
       );
     }
-    if (_scheduled.any(
-      (ScheduledCourse item) => item.offering.offeringId == offering.offeringId,
-    )) {
+    await _runScheduleMutation<void>(() async {
+      _requireCurrentOfferingScope(selectedCalendarId, offering);
+      if (_scheduled.any(
+        (ScheduledCourse item) =>
+            item.offering.offeringId == offering.offeringId,
+      )) {
+        return;
+      }
+      final List<TimeSlot> validTimeslots = _requireValidTimeslots(
+        timeslots,
+        offeringId: offering.offeringId,
+      );
+      final ScheduleConflict? conflict = findScheduleConflict(
+        existing: _scheduled,
+        candidate: validTimeslots,
+        candidateScheduleUnknown: offering.scheduleUnknown,
+      );
+      if (conflict?.kind == ScheduleConflictKind.confirmed) {
+        throw const ApiFailure(
+          kind: ApiFailureKind.conflict,
+          message: '课表已变化并出现确定冲突，请重新选择教学班',
+        );
+      }
+      await _appendOffering(offering, validTimeslots, selectedCalendarId);
+    });
+  }
+
+  Future<void> removeOffering(String offeringId) async {
+    final String? selectedCalendarId = _calendarId;
+    if (selectedCalendarId == null) {
       return;
     }
+    await _runScheduleMutation<void>(() async {
+      if (_calendarId != selectedCalendarId) {
+        return;
+      }
+      final List<ScheduledCourse> next = _scheduled
+          .where(
+            (ScheduledCourse item) => item.offering.offeringId != offeringId,
+          )
+          .toList(growable: false);
+      await _localRepository.save(
+        namespace: _namespace,
+        calendarId: selectedCalendarId,
+        courses: next,
+      );
+      if (!_isDisposed && _calendarId == selectedCalendarId) {
+        _scheduled = next;
+        notifyListeners();
+      }
+    });
+  }
+
+  Future<void> clearSchedule() async {
+    final String? selectedCalendarId = _calendarId;
+    if (selectedCalendarId == null) {
+      return;
+    }
+    await _runScheduleMutation<void>(() async {
+      if (_calendarId != selectedCalendarId) {
+        return;
+      }
+      await _localRepository.clear(
+        namespace: _namespace,
+        calendarId: selectedCalendarId,
+      );
+      if (!_isDisposed && _calendarId == selectedCalendarId) {
+        _scheduled = const <ScheduledCourse>[];
+        notifyListeners();
+      }
+    });
+  }
+
+  String exportScheduleJson({DateTime? exportedAt}) {
+    final String? selectedCalendarId = _calendarId;
+    if (selectedCalendarId == null) {
+      throw const ApiFailure(
+        kind: ApiFailureKind.invalidInput,
+        message: '请先选择学期',
+      );
+    }
+    return encodeScheduleExport(
+      environment: _namespace.environment,
+      calendarId: selectedCalendarId,
+      courses: _scheduled,
+      exportedAt: exportedAt,
+    );
+  }
+
+  Future<void> _appendOffering(
+    SelectionOffering offering,
+    List<TimeSlot> timeslots,
+    String calendarId,
+  ) async {
     final List<ScheduledCourse> next = <ScheduledCourse>[
       ..._scheduled,
       ScheduledCourse(
         offering: offering,
-        timeslots: timeslots
-            .where((TimeSlot item) {
-              return item.offeringId == offering.offeringId &&
-                  _isValidTimeslot(item);
-            })
-            .toList(growable: false),
+        timeslots: timeslots,
         colorIndex: _scheduled.length % 8,
       ),
     ];
     await _localRepository.save(
       namespace: _namespace,
-      calendarId: selectedCalendarId,
+      calendarId: calendarId,
       courses: next,
     );
-    if (!_isDisposed && _calendarId == selectedCalendarId) {
+    if (!_isDisposed && _calendarId == calendarId) {
       _scheduled = next;
       _storageFailure = null;
       notifyListeners();
     }
-  });
+  }
 
-  Future<void> removeOffering(String offeringId) =>
-      _serializeScheduleMutation(() async {
-        final String? selectedCalendarId = _calendarId;
-        if (selectedCalendarId == null) {
-          return;
-        }
-        final List<ScheduledCourse> next = _scheduled
-            .where(
-              (ScheduledCourse item) => item.offering.offeringId != offeringId,
-            )
-            .toList(growable: false);
-        await _localRepository.save(
-          namespace: _namespace,
-          calendarId: selectedCalendarId,
-          courses: next,
-        );
-        if (!_isDisposed && _calendarId == selectedCalendarId) {
-          _scheduled = next;
-          notifyListeners();
-        }
-      });
+  void _requireCurrentOfferingScope(
+    String expectedCalendarId,
+    SelectionOffering offering,
+  ) {
+    if (_calendarId != expectedCalendarId ||
+        offering.calendarId != expectedCalendarId) {
+      throw const ApiFailure(
+        kind: ApiFailureKind.invalidInput,
+        message: '教学班不属于当前学期，请刷新后重试',
+      );
+    }
+  }
 
-  Future<void> clearSchedule() => _serializeScheduleMutation(() async {
-    final String? selectedCalendarId = _calendarId;
-    if (selectedCalendarId == null) {
-      return;
-    }
-    await _localRepository.clear(
-      namespace: _namespace,
-      calendarId: selectedCalendarId,
-    );
-    if (!_isDisposed && _calendarId == selectedCalendarId) {
-      _scheduled = const <ScheduledCourse>[];
-      notifyListeners();
-    }
-  });
+  Future<T> _runScheduleMutation<T>(Future<T> Function() operation) {
+    final Completer<T> result = Completer<T>();
+    _scheduleMutationTail = _scheduleMutationTail.then((_) async {
+      try {
+        result.complete(await operation());
+      } on Object catch (error, stackTrace) {
+        result.completeError(error, stackTrace);
+      }
+    });
+    return result.future;
+  }
 
   bool _isValidTimeslot(TimeSlot timeslot) {
     return timeslot.weekday >= 1 &&
         timeslot.weekday <= 7 &&
         timeslot.startSlot >= 1 &&
-        timeslot.startSlot <= 13 &&
+        timeslot.startSlot <= 20 &&
         timeslot.endSlot >= timeslot.startSlot &&
-        timeslot.endSlot <= 13;
+        timeslot.endSlot <= 20 &&
+        timeslot.weekNumbers.every((int value) => value >= 1 && value <= 30) &&
+        (timeslot.weeksUnknown
+            ? timeslot.weekNumbers.isEmpty
+            : timeslot.weekNumbers.isNotEmpty) &&
+        (timeslot.locationUnknown ||
+            timeslot.location?.trim().isNotEmpty == true);
   }
 
-  Future<T> _serializeScheduleMutation<T>(Future<T> Function() mutation) async {
-    final Future<void> previous = _scheduleMutation;
-    final Completer<void> release = Completer<void>();
-    _scheduleMutation = release.future;
-    try {
-      await previous;
-      return await mutation();
-    } finally {
-      release.complete();
+  List<TimeSlot> _requireValidTimeslots(
+    List<TimeSlot> timeslots, {
+    required String offeringId,
+  }) {
+    if (timeslots.length > _maxTimeslotsPerOffering ||
+        timeslots.any(
+          (TimeSlot item) =>
+              !_matchesOffering(item, offeringId) || !_isValidTimeslot(item),
+        )) {
+      throw const ApiFailure(
+        kind: ApiFailureKind.unexpected,
+        message: '教学班时段数据不完整，请刷新后重试',
+      );
     }
+    return List<TimeSlot>.unmodifiable(timeslots);
+  }
+
+  bool _matchesOffering(TimeSlot timeslot, String offeringId) {
+    return timeslot.offeringId == offeringId &&
+        timeslot.toJson()['courseId'] == offeringId;
+  }
+
+  bool get _hasActiveBrowse => switch (_mode) {
+    SelectionBrowseMode.major => _grade != null && _majorId != null,
+    SelectionBrowseMode.nature => _natureId != null,
+    SelectionBrowseMode.search => _query.length >= 2,
+  };
+
+  void _resetTimeFilters() {
+    _weekday = null;
+    _startSlot = null;
+    _endSlot = null;
+    _week = null;
+    _includeUnknownSchedule = true;
   }
 
   void _resetOfferingResults() {

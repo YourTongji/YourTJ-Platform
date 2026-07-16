@@ -578,6 +578,7 @@ pub struct DmCountsDto {
 #[serde(rename_all = "camelCase")]
 pub struct DmMessageInput {
     pub body: String,
+    pub client_message_id: Option<String>,
 }
 
 /// A single DM message.

@@ -77,10 +77,17 @@ class MessagesRepository {
     '创建对话响应不完整，请刷新收件箱确认',
   );
 
-  Future<DmMessage> send(String conversationId, String body) => _required(
+  Future<DmMessage> send(
+    String conversationId,
+    String body, {
+    String? clientMessageId,
+  }) => _required(
     _api.forumDmConversationsIdMessagesPost(
       id: conversationId,
-      dmMessageInput: DmMessageInput(body: body.trim()),
+      dmMessageInput: DmMessageInput(
+        body: body.trim(),
+        clientMessageId: clientMessageId,
+      ),
     ),
     '发送响应不完整，请刷新对话确认',
   );

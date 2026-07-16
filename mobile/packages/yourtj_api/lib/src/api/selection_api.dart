@@ -534,10 +534,11 @@ class SelectionApi {
     );
   }
 
-  /// Optional course types/natures
+  /// Course types/natures represented in one calendar
   ///
   ///
   /// Parameters:
+  /// * [calendarId] - Selection calendar that bounds every returned teaching class.
   /// * [cancelToken] - A [CancelToken] that can be used to cancel the operation
   /// * [headers] - Can be used to add additional headers to the request
   /// * [extras] - Can be used to add flags to the request
@@ -548,6 +549,7 @@ class SelectionApi {
   /// Returns a [Future] containing a [Response] with a [List<CourseNature>] as data
   /// Throws [DioException] if API call or serialization fails
   Future<Response<List<CourseNature>>> selectionCourseNaturesGet({
+    required String calendarId,
     CancelToken? cancelToken,
     Map<String, dynamic>? headers,
     Map<String, dynamic>? extra,
@@ -563,9 +565,12 @@ class SelectionApi {
       validateStatus: validateStatus,
     );
 
+    final _queryParameters = <String, dynamic>{r'calendarId': calendarId};
+
     final _response = await _dio.request<Object>(
       _path,
       options: _options,
+      queryParameters: _queryParameters,
       cancelToken: cancelToken,
       onSendProgress: onSendProgress,
       onReceiveProgress: onReceiveProgress,
@@ -604,10 +609,11 @@ class SelectionApi {
     );
   }
 
-  /// Courses for a major
+  /// Teaching classes for a major in one calendar
   ///
   ///
   /// Parameters:
+  /// * [calendarId] - Selection calendar that bounds every returned teaching class.
   /// * [majorId]
   /// * [grade]
   /// * [cancelToken] - A [CancelToken] that can be used to cancel the operation
@@ -621,6 +627,7 @@ class SelectionApi {
   /// Throws [DioException] if API call or serialization fails
   @Deprecated('This operation has been deprecated')
   Future<Response<List<SelectionCourse>>> selectionCoursesByMajorGet({
+    required String calendarId,
     required String majorId,
     required String grade,
     CancelToken? cancelToken,
@@ -639,6 +646,7 @@ class SelectionApi {
     );
 
     final _queryParameters = <String, dynamic>{
+      r'calendarId': calendarId,
       r'majorId': majorId,
       r'grade': grade,
     };
@@ -685,10 +693,11 @@ class SelectionApi {
     );
   }
 
-  /// Courses by nature/type
+  /// Teaching classes by nature/type in one calendar
   ///
   ///
   /// Parameters:
+  /// * [calendarId] - Selection calendar that bounds every returned teaching class.
   /// * [natureId]
   /// * [cancelToken] - A [CancelToken] that can be used to cancel the operation
   /// * [headers] - Can be used to add additional headers to the request
@@ -701,6 +710,7 @@ class SelectionApi {
   /// Throws [DioException] if API call or serialization fails
   @Deprecated('This operation has been deprecated')
   Future<Response<List<SelectionCourse>>> selectionCoursesByNatureGet({
+    required String calendarId,
     required String natureId,
     CancelToken? cancelToken,
     Map<String, dynamic>? headers,
@@ -717,7 +727,10 @@ class SelectionApi {
       validateStatus: validateStatus,
     );
 
-    final _queryParameters = <String, dynamic>{r'natureId': natureId};
+    final _queryParameters = <String, dynamic>{
+      r'calendarId': calendarId,
+      r'natureId': natureId,
+    };
 
     final _response = await _dio.request<Object>(
       _path,
@@ -761,11 +774,92 @@ class SelectionApi {
     );
   }
 
-  /// Compatibility representative by course code
-  /// Deterministically returns the current/newest offering. Course code is not teaching-class identity; new clients use &#x60;/selection/offerings?courseCode&#x3D;...&#x60;.
+  /// Bounded compatibility search
+  ///
   ///
   /// Parameters:
-  /// * [code]
+  /// * [calendarId] - Selection calendar that bounds every returned teaching class.
+  /// * [q]
+  /// * [cancelToken] - A [CancelToken] that can be used to cancel the operation
+  /// * [headers] - Can be used to add additional headers to the request
+  /// * [extras] - Can be used to add flags to the request
+  /// * [validateStatus] - A [ValidateStatus] callback that can be used to determine request success based on the HTTP status of the response
+  /// * [onSendProgress] - A [ProgressCallback] that can be used to get the send progress
+  /// * [onReceiveProgress] - A [ProgressCallback] that can be used to get the receive progress
+  ///
+  /// Returns a [Future] containing a [Response] with a [List<SelectionCourse>] as data
+  /// Throws [DioException] if API call or serialization fails
+  @Deprecated('This operation has been deprecated')
+  Future<Response<List<SelectionCourse>>> selectionCoursesSearchGet({
+    required String calendarId,
+    required String q,
+    CancelToken? cancelToken,
+    Map<String, dynamic>? headers,
+    Map<String, dynamic>? extra,
+    ValidateStatus? validateStatus,
+    ProgressCallback? onSendProgress,
+    ProgressCallback? onReceiveProgress,
+  }) async {
+    final _path = r'/selection/courses/search';
+    final _options = Options(
+      method: r'GET',
+      headers: <String, dynamic>{...?headers},
+      extra: <String, dynamic>{'secure': <Map<String, String>>[], ...?extra},
+      validateStatus: validateStatus,
+    );
+
+    final _queryParameters = <String, dynamic>{
+      r'calendarId': calendarId,
+      r'q': q,
+    };
+
+    final _response = await _dio.request<Object>(
+      _path,
+      options: _options,
+      queryParameters: _queryParameters,
+      cancelToken: cancelToken,
+      onSendProgress: onSendProgress,
+      onReceiveProgress: onReceiveProgress,
+    );
+
+    List<SelectionCourse>? _responseData;
+
+    try {
+      final rawData = _response.data;
+      _responseData = rawData == null
+          ? null
+          : deserialize<List<SelectionCourse>, SelectionCourse>(
+              rawData,
+              'List<SelectionCourse>',
+              growable: true,
+            );
+    } catch (error, stackTrace) {
+      throw DioException(
+        requestOptions: _response.requestOptions,
+        response: _response,
+        type: DioExceptionType.unknown,
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
+
+    return Response<List<SelectionCourse>>(
+      data: _responseData,
+      headers: _response.headers,
+      isRedirect: _response.isRedirect,
+      requestOptions: _response.requestOptions,
+      redirects: _response.redirects,
+      statusCode: _response.statusCode,
+      statusMessage: _response.statusMessage,
+      extra: _response.extra,
+    );
+  }
+
+  /// Compatibility teaching-class detail by stable identifier
+  /// Preserves the teachingClassId route semantics used before the canonical &#x60;/selection/offerings/{offeringId}&#x60; path was added.
+  ///
+  /// Parameters:
+  /// * [teachingClassId] - Stable upstream teaching-class identifier, not a canonical course code.
   /// * [cancelToken] - A [CancelToken] that can be used to cancel the operation
   /// * [headers] - Can be used to add additional headers to the request
   /// * [extras] - Can be used to add flags to the request
@@ -776,8 +870,8 @@ class SelectionApi {
   /// Returns a [Future] containing a [Response] with a [SelectionCourse] as data
   /// Throws [DioException] if API call or serialization fails
   @Deprecated('This operation has been deprecated')
-  Future<Response<SelectionCourse>> selectionCoursesCodeGet({
-    required String code,
+  Future<Response<SelectionCourse>> selectionCoursesTeachingClassIdGet({
+    required String teachingClassId,
     CancelToken? cancelToken,
     Map<String, dynamic>? headers,
     Map<String, dynamic>? extra,
@@ -785,11 +879,11 @@ class SelectionApi {
     ProgressCallback? onSendProgress,
     ProgressCallback? onReceiveProgress,
   }) async {
-    final _path = r'/selection/courses/{code}'.replaceAll(
+    final _path = r'/selection/courses/{teachingClassId}'.replaceAll(
       '{'
-      r'code'
+      r'teachingClassId'
       '}',
-      code.toString(),
+      teachingClassId.toString(),
     );
     final _options = Options(
       method: r'GET',
@@ -839,11 +933,11 @@ class SelectionApi {
     );
   }
 
-  /// Timeslots for the deterministic compatibility representative by code
+  /// Timeslots for a stable teaching-class identifier
   ///
   ///
   /// Parameters:
-  /// * [code]
+  /// * [teachingClassId] - Stable upstream teaching-class identifier, not a canonical course code.
   /// * [cancelToken] - A [CancelToken] that can be used to cancel the operation
   /// * [headers] - Can be used to add additional headers to the request
   /// * [extras] - Can be used to add flags to the request
@@ -854,8 +948,8 @@ class SelectionApi {
   /// Returns a [Future] containing a [Response] with a [List<TimeSlot>] as data
   /// Throws [DioException] if API call or serialization fails
   @Deprecated('This operation has been deprecated')
-  Future<Response<List<TimeSlot>>> selectionCoursesCodeTimeslotsGet({
-    required String code,
+  Future<Response<List<TimeSlot>>> selectionCoursesTeachingClassIdTimeslotsGet({
+    required String teachingClassId,
     CancelToken? cancelToken,
     Map<String, dynamic>? headers,
     Map<String, dynamic>? extra,
@@ -863,11 +957,11 @@ class SelectionApi {
     ProgressCallback? onSendProgress,
     ProgressCallback? onReceiveProgress,
   }) async {
-    final _path = r'/selection/courses/{code}/timeslots'.replaceAll(
+    final _path = r'/selection/courses/{teachingClassId}/timeslots'.replaceAll(
       '{'
-      r'code'
+      r'teachingClassId'
       '}',
-      code.toString(),
+      teachingClassId.toString(),
     );
     final _options = Options(
       method: r'GET',
@@ -906,82 +1000,6 @@ class SelectionApi {
     }
 
     return Response<List<TimeSlot>>(
-      data: _responseData,
-      headers: _response.headers,
-      isRedirect: _response.isRedirect,
-      requestOptions: _response.requestOptions,
-      redirects: _response.redirects,
-      statusCode: _response.statusCode,
-      statusMessage: _response.statusMessage,
-      extra: _response.extra,
-    );
-  }
-
-  /// Bounded compatibility search
-  ///
-  ///
-  /// Parameters:
-  /// * [q]
-  /// * [cancelToken] - A [CancelToken] that can be used to cancel the operation
-  /// * [headers] - Can be used to add additional headers to the request
-  /// * [extras] - Can be used to add flags to the request
-  /// * [validateStatus] - A [ValidateStatus] callback that can be used to determine request success based on the HTTP status of the response
-  /// * [onSendProgress] - A [ProgressCallback] that can be used to get the send progress
-  /// * [onReceiveProgress] - A [ProgressCallback] that can be used to get the receive progress
-  ///
-  /// Returns a [Future] containing a [Response] with a [List<SelectionCourse>] as data
-  /// Throws [DioException] if API call or serialization fails
-  @Deprecated('This operation has been deprecated')
-  Future<Response<List<SelectionCourse>>> selectionCoursesSearchGet({
-    required String q,
-    CancelToken? cancelToken,
-    Map<String, dynamic>? headers,
-    Map<String, dynamic>? extra,
-    ValidateStatus? validateStatus,
-    ProgressCallback? onSendProgress,
-    ProgressCallback? onReceiveProgress,
-  }) async {
-    final _path = r'/selection/courses/search';
-    final _options = Options(
-      method: r'GET',
-      headers: <String, dynamic>{...?headers},
-      extra: <String, dynamic>{'secure': <Map<String, String>>[], ...?extra},
-      validateStatus: validateStatus,
-    );
-
-    final _queryParameters = <String, dynamic>{r'q': q};
-
-    final _response = await _dio.request<Object>(
-      _path,
-      options: _options,
-      queryParameters: _queryParameters,
-      cancelToken: cancelToken,
-      onSendProgress: onSendProgress,
-      onReceiveProgress: onReceiveProgress,
-    );
-
-    List<SelectionCourse>? _responseData;
-
-    try {
-      final rawData = _response.data;
-      _responseData = rawData == null
-          ? null
-          : deserialize<List<SelectionCourse>, SelectionCourse>(
-              rawData,
-              'List<SelectionCourse>',
-              growable: true,
-            );
-    } catch (error, stackTrace) {
-      throw DioException(
-        requestOptions: _response.requestOptions,
-        response: _response,
-        type: DioExceptionType.unknown,
-        error: error,
-        stackTrace: stackTrace,
-      );
-    }
-
-    return Response<List<SelectionCourse>>(
       data: _responseData,
       headers: _response.headers,
       isRedirect: _response.isRedirect,
@@ -1067,7 +1085,7 @@ class SelectionApi {
   ///
   ///
   /// Parameters:
-  /// * [calendarId]
+  /// * [calendarId] - Selection calendar that bounds every returned teaching class.
   /// * [cancelToken] - A [CancelToken] that can be used to cancel the operation
   /// * [headers] - Can be used to add additional headers to the request
   /// * [extras] - Can be used to add flags to the request
@@ -1208,10 +1226,11 @@ class SelectionApi {
     );
   }
 
-  /// Majors for a grade
+  /// Majors with teaching classes in a calendar and grade
   ///
   ///
   /// Parameters:
+  /// * [calendarId] - Selection calendar that bounds every returned teaching class.
   /// * [grade]
   /// * [cancelToken] - A [CancelToken] that can be used to cancel the operation
   /// * [headers] - Can be used to add additional headers to the request
@@ -1223,6 +1242,7 @@ class SelectionApi {
   /// Returns a [Future] containing a [Response] with a [List<Major>] as data
   /// Throws [DioException] if API call or serialization fails
   Future<Response<List<Major>>> selectionMajorsGet({
+    required String calendarId,
     required String grade,
     CancelToken? cancelToken,
     Map<String, dynamic>? headers,
@@ -1239,7 +1259,10 @@ class SelectionApi {
       validateStatus: validateStatus,
     );
 
-    final _queryParameters = <String, dynamic>{r'grade': grade};
+    final _queryParameters = <String, dynamic>{
+      r'calendarId': calendarId,
+      r'grade': grade,
+    };
 
     final _response = await _dio.request<Object>(
       _path,
@@ -1284,21 +1307,21 @@ class SelectionApi {
   }
 
   /// Browse, search, and time-filter concrete teaching-class offerings
-  /// PostgreSQL remains authoritative. Non-empty q is ranked by Meilisearch, then every candidate is rehydrated and filtered from PostgreSQL. Unknown schedules are retained by default so missing upstream data is never misrepresented as no conflict.
+  /// PostgreSQL remains authoritative. When q is supplied it must remain non-blank after trimming; valid search is ranked by Meilisearch, then every candidate is rehydrated and filtered from PostgreSQL. weekday, startSlot, and endSlot must be supplied together; week and includeUnknownSchedule&#x3D;false require that complete trio. Unknown schedules and unknown-week slots are retained by default so missing upstream data is never misrepresented as no conflict; false excludes both from time-filter results.
   ///
   /// Parameters:
+  /// * [calendarId] - Selection calendar that bounds every returned teaching class.
   /// * [q]
-  /// * [calendarId]
   /// * [majorId]
   /// * [grade]
   /// * [natureId]
   /// * [campusId]
   /// * [courseCode]
-  /// * [weekday]
-  /// * [startSlot]
-  /// * [endSlot]
-  /// * [week]
-  /// * [includeUnknownSchedule]
+  /// * [weekday] - Must be supplied with startSlot and endSlot.
+  /// * [startSlot] - Inclusive 1-based slot; must be supplied with weekday and endSlot.
+  /// * [endSlot] - Inclusive 1-based slot not before startSlot; must be supplied with weekday and startSlot.
+  /// * [week] - Optional week within a complete weekday/startSlot/endSlot filter.
+  /// * [includeUnknownSchedule] - Applies only to a complete time filter; false excludes offerings marked scheduleUnknown and matching slots marked weeksUnknown.
   /// * [cursor] - Opaque pagination cursor
   /// * [limit]
   /// * [cancelToken] - A [CancelToken] that can be used to cancel the operation
@@ -1311,8 +1334,8 @@ class SelectionApi {
   /// Returns a [Future] containing a [Response] with a [SelectionOfferingPage] as data
   /// Throws [DioException] if API call or serialization fails
   Future<Response<SelectionOfferingPage>> selectionOfferingsGet({
+    required String calendarId,
     String? q,
-    String? calendarId,
     String? majorId,
     String? grade,
     String? natureId,
@@ -1341,8 +1364,8 @@ class SelectionApi {
     );
 
     final _queryParameters = <String, dynamic>{
+      r'calendarId': calendarId,
       if (q != null) r'q': q,
-      if (calendarId != null) r'calendarId': calendarId,
       if (majorId != null) r'majorId': majorId,
       if (grade != null) r'grade': grade,
       if (natureId != null) r'natureId': natureId,

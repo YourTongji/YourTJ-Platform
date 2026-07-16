@@ -1,6 +1,8 @@
 //! Meilisearch integration for courses search, index setup, and document sync.
 //!
-//! Background synchronization degrades safely when Meilisearch is unreachable.
+//! Selection search reads degrade to an empty result when Meilisearch is
+//! unreachable. Index setup and synchronization propagate failures so an
+//! operator cannot mistake an enqueued or failed reindex for completion.
 //! Federated candidate reads return an error so callers can distinguish an
 //! unavailable section from a genuine empty result.
 
@@ -14,9 +16,48 @@ use meilisearch_sdk::task_info::TaskInfo;
 use serde::{Deserialize, Serialize};
 use shared::{AppError, AppResult, AppState};
 use sqlx::{FromRow, PgPool};
+use uuid::Uuid;
 
 const TASK_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const TASK_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// Database-backed generation fence for a durable selection sync worker.
+pub(crate) struct SelectionSyncFence<'a> {
+    pool: &'a PgPool,
+    job_id: Uuid,
+    lease_token: Uuid,
+}
+
+impl<'a> SelectionSyncFence<'a> {
+    pub(crate) fn new(pool: &'a PgPool, job_id: Uuid, lease_token: Uuid) -> Self {
+        Self { pool, job_id, lease_token }
+    }
+
+    pub(crate) async fn assert_current(&self) -> AppResult<()> {
+        let is_current: bool = sqlx::query_scalar(
+            "SELECT EXISTS (\
+                 SELECT 1 FROM selection.sync_jobs \
+                 WHERE id = $1 AND status = 'running' AND lease_token = $2 \
+                   AND lease_expires_at > now()\
+             )",
+        )
+        .bind(self.job_id)
+        .bind(self.lease_token)
+        .fetch_one(self.pool)
+        .await?;
+        if !is_current {
+            return Err(AppError::Conflict("selection sync job lease was lost".into()));
+        }
+        Ok(())
+    }
+}
+
+async fn assert_sync_fence(fence: Option<&SelectionSyncFence<'_>>) -> AppResult<()> {
+    if let Some(fence) = fence {
+        fence.assert_current().await?;
+    }
+    Ok(())
+}
 
 fn meili_api_key(api_key: &str) -> Option<&str> {
     let api_key = api_key.trim();
@@ -51,6 +92,11 @@ async fn wait_for_task(
 fn meili_app_failure(operation: &'static str, error: impl std::fmt::Display) -> AppError {
     tracing::warn!(%error, operation, "course meilisearch operation failed");
     AppError::Internal(anyhow::anyhow!("course meilisearch {operation} failed"))
+}
+
+fn meili_read_unavailable(operation: &'static str, error: impl std::fmt::Display) -> AppError {
+    tracing::warn!(%error, operation, "selection meilisearch read is unavailable");
+    AppError::ServiceUnavailable
 }
 
 /// Document category stored in the shared catalogue index.
@@ -192,6 +238,24 @@ pub fn reconcile_course_in_background(state: &AppState, course_id: i64) {
 
 /// Replaces every course document while preserving review documents in the shared index.
 pub async fn reindex_course_documents(pool: &PgPool, url: &str, api_key: &str) -> AppResult<usize> {
+    reindex_course_documents_inner(pool, url, api_key, None).await
+}
+
+pub(crate) async fn reindex_course_documents_fenced(
+    pool: &PgPool,
+    url: &str,
+    api_key: &str,
+    fence: &SelectionSyncFence<'_>,
+) -> AppResult<usize> {
+    reindex_course_documents_inner(pool, url, api_key, Some(fence)).await
+}
+
+async fn reindex_course_documents_inner(
+    pool: &PgPool,
+    url: &str,
+    api_key: &str,
+    fence: Option<&SelectionSyncFence<'_>>,
+) -> AppResult<usize> {
     let course_ids: Vec<i64> =
         sqlx::query_scalar("SELECT id FROM courses.courses ORDER BY id").fetch_all(pool).await?;
     let mut documents = Vec::with_capacity(course_ids.len());
@@ -204,6 +268,7 @@ pub async fn reindex_course_documents(pool: &PgPool, url: &str, api_key: &str) -
     let client = Client::new(url, meili_api_key(api_key))
         .map_err(|error| meili_app_failure("client creation", error))?;
     let index = client.index("courses");
+    assert_sync_fence(fence).await?;
     let mut deletion = DocumentDeletionQuery::new(&index);
     let deletion_task = deletion
         .with_filter("kind = course")
@@ -213,8 +278,10 @@ pub async fn reindex_course_documents(pool: &PgPool, url: &str, api_key: &str) -
     wait_for_task(&client, deletion_task, "course index clear")
         .await
         .map_err(|error| meili_app_failure("course index clear", error))?;
+    assert_sync_fence(fence).await?;
 
     if !documents.is_empty() {
+        assert_sync_fence(fence).await?;
         let addition_task = index
             .add_documents(&documents, Some("id"))
             .await
@@ -222,6 +289,7 @@ pub async fn reindex_course_documents(pool: &PgPool, url: &str, api_key: &str) -
         wait_for_task(&client, addition_task, "course index addition")
             .await
             .map_err(|error| meili_app_failure("course index addition", error))?;
+        assert_sync_fence(fence).await?;
     }
     Ok(documents.len())
 }
@@ -390,13 +458,16 @@ fn selection_filter_expression(filter: &crate::selection_repo::OfferingFilter) -
                 }
             } else {
                 keys.push(quote_meili_filter(&format!("d{weekday}s{slot}")));
+                if filter.include_unknown_schedule {
+                    keys.push(quote_meili_filter(&format!("d{weekday}s{slot}wu")));
+                }
             }
         }
         let slot_clause = format!("slotKeys IN [{}]", keys.join(", "));
         clauses.push(if filter.include_unknown_schedule {
             format!("({slot_clause} OR scheduleUnknown = true)")
         } else {
-            slot_clause
+            format!("(scheduleUnknown = false AND {slot_clause})")
         });
     }
     (!clauses.is_empty()).then(|| clauses.join(" AND "))
@@ -404,8 +475,27 @@ fn selection_filter_expression(filter: &crate::selection_repo::OfferingFilter) -
 
 pub struct SelectionSearchCandidates {
     pub ids: Vec<i64>,
+    pub consumed_through: Vec<usize>,
     pub consumed: usize,
     pub has_more: bool,
+}
+
+fn ranked_selection_candidate_ids(
+    candidates: impl IntoIterator<Item = SearchCandidate>,
+) -> (Vec<i64>, Vec<usize>) {
+    let mut seen = HashSet::new();
+    let mut ids = Vec::new();
+    let mut consumed_through = Vec::new();
+    for (position, candidate) in candidates.into_iter().enumerate() {
+        let Ok(id) = candidate.id.parse::<i64>() else {
+            continue;
+        };
+        if id > 0 && seen.insert(id) {
+            ids.push(id);
+            consumed_through.push(position + 1);
+        }
+    }
+    (ids, consumed_through)
 }
 
 /// Return ranked candidate offering ids. PostgreSQL rehydration is mandatory.
@@ -418,10 +508,15 @@ pub async fn search_selection_offering_ids(
     limit: usize,
 ) -> AppResult<SelectionSearchCandidates> {
     if limit == 0 {
-        return Ok(SelectionSearchCandidates { ids: Vec::new(), consumed: 0, has_more: false });
+        return Ok(SelectionSearchCandidates {
+            ids: Vec::new(),
+            consumed_through: Vec::new(),
+            consumed: 0,
+            has_more: false,
+        });
     }
     let client = Client::new(url, meili_api_key(api_key))
-        .map_err(|error| meili_app_failure("selection search client creation", error))?;
+        .map_err(|error| meili_read_unavailable("selection search client creation", error))?;
     let index = client.index("selection_courses");
     let mut search = index.search();
     search.with_query(q).with_offset(offset).with_limit(limit);
@@ -432,20 +527,15 @@ pub async fn search_selection_offering_ids(
     let results = search
         .execute::<SearchCandidate>()
         .await
-        .map_err(|error| meili_app_failure("selection candidate search", error))?;
+        .map_err(|error| meili_read_unavailable("selection candidate search", error))?;
     let consumed = results.hits.len();
     let total_hits = results.estimated_total_hits.or(results.total_hits);
     let has_more = total_hits
         .map(|total| offset.saturating_add(consumed) < total)
         .unwrap_or(consumed == limit);
-    let mut seen = HashSet::new();
-    let ids = results
-        .hits
-        .into_iter()
-        .filter_map(|hit| hit.result.id.parse::<i64>().ok())
-        .filter(|id| *id > 0 && seen.insert(*id))
-        .collect();
-    Ok(SelectionSearchCandidates { ids, consumed, has_more })
+    let (ids, consumed_through) =
+        ranked_selection_candidate_ids(results.hits.into_iter().map(|hit| hit.result));
+    Ok(SelectionSearchCandidates { ids, consumed_through, consumed, has_more })
 }
 
 /// Row type for selection course sync.
@@ -481,10 +571,10 @@ fn slot_keys(rows: &[SelectionTimeslotIndexRow]) -> Vec<String> {
     let mut keys = HashSet::new();
     for row in rows {
         for slot in row.start_slot..=row.end_slot {
-            keys.insert(format!("d{}s{slot}", row.weekday));
             if row.weeks_unknown {
                 keys.insert(format!("d{}s{slot}wu", row.weekday));
             } else {
+                keys.insert(format!("d{}s{slot}", row.weekday));
                 for week in &row.week_numbers {
                     keys.insert(format!("d{}s{slot}w{week}", row.weekday));
                 }
@@ -496,11 +586,29 @@ fn slot_keys(rows: &[SelectionTimeslotIndexRow]) -> Vec<String> {
     keys
 }
 
-/// Atomically replace the rebuildable selection index and await every task.
+/// Replace the rebuildable selection index and await every task.
 pub async fn sync_selection_courses_to_meili(
     url: &str,
     api_key: &str,
     pool: &PgPool,
+) -> AppResult<usize> {
+    sync_selection_courses_to_meili_inner(url, api_key, pool, None).await
+}
+
+pub(crate) async fn sync_selection_courses_to_meili_fenced(
+    url: &str,
+    api_key: &str,
+    pool: &PgPool,
+    fence: &SelectionSyncFence<'_>,
+) -> AppResult<usize> {
+    sync_selection_courses_to_meili_inner(url, api_key, pool, Some(fence)).await
+}
+
+async fn sync_selection_courses_to_meili_inner(
+    url: &str,
+    api_key: &str,
+    pool: &PgPool,
+    fence: Option<&SelectionSyncFence<'_>>,
 ) -> AppResult<usize> {
     let rows = sqlx::query_as::<_, SelectionCourseRow>(
         "SELECT course.id, course.code, course.teaching_class_code, course.name, course.credit, \
@@ -557,10 +665,10 @@ pub async fn sync_selection_courses_to_meili(
             }
         })
         .collect();
-
     let client = Client::new(url, meili_api_key(api_key))
         .map_err(|error| meili_app_failure("selection sync client creation", error))?;
     let index = client.index("selection_courses");
+    assert_sync_fence(fence).await?;
     let deletion_task = index
         .delete_all_documents()
         .await
@@ -568,7 +676,9 @@ pub async fn sync_selection_courses_to_meili(
     wait_for_task(&client, deletion_task, "selection index clear")
         .await
         .map_err(|error| meili_app_failure("selection index clear", error))?;
+    assert_sync_fence(fence).await?;
     for batch in documents.chunks(1_000) {
+        assert_sync_fence(fence).await?;
         let addition_task = index
             .add_documents(batch, Some("id"))
             .await
@@ -576,6 +686,7 @@ pub async fn sync_selection_courses_to_meili(
         wait_for_task(&client, addition_task, "selection index addition")
             .await
             .map_err(|error| meili_app_failure("selection index addition", error))?;
+        assert_sync_fence(fence).await?;
     }
     Ok(documents.len())
 }
@@ -702,9 +813,12 @@ pub async fn sync_review_document_to_meili(
 #[cfg(test)]
 mod tests {
     use super::{
-        ranked_candidate_ids, selection_filter_expression, SearchCandidate, SearchDocumentKind,
+        ranked_candidate_ids, ranked_selection_candidate_ids, search_selection_offering_ids,
+        selection_filter_expression, slot_keys, SearchCandidate, SearchDocumentKind,
+        SelectionTimeslotIndexRow,
     };
     use crate::selection_repo::OfferingFilter;
+    use shared::AppError;
 
     #[test]
     fn candidate_ids_require_the_requested_prefix_and_remain_ranked() {
@@ -720,8 +834,25 @@ mod tests {
     }
 
     #[test]
+    fn selection_candidate_offsets_track_raw_hits_after_invalid_and_duplicate_entries() {
+        let candidates = [
+            SearchCandidate { id: "invalid".into() },
+            SearchCandidate { id: "1".into() },
+            SearchCandidate { id: "1".into() },
+            SearchCandidate { id: "2".into() },
+            SearchCandidate { id: "3".into() },
+        ];
+
+        let (ids, consumed_through) = ranked_selection_candidate_ids(candidates);
+
+        assert_eq!(ids, vec![1, 2, 3]);
+        assert_eq!(consumed_through, vec![2, 4, 5]);
+    }
+
+    #[test]
     fn unknown_week_keys_require_explicit_opt_in() {
         let filter = OfferingFilter {
+            calendar_id: Some(122),
             weekday: Some(2),
             start_slot: Some(3),
             end_slot: Some(4),
@@ -730,9 +861,10 @@ mod tests {
             ..OfferingFilter::default()
         };
         let strict = selection_filter_expression(&filter).expect("time filter");
+        assert!(strict.contains("calendarId = 122"));
         assert!(strict.contains("d2s3w5"));
         assert!(!strict.contains("d2s3wu"));
-        assert!(!strict.contains("scheduleUnknown"));
+        assert!(strict.contains("scheduleUnknown = false"));
 
         let permissive = selection_filter_expression(&OfferingFilter {
             include_unknown_schedule: true,
@@ -741,5 +873,47 @@ mod tests {
         .expect("permissive time filter");
         assert!(permissive.contains("d2s3wu"));
         assert!(permissive.contains("scheduleUnknown = true"));
+    }
+
+    #[test]
+    fn unknown_week_slots_do_not_receive_known_week_agnostic_keys() {
+        let keys = slot_keys(&[
+            SelectionTimeslotIndexRow {
+                course_id: 1,
+                weekday: 2,
+                start_slot: 3,
+                end_slot: 3,
+                week_numbers: Vec::new(),
+                weeks_unknown: true,
+            },
+            SelectionTimeslotIndexRow {
+                course_id: 1,
+                weekday: 2,
+                start_slot: 4,
+                end_slot: 4,
+                week_numbers: vec![5],
+                weeks_unknown: false,
+            },
+        ]);
+
+        assert!(keys.contains(&"d2s3wu".into()));
+        assert!(!keys.contains(&"d2s3".into()));
+        assert!(keys.contains(&"d2s4".into()));
+        assert!(keys.contains(&"d2s4w5".into()));
+    }
+
+    #[tokio::test]
+    async fn selection_search_maps_configured_backend_failures_to_unavailable() {
+        let result = search_selection_offering_ids(
+            "not a valid URL",
+            "",
+            "course",
+            &OfferingFilter::default(),
+            0,
+            20,
+        )
+        .await;
+
+        assert!(matches!(result, Err(AppError::ServiceUnavailable)));
     }
 }

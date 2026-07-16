@@ -7,16 +7,28 @@ import '../../../core/network/api_failure.dart';
 
 abstract interface class SelectionRepository {
   Future<List<Calendar>> calendars({CancelToken? cancelToken});
-  Future<List<CourseNature>> natures({CancelToken? cancelToken});
+  Future<List<CourseNature>> natures(
+    String calendarId, {
+    CancelToken? cancelToken,
+  });
   Future<LatestUpdate?> latestUpdate({CancelToken? cancelToken});
   Future<List<String>> grades(String calendarId, {CancelToken? cancelToken});
-  Future<List<Major>> majors(String grade, {CancelToken? cancelToken});
+  Future<List<Major>> majors({
+    required String calendarId,
+    required String grade,
+    CancelToken? cancelToken,
+  });
   Future<SelectionOfferingPage> offerings({
     required String calendarId,
     String? query,
     String? majorId,
     String? grade,
     String? natureId,
+    int? weekday,
+    int? startSlot,
+    int? endSlot,
+    int? week,
+    bool includeUnknownSchedule = true,
     String? cursor,
     int limit = 20,
     CancelToken? cancelToken,
@@ -39,8 +51,14 @@ class GeneratedSelectionRepository implements SelectionRepository {
   );
 
   @override
-  Future<List<CourseNature>> natures({CancelToken? cancelToken}) => _request(
-    () => _api.selectionCourseNaturesGet(cancelToken: cancelToken),
+  Future<List<CourseNature>> natures(
+    String calendarId, {
+    CancelToken? cancelToken,
+  }) => _request(
+    () => _api.selectionCourseNaturesGet(
+      calendarId: calendarId,
+      cancelToken: cancelToken,
+    ),
     '课程性质',
   );
 
@@ -66,11 +84,18 @@ class GeneratedSelectionRepository implements SelectionRepository {
       );
 
   @override
-  Future<List<Major>> majors(String grade, {CancelToken? cancelToken}) =>
-      _request(
-        () => _api.selectionMajorsGet(grade: grade, cancelToken: cancelToken),
-        '专业',
-      );
+  Future<List<Major>> majors({
+    required String calendarId,
+    required String grade,
+    CancelToken? cancelToken,
+  }) => _request(
+    () => _api.selectionMajorsGet(
+      calendarId: calendarId,
+      grade: grade,
+      cancelToken: cancelToken,
+    ),
+    '专业',
+  );
 
   @override
   Future<SelectionOfferingPage> offerings({
@@ -79,6 +104,11 @@ class GeneratedSelectionRepository implements SelectionRepository {
     String? majorId,
     String? grade,
     String? natureId,
+    int? weekday,
+    int? startSlot,
+    int? endSlot,
+    int? week,
+    bool includeUnknownSchedule = true,
     String? cursor,
     int limit = 20,
     CancelToken? cancelToken,
@@ -91,6 +121,11 @@ class GeneratedSelectionRepository implements SelectionRepository {
             majorId: majorId,
             grade: grade,
             natureId: natureId,
+            weekday: weekday,
+            startSlot: startSlot,
+            endSlot: endSlot,
+            week: week,
+            includeUnknownSchedule: includeUnknownSchedule,
             cursor: cursor,
             limit: limit,
             cancelToken: cancelToken,
@@ -131,7 +166,16 @@ class GeneratedSelectionRepository implements SelectionRepository {
   ) async {
     try {
       final Response<List<T>> response = await request();
-      return response.data ?? <T>[];
+      final List<T>? data = response.data;
+      if (data == null) {
+        throw ApiFailure(
+          kind: ApiFailureKind.unexpected,
+          message: '$surface响应不完整，请稍后重试',
+        );
+      }
+      return data;
+    } on ApiFailure {
+      rethrow;
     } on DioException catch (exception) {
       throw ApiFailure.fromDio(exception);
     } on TypeError {

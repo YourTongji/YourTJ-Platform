@@ -24,6 +24,7 @@ interface CheckInState {
   error?: unknown;
   onCheckIn: () => void;
   onRetry: () => void;
+  onShare: () => void;
 }
 
 interface TrustProgressSummaryProps {

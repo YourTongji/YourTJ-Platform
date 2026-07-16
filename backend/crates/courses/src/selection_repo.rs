@@ -80,20 +80,36 @@ pub async fn list_grades(pool: &PgPool, calendar_id: i64) -> Result<Vec<String>,
     Ok(rows.into_iter().filter_map(|(grade,)| grade).collect())
 }
 
-pub async fn list_majors(pool: &PgPool, grade: &str) -> Result<Vec<MajorRow>, CoursesError> {
+pub async fn list_majors(
+    pool: &PgPool,
+    calendar_id: i64,
+    grade: &str,
+) -> Result<Vec<MajorRow>, CoursesError> {
     Ok(sqlx::query_as::<_, MajorRow>(
-        "SELECT id, name, faculty_id, grade FROM selection.majors \
-         WHERE grade = $1 ORDER BY name, id LIMIT 500",
+        "SELECT DISTINCT major.id, major.name, major.faculty_id, major.grade \
+         FROM selection.majors AS major \
+         JOIN selection.major_courses AS binding ON binding.major_id = major.id \
+         JOIN selection.courses AS course ON course.id = binding.course_id \
+         WHERE course.calendar_id = $1 AND binding.grade = $2 \
+         ORDER BY major.name, major.id LIMIT 500",
     )
+    .bind(calendar_id)
     .bind(grade)
     .fetch_all(pool)
     .await?)
 }
 
-pub async fn list_course_natures(pool: &PgPool) -> Result<Vec<CourseNatureRow>, CoursesError> {
+pub async fn list_course_natures(
+    pool: &PgPool,
+    calendar_id: i64,
+) -> Result<Vec<CourseNatureRow>, CoursesError> {
     Ok(sqlx::query_as::<_, CourseNatureRow>(
-        "SELECT id, name FROM selection.course_natures ORDER BY name, id",
+        "SELECT DISTINCT nature.id, nature.name \
+         FROM selection.course_natures AS nature \
+         JOIN selection.courses AS course ON course.nature_id = nature.id \
+         WHERE course.calendar_id = $1 ORDER BY nature.name, nature.id",
     )
+    .bind(calendar_id)
     .fetch_all(pool)
     .await?)
 }
@@ -101,16 +117,18 @@ pub async fn list_course_natures(pool: &PgPool) -> Result<Vec<CourseNatureRow>, 
 /// Compatibility list with a hard upper bound. New clients use list_offerings.
 pub async fn list_courses_by_major(
     pool: &PgPool,
+    calendar_id: i64,
     major_id: i64,
     grade: &str,
 ) -> Result<Vec<SelectionCourseRow>, CoursesError> {
     let sql = format!(
         "SELECT {OFFERING_COLUMNS} FROM selection.courses AS c \
          JOIN selection.major_courses AS binding ON binding.course_id = c.id \
-         WHERE binding.major_id = $1 AND binding.grade = $2 \
+         WHERE c.calendar_id = $1 AND binding.major_id = $2 AND binding.grade = $3 \
          ORDER BY c.code, c.id LIMIT 100"
     );
     Ok(sqlx::query_as::<_, SelectionCourseRow>(&sql)
+        .bind(calendar_id)
         .bind(major_id)
         .bind(grade)
         .fetch_all(pool)
@@ -120,28 +138,26 @@ pub async fn list_courses_by_major(
 /// Compatibility list with a hard upper bound. New clients use list_offerings.
 pub async fn list_courses_by_nature(
     pool: &PgPool,
+    calendar_id: i64,
     nature_id: i64,
 ) -> Result<Vec<SelectionCourseRow>, CoursesError> {
     let sql = format!(
         "SELECT {OFFERING_COLUMNS} FROM selection.courses AS c \
-         WHERE c.nature_id = $1 ORDER BY c.code, c.id LIMIT 100"
+         WHERE c.calendar_id = $1 AND c.nature_id = $2 ORDER BY c.code, c.id LIMIT 100"
     );
-    Ok(sqlx::query_as::<_, SelectionCourseRow>(&sql).bind(nature_id).fetch_all(pool).await?)
+    Ok(sqlx::query_as::<_, SelectionCourseRow>(&sql)
+        .bind(calendar_id)
+        .bind(nature_id)
+        .fetch_all(pool)
+        .await?)
 }
 
-/// Deterministic compatibility representative: current semester first, then
-/// newest calendar and smallest teachingClassId.
-pub async fn find_selection_course_by_code(
+/// Find one teaching class by its stable upstream identifier.
+pub async fn find_selection_course_by_id(
     pool: &PgPool,
-    code: &str,
+    teaching_class_id: i64,
 ) -> Result<Option<SelectionCourseRow>, CoursesError> {
-    let sql = format!(
-        "SELECT {OFFERING_COLUMNS} FROM selection.courses AS c \
-         JOIN selection.calendars AS calendar ON calendar.id = c.calendar_id \
-         WHERE c.code = $1 \
-         ORDER BY calendar.is_current DESC, c.calendar_id DESC, c.id LIMIT 1"
-    );
-    Ok(sqlx::query_as::<_, SelectionCourseRow>(&sql).bind(code.trim()).fetch_optional(pool).await?)
+    find_offering_by_id(pool, teaching_class_id).await
 }
 
 pub async fn find_offering_by_id(
@@ -150,6 +166,26 @@ pub async fn find_offering_by_id(
 ) -> Result<Option<SelectionCourseRow>, CoursesError> {
     let sql = format!("SELECT {OFFERING_COLUMNS} FROM selection.courses AS c WHERE c.id = $1");
     Ok(sqlx::query_as::<_, SelectionCourseRow>(&sql).bind(offering_id).fetch_optional(pool).await?)
+}
+
+/// Rehydrate current teaching-class facts for candidate ids in one calendar.
+pub async fn find_selection_courses_by_ids(
+    pool: &PgPool,
+    calendar_id: i64,
+    teaching_class_ids: &[i64],
+) -> Result<Vec<SelectionCourseRow>, CoursesError> {
+    if teaching_class_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let sql = format!(
+        "SELECT {OFFERING_COLUMNS} FROM selection.courses AS c \
+         WHERE c.calendar_id = $1 AND c.id = ANY($2) ORDER BY c.id"
+    );
+    Ok(sqlx::query_as::<_, SelectionCourseRow>(&sql)
+        .bind(calendar_id)
+        .bind(teaching_class_ids)
+        .fetch_all(pool)
+        .await?)
 }
 
 async fn query_offerings(
@@ -177,12 +213,15 @@ async fn query_offerings(
            AND ($5::bigint IS NULL OR c.campus_id = $5) \
            AND ($6::text IS NULL OR c.code = $6) \
            AND (NOT $7::boolean OR ( \
-             ($8::boolean AND c.schedule_unknown) OR EXISTS ( \
+             ($8::boolean AND c.schedule_unknown) OR ( \
+               ($8::boolean OR NOT c.schedule_unknown) AND EXISTS ( \
                SELECT 1 FROM selection.timeslots AS slot \
                WHERE slot.course_id = c.id AND slot.weekday = $9 \
                  AND slot.start_slot <= $11 AND slot.end_slot >= $10 \
-                 AND ($12::integer IS NULL OR ($8::boolean AND slot.weeks_unknown) \
+                 AND ($8::boolean OR NOT slot.weeks_unknown) \
+                 AND ($12::integer IS NULL OR slot.weeks_unknown \
                       OR $12 = ANY(slot.week_numbers)) \
+               ) \
              ) \
            )) \
            AND ($13::bigint[] IS NULL OR c.id = ANY($13)) \
@@ -222,10 +261,11 @@ pub async fn list_offerings(
     if has_more {
         rows.pop();
     }
-    let next_cursor = has_more.then(|| {
-        let last = rows.last().expect("non-empty page with continuation");
-        OfferingCursor { code: last.code.clone(), id: last.id }
-    });
+    let next_cursor = if has_more {
+        rows.last().map(|last| OfferingCursor { code: last.code.clone(), id: last.id })
+    } else {
+        None
+    };
     Ok((rows, next_cursor))
 }
 
@@ -244,7 +284,7 @@ pub async fn find_offerings_by_candidate_ids(
         filter,
         Some(candidate_ids.to_vec()),
         None,
-        i64::try_from(candidate_ids.len()).unwrap_or(1_000).min(1_000),
+        candidate_ids.len().min(1_000) as i64,
     )
     .await?;
     let mut by_id: HashMap<i64, SelectionCourseRow> =
@@ -256,16 +296,20 @@ pub async fn list_timeslots(
     pool: &PgPool,
     offering_id: i64,
 ) -> Result<Vec<TimeslotRow>, CoursesError> {
-    Ok(sqlx::query_as::<_, TimeslotRow>(
+    let rows = sqlx::query_as::<_, TimeslotRow>(
         "SELECT course_id, teacher_name, weekday, start_slot, end_slot, weeks, \
                 week_numbers, weeks_unknown, location, location_unknown \
          FROM selection.timeslots WHERE course_id = $1 \
          ORDER BY weekday, start_slot, end_slot, location NULLS LAST, teacher_name NULLS LAST \
-         LIMIT 100",
+         LIMIT 101",
     )
     .bind(offering_id)
     .fetch_all(pool)
-    .await?)
+    .await?;
+    if rows.len() > 100 {
+        return Err(CoursesError::SelectionScheduleTooLarge);
+    }
+    Ok(rows)
 }
 
 pub async fn find_latest_update(pool: &PgPool) -> Result<SelectionFreshnessRow, CoursesError> {

@@ -1,5 +1,6 @@
 //! Operations-only HTTP surface for durable selection synchronization.
 
+use axum::extract::rejection::{JsonRejection, QueryRejection};
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
@@ -14,11 +15,13 @@ use uuid::Uuid;
 use crate::sync::{self, SelectionSyncJob};
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SyncJobInput {
     pub reason: String,
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SyncJobsQuery {
     pub status: Option<String>,
     pub cursor: Option<String>,
@@ -121,12 +124,25 @@ fn digest(parts: &[&str]) -> String {
     hex::encode(hasher.finalize())
 }
 
+fn parse_json<T>(input: Result<Json<T>, JsonRejection>) -> AppResult<T> {
+    input
+        .map(|Json(value)| value)
+        .map_err(|_| AppError::BadRequest("invalid selection sync request".into()))
+}
+
+fn parse_query<T>(query: Result<Query<T>, QueryRejection>) -> AppResult<T> {
+    query
+        .map(|Query(value)| value)
+        .map_err(|_| AppError::BadRequest("invalid selection sync query".into()))
+}
+
 /// POST /api/v2/admin/selection/sync
 pub async fn enqueue_sync(
     headers: HeaderMap,
     State(state): State<AppState>,
-    Json(input): Json<SyncJobInput>,
+    input: Result<Json<SyncJobInput>, JsonRejection>,
 ) -> AppResult<(StatusCode, Json<SelectionSyncJobDto>)> {
+    let input = parse_json(input)?;
     let auth = authenticate_operations(&headers, &state).await?;
     let reason = validate_reason(&input.reason)?;
     let key = idempotency_key(&headers)?;
@@ -156,9 +172,10 @@ pub async fn enqueue_sync(
 pub async fn list_sync_jobs(
     headers: HeaderMap,
     State(state): State<AppState>,
-    Query(query): Query<SyncJobsQuery>,
+    query: Result<Query<SyncJobsQuery>, QueryRejection>,
 ) -> AppResult<Json<Page<SelectionSyncJobDto>>> {
     authenticate_operations(&headers, &state).await?;
+    let query = parse_query(query)?;
     if !(1..=100).contains(&query.limit) {
         return Err(AppError::BadRequest("limit must be between 1 and 100".into()));
     }
@@ -199,9 +216,10 @@ pub async fn retry_sync_job(
     headers: HeaderMap,
     State(state): State<AppState>,
     Path(id): Path<String>,
-    Json(input): Json<SyncJobInput>,
+    input: Result<Json<SyncJobInput>, JsonRejection>,
 ) -> AppResult<Json<SelectionSyncJobDto>> {
     let auth = authenticate_operations(&headers, &state).await?;
+    let input = parse_json(input)?;
     let id = Uuid::parse_str(&id)
         .map_err(|_| AppError::BadRequest("invalid selection sync job id".into()))?;
     let reason = validate_reason(&input.reason)?;

@@ -3,6 +3,7 @@ import {
   AlertTriangle,
   CalendarDays,
   FileJson2,
+  FileUp,
   ImageDown,
   Plus,
   Search,
@@ -31,24 +32,26 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useAuth } from "@/context/auth-provider";
+import { API_BASE_URL } from "@/lib/api/client";
 import { api } from "@/lib/api/endpoints";
 import type { SelectionCourse, TimeSlot } from "@/lib/api/types";
 import { formatDate } from "@/lib/format";
 import {
   findScheduleConflicts,
   offeringKey,
-  scheduleScopeKey,
+  parseScheduleImport,
+  serializeScheduleExport,
   type ScheduleConflict,
   type ScheduledCourse,
+  type ScheduleScope,
   timetableCells,
+  timetableMaxSlot,
   useScheduleStore,
 } from "@/lib/schedule-store";
 import { cn } from "@/lib/utils";
 
 const weekdays = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"];
-const maxSlot = 13;
 const metadataStaleTime = 30 * 60 * 1000;
-const emptySchedule: ScheduledCourse[] = [];
 
 function useDebouncedValue<T>(value: T, delay: number) {
   const [debounced, setDebounced] = React.useState(value);
@@ -155,6 +158,7 @@ function conflictMap(staged: ScheduledCourse[]) {
 }
 
 function Timetable({ staged, onSelect }: { staged: ScheduledCourse[]; onSelect: (item: ScheduledCourse) => void }) {
+  const maxSlot = timetableMaxSlot(staged);
   const cells = timetableCells(staged, maxSlot);
   const conflicts = conflictMap(staged);
   return (
@@ -291,20 +295,15 @@ function downloadBlob(blob: Blob, filename: string) {
   window.setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
-function exportJson(staged: ScheduledCourse[], calendarId: string) {
-  const payload = {
-    version: 2,
-    calendarId,
-    exportedAt: new Date().toISOString(),
-    offerings: staged.map(({ course, timeslots }) => ({ course, timeslots })),
-  };
+function exportJson(staged: ScheduledCourse[], scope: ScheduleScope) {
   downloadBlob(
-    new Blob([JSON.stringify(payload, null, 2)], { type: "application/json;charset=utf-8" }),
-    `yourtj-schedule-${calendarId}.json`,
+    new Blob([serializeScheduleExport(staged, scope)], { type: "application/json;charset=utf-8" }),
+    `yourtj-schedule-${scope.calendarId}.json`,
   );
 }
 
 async function exportPng(staged: ScheduledCourse[], calendarId: string) {
+  const maxSlot = timetableMaxSlot(staged);
   const width = 1400;
   const rowHeight = 72;
   const incompleteCount = staged.filter((item) => (
@@ -401,6 +400,7 @@ export function SchedulePage() {
     conflicts: ScheduleConflict[];
   } | null>(null);
   const [selectedCourse, setSelectedCourse] = React.useState<ScheduledCourse | null>(null);
+  const importInput = React.useRef<HTMLInputElement | null>(null);
   const debouncedSearch = useDebouncedValue(searchText.trim(), 350);
 
   const calendars = useQuery({
@@ -420,14 +420,15 @@ export function SchedulePage() {
     staleTime: metadataStaleTime,
   });
   const majors = useQuery({
-    queryKey: ["selection", "majors", grade],
-    queryFn: () => api.majors(grade),
-    enabled: Boolean(grade),
+    queryKey: ["selection", "majors", calendarId, grade],
+    queryFn: () => api.majors(calendarId, grade),
+    enabled: Boolean(calendarId && grade),
     staleTime: metadataStaleTime,
   });
   const natures = useQuery({
-    queryKey: ["selection", "natures"],
-    queryFn: api.courseNatures,
+    queryKey: ["selection", "natures", calendarId],
+    queryFn: () => api.courseNatures(calendarId),
+    enabled: Boolean(calendarId),
     staleTime: metadataStaleTime,
   });
 
@@ -487,14 +488,19 @@ export function SchedulePage() {
     staleTime: 60 * 1000,
   });
 
-  const scope = React.useMemo(
-    () => scheduleScopeKey(calendarId, account?.id),
+  const scope = React.useMemo<ScheduleScope>(
+    () => ({
+      environment: API_BASE_URL,
+      principal: account?.id ?? "anonymous",
+      calendarId,
+    }),
     [account?.id, calendarId],
   );
-  const staged = useScheduleStore((state) => state.schedules[scope] ?? emptySchedule);
-  const addCourse = useScheduleStore((state) => state.addCourse);
-  const removeCourse = useScheduleStore((state) => state.removeCourse);
-  const clearSchedule = useScheduleStore((state) => state.clear);
+  const staged = useScheduleStore(scope, (state) => state.staged);
+  const addCourse = useScheduleStore(scope, (state) => state.addCourse);
+  const removeCourse = useScheduleStore(scope, (state) => state.removeCourse);
+  const restoreSchedule = useScheduleStore(scope, (state) => state.restore);
+  const clearSchedule = useScheduleStore(scope, (state) => state.clear);
   const stagedIds = React.useMemo(() => new Set(staged.map((item) => offeringKey(item.course))), [staged]);
   const offeringItems = offerings.data?.pages.flatMap((page) => page.items) ?? [];
   const addRequest = React.useRef<AbortController | null>(null);
@@ -524,14 +530,13 @@ export function SchedulePage() {
     try {
       const timeslots = await api.selectionOfferingTimeslots(course.offeringId, controller.signal);
       if (controller.signal.aborted || activeScope.current !== requestScope) return;
-      const conflicts = findScheduleConflicts(staged, course, timeslots);
-      if (conflicts.length > 0) {
-        setPendingAdd({ course, timeslots, conflicts });
-        return;
-      }
-      const result = addCourse(scope, course, timeslots);
+      const result = addCourse(course, timeslots);
       if (result.status === "duplicate") {
         toast.info("这个教学班已经在待选课表中");
+      } else if (result.status === "scopeMismatch") {
+        toast.error("教学班不属于当前学期，请刷新后重试");
+      } else if (result.status === "conflict") {
+        setPendingAdd({ course, timeslots, conflicts: result.conflicts });
       } else if (result.status === "added") {
         if (course.scheduleUnknown || timeslots.some((slot) => slot.weeksUnknown)) {
           toast.warning(`${course.name} 已加入，但上游时段或周次仍不完整`);
@@ -552,13 +557,45 @@ export function SchedulePage() {
 
   function confirmConflictingAdd() {
     if (!pendingAdd) return;
-    const result = addCourse(scope, pendingAdd.course, pendingAdd.timeslots, true);
+    const result = addCourse(pendingAdd.course, pendingAdd.timeslots, {
+      allowPossibleConflict: true,
+    });
     setPendingAdd(null);
     if (result.status === "added") toast.warning(`${pendingAdd.course.name} 已带冲突标记加入`);
     if (result.status === "duplicate") toast.info("这个教学班已经在待选课表中");
+    if (result.status === "scopeMismatch") toast.error("教学班不属于当前学期，请刷新后重试");
+    if (result.status === "conflict") toast.error("课表已有变化，当前教学班存在确定冲突，未加入");
+  }
+
+  async function importJson(file: File) {
+    try {
+      if (file.size > 2 * 1024 * 1024) throw new Error("课表 JSON 不能超过 2 MB");
+      const restored = parseScheduleImport(await file.text(), scope);
+      restoreSchedule(restored);
+      setPendingAdd(null);
+      setSelectedCourse(null);
+      toast.success(`已恢复 ${restored.length} 个教学班`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "课表文件导入失败");
+    } finally {
+      if (importInput.current) importInput.current.value = "";
+    }
+  }
+
+  function handleCalendarChange(nextCalendarId: string) {
+    setCalendarId(nextCalendarId);
+    setGrade("");
+    setMajorId("");
+    setNatureId("");
+    setSearchText("");
+    setPendingAdd(null);
+    setSelectedCourse(null);
   }
 
   const totalCredits = staged.reduce((sum, item) => sum + Number(item.course.credit ?? 0), 0);
+  const pendingHasConfirmedConflict = pendingAdd?.conflicts.some(
+    ({ certainty }) => certainty === "confirmed",
+  ) ?? false;
 
   if (calendars.isLoading) return <LoadingState label="加载选课基础数据" />;
   if (calendars.isError) {
@@ -614,9 +651,37 @@ export function SchedulePage() {
         description="按教学班浏览、检查周次冲突，并将待选课表仅保存在当前环境与账号的本机空间。"
         actions={
           <div className="flex flex-wrap gap-2">
-            <Button variant="outline" onClick={() => exportJson(staged, calendarId)} disabled={staged.length === 0}>
+            <Button
+              variant="outline"
+              onClick={() => {
+                try {
+                  exportJson(staged, scope);
+                } catch (error) {
+                  toast.error(error instanceof Error ? error.message : "导出失败");
+                }
+              }}
+              disabled={staged.length === 0 || !calendarId}
+            >
               <FileJson2 className="h-4 w-4" />导出 JSON
             </Button>
+            <Button
+              variant="outline"
+              onClick={() => importInput.current?.click()}
+              disabled={!calendarId}
+            >
+              <FileUp className="h-4 w-4" />导入 JSON
+            </Button>
+            <input
+              ref={importInput}
+              type="file"
+              accept="application/json,.json"
+              className="sr-only"
+              aria-label="导入课表 JSON"
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                if (file) void importJson(file);
+              }}
+            />
             <Button
               variant="outline"
               onClick={() => void exportPng(staged, calendarId).catch((error) => toast.error(error instanceof Error ? error.message : "导出失败"))}
@@ -672,11 +737,7 @@ export function SchedulePage() {
                 <Label>学期</Label>
                 <Select
                   value={calendarId}
-                  onValueChange={(value) => {
-                    setCalendarId(value);
-                    setGrade("");
-                    setMajorId("");
-                  }}
+                  onValueChange={handleCalendarChange}
                 >
                   <SelectTrigger aria-label="学期"><SelectValue placeholder="选择学期" /></SelectTrigger>
                   <SelectContent>
@@ -857,7 +918,7 @@ export function SchedulePage() {
                     <Button
                       size="icon"
                       variant="ghost"
-                      onClick={() => removeCourse(scope, offeringKey(item.course))}
+                      onClick={() => removeCourse(offeringKey(item.course))}
                       aria-label={`移除${item.course.name}`}
                     >
                       <Trash2 className="h-4 w-4" />
@@ -883,7 +944,11 @@ export function SchedulePage() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2"><AlertTriangle className="h-5 w-5 text-destructive" />发现课表冲突</DialogTitle>
-            <DialogDescription>冲突分为已确认和可能两类；未知周次绝不会显示为“无冲突”。</DialogDescription>
+            <DialogDescription>
+              {pendingHasConfirmedConflict
+                ? "已确认冲突不能强制加入；请先调整待选教学班。"
+                : "周次或时段信息不完整，只能在确认风险后加入并标记。"}
+            </DialogDescription>
           </DialogHeader>
           <div className="space-y-2">
             {(pendingAdd?.conflicts ?? []).map((conflict) => (
@@ -900,7 +965,11 @@ export function SchedulePage() {
           </div>
           <DialogFooter>
             <DialogClose asChild><Button variant="outline">取消</Button></DialogClose>
-            <Button variant="destructive" onClick={confirmConflictingAdd}>仍然加入并标记</Button>
+            {pendingHasConfirmedConflict ? null : (
+              <Button variant="destructive" onClick={confirmConflictingAdd}>
+                仍然加入并标记
+              </Button>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -915,7 +984,7 @@ export function SchedulePage() {
             <DialogClose asChild><Button variant="outline">取消</Button></DialogClose>
             <Button
               variant="destructive"
-              onClick={() => { clearSchedule(scope); setClearOpen(false); toast.success("当前学期待选课表已清空"); }}
+              onClick={() => { clearSchedule(); setClearOpen(false); toast.success("当前学期待选课表已清空"); }}
             >
               确认清空
             </Button>

@@ -12,6 +12,7 @@ const apiMocks = vi.hoisted(() => ({
   myMediaUpload: vi.fn(),
   myMediaPreview: vi.fn(),
   mediaUrl: vi.fn(),
+  onebox: vi.fn(),
 }));
 const originalCreateObjectURL = URL.createObjectURL;
 const originalRevokeObjectURL = URL.revokeObjectURL;
@@ -38,6 +39,7 @@ vi.mock("@/components/media/media-upload-button", () => ({
 
 describe("MarkdownEditor", () => {
   beforeEach(() => {
+    apiMocks.onebox.mockReset();
     Object.defineProperty(URL, "createObjectURL", {
       configurable: true,
       value: vi.fn(() => "blob:editor-owner-preview"),
@@ -161,5 +163,40 @@ describe("MarkdownEditor", () => {
       "blob:editor-owner-preview",
     );
     expect(apiMocks.myMediaPreview).toHaveBeenCalledWith("42");
+  });
+
+  it("inserts the normalized onebox URL as an unambiguous Markdown destination", async () => {
+    apiMocks.onebox.mockResolvedValue({
+      type: "card",
+      url: "https://news.tongji.edu.cn/article_(1)",
+      title: "[校园新闻]",
+      description: null,
+      imageUrl: null,
+      siteName: "同济新闻网",
+    });
+    const user = userEvent.setup();
+
+    function Harness() {
+      const [value, setValue] = React.useState("");
+      return (
+        <>
+          <MarkdownEditor value={value} onChange={setValue} label="主题正文" maxLength={50_000} />
+          <output data-testid="source">{value}</output>
+        </>
+      );
+    }
+
+    render(<Harness />);
+    await user.click(screen.getByRole("button", { name: "预览并插入链接" }));
+    await user.type(
+      screen.getByRole("textbox", { name: "HTTPS 链接" }),
+      "https://news.tongji.edu.cn/article_(1)",
+    );
+    await user.click(screen.getByRole("button", { name: "安全预览" }));
+    await user.click(await screen.findByRole("button", { name: "插入预览链接" }));
+
+    expect(screen.getByTestId("source").textContent).toBe(
+      "[校园新闻](<https://news.tongji.edu.cn/article_(1)>)",
+    );
   });
 });

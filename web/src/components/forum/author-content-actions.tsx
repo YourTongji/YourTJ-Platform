@@ -19,6 +19,7 @@ import { Label } from "@/components/ui/label";
 import { ApiError } from "@/lib/api/client";
 import { api } from "@/lib/api/endpoints";
 import type { Comment, ContentFormat, ThreadDetailWithPoll } from "@/lib/api/types";
+import { forumQueryKeys } from "@/lib/forum-query-keys";
 
 interface VersionedSource {
   body: string;
@@ -131,10 +132,10 @@ export function ThreadAuthorActions({ thread }: { thread: ThreadDetailWithPoll }
 
   const invalidate = React.useCallback(async () => {
     await Promise.all([
-      queryClient.invalidateQueries({ queryKey: ["thread", threadId] }),
-      queryClient.invalidateQueries({ queryKey: ["forum", "threads"] }),
-      queryClient.invalidateQueries({ queryKey: ["home", "threads"] }),
-      queryClient.invalidateQueries({ queryKey: ["profile", thread.authorHandle] }),
+      queryClient.invalidateQueries({ queryKey: forumQueryKeys.thread(threadId) }),
+      queryClient.invalidateQueries({ queryKey: forumQueryKeys.feeds() }),
+      queryClient.invalidateQueries({ queryKey: forumQueryKeys.homeFeeds() }),
+      queryClient.invalidateQueries({ queryKey: forumQueryKeys.profile(thread.authorHandle) }),
     ]);
   }, [queryClient, thread.authorHandle, threadId]);
 
@@ -278,11 +279,11 @@ export function CommentAuthorActions({ comment, threadId }: { comment: Comment; 
 
   const invalidate = React.useCallback(async () => {
     await Promise.all([
-      queryClient.invalidateQueries({ queryKey: ["thread", threadId] }),
-      queryClient.invalidateQueries({ queryKey: ["thread-comments", threadId] }),
-      queryClient.invalidateQueries({ queryKey: ["forum", "threads"] }),
-      queryClient.invalidateQueries({ queryKey: ["home", "threads"] }),
-      queryClient.invalidateQueries({ queryKey: ["profile", comment.authorHandle] }),
+      queryClient.invalidateQueries({ queryKey: forumQueryKeys.thread(threadId) }),
+      queryClient.invalidateQueries({ queryKey: forumQueryKeys.comments(threadId) }),
+      queryClient.invalidateQueries({ queryKey: forumQueryKeys.feeds() }),
+      queryClient.invalidateQueries({ queryKey: forumQueryKeys.homeFeeds() }),
+      queryClient.invalidateQueries({ queryKey: forumQueryKeys.profile(comment.authorHandle) }),
     ]);
   }, [comment.authorHandle, queryClient, threadId]);
 

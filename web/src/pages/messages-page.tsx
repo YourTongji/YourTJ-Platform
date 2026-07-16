@@ -1,4 +1,10 @@
-import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  type InfiniteData,
+  useInfiniteQuery,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import * as React from "react";
 import { Link, useSearchParams } from "react-router";
 import { toast } from "sonner";
@@ -6,14 +12,17 @@ import { toast } from "sonner";
 import { PageHeader } from "@/components/common/page-header";
 import { EmptyState, LoadingState } from "@/components/common/states";
 import { ConversationList, type ConversationView } from "@/components/messages/conversation-list";
-import { ConversationThread } from "@/components/messages/conversation-thread";
+import {
+  ConversationThread,
+  type PendingDmMessage,
+} from "@/components/messages/conversation-thread";
 import { NewConversationDialog } from "@/components/messages/new-conversation-dialog";
 import { ReportMessageDialog } from "@/components/messages/report-message-dialog";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/context/auth-provider";
 import { accountQueryKeys } from "@/lib/account-query-keys";
 import { api } from "@/lib/api/endpoints";
-import type { DmConversation, DmMessage, DmReportReason } from "@/lib/api/types";
+import type { DmConversation, DmMessage, DmReportReason, Page } from "@/lib/api/types";
 import { cn } from "@/lib/utils";
 
 export function MessagesPage() {
@@ -30,11 +39,20 @@ export function MessagesPage() {
     : "inbox";
   const composeRecipient = searchParams.get("recipient") ?? undefined;
   const [body, setBody] = React.useState("");
+  const [pendingMessages, setPendingMessages] = React.useState<PendingDmMessage[]>([]);
   const [conversationSearch, setConversationSearch] = React.useState("");
   const deferredConversationSearch = React.useDeferredValue(conversationSearch.trim());
   const [reportingMessage, setReportingMessage] = React.useState<DmMessage | null>(null);
   const [reportingRequest, setReportingRequest] = React.useState(false);
   const lastMarkedRead = React.useRef("");
+  const activeAccountIdRef = React.useRef(account?.id);
+  activeAccountIdRef.current = account?.id;
+
+  React.useEffect(() => {
+    setBody("");
+    setPendingMessages([]);
+  }, [account?.id]);
+
   const directMessageKey = React.useMemo(
     () => accountQueryKeys.directMessages(account?.id),
     [account?.id],
@@ -134,14 +152,56 @@ export function MessagesPage() {
     },
   });
   const sendMessage = useMutation({
-    mutationFn: () => api.sendDmMessage(selectedId, body.trim()),
-    onSuccess: async () => {
-      setBody("");
+    mutationFn: (message: PendingDmMessage) => api.sendDmMessage(
+      message.conversationId,
+      message.body,
+      message.clientId,
+    ),
+    onMutate: (message) => {
+      setPendingMessages((current) => {
+        const isRetry = current.some((item) => item.clientId === message.clientId);
+        if (!isRetry) return [...current, message];
+        return current.map((item) => item.clientId === message.clientId
+          ? { ...item, status: "sending", errorMessage: undefined }
+          : item);
+      });
+    },
+    onSuccess: async (savedMessage, pendingMessage) => {
+      if (pendingMessage.accountId !== activeAccountIdRef.current) return;
+      queryClient.setQueryData<InfiniteData<Page<DmMessage>>>(
+        [...directMessageKey, "messages", pendingMessage.conversationId],
+        (current) => {
+          if (!current || current.pages.length === 0) return current;
+          if (current.pages.some((page) => page.items.some((item) => item.id === savedMessage.id))) {
+            return current;
+          }
+          const [firstPage, ...remainingPages] = current.pages;
+          return {
+            ...current,
+            pages: [
+              { ...firstPage, items: [savedMessage, ...firstPage.items] },
+              ...remainingPages,
+            ],
+          };
+        },
+      );
+      setPendingMessages((current) => current.filter(
+        (item) => item.clientId !== pendingMessage.clientId,
+      ));
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: [...directMessageKey, "messages", selectedId] }),
+        queryClient.invalidateQueries({
+          queryKey: [...directMessageKey, "messages", pendingMessage.conversationId],
+        }),
         queryClient.invalidateQueries({ queryKey: [...directMessageKey, "conversations"] }),
         queryClient.invalidateQueries({ queryKey: directMessageCountKey }),
       ]);
+    },
+    onError: (error, message) => {
+      if (message.accountId !== activeAccountIdRef.current) return;
+      const errorMessage = error instanceof Error ? error.message : "消息未送达";
+      setPendingMessages((current) => current.map((item) => item.clientId === message.clientId
+        ? { ...item, status: "failed", errorMessage }
+        : item));
     },
   });
   const reportMessage = useMutation({
@@ -287,6 +347,20 @@ export function MessagesPage() {
     setSearchParams(next, { replace: true });
   }
 
+  function submitMessage() {
+    const messageBody = body.trim();
+    if (!account?.id || !selectedId || !messageBody) return;
+    setBody("");
+    sendMessage.mutate({
+      accountId: account.id,
+      clientId: crypto.randomUUID(),
+      conversationId: selectedId,
+      body: messageBody,
+      createdAt: Math.floor(Date.now() / 1000),
+      status: "sending",
+    });
+  }
+
   if (authLoading) {
     return <LoadingState label="确认登录状态" />;
   }
@@ -349,6 +423,7 @@ export function MessagesPage() {
           <ConversationThread
             conversation={selectedConversation}
             messages={messageItems}
+            pendingMessages={pendingMessages.filter((message) => message.conversationId === selectedId)}
             currentAccountId={account?.id}
             body={body}
             isIgnored={selectedIsIgnored}
@@ -357,15 +432,22 @@ export function MessagesPage() {
             requestActionPending={requestAction.isPending || reportMessage.isPending}
             isLoading={messages.isLoading}
             error={messages.error}
-            sendError={sendMessage.error}
+            sendError={undefined}
             isSending={sendMessage.isPending}
             hasOlder={Boolean(messages.hasNextPage)}
             isLoadingOlder={messages.isFetchingNextPage}
-            onBodyChange={setBody}
+            onBodyChange={(nextBody) => {
+              setBody(nextBody);
+              sendMessage.reset();
+            }}
             onBack={clearSelection}
             onRetry={() => void messages.refetch()}
             onLoadOlder={() => void messages.fetchNextPage()}
-            onSend={() => sendMessage.mutate()}
+            onSend={submitMessage}
+            onRetryPending={(message) => sendMessage.mutate(message)}
+            onDiscardPending={(clientId) => setPendingMessages((current) => current.filter(
+              (message) => message.clientId !== clientId,
+            ))}
             onReport={(message, isRequest) => {
               reportMessage.reset();
               setReportingRequest(isRequest);

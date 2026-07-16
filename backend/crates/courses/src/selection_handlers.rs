@@ -1,9 +1,11 @@
 //! HTTP handlers for the selection (选课) domain.
 //!
 //! Canonical APIs use teachingClassId-backed offering identity and bounded Page
-//! envelopes. Legacy course-code routes remain deterministic, bounded adapters.
+//! envelopes. Legacy routes remain bounded teaching-class-id adapters.
 
+use axum::extract::rejection::QueryRejection;
 use axum::extract::{Path, Query, State};
+use axum::http::HeaderMap;
 use axum::Json;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
@@ -22,6 +24,8 @@ use crate::selection_repo::{self, OfferingCursor, OfferingFilter};
 
 const SELECTION_STALE_AFTER_HOURS: i64 = 168;
 const MAX_SEARCH_WINDOW: usize = 1_000;
+const SEARCH_CANDIDATE_BATCH: usize = 200;
+const MAX_SEARCH_BATCHES_PER_PAGE: usize = 5;
 
 fn default_limit() -> i64 {
     20
@@ -29,6 +33,13 @@ fn default_limit() -> i64 {
 
 fn default_true() -> bool {
     true
+}
+
+fn next_search_batch_size(search_offset: usize, completed_batches: usize) -> Option<usize> {
+    if search_offset >= MAX_SEARCH_WINDOW || completed_batches >= MAX_SEARCH_BATCHES_PER_PAGE {
+        return None;
+    }
+    Some(SEARCH_CANDIDATE_BATCH.min(MAX_SEARCH_WINDOW - search_offset))
 }
 
 fn bad_request(message: impl Into<String>) -> AppError {
@@ -144,13 +155,25 @@ pub struct GradesQuery {
     pub calendar_id: i64,
 }
 
+fn validate_calendar_id(calendar_id: i64) -> AppResult<()> {
+    if calendar_id <= 0 {
+        return Err(AppError::BadRequest("invalid selection calendar id".into()));
+    }
+    Ok(())
+}
+
+fn parse_selection_query<T>(query: Result<Query<T>, QueryRejection>) -> AppResult<T> {
+    query
+        .map(|Query(params)| params)
+        .map_err(|_| AppError::BadRequest("invalid selection query".into()))
+}
+
 pub async fn selection_grades(
     state: State<AppState>,
-    Query(params): Query<GradesQuery>,
+    query: Result<Query<GradesQuery>, QueryRejection>,
 ) -> AppResult<Json<Vec<String>>> {
-    if params.calendar_id <= 0 {
-        return Err(bad_request("calendarId must be positive"));
-    }
+    let params = parse_selection_query(query)?;
+    validate_calendar_id(params.calendar_id)?;
     let raw_key = params.calendar_id.to_string();
     let key = versioned_cache_id(&state, "selection-grades", &raw_key).await;
     let grades =
@@ -163,22 +186,28 @@ pub async fn selection_grades(
 
 #[derive(Debug, Deserialize)]
 pub struct MajorsQuery {
+    #[serde(rename = "calendarId")]
+    pub calendar_id: i64,
     pub grade: String,
 }
 
 pub async fn selection_majors(
     state: State<AppState>,
-    Query(params): Query<MajorsQuery>,
+    query: Result<Query<MajorsQuery>, QueryRejection>,
 ) -> AppResult<Json<Vec<MajorDto>>> {
+    let params = parse_selection_query(query)?;
+    validate_calendar_id(params.calendar_id)?;
     let grade = params.grade.trim();
     if grade.is_empty() || grade.chars().count() > 16 || grade.chars().any(char::is_control) {
         return Err(bad_request("grade must contain 1-16 non-control characters"));
     }
-    let key = versioned_cache_id(&state, "selection-majors", grade).await;
+    let key =
+        versioned_cache_id(&state, "selection-majors", &format!("{}:{grade}", params.calendar_id))
+            .await;
     let items =
         shared::cache::cached_json(state.redis.as_ref(), "selection-majors", &key, 600, async {
             Ok::<_, CoursesError>(
-                selection_repo::list_majors(&state.db, grade)
+                selection_repo::list_majors(&state.db, params.calendar_id, grade)
                     .await?
                     .into_iter()
                     .map(|row| MajorDto {
@@ -194,14 +223,24 @@ pub async fn selection_majors(
     Ok(Json(items))
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CourseNaturesQuery {
+    pub calendar_id: i64,
+}
+
 pub async fn selection_course_natures(
     state: State<AppState>,
+    query: Result<Query<CourseNaturesQuery>, QueryRejection>,
 ) -> AppResult<Json<Vec<CourseNatureDto>>> {
-    let key = versioned_cache_id(&state, "selection-natures", "all").await;
+    let params = parse_selection_query(query)?;
+    validate_calendar_id(params.calendar_id)?;
+    let key =
+        versioned_cache_id(&state, "selection-natures", &params.calendar_id.to_string()).await;
     let items =
         shared::cache::cached_json(state.redis.as_ref(), "selection-natures", &key, 600, async {
             Ok::<_, CoursesError>(
-                selection_repo::list_course_natures(&state.db)
+                selection_repo::list_course_natures(&state.db, params.calendar_id)
                     .await?
                     .into_iter()
                     .map(|row| CourseNatureDto { id: row.id.to_string(), name: row.name })
@@ -216,7 +255,7 @@ pub async fn selection_course_natures(
 #[serde(rename_all = "camelCase")]
 pub struct OfferingsQuery {
     pub q: Option<String>,
-    pub calendar_id: Option<i64>,
+    pub calendar_id: i64,
     pub major_id: Option<i64>,
     pub grade: Option<String>,
     pub nature_id: Option<i64>,
@@ -248,6 +287,17 @@ fn normalized_query(params: &OfferingsQuery) -> Option<String> {
     params.q.as_deref().map(str::trim).filter(|value| !value.is_empty()).map(str::to_lowercase)
 }
 
+fn rate_limit_key(headers: &HeaderMap) -> String {
+    let identifier = headers
+        .get("x-forwarded-for")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(',').next())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("unknown");
+    hex::encode(Sha256::digest(identifier.as_bytes()))
+}
+
 fn filter_fingerprint(params: &OfferingsQuery) -> String {
     let value = serde_json::json!({
         "q": normalized_query(params),
@@ -268,8 +318,10 @@ fn filter_fingerprint(params: &OfferingsQuery) -> String {
     hex::encode(&hasher.finalize()[..12])
 }
 
-fn encode_cursor(payload: &OfferingCursorPayload) -> String {
-    URL_SAFE_NO_PAD.encode(serde_json::to_vec(payload).expect("serialize offering cursor"))
+fn encode_cursor(payload: &OfferingCursorPayload) -> AppResult<String> {
+    let bytes = serde_json::to_vec(payload)
+        .map_err(|error| AppError::Internal(anyhow::Error::new(error)))?;
+    Ok(URL_SAFE_NO_PAD.encode(bytes))
 }
 
 fn decode_cursor(
@@ -297,8 +349,8 @@ fn validate_offerings_query(params: &OfferingsQuery) -> AppResult<OfferingFilter
     if !(1..=100).contains(&params.limit) {
         return Err(bad_request("limit must be between 1 and 100"));
     }
+    validate_calendar_id(params.calendar_id)?;
     for (name, value) in [
-        ("calendarId", params.calendar_id),
         ("majorId", params.major_id),
         ("natureId", params.nature_id),
         ("campusId", params.campus_id),
@@ -307,22 +359,29 @@ fn validate_offerings_query(params: &OfferingsQuery) -> AppResult<OfferingFilter
             return Err(bad_request(format!("{name} must be positive")));
         }
     }
-    if let Some(query) = normalized_query(params) {
+    let normalized_query = normalized_query(params);
+    if params.q.is_some() && normalized_query.is_none() {
+        return Err(bad_request("q must contain 1-100 non-control characters"));
+    }
+    if let Some(query) = normalized_query {
         if query.chars().count() > 100 || query.chars().any(char::is_control) {
-            return Err(bad_request("q must contain at most 100 non-control characters"));
+            return Err(bad_request("q must contain 1-100 non-control characters"));
         }
     }
     let grade = params.grade.as_deref().map(str::trim).filter(|value| !value.is_empty());
-    if grade.is_some_and(|value| value.chars().count() > 16 || value.chars().any(char::is_control))
+    if params.grade.is_some() && grade.is_none()
+        || grade
+            .is_some_and(|value| value.chars().count() > 16 || value.chars().any(char::is_control))
     {
-        return Err(bad_request("grade must contain at most 16 non-control characters"));
+        return Err(bad_request("grade must contain 1-16 non-control characters"));
     }
     let course_code =
         params.course_code.as_deref().map(str::trim).filter(|value| !value.is_empty());
-    if course_code
-        .is_some_and(|value| value.chars().count() > 64 || value.chars().any(char::is_control))
+    if params.course_code.is_some() && course_code.is_none()
+        || course_code
+            .is_some_and(|value| value.chars().count() > 64 || value.chars().any(char::is_control))
     {
-        return Err(bad_request("courseCode must contain at most 64 non-control characters"));
+        return Err(bad_request("courseCode must contain 1-64 non-control characters"));
     }
     let time_fields =
         [params.weekday.is_some(), params.start_slot.is_some(), params.end_slot.is_some()];
@@ -344,8 +403,11 @@ fn validate_offerings_query(params: &OfferingsQuery) -> AppResult<OfferingFilter
     if params.week.is_some() && params.weekday.is_none() {
         return Err(bad_request("week requires a weekday and slot range"));
     }
+    if !params.include_unknown_schedule && params.weekday.is_none() {
+        return Err(bad_request("includeUnknownSchedule=false requires a weekday and slot range"));
+    }
     Ok(OfferingFilter {
-        calendar_id: params.calendar_id,
+        calendar_id: Some(params.calendar_id),
         major_id: params.major_id,
         grade: grade.map(str::to_owned),
         nature_id: params.nature_id,
@@ -378,12 +440,17 @@ async fn fetch_offering_page(
         if offset >= MAX_SEARCH_WINDOW {
             return Err(bad_request("search cursor exceeds the result window"));
         }
-        let limit = usize::try_from(params.limit).unwrap_or(20);
+        let limit = usize::try_from(params.limit)
+            .map_err(|error| AppError::Internal(anyhow::Error::new(error)))?;
         let mut search_offset = offset;
         let mut has_more = true;
         let mut rows = Vec::with_capacity(limit);
-        while rows.len() < limit && search_offset < MAX_SEARCH_WINDOW && has_more {
-            let fetch_limit = (limit - rows.len()).min(MAX_SEARCH_WINDOW - search_offset);
+        let mut batches = 0;
+        while rows.len() < limit && has_more {
+            let Some(fetch_limit) = next_search_batch_size(search_offset, batches) else {
+                break;
+            };
+            batches += 1;
             let candidates = crate::meili::search_selection_offering_ids(
                 &state.meili_url,
                 &state.meili_master_key,
@@ -397,28 +464,54 @@ async fn fetch_offering_page(
                 has_more = false;
                 break;
             }
+            let hydrated = selection_repo::find_offerings_by_candidate_ids(
+                &state.db,
+                &filter,
+                &candidates.ids,
+            )
+            .await?;
+            let remaining = limit - rows.len();
+            if hydrated.len() > remaining {
+                let selected = hydrated.into_iter().take(remaining).collect::<Vec<_>>();
+                let Some(last_selected) = selected.last() else {
+                    return Err(AppError::Internal(anyhow::anyhow!(
+                        "selection search produced an empty bounded page"
+                    )));
+                };
+                let consumed_through = match candidates
+                    .ids
+                    .iter()
+                    .position(|candidate_id| *candidate_id == last_selected.id)
+                {
+                    Some(position) => candidates.consumed_through[position],
+                    None => {
+                        return Err(AppError::Internal(anyhow::anyhow!(
+                            "selection search ordering could not be reconciled"
+                        )))
+                    }
+                };
+                rows.extend(selected);
+                search_offset += consumed_through;
+                has_more = consumed_through < candidates.consumed || candidates.has_more;
+                break;
+            }
+            rows.extend(hydrated);
             search_offset += candidates.consumed;
             has_more = candidates.has_more;
-            rows.extend(
-                selection_repo::find_offerings_by_candidate_ids(
-                    &state.db,
-                    &filter,
-                    &candidates.ids,
-                )
-                .await?,
-            );
         }
-        let next_cursor = (rows.len() == limit && has_more && search_offset < MAX_SEARCH_WINDOW)
-            .then(|| {
-                encode_cursor(&OfferingCursorPayload {
-                    version: 1,
-                    mode: "search".into(),
-                    fingerprint: fingerprint.clone(),
-                    code: None,
-                    id: None,
-                    offset: Some(search_offset),
-                })
-            });
+        let next_cursor = if has_more && search_offset > offset && search_offset < MAX_SEARCH_WINDOW
+        {
+            Some(encode_cursor(&OfferingCursorPayload {
+                version: 1,
+                mode: "search".into(),
+                fingerprint: fingerprint.clone(),
+                code: None,
+                id: None,
+                offset: Some(search_offset),
+            })?)
+        } else {
+            None
+        };
         return Ok(Page::new(rows.into_iter().map(row_to_course_dto).collect(), next_cursor));
     }
 
@@ -436,33 +529,52 @@ async fn fetch_offering_page(
         .transpose()?;
     let (rows, next) =
         selection_repo::list_offerings(&state.db, &filter, cursor.as_ref(), params.limit).await?;
-    let next_cursor = next.map(|cursor| {
-        encode_cursor(&OfferingCursorPayload {
-            version: 1,
-            mode: "browse".into(),
-            fingerprint,
-            code: Some(cursor.code),
-            id: Some(cursor.id),
-            offset: None,
+    let next_cursor = next
+        .map(|cursor| {
+            encode_cursor(&OfferingCursorPayload {
+                version: 1,
+                mode: "browse".into(),
+                fingerprint,
+                code: Some(cursor.code),
+                id: Some(cursor.id),
+                offset: None,
+            })
         })
-    });
+        .transpose()?;
     Ok(Page::new(rows.into_iter().map(row_to_course_dto).collect(), next_cursor))
+}
+
+async fn check_search_rate_limit(
+    state: &AppState,
+    headers: &HeaderMap,
+    params: &OfferingsQuery,
+) -> AppResult<()> {
+    if normalized_query(params).is_some() {
+        shared::ratelimit::check_token_bucket(
+            state.redis.as_ref(),
+            "selection-search",
+            &rate_limit_key(headers),
+            30,
+            10,
+        )
+        .await?;
+    }
+    Ok(())
 }
 
 pub async fn selection_offerings(
     State(state): State<AppState>,
-    Query(params): Query<OfferingsQuery>,
+    headers: HeaderMap,
+    query: Result<Query<OfferingsQuery>, QueryRejection>,
 ) -> AppResult<Json<Page<SelectionCourseDto>>> {
+    let params = parse_selection_query(query)?;
     validate_offerings_query(&params)?;
+    check_search_rate_limit(&state, &headers, &params).await?;
+    let cursor_key = params.cursor.as_deref().unwrap_or("first");
     let cache_key = versioned_cache_id(
         &state,
         "selection-offerings",
-        &format!(
-            "{}:{}:{}",
-            filter_fingerprint(&params),
-            params.cursor.as_deref().unwrap_or("first"),
-            params.limit
-        ),
+        &format!("{}:{}:{}", filter_fingerprint(&params), cursor_key, params.limit),
     )
     .await;
     let page = shared::cache::cached_json(
@@ -478,11 +590,9 @@ pub async fn selection_offerings(
 
 pub async fn selection_offering(
     State(state): State<AppState>,
-    Path(offering_id): Path<i64>,
+    Path(raw_id): Path<String>,
 ) -> AppResult<Json<SelectionCourseDto>> {
-    if offering_id <= 0 {
-        return Err(bad_request("offeringId must be positive"));
-    }
+    let offering_id = parse_positive_id(&raw_id, "offeringId")?;
     let key =
         versioned_cache_id(&state, "selection-offering-detail", &offering_id.to_string()).await;
     let item = shared::cache::cached_json(
@@ -512,13 +622,19 @@ async fn offering_timeslots(state: &AppState, offering_id: i64) -> AppResult<Vec
         .collect())
 }
 
+fn parse_positive_id(raw_id: &str, field: &str) -> AppResult<i64> {
+    let value = raw_id.parse::<i64>().map_err(|_| bad_request(format!("invalid {field}")))?;
+    if value <= 0 {
+        return Err(bad_request(format!("invalid {field}")));
+    }
+    Ok(value)
+}
+
 pub async fn selection_offering_timeslots(
     State(state): State<AppState>,
-    Path(offering_id): Path<i64>,
+    Path(raw_id): Path<String>,
 ) -> AppResult<Json<Vec<TimeSlotDto>>> {
-    if offering_id <= 0 {
-        return Err(bad_request("offeringId must be positive"));
-    }
+    let offering_id = parse_positive_id(&raw_id, "offeringId")?;
     let key =
         versioned_cache_id(&state, "selection-offering-timeslots", &offering_id.to_string()).await;
     let items = shared::cache::cached_json(
@@ -537,14 +653,17 @@ pub async fn selection_offering_timeslots(
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CoursesByMajorQuery {
+    pub calendar_id: i64,
     pub major_id: i64,
     pub grade: String,
 }
 
 pub async fn selection_courses_by_major(
     State(state): State<AppState>,
-    Query(params): Query<CoursesByMajorQuery>,
+    query: Result<Query<CoursesByMajorQuery>, QueryRejection>,
 ) -> AppResult<Json<Vec<SelectionCourseDto>>> {
+    let params = parse_selection_query(query)?;
+    validate_calendar_id(params.calendar_id)?;
     if params.major_id <= 0 {
         return Err(bad_request("majorId must be positive"));
     }
@@ -552,36 +671,44 @@ pub async fn selection_courses_by_major(
     if grade.is_empty() || grade.chars().count() > 16 || grade.chars().any(char::is_control) {
         return Err(bad_request("grade must contain 1-16 non-control characters"));
     }
-    let rows = selection_repo::list_courses_by_major(&state.db, params.major_id, grade).await?;
+    let rows = selection_repo::list_courses_by_major(
+        &state.db,
+        params.calendar_id,
+        params.major_id,
+        grade,
+    )
+    .await?;
     Ok(Json(rows.into_iter().map(row_to_course_dto).collect()))
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CoursesByNatureQuery {
+    pub calendar_id: i64,
     pub nature_id: i64,
 }
 
 pub async fn selection_courses_by_nature(
     State(state): State<AppState>,
-    Query(params): Query<CoursesByNatureQuery>,
+    query: Result<Query<CoursesByNatureQuery>, QueryRejection>,
 ) -> AppResult<Json<Vec<SelectionCourseDto>>> {
+    let params = parse_selection_query(query)?;
+    validate_calendar_id(params.calendar_id)?;
     if params.nature_id <= 0 {
         return Err(bad_request("natureId must be positive"));
     }
-    let rows = selection_repo::list_courses_by_nature(&state.db, params.nature_id).await?;
+    let rows =
+        selection_repo::list_courses_by_nature(&state.db, params.calendar_id, params.nature_id)
+            .await?;
     Ok(Json(rows.into_iter().map(row_to_course_dto).collect()))
 }
 
-pub async fn selection_course_by_code(
+pub async fn selection_course_by_id(
     State(state): State<AppState>,
-    Path(code): Path<String>,
+    Path(raw_id): Path<String>,
 ) -> AppResult<Json<SelectionCourseDto>> {
-    let code = code.trim();
-    if code.is_empty() || code.chars().count() > 64 || code.chars().any(char::is_control) {
-        return Err(bad_request("code must contain 1-64 non-control characters"));
-    }
-    let row = selection_repo::find_selection_course_by_code(&state.db, code)
+    let teaching_class_id = parse_positive_id(&raw_id, "teachingClassId")?;
+    let row = selection_repo::find_selection_course_by_id(&state.db, teaching_class_id)
         .await?
         .ok_or(CoursesError::SelectionCourseNotFound)?;
     Ok(Json(row_to_course_dto(row)))
@@ -589,45 +716,46 @@ pub async fn selection_course_by_code(
 
 #[derive(Debug, Deserialize)]
 pub struct SelectionSearchQuery {
+    #[serde(rename = "calendarId")]
+    pub calendar_id: i64,
     pub q: String,
 }
 
 pub async fn selection_courses_search(
     State(state): State<AppState>,
-    Query(params): Query<SelectionSearchQuery>,
+    headers: HeaderMap,
+    query: Result<Query<SelectionSearchQuery>, QueryRejection>,
 ) -> AppResult<Json<Vec<SelectionCourseDto>>> {
-    let page = fetch_offering_page(
-        &state,
-        &OfferingsQuery {
-            q: Some(params.q),
-            calendar_id: None,
-            major_id: None,
-            grade: None,
-            nature_id: None,
-            campus_id: None,
-            course_code: None,
-            weekday: None,
-            start_slot: None,
-            end_slot: None,
-            week: None,
-            include_unknown_schedule: true,
-            cursor: None,
-            limit: 20,
-        },
-    )
-    .await?;
+    let params = parse_selection_query(query)?;
+    validate_calendar_id(params.calendar_id)?;
+    let offering_params = OfferingsQuery {
+        q: Some(params.q),
+        calendar_id: params.calendar_id,
+        major_id: None,
+        grade: None,
+        nature_id: None,
+        campus_id: None,
+        course_code: None,
+        weekday: None,
+        start_slot: None,
+        end_slot: None,
+        week: None,
+        include_unknown_schedule: true,
+        cursor: None,
+        limit: 20,
+    };
+    validate_offerings_query(&offering_params)?;
+    check_search_rate_limit(&state, &headers, &offering_params).await?;
+    let page = fetch_offering_page(&state, &offering_params).await?;
     Ok(Json(page.items))
 }
 
-pub async fn selection_courses_by_time(
+pub async fn selection_course_timeslots(
     State(state): State<AppState>,
-    Path(code): Path<String>,
+    Path(raw_id): Path<String>,
 ) -> AppResult<Json<Vec<TimeSlotDto>>> {
-    let code = code.trim();
-    if code.is_empty() || code.chars().count() > 64 || code.chars().any(char::is_control) {
-        return Err(bad_request("code must contain 1-64 non-control characters"));
-    }
-    let course = selection_repo::find_selection_course_by_code(&state.db, code)
+    let teaching_class_id = parse_positive_id(&raw_id, "teachingClassId")?;
+    let course = selection_repo::find_selection_course_by_id(&state.db, teaching_class_id)
         .await?
         .ok_or(CoursesError::SelectionCourseNotFound)?;
     Ok(Json(offering_timeslots(&state, course.id).await?))
@@ -658,4 +786,85 @@ pub async fn selection_latest_update(
     )
     .await?;
     Ok(Json(dto))
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::http::HeaderMap;
+
+    use super::{
+        next_search_batch_size, normalized_query, rate_limit_key, validate_offerings_query,
+        OfferingsQuery, MAX_SEARCH_BATCHES_PER_PAGE, MAX_SEARCH_WINDOW,
+    };
+
+    fn offerings_query(calendar_id: i64) -> OfferingsQuery {
+        OfferingsQuery {
+            q: None,
+            calendar_id,
+            major_id: None,
+            grade: None,
+            nature_id: None,
+            campus_id: None,
+            course_code: None,
+            weekday: None,
+            start_slot: None,
+            end_slot: None,
+            week: None,
+            include_unknown_schedule: true,
+            cursor: None,
+            limit: 20,
+        }
+    }
+
+    #[test]
+    fn stale_candidate_scan_is_bounded_to_five_batches() {
+        let mut search_offset = 0;
+        let mut completed_batches = 0;
+        while let Some(batch_size) = next_search_batch_size(search_offset, completed_batches) {
+            search_offset += batch_size;
+            completed_batches += 1;
+        }
+
+        assert_eq!(completed_batches, MAX_SEARCH_BATCHES_PER_PAGE);
+        assert_eq!(search_offset, MAX_SEARCH_WINDOW);
+    }
+
+    #[test]
+    fn canonical_offerings_require_a_positive_calendar() {
+        assert!(validate_offerings_query(&offerings_query(0)).is_err());
+        assert!(validate_offerings_query(&offerings_query(1)).is_ok());
+    }
+
+    #[test]
+    fn canonical_offerings_reject_blank_filters_and_unscoped_strict_time() {
+        let mut query = offerings_query(1);
+        query.q = Some("  ".into());
+        assert!(validate_offerings_query(&query).is_err());
+
+        query.q = None;
+        query.grade = Some("\t".into());
+        assert!(validate_offerings_query(&query).is_err());
+
+        query.grade = None;
+        query.include_unknown_schedule = false;
+        assert!(validate_offerings_query(&query).is_err());
+    }
+
+    #[test]
+    fn only_non_blank_search_uses_the_stable_source_rate_limit_key() {
+        let mut browse = offerings_query(1);
+        assert!(normalized_query(&browse).is_none());
+
+        browse.q = Some("course".into());
+        assert!(normalized_query(&browse).is_some());
+        let first = HeaderMap::from_iter([(
+            "x-forwarded-for".parse().expect("header name"),
+            "203.0.113.10, 10.0.0.1".parse().expect("header value"),
+        )]);
+        let second = HeaderMap::from_iter([(
+            "x-forwarded-for".parse().expect("header name"),
+            "203.0.113.10".parse().expect("header value"),
+        )]);
+        assert_eq!(rate_limit_key(&first), rate_limit_key(&second));
+    }
 }

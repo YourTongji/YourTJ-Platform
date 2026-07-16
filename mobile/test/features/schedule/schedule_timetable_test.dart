@@ -43,6 +43,7 @@ void main() {
 
     expect(find.byType(Table), findsOneWidget);
     expect(find.text('周日'), findsOneWidget);
+    expect(find.text('20'), findsOneWidget);
   });
 }
 
@@ -76,8 +77,8 @@ List<ScheduledCourse> _courses() {
           courseId: '1',
           teacherName: '张老师',
           weekday: 1,
-          startSlot: 1,
-          endSlot: 2,
+          startSlot: 20,
+          endSlot: 20,
           weeks: '1-16',
           weekNumbers: const <int>{1, 2, 3, 4},
           weeksUnknown: false,

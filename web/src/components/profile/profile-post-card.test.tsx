@@ -68,4 +68,37 @@ describe("ProfilePostCard", () => {
     );
     await expectNoAccessibilityViolations(view.container);
   });
+
+  it("keeps attachment preview outside navigation and opens it in a lightbox", async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <ProfilePostCard
+          authorName="Alice"
+          authorHandle="alice"
+          post={{
+            id: "thread-1",
+            title: "带图主题",
+            createdAtLabel: "刚刚",
+            href: "/forum/threads/thread-1",
+            attachment: {
+              assetId: "asset-1",
+              reference: "yourtj-asset:asset-1",
+              position: 0,
+              alt: "校园樱花",
+              url: "https://media.example.test/cherry.webp",
+              expiresAt: Math.floor(Date.now() / 1000) + 300,
+              width: 1280,
+              height: 720,
+            },
+          }}
+        />
+      </MemoryRouter>,
+    );
+
+    const contentLink = screen.getByRole("link", { name: "带图主题" });
+    expect(contentLink.querySelector("button")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "查看大图：校园樱花" }));
+    expect(screen.getByRole("dialog", { name: "校园樱花" })).toBeVisible();
+  });
 });

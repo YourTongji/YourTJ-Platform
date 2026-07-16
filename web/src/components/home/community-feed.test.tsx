@@ -53,6 +53,11 @@ const thread = {
   canModerate: false,
 };
 
+const interactionProps = {
+  onVote: vi.fn(),
+  onToggleBookmark: vi.fn(),
+};
+
 describe("CommunityFeed", () => {
   it("offers the canonical following feed and renders accessible server summaries", async () => {
     const onModeChange = vi.fn();
@@ -67,6 +72,7 @@ describe("CommunityFeed", () => {
           onRetry={vi.fn()}
           isAuthenticated
           onAttachmentDeliveryRefresh={vi.fn()}
+          {...interactionProps}
         />
       </MemoryRouter>,
     );
@@ -99,6 +105,7 @@ describe("CommunityFeed", () => {
           onRetry={vi.fn()}
           isAuthenticated
           onAttachmentDeliveryRefresh={onDeliveryRefresh}
+          {...interactionProps}
         />
       </MemoryRouter>,
     );
@@ -118,6 +125,7 @@ describe("CommunityFeed", () => {
           onRetry={vi.fn()}
           isAuthenticated={false}
           onAttachmentDeliveryRefresh={vi.fn()}
+          {...interactionProps}
         />
       </MemoryRouter>,
     );
@@ -142,6 +150,7 @@ describe("CommunityFeed", () => {
           onLoadMore={onLoadMore}
           isAuthenticated
           onAttachmentDeliveryRefresh={vi.fn()}
+          {...interactionProps}
         />
       </MemoryRouter>,
     );
@@ -174,6 +183,7 @@ describe("CommunityFeed", () => {
           onRetry={vi.fn()}
           isAuthenticated
           onAttachmentDeliveryRefresh={vi.fn()}
+          {...interactionProps}
         />
       </MemoryRouter>,
     );
@@ -182,5 +192,33 @@ describe("CommunityFeed", () => {
     expect(threadLink.querySelector("button")).toBeNull();
     await user.click(screen.getByRole("button", { name: "查看大图：樱花大道" }));
     expect(screen.getByRole("dialog", { name: "樱花大道" })).toBeVisible();
+  });
+
+  it("exposes vote and bookmark actions outside thread navigation", async () => {
+    const user = userEvent.setup();
+    const onVote = vi.fn();
+    const onToggleBookmark = vi.fn();
+    render(
+      <MemoryRouter>
+        <CommunityFeed
+          mode="hot"
+          onModeChange={vi.fn()}
+          items={[thread]}
+          isLoading={false}
+          onRetry={vi.fn()}
+          isAuthenticated
+          onAttachmentDeliveryRefresh={vi.fn()}
+          onVote={onVote}
+          onToggleBookmark={onToggleBookmark}
+        />
+      </MemoryRouter>,
+    );
+
+    await user.click(screen.getByRole("button", { name: "取消赞同" }));
+    await user.click(screen.getByRole("button", { name: "取消收藏" }));
+
+    expect(onVote).toHaveBeenCalledWith(thread, "up");
+    expect(onToggleBookmark).toHaveBeenCalledWith(thread);
+    expect(screen.getByRole("button", { name: "分享：关注动态" })).toBeVisible();
   });
 });

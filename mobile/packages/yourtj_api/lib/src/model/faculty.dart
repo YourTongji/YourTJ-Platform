@@ -15,15 +15,15 @@ part 'faculty.g.dart';
 )
 class Faculty {
   /// Returns a new [Faculty] instance.
-  Faculty({this.id, this.name, this.campusId});
+  Faculty({required this.id, required this.name, required this.campusId});
 
-  @JsonKey(name: r'id', required: false, includeIfNull: false)
-  final String? id;
+  @JsonKey(name: r'id', required: true, includeIfNull: false)
+  final String id;
 
-  @JsonKey(name: r'name', required: false, includeIfNull: false)
-  final String? name;
+  @JsonKey(name: r'name', required: true, includeIfNull: false)
+  final String name;
 
-  @JsonKey(name: r'campusId', required: false, includeIfNull: false)
+  @JsonKey(name: r'campusId', required: true, includeIfNull: true)
   final String? campusId;
 
   @override

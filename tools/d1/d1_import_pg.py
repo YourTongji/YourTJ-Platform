@@ -26,6 +26,24 @@ from pathlib import Path
 from typing import Any, TextIO
 
 BACKUP_DATABASE_NAME = "jcourse-db-backup"
+MANIFEST_SCHEMA_VERSION = 1
+APPROVAL_REASON_MIN_LENGTH = 10
+APPROVAL_REASON_MAX_LENGTH = 500
+OPERATOR_LABEL_MIN_LENGTH = 3
+OPERATOR_LABEL_MAX_LENGTH = 64
+ESSENTIAL_TABLES = (
+    "calendar",
+    "coursenature",
+    "coursenature_by_calendar",
+    "campus",
+    "faculty",
+    "major",
+    "coursedetail",
+    "teacher",
+    "teacher_timeslots",
+    "majorandcourse",
+    "fetchlog",
+)
 
 
 @dataclass(frozen=True)
@@ -241,13 +259,36 @@ def sha256_file(path: Path) -> str:
 
 def build_manifest(args: argparse.Namespace, counts: dict[str, int]) -> dict[str, Any]:
     return {
-        "schemaVersion": 1,
+        "schemaVersion": MANIFEST_SCHEMA_VERSION,
         "sourceDatabase": args.source_database,
         "snapshotSha256": sha256_file(args.source),
         "snapshotBytes": args.source.stat().st_size,
         "snapshotExportedAt": args.snapshot_exported_at,
         "sourceTableCounts": counts,
     }
+
+
+def paths_alias(left: Path, right: Path) -> bool:
+    if left.exists() and right.exists() and os.path.samefile(left, right):
+        return True
+    return left.resolve(strict=False) == right.resolve(strict=False)
+
+
+def validate_manifest_paths(
+    source: Path,
+    manifest_out: Path | None,
+    compare_manifest: Path | None,
+) -> None:
+    paths = [
+        ("source", source),
+        ("manifest output", manifest_out),
+        ("comparison manifest", compare_manifest),
+    ]
+    configured = [(label, path) for label, path in paths if path is not None]
+    for index, (left_label, left_path) in enumerate(configured):
+        for right_label, right_path in configured[index + 1 :]:
+            if paths_alias(left_path, right_path):
+                raise ValueError(f"{left_label} and {right_label} must be different files")
 
 
 def write_manifest(path: Path, manifest: dict[str, Any]) -> None:
@@ -264,8 +305,11 @@ def write_manifest(path: Path, manifest: dict[str, Any]) -> None:
             output.write("\n")
             output.flush()
             os.fsync(output.fileno())
-        os.replace(temporary, path)
-        os.chmod(path, 0o600)
+        try:
+            os.link(temporary, path)
+        except FileExistsError as error:
+            raise FileExistsError(f"manifest output already exists: {path}") from error
+        temporary.unlink()
     except Exception:
         if descriptor >= 0:
             os.close(descriptor)
@@ -276,17 +320,156 @@ def write_manifest(path: Path, manifest: dict[str, Any]) -> None:
         raise
 
 
-def report_manifest_diff(path: Path, manifest: dict[str, Any]) -> None:
-    previous = json.loads(path.read_text(encoding="utf-8"))
-    previous_counts = previous.get("sourceTableCounts")
-    if not isinstance(previous_counts, dict):
-        raise ValueError("comparison manifest is missing sourceTableCounts")
+def validated_table_counts(value: object, surface: str) -> dict[str, int]:
+    expected = {spec.source for spec in TABLES}
+    if not isinstance(value, dict) or set(value) != expected:
+        raise ValueError(f"{surface} must contain exactly the 13 supported table counts")
+    counts: dict[str, int] = {}
+    for table, count in value.items():
+        if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+            raise ValueError(f"{surface} contains an invalid count for {table}")
+        counts[table] = count
+    return counts
+
+
+def load_comparison_manifest(
+    path: Path, current_manifest: dict[str, Any]
+) -> dict[str, Any]:
+    try:
+        previous = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError(f"cannot read comparison manifest: {error}") from error
+    if not isinstance(previous, dict):
+        raise ValueError("comparison manifest must be a JSON object")
+    if previous.get("schemaVersion") != MANIFEST_SCHEMA_VERSION:
+        raise ValueError("comparison manifest has an unsupported schemaVersion")
+    if previous.get("sourceDatabase") != current_manifest["sourceDatabase"]:
+        raise ValueError("comparison manifest sourceDatabase does not match")
+    snapshot_sha256 = previous.get("snapshotSha256")
+    if (
+        not isinstance(snapshot_sha256, str)
+        or len(snapshot_sha256) != 64
+        or any(character not in "0123456789abcdef" for character in snapshot_sha256)
+    ):
+        raise ValueError("comparison manifest has an invalid snapshotSha256")
+    previous["sourceTableCounts"] = validated_table_counts(
+        previous.get("sourceTableCounts"), "comparison manifest sourceTableCounts"
+    )
+    return previous
+
+
+def bounded_approval_reason(args: argparse.Namespace) -> str:
+    reason = (args.approval_reason or "").strip()
+    if not APPROVAL_REASON_MIN_LENGTH <= len(reason) <= APPROVAL_REASON_MAX_LENGTH:
+        raise ValueError(
+            "approval reason must contain between "
+            f"{APPROVAL_REASON_MIN_LENGTH} and {APPROVAL_REASON_MAX_LENGTH} characters"
+        )
+    return reason
+
+
+def validated_operator_label(value: str) -> str:
+    label = value.strip()
+    allowed = set("abcdefghijklmnopqrstuvwxyz0123456789._:/-")
+    if (
+        not OPERATOR_LABEL_MIN_LENGTH <= len(label) <= OPERATOR_LABEL_MAX_LENGTH
+        or label[0] not in "abcdefghijklmnopqrstuvwxyz0123456789"
+        or any(character not in allowed for character in label)
+    ):
+        raise ValueError(
+            "imported-by must be a 3-64 character lowercase role/service label"
+        )
+    return label
+
+
+def validate_snapshot_completeness(
+    args: argparse.Namespace,
+    manifest: dict[str, Any],
+    comparison_manifest: dict[str, Any] | None,
+) -> dict[str, Any]:
+    current_counts = validated_table_counts(
+        manifest.get("sourceTableCounts"), "current sourceTableCounts"
+    )
+    empty_essential = [table for table in ESSENTIAL_TABLES if current_counts[table] == 0]
+    if empty_essential:
+        raise ValueError(
+            "essential source tables must be non-empty: " + ", ".join(empty_essential)
+        )
+
+    approves_unbaselined = bool(args.approve_unbaselined_snapshot)
+    approves_decrease = bool(args.approve_count_decrease)
+    if comparison_manifest is None:
+        if not approves_unbaselined:
+            raise ValueError(
+                "a comparison manifest is required unless "
+                "--approve-unbaselined-snapshot is explicitly supplied"
+            )
+        if approves_decrease:
+            raise ValueError("count-decrease approval requires a comparison manifest")
+        return {
+            "completenessApproved": True,
+            "approvalMode": "unbaselined",
+            "approvalReason": bounded_approval_reason(args),
+            "approvedCoreCounts": {
+                table: current_counts[table] for table in ESSENTIAL_TABLES
+            },
+        }
+
+    if approves_unbaselined:
+        raise ValueError(
+            "--approve-unbaselined-snapshot cannot be combined with --compare-manifest"
+        )
+    previous_counts = comparison_manifest["sourceTableCounts"]
+    decreases = {
+        table: {"before": previous_counts[table], "after": current_counts[table]}
+        for table in ESSENTIAL_TABLES
+        if current_counts[table] < previous_counts[table]
+    }
+    if decreases and not approves_decrease:
+        raise ValueError(
+            "essential table counts decreased; inspect the diff and explicitly approve: "
+            + ", ".join(decreases)
+        )
+    if approves_decrease and not decreases:
+        raise ValueError("--approve-count-decrease was supplied but no essential count decreased")
+    if args.approval_reason and not approves_decrease:
+        raise ValueError("--approval-reason is only valid for an explicit approval mode")
+
+    validation: dict[str, Any] = {
+        "completenessApproved": True,
+        "approvalMode": "countDecreaseOverride" if decreases else "baselineCompared",
+        "baselineSnapshotSha256": comparison_manifest["snapshotSha256"],
+        "baselineCoreCounts": {
+            table: previous_counts[table] for table in ESSENTIAL_TABLES
+        },
+    }
+    if decreases:
+        validation["approvalReason"] = bounded_approval_reason(args)
+        validation["countDecreases"] = decreases
+    return validation
+
+
+def report_manifest_diff(
+    previous: dict[str, Any], manifest: dict[str, Any]
+) -> None:
+    previous_counts = previous["sourceTableCounts"]
     current_counts = manifest["sourceTableCounts"]
     print("Snapshot row-count delta:", file=sys.stderr)
     for spec in TABLES:
-        before = int(previous_counts.get(spec.source, 0))
+        before = previous_counts[spec.source]
         after = int(current_counts[spec.source])
         print(f"  {spec.source}: {after - before:+d} ({before} -> {after})", file=sys.stderr)
+
+
+def process_manifest_files(
+    args: argparse.Namespace,
+    manifest: dict[str, Any],
+    comparison_manifest: dict[str, Any] | None,
+) -> None:
+    if comparison_manifest is not None:
+        report_manifest_diff(comparison_manifest, manifest)
+    if args.manifest_out:
+        write_manifest(args.manifest_out, manifest)
 
 
 def sql_literal(value: str) -> str:
@@ -305,7 +488,9 @@ def target_count_guard(counts: dict[str, int]) -> str:
     return "DO $validate$\nBEGIN\n" + "\n".join(checks) + "\nEND\n$validate$;"
 
 
-def import_run_insert(manifest: dict[str, Any], imported_by: str) -> str:
+def import_run_insert(
+    manifest: dict[str, Any], imported_by: str, validation_result: dict[str, Any]
+) -> str:
     exported_at = manifest["snapshotExportedAt"]
     exported_sql = (
         "NULL"
@@ -313,11 +498,7 @@ def import_run_insert(manifest: dict[str, Any], imported_by: str) -> str:
         else f"{sql_literal(exported_at)}::timestamptz"
     )
     counts = json.dumps(manifest["sourceTableCounts"], separators=(",", ":"), sort_keys=True)
-    validation = json.dumps(
-        {"rowCountsMatched": True, "sourceSchemaValidated": True},
-        separators=(",", ":"),
-        sort_keys=True,
-    )
+    validation = json.dumps(validation_result, separators=(",", ":"), sort_keys=True)
     return (
         "INSERT INTO selection.import_runs ("
         "snapshot_sha256, snapshot_bytes, source_database, snapshot_exported_at, "
@@ -369,6 +550,7 @@ def emit_copy_stream(
     output: TextIO,
     manifest: dict[str, Any],
     imported_by: str,
+    validation_result: dict[str, Any],
 ) -> int:
     targets = ", ".join(spec.target for spec in TABLES)
     print(r"\set ON_ERROR_STOP on", file=output)
@@ -383,7 +565,7 @@ def emit_copy_stream(
         print(f"{spec.source}: {count} rows", file=sys.stderr)
         total += count
     print(target_count_guard(manifest["sourceTableCounts"]), file=output)
-    print(import_run_insert(manifest, imported_by), file=output)
+    print(import_run_insert(manifest, imported_by, validation_result), file=output)
     print("COMMIT;", file=output)
     return total
 
@@ -393,6 +575,7 @@ def import_direct(
     database_url: str,
     manifest: dict[str, Any],
     imported_by: str,
+    validation_result: dict[str, Any],
 ) -> int:
     try:
         import psycopg2
@@ -432,10 +615,7 @@ def import_direct(
                     imported_by,
                     json.dumps(manifest["sourceTableCounts"], sort_keys=True),
                     json.dumps(target_counts, sort_keys=True),
-                    json.dumps(
-                        {"rowCountsMatched": True, "sourceSchemaValidated": True},
-                        sort_keys=True,
-                    ),
+                    json.dumps(validation_result, sort_keys=True),
                 ),
             )
         connection.commit()
@@ -467,8 +647,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--imported-by",
-        default=os.environ.get("USER", "unknown"),
-        help="operator label stored with the import audit record",
+        required=True,
+        help="non-PII lowercase role/service label stored with the import audit record",
     )
     parser.add_argument(
         "--manifest-out",
@@ -478,13 +658,33 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--compare-manifest",
         type=Path,
-        help="print per-table row-count deltas against an earlier manifest",
+        help="validate and print row-count deltas against an approved earlier manifest",
+    )
+    parser.add_argument(
+        "--approve-unbaselined-snapshot",
+        action="store_true",
+        help="explicitly approve the first snapshot when no comparison manifest exists",
+    )
+    parser.add_argument(
+        "--approve-count-decrease",
+        action="store_true",
+        help="explicitly approve decreases in essential tables after reviewing the diff",
+    )
+    parser.add_argument(
+        "--approval-reason",
+        help="bounded operator rationale required for unbaselined or count-decrease approval",
     )
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
+    try:
+        validate_manifest_paths(args.source, args.manifest_out, args.compare_manifest)
+        imported_by = validated_operator_label(args.imported_by)
+    except (OSError, ValueError) as error:
+        print(f"ERROR: {error}", file=sys.stderr)
+        return 1
     if not args.source.is_file():
         print(f"ERROR: snapshot not found: {args.source}", file=sys.stderr)
         return 1
@@ -493,18 +693,40 @@ def main() -> int:
         validate_source(database)
         counts = source_counts(database)
         manifest = build_manifest(args, counts)
-        if args.manifest_out:
-            write_manifest(args.manifest_out, manifest)
-        if args.compare_manifest:
-            report_manifest_diff(args.compare_manifest, manifest)
+        comparison_manifest = (
+            load_comparison_manifest(args.compare_manifest, manifest)
+            if args.compare_manifest
+            else None
+        )
+        completeness = validate_snapshot_completeness(
+            args, manifest, comparison_manifest
+        )
+        validation_result = {
+            "rowCountsMatched": True,
+            "sourceSchemaValidated": True,
+            **completeness,
+        }
+        process_manifest_files(args, manifest, comparison_manifest)
         if args.emit_copy:
-            total = emit_copy_stream(database, sys.stdout, manifest, args.imported_by)
+            total = emit_copy_stream(
+                database,
+                sys.stdout,
+                manifest,
+                imported_by,
+                validation_result,
+            )
         else:
             database_url = os.environ.get("DATABASE_URL")
             if not database_url:
                 print("ERROR: DATABASE_URL is not set", file=sys.stderr)
                 return 1
-            total = import_direct(database, database_url, manifest, args.imported_by)
+            total = import_direct(
+                database,
+                database_url,
+                manifest,
+                imported_by,
+                validation_result,
+            )
     except Exception as error:
         print(f"ERROR: {error}", file=sys.stderr)
         return 1

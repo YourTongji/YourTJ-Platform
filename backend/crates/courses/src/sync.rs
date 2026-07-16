@@ -15,6 +15,11 @@ use uuid::Uuid;
 
 const MAX_ATTEMPTS: i16 = 8;
 const LEASE_MINUTES: i64 = 30;
+const LEASE_HEARTBEAT_SECONDS: u64 = 60;
+const RETENTION_INTERVAL_SECONDS: u64 = 24 * 60 * 60;
+const SUCCEEDED_RETENTION_DAYS: i64 = 90;
+const DEAD_RETENTION_DAYS: i64 = 365;
+const IMPORT_PROVENANCE_RETENTION_DAYS: i64 = 365;
 
 #[derive(Debug, Clone, FromRow)]
 pub struct SelectionSyncJob {
@@ -158,7 +163,7 @@ pub async fn list_sync_jobs(
     if has_more {
         rows.pop();
     }
-    let next_cursor = has_more.then(|| rows.last().expect("continued job page").id);
+    let next_cursor = if has_more { rows.last().map(|job| job.id) } else { None };
     Ok((rows, next_cursor))
 }
 
@@ -270,7 +275,8 @@ async fn set_progress(
          SET step = $3, progress_current = $4, \
              lease_expires_at = now() + ($5::bigint * interval '1 minute'), \
              result = result || COALESCE($6, '{}'::jsonb), updated_at = now() \
-         WHERE id = $1 AND status = 'running' AND lease_token = $2",
+         WHERE id = $1 AND status = 'running' AND lease_token = $2 \
+           AND lease_expires_at > now()",
     )
     .bind(job.id)
     .bind(job.lease_token)
@@ -278,6 +284,25 @@ async fn set_progress(
     .bind(progress_current)
     .bind(LEASE_MINUTES)
     .bind(result_patch)
+    .execute(pool)
+    .await?
+    .rows_affected();
+    if affected != 1 {
+        return Err(AppError::Conflict("selection sync job lease was lost".into()));
+    }
+    Ok(())
+}
+
+async fn renew_lease(pool: &PgPool, job: &ClaimedSyncJob) -> AppResult<()> {
+    let affected = sqlx::query(
+        "UPDATE selection.sync_jobs \
+         SET lease_expires_at = now() + ($3::bigint * interval '1 minute'), updated_at = now() \
+         WHERE id = $1 AND status = 'running' AND lease_token = $2 \
+           AND lease_expires_at > now()",
+    )
+    .bind(job.id)
+    .bind(job.lease_token)
+    .bind(LEASE_MINUTES)
     .execute(pool)
     .await?
     .rows_affected();
@@ -313,6 +338,11 @@ async fn invalidate_selection_caches(state: &AppState) -> anyhow::Result<bool> {
 struct PipelineFailure {
     code: &'static str,
     error: anyhow::Error,
+}
+
+fn projection_failure(error: AppError) -> PipelineFailure {
+    let code = if matches!(error, AppError::Conflict(_)) { "lease_lost" } else { "search_failed" };
+    PipelineFailure { code, error: anyhow::anyhow!(error.to_string()) }
 }
 
 async fn execute_pipeline(
@@ -365,10 +395,7 @@ async fn execute_pipeline(
         Some(&json!({ "offeringRows": offering_rows, "timeslotRows": timeslot_rows })),
     )
     .await
-    .map_err(|error| PipelineFailure {
-        code: "search_failed",
-        error: anyhow::anyhow!(error.to_string()),
-    })?;
+    .map_err(projection_failure)?;
 
     if state.meili_url.trim().is_empty() {
         return Err(PipelineFailure {
@@ -376,29 +403,34 @@ async fn execute_pipeline(
             error: anyhow::anyhow!("Meilisearch is not configured"),
         });
     }
+    let fence = crate::meili::SelectionSyncFence::new(&state.db, job.id, job.lease_token);
+    fence.assert_current().await.map_err(|error| PipelineFailure {
+        code: "lease_lost",
+        error: anyhow::anyhow!(error.to_string()),
+    })?;
     crate::meili::setup_selection_index(&state.meili_url, &state.meili_master_key).await.map_err(
         |error| PipelineFailure { code: "search_failed", error: anyhow::anyhow!(error) },
     )?;
-    let indexed_catalogue = crate::meili::reindex_course_documents(
+    fence.assert_current().await.map_err(|error| PipelineFailure {
+        code: "lease_lost",
+        error: anyhow::anyhow!(error.to_string()),
+    })?;
+    let indexed_catalogue = crate::meili::reindex_course_documents_fenced(
         &state.db,
         &state.meili_url,
         &state.meili_master_key,
+        &fence,
     )
     .await
-    .map_err(|error| PipelineFailure {
-        code: "search_failed",
-        error: anyhow::anyhow!(error.to_string()),
-    })?;
-    let indexed_offerings = crate::meili::sync_selection_courses_to_meili(
+    .map_err(projection_failure)?;
+    let indexed_offerings = crate::meili::sync_selection_courses_to_meili_fenced(
         &state.meili_url,
         &state.meili_master_key,
         &state.db,
+        &fence,
     )
     .await
-    .map_err(|error| PipelineFailure {
-        code: "search_failed",
-        error: anyhow::anyhow!(error.to_string()),
-    })?;
+    .map_err(projection_failure)?;
     set_progress(
         &state.db,
         job,
@@ -428,6 +460,32 @@ async fn execute_pipeline(
     }))
 }
 
+async fn execute_pipeline_with_heartbeat(
+    state: &AppState,
+    job: &ClaimedSyncJob,
+) -> Result<Value, PipelineFailure> {
+    renew_lease(&state.db, job).await.map_err(|error| PipelineFailure {
+        code: "lease_lost",
+        error: anyhow::anyhow!(error.to_string()),
+    })?;
+    let pipeline = execute_pipeline(state, job);
+    tokio::pin!(pipeline);
+    let mut heartbeat = tokio::time::interval(StdDuration::from_secs(LEASE_HEARTBEAT_SECONDS));
+    heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    heartbeat.tick().await;
+    loop {
+        tokio::select! {
+            result = &mut pipeline => return result,
+            _ = heartbeat.tick() => {
+                renew_lease(&state.db, job).await.map_err(|error| PipelineFailure {
+                    code: "lease_lost",
+                    error: anyhow::anyhow!(error.to_string()),
+                })?;
+            }
+        }
+    }
+}
+
 async fn complete_job(pool: &PgPool, job: &ClaimedSyncJob, result: &Value) -> AppResult<()> {
     let mut tx = pool.begin().await?;
     let affected = sqlx::query(
@@ -435,7 +493,8 @@ async fn complete_job(pool: &PgPool, job: &ClaimedSyncJob, result: &Value) -> Ap
          SET status = 'succeeded', step = 'complete', progress_current = progress_total, \
              result = $3, locked_at = NULL, lease_token = NULL, lease_expires_at = NULL, \
              last_error_code = NULL, completed_at = now(), updated_at = now() \
-         WHERE id = $1 AND status = 'running' AND lease_token = $2",
+         WHERE id = $1 AND status = 'running' AND lease_token = $2 \
+           AND lease_expires_at > now()",
     )
     .bind(job.id)
     .bind(job.lease_token)
@@ -465,7 +524,8 @@ async fn fail_job(
     job: &ClaimedSyncJob,
     error_code: &'static str,
 ) -> AppResult<String> {
-    let exponent = u32::try_from((job.attempts - 1).clamp(0, 7)).unwrap_or(0);
+    let exponent = u32::try_from((job.attempts - 1).clamp(0, 7))
+        .map_err(|error| AppError::Internal(anyhow::Error::new(error)))?;
     let retry_at = Utc::now() + Duration::seconds((30_i64 * 2_i64.pow(exponent)).min(3_600));
     let next_status = if job.attempts >= MAX_ATTEMPTS { "dead" } else { "queued" };
     let mut tx = pool.begin().await?;
@@ -474,7 +534,8 @@ async fn fail_job(
          SET status = $3, next_attempt_at = $4, locked_at = NULL, lease_token = NULL, \
              lease_expires_at = NULL, last_error_code = $5, \
              completed_at = CASE WHEN $3 = 'dead' THEN now() ELSE NULL END, updated_at = now() \
-         WHERE id = $1 AND status = 'running' AND lease_token = $2",
+         WHERE id = $1 AND status = 'running' AND lease_token = $2 \
+           AND lease_expires_at > now()",
     )
     .bind(job.id)
     .bind(job.lease_token)
@@ -514,10 +575,35 @@ pub async fn process_one_selection_sync_job(state: &AppState) -> AppResult<bool>
     let Some(job) = claim_due_job(&state.db).await? else {
         return Ok(false);
     };
-    match execute_pipeline(state, &job).await {
-        Ok(result) => complete_job(&state.db, &job, &result).await?,
+    match execute_pipeline_with_heartbeat(state, &job).await {
+        Ok(result) => {
+            if let Err(error) = complete_job(&state.db, &job, &result).await {
+                if matches!(error, AppError::Conflict(_)) {
+                    tracing::warn!(
+                        job_id = %job.id,
+                        attempt = job.attempts,
+                        "stale selection sync worker could not complete after losing its lease"
+                    );
+                    return Ok(true);
+                }
+                return Err(error);
+            }
+        }
         Err(failure) => {
-            let next_status = fail_job(&state.db, &job, failure.code).await?;
+            let next_status = match fail_job(&state.db, &job, failure.code).await {
+                Ok(status) => status,
+                Err(AppError::Conflict(_)) => {
+                    tracing::warn!(
+                        job_id = %job.id,
+                        attempt = job.attempts,
+                        error_code = failure.code,
+                        error = %failure.error,
+                        "stale selection sync worker stopped after losing its lease"
+                    );
+                    return Ok(true);
+                }
+                Err(error) => return Err(error),
+            };
             tracing::warn!(
                 job_id = %job.id,
                 attempt = job.attempts,
@@ -531,9 +617,55 @@ pub async fn process_one_selection_sync_job(state: &AppState) -> AppResult<bool>
     Ok(true)
 }
 
+async fn purge_operation_history(pool: &PgPool) -> AppResult<(u64, u64)> {
+    let mut tx = pool.begin().await?;
+    let sync_jobs = sqlx::query(
+        "DELETE FROM selection.sync_jobs \
+         WHERE (status IN ('succeeded', 'cancelled') \
+                AND completed_at < now() - ($1::bigint * interval '1 day')) \
+            OR (status = 'dead' \
+                AND completed_at < now() - ($2::bigint * interval '1 day'))",
+    )
+    .bind(SUCCEEDED_RETENTION_DAYS)
+    .bind(DEAD_RETENTION_DAYS)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+    let import_runs = sqlx::query(
+        "DELETE FROM selection.import_runs \
+         WHERE imported_at < now() - ($1::bigint * interval '1 day') \
+           AND id <> (SELECT id FROM selection.import_runs \
+                      ORDER BY imported_at DESC, id DESC LIMIT 1)",
+    )
+    .bind(IMPORT_PROVENANCE_RETENTION_DAYS)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+    tx.commit().await?;
+    Ok((sync_jobs, import_runs))
+}
+
 /// Run the durable worker until process shutdown.
 pub async fn run_selection_sync_worker(state: AppState) {
+    let mut next_retention = tokio::time::Instant::now();
     loop {
+        let now = tokio::time::Instant::now();
+        if now >= next_retention {
+            next_retention = now + StdDuration::from_secs(RETENTION_INTERVAL_SECONDS);
+            match purge_operation_history(&state.db).await {
+                Ok((sync_jobs, import_runs)) if sync_jobs > 0 || import_runs > 0 => {
+                    tracing::info!(
+                        sync_jobs,
+                        import_runs,
+                        "selection operation history retention completed"
+                    );
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    tracing::warn!(?error, "selection operation history retention failed");
+                }
+            }
+        }
         match process_one_selection_sync_job(&state).await {
             Ok(true) => continue,
             Ok(false) => tokio::time::sleep(StdDuration::from_millis(500)).await,
@@ -546,5 +678,209 @@ pub async fn run_selection_sync_worker(state: AppState) {
                 tokio::time::sleep(StdDuration::from_secs(1)).await;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::str::FromStr;
+
+    use serde_json::json;
+    use shared::AppError;
+    use sqlx::migrate::Migrator;
+    use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+    use sqlx::{Connection, PgConnection};
+
+    use super::{
+        claim_due_job, complete_job, enqueue_sync_job_tx, fail_job, purge_operation_history,
+        renew_lease, set_progress,
+    };
+
+    static MIGRATOR: Migrator = sqlx::migrate!("../../migrations");
+
+    #[tokio::test]
+    async fn expired_worker_cannot_mutate_before_or_after_reclaim() {
+        let Ok(database_url) = std::env::var("DATABASE_URL") else {
+            return;
+        };
+        let base_options = PgConnectOptions::from_str(&database_url)
+            .expect("parse selection lease-test database URL");
+        let mut admin = PgConnection::connect_with(&base_options.clone().database("postgres"))
+            .await
+            .expect("connect selection lease-test administrator");
+        let database_name =
+            format!("yourtj_selection_lease_{}_test", uuid::Uuid::new_v4().simple());
+        sqlx::query(&format!("CREATE DATABASE \"{database_name}\""))
+            .execute(&mut admin)
+            .await
+            .expect("create isolated selection lease-test database");
+        let pool = PgPoolOptions::new()
+            .max_connections(5)
+            .connect_with(base_options.database(&database_name))
+            .await
+            .expect("connect isolated selection lease-test database");
+        MIGRATOR.run(&pool).await.expect("apply selection lease-test migrations");
+        let account_id: i64 = sqlx::query_scalar(
+            "INSERT INTO identity.accounts (email, handle, role) \
+             VALUES ($1, $2, 'admin') RETURNING id",
+        )
+        .bind(format!("lease-test-{}@tongji.edu.cn", uuid::Uuid::new_v4().simple()))
+        .bind(format!("lease-test-{}", uuid::Uuid::new_v4().simple()))
+        .fetch_one(&pool)
+        .await
+        .expect("seed selection lease-test operator");
+        let mut tx = pool.begin().await.expect("begin selection lease-test enqueue");
+        enqueue_sync_job_tx(
+            &mut tx,
+            account_id,
+            "lease fencing test",
+            &"a".repeat(64),
+            &"b".repeat(64),
+        )
+        .await
+        .expect("enqueue selection lease-test job");
+        tx.commit().await.expect("commit selection lease-test enqueue");
+
+        let first = claim_due_job(&pool)
+            .await
+            .expect("claim first selection lease")
+            .expect("queued selection lease-test job");
+        sqlx::query(
+            "UPDATE selection.sync_jobs \
+             SET lease_expires_at = now() - interval '1 second' WHERE id = $1",
+        )
+        .bind(first.id)
+        .execute(&pool)
+        .await
+        .expect("expire first selection lease");
+
+        assert!(matches!(renew_lease(&pool, &first).await, Err(AppError::Conflict(_))));
+        assert!(matches!(
+            set_progress(&pool, &first, "search", 2, None).await,
+            Err(AppError::Conflict(_))
+        ));
+        assert!(matches!(
+            complete_job(&pool, &first, &json!({"worker": 1})).await,
+            Err(AppError::Conflict(_))
+        ));
+        assert!(matches!(
+            fail_job(&pool, &first, "search_failed").await,
+            Err(AppError::Conflict(_))
+        ));
+
+        let second = claim_due_job(&pool)
+            .await
+            .expect("reclaim expired selection lease")
+            .expect("expired selection lease-test job is requeued");
+        assert_ne!(first.lease_token, second.lease_token);
+        assert!(matches!(renew_lease(&pool, &first).await, Err(AppError::Conflict(_))));
+        assert!(matches!(
+            set_progress(&pool, &first, "search", 2, None).await,
+            Err(AppError::Conflict(_))
+        ));
+        assert!(matches!(
+            complete_job(&pool, &first, &json!({"worker": 1})).await,
+            Err(AppError::Conflict(_))
+        ));
+        assert!(matches!(
+            fail_job(&pool, &first, "search_failed").await,
+            Err(AppError::Conflict(_))
+        ));
+
+        renew_lease(&pool, &second).await.expect("renew current selection lease");
+        set_progress(&pool, &second, "cache", 3, None)
+            .await
+            .expect("advance current selection lease");
+        complete_job(&pool, &second, &json!({"worker": 2}))
+            .await
+            .expect("complete current selection lease");
+        let status: String =
+            sqlx::query_scalar("SELECT status FROM selection.sync_jobs WHERE id = $1")
+                .bind(second.id)
+                .fetch_one(&pool)
+                .await
+                .expect("read completed selection lease-test job");
+        assert_eq!(status, "succeeded");
+
+        let recent_succeeded = uuid::Uuid::new_v4();
+        let old_dead = uuid::Uuid::new_v4();
+        let recent_dead = uuid::Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO selection.sync_jobs (\
+               id, requested_by, reason, idempotency_key_hash, request_fingerprint, status, step, \
+               attempts, progress_current, last_error_code, completed_at, created_at, updated_at\
+             ) VALUES \
+               ($1, $4, 'recent success', $5, $6, 'succeeded', 'complete', 1, 4, NULL, \
+                now() - interval '89 days', now() - interval '89 days', now() - interval '89 days'), \
+               ($2, $4, 'old failure', $7, $8, 'dead', 'search', 8, 2, 'search_failed', \
+                now() - interval '366 days', now() - interval '366 days', now() - interval '366 days'), \
+               ($3, $4, 'recent failure', $9, $10, 'dead', 'search', 8, 2, 'search_failed', \
+                now() - interval '364 days', now() - interval '364 days', now() - interval '364 days')",
+        )
+        .bind(recent_succeeded)
+        .bind(old_dead)
+        .bind(recent_dead)
+        .bind(account_id)
+        .bind("c".repeat(64))
+        .bind("d".repeat(64))
+        .bind("e".repeat(64))
+        .bind("f".repeat(64))
+        .bind("1".repeat(64))
+        .bind("2".repeat(64))
+        .execute(&pool)
+        .await
+        .expect("seed selection operation retention jobs");
+        sqlx::query(
+            "UPDATE selection.sync_jobs \
+             SET completed_at = now() - interval '91 days', \
+                 created_at = now() - interval '91 days', updated_at = now() - interval '91 days' \
+             WHERE id = $1",
+        )
+        .bind(second.id)
+        .execute(&pool)
+        .await
+        .expect("age completed selection sync job");
+        sqlx::query(
+            "INSERT INTO selection.import_runs (\
+               snapshot_sha256, snapshot_bytes, source_database, imported_by, \
+               source_table_counts, target_table_counts, imported_at\
+             ) VALUES \
+               ($1, 1, 'jcourse-db-backup', 'on-call-role', '{}'::jsonb, '{}'::jsonb, \
+                now() - interval '366 days'), \
+               ($2, 1, 'jcourse-db-backup', 'on-call-role', '{}'::jsonb, '{}'::jsonb, now())",
+        )
+        .bind("3".repeat(64))
+        .bind("4".repeat(64))
+        .execute(&pool)
+        .await
+        .expect("seed selection import provenance retention rows");
+
+        let purged = purge_operation_history(&pool)
+            .await
+            .expect("purge expired selection operation history");
+        assert_eq!(purged, (2, 1));
+        let retained_jobs: Vec<uuid::Uuid> = sqlx::query_scalar(
+            "SELECT id FROM selection.sync_jobs \
+             WHERE id = ANY($1) ORDER BY id",
+        )
+        .bind(vec![second.id, recent_succeeded, old_dead, recent_dead])
+        .fetch_all(&pool)
+        .await
+        .expect("read retained selection operation jobs");
+        let mut expected_jobs = vec![recent_succeeded, recent_dead];
+        expected_jobs.sort_unstable();
+        assert_eq!(retained_jobs, expected_jobs);
+        let retained_imports: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM selection.import_runs")
+                .fetch_one(&pool)
+                .await
+                .expect("read retained selection import provenance");
+        assert_eq!(retained_imports, 1);
+
+        pool.close().await;
+        sqlx::query(&format!("DROP DATABASE \"{database_name}\""))
+            .execute(&mut admin)
+            .await
+            .expect("drop isolated selection lease-test database");
     }
 }

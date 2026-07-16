@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:yourtj_api/yourtj_api.dart';
 
@@ -47,6 +48,11 @@ class _ScheduleJourney extends ConsumerStatefulWidget {
 class _ScheduleJourneyState extends ConsumerState<_ScheduleJourney> {
   late final ScheduleController _controller;
   final TextEditingController _searchController = TextEditingController();
+  int? _draftWeekday;
+  int? _draftStartSlot;
+  int? _draftEndSlot;
+  int? _draftWeek;
+  bool _draftIncludeUnknownSchedule = true;
 
   @override
   void initState() {
@@ -198,9 +204,9 @@ class _ScheduleJourneyState extends ConsumerState<_ScheduleJourney> {
                     label: '学期',
                     selectedValue: _controller.calendarId,
                     items: _controller.calendars,
-                    value: (Calendar item) => item.id!,
-                    name: (Calendar item) => item.name ?? item.id!,
-                    onChanged: _controller.selectCalendar,
+                    value: (Calendar item) => item.id,
+                    name: (Calendar item) => item.name,
+                    onChanged: _selectCalendar,
                   ),
                   _dropdown<String>(
                     label: '年级',
@@ -208,7 +214,9 @@ class _ScheduleJourneyState extends ConsumerState<_ScheduleJourney> {
                     items: _controller.grades,
                     value: (String item) => item,
                     name: (String item) => item,
-                    onChanged: _controller.calendarId == null
+                    onChanged:
+                        _controller.calendarId == null ||
+                            _controller.areContextOptionsLoading
                         ? null
                         : _controller.selectGrade,
                   ),
@@ -216,9 +224,11 @@ class _ScheduleJourneyState extends ConsumerState<_ScheduleJourney> {
                     label: '专业',
                     selectedValue: _controller.majorId,
                     items: _controller.majors,
-                    value: (Major item) => item.id!,
-                    name: (Major item) => item.name ?? item.id!,
-                    onChanged: _controller.grade == null
+                    value: (Major item) => item.id,
+                    name: (Major item) => item.name,
+                    onChanged:
+                        _controller.grade == null ||
+                            _controller.areContextOptionsLoading
                         ? null
                         : _controller.selectMajor,
                   ),
@@ -313,8 +323,8 @@ class _ScheduleJourneyState extends ConsumerState<_ScheduleJourney> {
                 label: '课程性质',
                 selectedValue: _controller.natureId,
                 items: _controller.natures,
-                value: (CourseNature item) => item.id!,
-                name: (CourseNature item) => item.name ?? item.id!,
+                value: (CourseNature item) => item.id,
+                name: (CourseNature item) => item.name,
                 onChanged: _controller.selectNature,
               )
             else if (_controller.mode == SelectionBrowseMode.search)
@@ -339,6 +349,8 @@ class _ScheduleJourneyState extends ConsumerState<_ScheduleJourney> {
                   ),
                 ],
               ),
+            const SizedBox(height: 10),
+            _timeFilters(context),
             const SizedBox(height: 14),
             _courseResults(context),
           ],
@@ -443,6 +455,13 @@ class _ScheduleJourneyState extends ConsumerState<_ScheduleJourney> {
                   ),
                 ),
                 IconButton(
+                  tooltip: '导出或分享课表 JSON',
+                  onPressed: _controller.scheduled.isEmpty
+                      ? null
+                      : _copyScheduleJson,
+                  icon: const Icon(Icons.ios_share_outlined),
+                ),
+                IconButton(
                   tooltip: '清空本机课表',
                   onPressed: _controller.scheduled.isEmpty
                       ? null
@@ -499,6 +518,202 @@ class _ScheduleJourneyState extends ConsumerState<_ScheduleJourney> {
     );
   }
 
+  Widget _timeFilters(BuildContext context) {
+    final bool hasAppliedFilter =
+        _controller.weekday != null ||
+        _controller.startSlot != null ||
+        _controller.endSlot != null ||
+        _controller.week != null ||
+        !_controller.includeUnknownSchedule;
+    final bool hasDraftFilter =
+        _draftWeekday != null ||
+        _draftStartSlot != null ||
+        _draftEndSlot != null ||
+        _draftWeek != null ||
+        !_draftIncludeUnknownSchedule;
+    final bool hasCompleteSlotRange =
+        _draftWeekday != null &&
+        _draftStartSlot != null &&
+        _draftEndSlot != null;
+    final bool hasPartialSlotRange =
+        <int?>[
+          _draftWeekday,
+          _draftStartSlot,
+          _draftEndSlot,
+        ].any((int? value) => value != null) &&
+        !hasCompleteSlotRange;
+    final bool excludesUnknownWithoutRange =
+        !_draftIncludeUnknownSchedule && !hasCompleteSlotRange;
+    final bool canApply =
+        !hasPartialSlotRange &&
+        !excludesUnknownWithoutRange &&
+        (_draftWeek == null || hasCompleteSlotRange) &&
+        (_draftStartSlot == null ||
+            _draftEndSlot == null ||
+            _draftStartSlot! <= _draftEndSlot!);
+    return ExpansionTile(
+      tilePadding: EdgeInsets.zero,
+      childrenPadding: EdgeInsets.zero,
+      title: const Text('按空闲时间筛选'),
+      subtitle: Text(
+        hasPartialSlotRange ||
+                _draftWeek != null && !hasCompleteSlotRange ||
+                excludesUnknownWithoutRange
+            ? '星期、起始节次和结束节次需要一起选择'
+            : hasAppliedFilter
+            ? '已应用时间条件'
+            : '默认保留排课未知的教学班',
+      ),
+      children: <Widget>[
+        LayoutBuilder(
+          builder: (BuildContext context, BoxConstraints constraints) {
+            final List<Widget> fields = <Widget>[
+              _integerFilter(
+                label: '星期',
+                selectedValue: _draftWeekday,
+                values: List<int>.generate(7, (int index) => index + 1),
+                name: _weekday,
+                onChanged: (int? value) =>
+                    setState(() => _draftWeekday = value),
+              ),
+              _integerFilter(
+                label: '起始节次',
+                selectedValue: _draftStartSlot,
+                values: List<int>.generate(20, (int index) => index + 1),
+                name: (int value) => '$value 节',
+                onChanged: (int? value) =>
+                    setState(() => _draftStartSlot = value),
+              ),
+              _integerFilter(
+                label: '结束节次',
+                selectedValue: _draftEndSlot,
+                values: List<int>.generate(20, (int index) => index + 1),
+                name: (int value) => '$value 节',
+                onChanged: (int? value) =>
+                    setState(() => _draftEndSlot = value),
+              ),
+              _integerFilter(
+                label: '周次',
+                selectedValue: _draftWeek,
+                values: List<int>.generate(30, (int index) => index + 1),
+                name: (int value) => '第 $value 周',
+                onChanged: (int? value) => setState(() => _draftWeek = value),
+              ),
+            ];
+            if (constraints.maxWidth < 620) {
+              return Column(
+                children:
+                    fields
+                        .expand(
+                          (Widget field) => <Widget>[
+                            field,
+                            const SizedBox(height: 10),
+                          ],
+                        )
+                        .toList()
+                      ..removeLast(),
+              );
+            }
+            return Wrap(
+              spacing: 10,
+              runSpacing: 10,
+              children: fields
+                  .map((Widget field) => SizedBox(width: 150, child: field))
+                  .toList(growable: false),
+            );
+          },
+        ),
+        SwitchListTile.adaptive(
+          contentPadding: EdgeInsets.zero,
+          title: const Text('保留排课未知教学班'),
+          subtitle: const Text('关闭后只显示能确认满足空闲条件的教学班。'),
+          value: _draftIncludeUnknownSchedule,
+          onChanged: hasCompleteSlotRange || !_draftIncludeUnknownSchedule
+              ? (bool value) =>
+                    setState(() => _draftIncludeUnknownSchedule = value)
+              : null,
+        ),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.end,
+          children: <Widget>[
+            if (hasDraftFilter || hasAppliedFilter)
+              TextButton.icon(
+                onPressed: _clearTimeFilters,
+                icon: const Icon(Icons.filter_alt_off_outlined),
+                label: const Text('清除'),
+              ),
+            const SizedBox(width: 8),
+            FilledButton.icon(
+              onPressed: canApply ? _applyTimeFilters : null,
+              icon: const Icon(Icons.filter_alt_outlined),
+              label: const Text('应用筛选'),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _integerFilter({
+    required String label,
+    required int? selectedValue,
+    required List<int> values,
+    required String Function(int value) name,
+    required ValueChanged<int?> onChanged,
+  }) {
+    return DropdownButtonFormField<int>(
+      key: ValueKey<String>('$label:${selectedValue ?? ''}'),
+      initialValue: selectedValue,
+      isExpanded: true,
+      decoration: InputDecoration(labelText: label),
+      items: <DropdownMenuItem<int>>[
+        const DropdownMenuItem<int>(value: null, child: Text('不限')),
+        ...values.map(
+          (int value) =>
+              DropdownMenuItem<int>(value: value, child: Text(name(value))),
+        ),
+      ],
+      onChanged: onChanged,
+    );
+  }
+
+  Future<void> _selectCalendar(String? calendarId) async {
+    _searchController.clear();
+    _resetDraftTimeFilters();
+    await _controller.selectCalendar(calendarId);
+  }
+
+  Future<void> _applyTimeFilters() async {
+    try {
+      await _controller.updateTimeFilters(
+        weekday: _draftWeekday,
+        startSlot: _draftStartSlot,
+        endSlot: _draftEndSlot,
+        week: _draftWeek,
+        includeUnknownSchedule: _draftIncludeUnknownSchedule,
+      );
+    } on ApiFailure catch (failure) {
+      if (mounted) {
+        _showMessage(failure.message);
+      }
+    }
+  }
+
+  Future<void> _clearTimeFilters() async {
+    _resetDraftTimeFilters();
+    await _controller.clearTimeFilters();
+  }
+
+  void _resetDraftTimeFilters() {
+    setState(() {
+      _draftWeekday = null;
+      _draftStartSlot = null;
+      _draftEndSlot = null;
+      _draftWeek = null;
+      _draftIncludeUnknownSchedule = true;
+    });
+  }
+
   Future<void> _addOffering(SelectionOffering offering) async {
     try {
       final ScheduleAddResult result = await _controller.addOffering(offering);
@@ -523,9 +738,11 @@ class _ScheduleJourneyState extends ConsumerState<_ScheduleJourney> {
   Future<void> _showConflict(ScheduleAddResult result) async {
     final ScheduleConflict conflict = result.conflict!;
     final String withName = conflict.withCourse.offering.name;
-    final String slot =
-        '${_weekday(conflict.candidateSlot.weekday)} '
-        '${conflict.candidateSlot.startSlot}–${conflict.candidateSlot.endSlot} 节';
+    final TimeSlot? candidateSlot = conflict.candidateSlot;
+    final String slot = candidateSlot == null
+        ? '未知排课时段'
+        : '${_weekday(candidateSlot.weekday)} '
+              '${candidateSlot.startSlot}–${candidateSlot.endSlot} 节';
     if (conflict.kind == ScheduleConflictKind.confirmed) {
       await showDialog<void>(
         context: context,
@@ -549,8 +766,10 @@ class _ScheduleJourneyState extends ConsumerState<_ScheduleJourney> {
         icon: const Icon(Icons.warning_amber_rounded),
         title: const Text('可能存在周次冲突'),
         content: Text(
-          '该课程在 $slot 与“$withName”节次重叠，但至少一条时段的周次未知或无法解析。'
-          '系统不能确认是否同周上课，是否仍要加入？',
+          candidateSlot == null
+              ? '该教学班排课完全未知，无法排除与“$withName”冲突。是否仍要加入？'
+              : '该课程在 $slot 与“$withName”节次重叠，但至少一条时段的周次未知或无法解析。'
+                    '系统不能确认是否同周上课，是否仍要加入？',
         ),
         actions: <Widget>[
           TextButton(
@@ -597,7 +816,10 @@ class _ScheduleJourneyState extends ConsumerState<_ScheduleJourney> {
       context: context,
       builder: (BuildContext context) => AlertDialog(
         title: const Text('清空当前学期课表？'),
-        content: const Text('只会删除本机当前账号、环境和学期分区中的课程，不会写回一系统。'),
+        content: const Text(
+          '只会删除本机当前账号、环境和学期分区中的课程，'
+          '不会写回一系统。',
+        ),
         actions: <Widget>[
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
@@ -618,6 +840,50 @@ class _ScheduleJourneyState extends ConsumerState<_ScheduleJourney> {
     } on ApiFailure catch (failure) {
       if (mounted) {
         _showMessage(failure.message);
+      }
+    }
+  }
+
+  Future<void> _copyScheduleJson() async {
+    final bool? confirmed = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext context) => AlertDialog(
+        icon: const Icon(Icons.privacy_tip_outlined),
+        title: const Text('复制课表 JSON？'),
+        content: const Text(
+          '导出包含 API 环境、当前学期、教学班与时段，用于导入时防止串环境。'
+          '不包含账号标识或登录凭据。'
+          '复制到系统剪贴板后，其他应用可能读取；请只粘贴给信任的人。',
+        ),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton.icon(
+            onPressed: () => Navigator.of(context).pop(true),
+            icon: const Icon(Icons.content_copy_rounded),
+            label: const Text('复制 JSON'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) {
+      return;
+    }
+    try {
+      final String payload = _controller.exportScheduleJson();
+      await Clipboard.setData(ClipboardData(text: payload));
+      if (mounted) {
+        _showMessage('课表 JSON 已复制，可粘贴到你信任的应用中分享');
+      }
+    } on ApiFailure catch (failure) {
+      if (mounted) {
+        _showMessage(failure.message);
+      }
+    } on Object {
+      if (mounted) {
+        _showMessage('系统剪贴板暂不可用，课表未导出');
       }
     }
   }
@@ -769,8 +1035,8 @@ class _ScheduledCourseCard extends StatelessWidget {
             const SizedBox(height: 6),
             if (scheduled.timeslots.isEmpty)
               Text(
-                scheduled.offering.scheduleUnknown
-                    ? '该教学班排课未知，无法执行冲突检查。'
+                scheduled.hasUnknownSchedule
+                    ? '该教学班排课未知，加入时按可能冲突处理。'
                     : '该教学班当前无上课时段。',
               )
             else
@@ -814,7 +1080,7 @@ class ScheduleTimetable extends StatelessWidget {
     if (courses.isEmpty) {
       return const _InlineEmpty(
         title: '课表为空',
-        message: '加入课程后会按周一至周日、1–13 节显示。',
+        message: '加入课程后会按周一至周日、1–20 节显示。',
       );
     }
     return LayoutBuilder(
@@ -942,7 +1208,7 @@ class _ExpandedTimetable extends StatelessWidget {
                   ),
                 ],
               ),
-              ...List<TableRow>.generate(13, (int slotIndex) {
+              ...List<TableRow>.generate(20, (int slotIndex) {
                 final int section = slotIndex + 1;
                 return TableRow(
                   children: <Widget>[

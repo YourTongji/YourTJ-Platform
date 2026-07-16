@@ -13,10 +13,12 @@ class CourseDetailController extends ChangeNotifier {
     required this.courseId,
     required CoursesRepository courseSource,
     required ReviewsRepository reviewSource,
+    this.targetReviewId,
   }) : _coursesRepository = courseSource,
        _reviewsRepository = reviewSource;
 
   final String courseId;
+  final String? targetReviewId;
   final CoursesRepository _coursesRepository;
   final ReviewsRepository _reviewsRepository;
 
@@ -24,21 +26,25 @@ class CourseDetailController extends ChangeNotifier {
   AiSummary? _summary;
   List<Course> _related = const <Course>[];
   List<Review> _reviews = const <Review>[];
+  Review? _targetReview;
   String _reviewSort = 'hot';
   String? _reviewCursor;
   bool _reviewsHaveMore = false;
   bool _isLoading = true;
   bool _areReviewsLoading = true;
   bool _areMoreReviewsLoading = false;
+  bool _isTargetReviewLoading = false;
   bool _isPublishing = false;
   final Set<String> _busyReviewIds = <String>{};
   ApiFailure? _failure;
   ApiFailure? _summaryFailure;
   ApiFailure? _relatedFailure;
   ApiFailure? _reviewsFailure;
+  ApiFailure? _targetReviewFailure;
   ApiFailure? _mutationFailure;
   CancelToken? _detailRequest;
   CancelToken? _reviewsRequest;
+  CancelToken? _targetReviewRequest;
   int _detailGeneration = 0;
   int _reviewsGeneration = 0;
   bool _isDisposed = false;
@@ -47,22 +53,63 @@ class CourseDetailController extends ChangeNotifier {
   AiSummary? get summary => _summary;
   List<Course> get related => _related;
   List<Review> get reviews => _reviews;
+  Review? get targetReview => _targetReview;
   String get reviewSort => _reviewSort;
   bool get reviewsHaveMore => _reviewsHaveMore;
   bool get isLoading => _isLoading;
   bool get areReviewsLoading => _areReviewsLoading;
   bool get areMoreReviewsLoading => _areMoreReviewsLoading;
+  bool get isTargetReviewLoading => _isTargetReviewLoading;
   bool get isPublishing => _isPublishing;
   ApiFailure? get failure => _failure;
   ApiFailure? get summaryFailure => _summaryFailure;
   ApiFailure? get relatedFailure => _relatedFailure;
   ApiFailure? get reviewsFailure => _reviewsFailure;
+  ApiFailure? get targetReviewFailure => _targetReviewFailure;
   ApiFailure? get mutationFailure => _mutationFailure;
 
   bool isReviewBusy(String reviewId) => _busyReviewIds.contains(reviewId);
 
   Future<void> initialize() async {
-    await Future.wait<void>(<Future<void>>[reloadDetails(), reloadReviews()]);
+    await Future.wait<void>(<Future<void>>[
+      reloadDetails(),
+      reloadReviews(),
+      reloadTargetReview(),
+    ]);
+  }
+
+  Future<void> reloadTargetReview() async {
+    final String reviewId = targetReviewId ?? '';
+    if (reviewId.isEmpty) {
+      return;
+    }
+    _targetReviewRequest?.cancel('target review replaced');
+    final CancelToken request = CancelToken();
+    _targetReviewRequest = request;
+    _isTargetReviewLoading = true;
+    _targetReviewFailure = null;
+    _targetReview = null;
+    notifyListeners();
+    try {
+      final Review review = await _reviewsRepository.get(
+        reviewId,
+        cancelToken: request,
+      );
+      if (!_isDisposed && identical(_targetReviewRequest, request)) {
+        _targetReview = review.courseId == courseId ? review : null;
+      }
+    } on ApiFailure catch (failure) {
+      if (!_isDisposed &&
+          identical(_targetReviewRequest, request) &&
+          failure.kind != ApiFailureKind.cancelled) {
+        _targetReviewFailure = failure;
+      }
+    } finally {
+      if (!_isDisposed && identical(_targetReviewRequest, request)) {
+        _isTargetReviewLoading = false;
+        notifyListeners();
+      }
+    }
   }
 
   Future<void> reloadDetails() async {
@@ -276,8 +323,32 @@ class CourseDetailController extends ChangeNotifier {
     }
   }
 
-  Future<void> like(String reviewId) async {
-    await _runReviewMutation(reviewId, () => _reviewsRepository.like(reviewId));
+  Future<void> toggleLike(Review review) async {
+    final String reviewId = review.id ?? '';
+    await _runReviewMutation(
+      reviewId,
+      () => review.viewerLiked
+          ? _reviewsRepository.unlike(reviewId)
+          : _reviewsRepository.like(reviewId),
+    );
+  }
+
+  Future<void> edit({
+    required String reviewId,
+    required int rating,
+    String? comment,
+    String? semester,
+    String? score,
+  }) async {
+    await _runReviewMutation(reviewId, () async {
+      await _reviewsRepository.edit(
+        reviewId: reviewId,
+        rating: rating,
+        comment: comment,
+        semester: semester,
+        score: score,
+      );
+    }, reloadDetailsAfter: true);
   }
 
   Future<void> report({
@@ -292,7 +363,6 @@ class CourseDetailController extends ChangeNotifier {
         reason: reason,
         captchaToken: captchaToken,
       ),
-      reloadAfter: false,
     );
   }
 
@@ -300,6 +370,7 @@ class CourseDetailController extends ChangeNotifier {
     String reviewId,
     Future<void> Function() mutation, {
     bool reloadAfter = true,
+    bool reloadDetailsAfter = false,
   }) async {
     if (reviewId.isEmpty || !_busyReviewIds.add(reviewId)) {
       return;
@@ -309,7 +380,11 @@ class CourseDetailController extends ChangeNotifier {
     try {
       await mutation();
       if (reloadAfter && !_isDisposed) {
-        await reloadReviews();
+        await Future.wait<void>(<Future<void>>[
+          reloadReviews(),
+          if (targetReviewId == reviewId) reloadTargetReview(),
+          if (reloadDetailsAfter) reloadDetails(),
+        ]);
       }
     } on ApiFailure catch (failure) {
       if (!_isDisposed) {
@@ -341,6 +416,7 @@ class CourseDetailController extends ChangeNotifier {
     _isDisposed = true;
     _detailRequest?.cancel('course detail disposed');
     _reviewsRequest?.cancel('review list disposed');
+    _targetReviewRequest?.cancel('target review disposed');
     super.dispose();
   }
 }

@@ -8,6 +8,7 @@ class ReviewCard extends StatelessWidget {
     required this.review,
     required this.isBusy,
     required this.onLike,
+    required this.onEdit,
     required this.onReport,
     required this.onRefreshAvatar,
     super.key,
@@ -16,6 +17,7 @@ class ReviewCard extends StatelessWidget {
   final Review review;
   final bool isBusy;
   final Future<void> Function() onLike;
+  final Future<void> Function() onEdit;
   final Future<void> Function() onReport;
   final VoidCallback onRefreshAvatar;
 
@@ -88,16 +90,32 @@ class ReviewCard extends StatelessWidget {
             Wrap(
               spacing: 8,
               children: <Widget>[
-                TextButton.icon(
-                  onPressed: isBusy ? null : onLike,
-                  icon: const Icon(Icons.favorite_border_rounded),
-                  label: Text('${review.approveCount ?? 0} 赞同'),
-                ),
-                TextButton.icon(
-                  onPressed: isBusy ? null : onReport,
-                  icon: const Icon(Icons.flag_outlined),
-                  label: const Text('举报'),
-                ),
+                if (review.canEdit)
+                  TextButton.icon(
+                    onPressed: isBusy ? null : onEdit,
+                    icon: const Icon(Icons.edit_outlined),
+                    label: const Text('编辑'),
+                  )
+                else
+                  TextButton.icon(
+                    onPressed: isBusy ? null : onLike,
+                    icon: Icon(
+                      review.viewerLiked
+                          ? Icons.favorite_rounded
+                          : Icons.favorite_border_rounded,
+                    ),
+                    label: Text(
+                      review.viewerLiked
+                          ? '${review.approveCount ?? 0} 已赞同'
+                          : '${review.approveCount ?? 0} 赞同',
+                    ),
+                  ),
+                if (review.canReport)
+                  TextButton.icon(
+                    onPressed: isBusy ? null : onReport,
+                    icon: const Icon(Icons.flag_outlined),
+                    label: const Text('举报'),
+                  ),
               ],
             ),
           ],
@@ -105,6 +123,117 @@ class ReviewCard extends StatelessWidget {
       ),
     );
   }
+}
+
+class ReviewEditDraft {
+  const ReviewEditDraft({
+    required this.rating,
+    required this.comment,
+    required this.semester,
+    required this.score,
+  });
+
+  final int rating;
+  final String comment;
+  final String semester;
+  final String score;
+}
+
+Future<ReviewEditDraft?> requestReviewEdit(
+  BuildContext context,
+  Review review,
+) {
+  final TextEditingController semester = TextEditingController(
+    text: review.semester,
+  );
+  final TextEditingController score = TextEditingController(text: review.score);
+  final TextEditingController comment = TextEditingController(
+    text: review.comment,
+  );
+  int rating = review.rating ?? 0;
+  return showDialog<ReviewEditDraft>(
+    context: context,
+    builder: (BuildContext context) {
+      return StatefulBuilder(
+        builder: (BuildContext context, StateSetter setState) {
+          return AlertDialog(
+            title: const Text('编辑点评'),
+            content: SingleChildScrollView(
+              child: SizedBox(
+                width: 500,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: <Widget>[
+                    Semantics(
+                      label: '课程评分，当前 $rating 星',
+                      child: Wrap(
+                        children: List<Widget>.generate(5, (int index) {
+                          final int value = index + 1;
+                          return IconButton(
+                            tooltip: '$value 星',
+                            onPressed: () => setState(() => rating = value),
+                            icon: Icon(
+                              value <= rating
+                                  ? Icons.star_rounded
+                                  : Icons.star_outline_rounded,
+                            ),
+                          );
+                        }),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: semester,
+                      decoration: const InputDecoration(labelText: '学期（可选）'),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: score,
+                      decoration: const InputDecoration(labelText: '成绩（可选）'),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: comment,
+                      minLines: 3,
+                      maxLines: 8,
+                      decoration: const InputDecoration(
+                        labelText: '正文（可选）',
+                        alignLabelWithHint: true,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            actions: <Widget>[
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: const Text('取消'),
+              ),
+              FilledButton(
+                onPressed: rating < 1
+                    ? null
+                    : () => Navigator.of(context).pop(
+                        ReviewEditDraft(
+                          rating: rating,
+                          comment: comment.text.trim(),
+                          semester: semester.text.trim(),
+                          score: score.text.trim(),
+                        ),
+                      ),
+                child: const Text('保存修改'),
+              ),
+            ],
+          );
+        },
+      );
+    },
+  ).whenComplete(() {
+    semester.dispose();
+    score.dispose();
+    comment.dispose();
+  });
 }
 
 Future<String?> requestReviewReportReason(BuildContext context) {

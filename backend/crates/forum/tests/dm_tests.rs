@@ -123,19 +123,86 @@ async fn dm_lifecycle_is_canonical_private_readable_and_moderated() {
     assert_eq!(conversation["isMuted"], false);
     assert_eq!(conversation["isDeleted"], false);
 
-    let send_response = request(
+    let wrong_recipient = forum::repo::dms::send_message(
+        &pool,
+        conversation_id.parse().expect("conversation id is numeric"),
+        alice_id,
+        moderator_id,
+        "must not be delivered",
+        None,
+    )
+    .await;
+    assert!(matches!(wrong_recipient, Err(shared::AppError::Forbidden)));
+
+    let message_uri = format!("/api/v2/forum/dm/conversations/{conversation_id}/messages");
+    let invalid_client_message_id = request(
+        &app,
+        Method::POST,
+        &message_uri,
+        &alice_token,
+        Some(json!({
+            "body": "invalid client identity",
+            "clientMessageId": "not-a-uuid"
+        })),
+    )
+    .await;
+    assert_eq!(invalid_client_message_id.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        read_json(invalid_client_message_id).await,
+        json!({
+            "error": {
+                "code": "BAD_REQUEST",
+                "message": "clientMessageId must be a UUID"
+            }
+        })
+    );
+
+    let message_body = json!({
+        "body": "hello bob",
+        "clientMessageId": "018f2857-4f63-7d31-a72a-4e75f006c5c8"
+    });
+    let (send_response, replay_response) = tokio::join!(
+        request(&app, Method::POST, &message_uri, &alice_token, Some(message_body.clone())),
+        request(&app, Method::POST, &message_uri, &alice_token, Some(message_body)),
+    );
+    assert_eq!(send_response.status(), StatusCode::CREATED);
+    assert_eq!(replay_response.status(), StatusCode::CREATED);
+    let sent_message = read_json(send_response).await;
+    let replayed_message = read_json(replay_response).await;
+    let message_id = sent_message["id"].as_str().unwrap();
+    assert_eq!(sent_message["senderHandle"], "dm-alice");
+    assert_eq!(sent_message["senderDisplayName"], "Alice Chen");
+    assert_eq!(replayed_message["id"], sent_message["id"]);
+    let matching_messages: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM forum.dm_messages \
+         WHERE sender_id = $1 AND client_message_id = $2::uuid",
+    )
+    .bind(alice_id)
+    .bind("018f2857-4f63-7d31-a72a-4e75f006c5c8")
+    .fetch_one(&pool)
+    .await
+    .expect("count idempotent message");
+    assert_eq!(matching_messages, 1);
+    let matching_outbox_events: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM platform.outbox_events WHERE source_key = $1")
+            .bind(format!("dm-message:{message_id}"))
+            .fetch_one(&pool)
+            .await
+            .expect("count idempotent message notifications");
+    assert_eq!(matching_outbox_events, 1);
+
+    let conflicting_replay = request(
         &app,
         Method::POST,
         &format!("/api/v2/forum/dm/conversations/{conversation_id}/messages"),
         &alice_token,
-        Some(json!({ "body": "hello bob" })),
+        Some(json!({
+            "body": "different body",
+            "clientMessageId": "018f2857-4f63-7d31-a72a-4e75f006c5c8"
+        })),
     )
     .await;
-    assert_eq!(send_response.status(), StatusCode::CREATED);
-    let sent_message = read_json(send_response).await;
-    let message_id = sent_message["id"].as_str().unwrap();
-    assert_eq!(sent_message["senderHandle"], "dm-alice");
-    assert_eq!(sent_message["senderDisplayName"], "Alice Chen");
+    assert_eq!(conflicting_replay.status(), StatusCode::CONFLICT);
 
     let inbox_response =
         request(&app, Method::GET, "/api/v2/forum/dm/conversations?limit=20", &bob_token, None)

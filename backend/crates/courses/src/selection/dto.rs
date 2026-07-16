@@ -52,6 +52,7 @@ pub struct CourseNatureDto {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SelectionCourseDto {
+    /// Stable upstream teaching-class identifier.
     pub id: String,
     pub offering_id: String,
     pub code: String,

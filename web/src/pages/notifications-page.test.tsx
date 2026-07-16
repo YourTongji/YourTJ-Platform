@@ -67,6 +67,15 @@ describe("NotificationsPage", () => {
           readAt: 1_700_000_020,
           createdAt: 1_700_000_020,
         },
+        {
+          id: "13",
+          type: "mention",
+          payload: { title: "较早的提及" },
+          targetUrl: "/forum/threads/3",
+          read: true,
+          readAt: 1_699_827_200,
+          createdAt: 1_699_827_200,
+        },
       ],
       hasMore: false,
       nextCursor: null,
@@ -101,6 +110,8 @@ describe("NotificationsPage", () => {
 
     expect(await screen.findByText("新的回复")).toBeVisible();
     expect(screen.getByText("认证 ·", { exact: false })).toBeVisible();
+    expect(screen.getByText("较早的提及")).toBeVisible();
+    expect(screen.getAllByRole("heading", { level: 2 }).length).toBeGreaterThanOrEqual(3);
     expect(screen.getAllByRole("link", { name: "查看通知详情" })[0]).toHaveAttribute(
       "href",
       "/forum/threads/2",
@@ -121,5 +132,15 @@ describe("NotificationsPage", () => {
     await waitFor(() => expect(apiMocks.markRead).toHaveBeenCalledWith(undefined));
     await waitFor(() => expect(apiMocks.governanceMarkRead).toHaveBeenCalledWith(undefined));
     await expectNoAccessibilityViolations(view.container);
+  });
+
+  it("uses structured skeletons while notification pages load", () => {
+    apiMocks.list.mockReturnValue(new Promise(() => undefined));
+    apiMocks.governanceList.mockReturnValue(new Promise(() => undefined));
+
+    renderPage();
+
+    expect(screen.getByRole("status", { name: "加载平台通知" })).toBeVisible();
+    expect(screen.getByRole("status", { name: "加载通知" })).toBeVisible();
   });
 });

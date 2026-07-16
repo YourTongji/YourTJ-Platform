@@ -15,13 +15,13 @@ part 'campus.g.dart';
 )
 class Campus {
   /// Returns a new [Campus] instance.
-  Campus({this.id, this.name});
+  Campus({required this.id, required this.name});
 
-  @JsonKey(name: r'id', required: false, includeIfNull: false)
-  final String? id;
+  @JsonKey(name: r'id', required: true, includeIfNull: false)
+  final String id;
 
-  @JsonKey(name: r'name', required: false, includeIfNull: false)
-  final String? name;
+  @JsonKey(name: r'name', required: true, includeIfNull: false)
+  final String name;
 
   @override
   bool operator ==(Object other) =>

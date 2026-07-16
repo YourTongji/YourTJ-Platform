@@ -9,7 +9,7 @@ use axum::Json;
 use sha2::{Digest, Sha256};
 use shared::{AppResult, AppState, Page};
 
-use crate::dto::{ListReviewsQuery, ReportInput, ReviewDto, ReviewInput};
+use crate::dto::{ListReviewsQuery, ReportInput, ReviewDto, ReviewInput, ReviewSort};
 use crate::repo;
 
 fn review_create_idempotency_key(headers: &HeaderMap) -> AppResult<Option<&str>> {
@@ -40,8 +40,12 @@ fn review_create_request_hash(course_id: i64, body: &ReviewInput) -> AppResult<S
     Ok(hex::encode(Sha256::digest(bytes)))
 }
 
+async fn is_review_write_allowed(state: &AppState, account_id: i64) -> AppResult<bool> {
+    Ok(!identity::sanctions::is_silenced(state.redis.as_ref(), &state.db, account_id).await?)
+}
+
 async fn require_review_write_allowed(state: &AppState, account_id: i64) -> AppResult<()> {
-    if identity::sanctions::is_silenced(state.redis.as_ref(), &state.db, account_id).await? {
+    if !is_review_write_allowed(state, account_id).await? {
         return Err(shared::AppError::Forbidden);
     }
     Ok(())
@@ -91,22 +95,92 @@ async fn invalidate_created_review(state: &AppState, course_id: i64, dto: &Revie
 /// GET /courses/{id}/reviews — cursor-paginated list of visible reviews.
 pub async fn list_reviews(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(course_id): Path<i64>,
     Query(params): Query<ListReviewsQuery>,
 ) -> AppResult<Json<Page<ReviewDto>>> {
-    let sort = params.sort.as_deref().unwrap_or("new");
+    if params.cursor.is_some_and(|cursor| cursor <= 0) {
+        return Err(shared::AppError::BadRequest("cursor must be a positive review id".into()));
+    }
+    if !(1..=100).contains(&params.limit) {
+        return Err(shared::AppError::BadRequest("limit must be between 1 and 100".into()));
+    }
+
+    let viewer = identity::auth_middleware::authenticate_optional(
+        &headers,
+        &state.db,
+        &state.jwt_secret,
+        state.redis.as_ref(),
+    )
+    .await
+    .map_err(|_response| shared::AppError::Unauthorized)?;
+    let viewer_account_id = viewer.as_ref().map(|account| account.id);
+    let viewer_can_write = if let Some(viewer_account_id) = viewer_account_id {
+        is_review_write_allowed(&state, viewer_account_id).await?
+    } else {
+        false
+    };
+    let sort = params.sort.unwrap_or(ReviewSort::Hot);
     let c = params.cursor.map(|x| x.to_string()).unwrap_or_default();
     let course_key = course_id.to_string();
     let namespace_version =
         shared::cache::current_version_opt(state.redis.as_ref(), "reviews", &course_key).await;
-    let cache_id = format!("{course_id}:v{namespace_version}:{sort}:{c}");
-    let page =
+    let cache_id =
+        format!("{course_id}:v{namespace_version}:{}:{c}:{}", sort.as_str(), params.limit);
+    let page = if viewer_account_id.is_some() {
+        repo::list_reviews(
+            &state.db,
+            course_id,
+            sort,
+            params.cursor,
+            Some(params.limit),
+            viewer_account_id,
+            viewer_can_write,
+        )
+        .await?
+    } else {
         shared::cache::cached_json(state.redis.as_ref(), "review_page", &cache_id, 120, async {
-            repo::list_reviews(&state.db, course_id, Some(sort), params.cursor, Some(params.limit))
-                .await
+            repo::list_reviews(
+                &state.db,
+                course_id,
+                sort,
+                params.cursor,
+                Some(params.limit),
+                None,
+                false,
+            )
+            .await
         })
-        .await?;
+        .await?
+    };
     Ok(Json(page))
+}
+
+/// GET /reviews/{id} — return one visible review with viewer-specific permissions.
+pub async fn get_review(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(review_id): Path<i64>,
+) -> AppResult<Json<ReviewDto>> {
+    let viewer = identity::auth_middleware::authenticate_optional(
+        &headers,
+        &state.db,
+        &state.jwt_secret,
+        state.redis.as_ref(),
+    )
+    .await
+    .map_err(|_response| shared::AppError::Unauthorized)?;
+    let viewer_account_id = viewer.as_ref().map(|account| account.id);
+    let viewer_can_write = if let Some(viewer_account_id) = viewer_account_id {
+        is_review_write_allowed(&state, viewer_account_id).await?
+    } else {
+        false
+    };
+    let review =
+        repo::get_visible_review(&state.db, review_id, viewer_account_id, viewer_can_write)
+            .await?
+            .ok_or(shared::AppError::NotFound)?;
+    Ok(Json(review))
 }
 
 /// POST /courses/{id}/reviews — create a new review (authenticated).
@@ -130,10 +204,13 @@ pub async fn create_review(
         let request_hash = review_create_request_hash(course_id, &body)?;
         let mut tx = state.db.begin().await?;
         repo::lock_review_create_idempotency(&mut tx, auth.id, idempotency_key).await?;
-        if let Some(replay) =
+        if let Some(mut replay) =
             repo::find_review_create_replay(&mut tx, auth.id, idempotency_key, &request_hash)
                 .await?
         {
+            replay.viewer_liked = false;
+            replay.can_edit = is_review_write_allowed(&state, auth.id).await?;
+            replay.can_report = false;
             tx.commit().await?;
             invalidate_created_review(&state, course_id, &replay).await;
             return Ok((StatusCode::CREATED, Json(replay)));
@@ -328,6 +405,8 @@ pub async fn report_review(
     )
     .await
     .map_err(|_r| shared::AppError::Unauthorized)?;
+
+    require_review_write_allowed(&state, auth.id).await?;
 
     shared::captcha::require_captcha(
         state.captcha_verifier.as_deref(),

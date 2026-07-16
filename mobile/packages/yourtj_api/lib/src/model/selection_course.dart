@@ -110,7 +110,7 @@ class SelectionCourse {
   @JsonKey(name: r'weeksUnknown', required: true, includeIfNull: false)
   final bool weeksUnknown;
 
-  /// True when no trustworthy day/slot arrangement was materialized.
+  /// True when a complete trustworthy schedule could not be materialized, including mixed parseable and unparseable arrangement input even if partial slots are available.
   @JsonKey(name: r'scheduleUnknown', required: true, includeIfNull: false)
   final bool scheduleUnknown;
 

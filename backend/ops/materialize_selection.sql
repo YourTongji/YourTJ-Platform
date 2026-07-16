@@ -5,6 +5,24 @@ BEGIN;
 
 SELECT pg_advisory_xact_lock(hashtextextended('selection.materialize', 0));
 
+LOCK TABLE
+  selection.pk_calendars,
+  selection.pk_languages,
+  selection.pk_course_natures,
+  selection.pk_course_natures_by_calendar,
+  selection.pk_assessments,
+  selection.pk_campuses,
+  selection.pk_faculties,
+  selection.pk_majors,
+  selection.pk_course_details,
+  selection.pk_teachers_raw,
+  selection.pk_teacher_timeslots,
+  selection.pk_major_courses,
+  selection.pk_fetch_logs
+IN SHARE MODE;
+
+SELECT selection.assert_materialization_source();
+
 -- Replace dependent facts first; dimensions retain stable natural-key IDs.
 DELETE FROM selection.timeslots;
 DELETE FROM selection.major_courses;
@@ -127,8 +145,11 @@ SELECT detail.id,
        CASE WHEN detail.start_week BETWEEN 1 AND 30
                   AND detail.end_week BETWEEN detail.start_week AND 30
             THEN detail.end_week END,
-       NOT (detail.start_week BETWEEN 1 AND 30
-            AND detail.end_week BETWEEN detail.start_week AND 30),
+       NOT COALESCE(
+         detail.start_week BETWEEN 1 AND 30
+         AND detail.end_week BETWEEN detail.start_week AND 30,
+         false
+       ),
        true,
        'unknown',
        catalogue.id,
@@ -238,9 +259,9 @@ WHERE EXISTS (
 GROUP BY teaching_class_id, weekday, start_slot, end_slot,
          week_numbers, weeks_unknown, location;
 
--- Auxiliary day/section rows are a fallback only when the complete arrangement
--- text produced no schedule. occupy_section is already a single 1-based class
--- period; consecutive periods are merged without multiplying the slot number.
+-- Auxiliary day/section rows fill only periods not already represented by a
+-- parsed arrangement. This preserves usable fallback facts when one line in a
+-- mixed-format arrangement is not understood.
 WITH auxiliary_sections AS (
   SELECT raw.teaching_class_id,
          NULLIF(BTRIM(raw.teacher_name), '') AS teacher_name,
@@ -260,6 +281,8 @@ WITH auxiliary_sections AS (
     AND NOT EXISTS (
       SELECT 1 FROM selection.timeslots AS existing
       WHERE existing.course_id = raw.teaching_class_id
+        AND existing.weekday = raw.occupy_day
+        AND raw.occupy_section BETWEEN existing.start_slot AND existing.end_slot
     )
 ), auxiliary_teacher_ranges AS (
   SELECT teaching_class_id,
@@ -298,10 +321,39 @@ FROM auxiliary_ranges AS range
 JOIN selection.courses AS course ON course.id = range.teaching_class_id;
 
 UPDATE selection.courses AS course
-SET schedule_unknown = NOT EXISTS (
-      SELECT 1 FROM selection.timeslots AS slot WHERE slot.course_id = course.id
+SET schedule_unknown = (
+      NOT EXISTS (
+        SELECT 1 FROM selection.timeslots AS slot WHERE slot.course_id = course.id
+      )
+      OR EXISTS (
+        SELECT 1
+        FROM selection.pk_teachers_raw AS teacher
+        CROSS JOIN LATERAL regexp_split_to_table(
+          COALESCE(teacher.arrange_info_text, ''), E'\\r?\\n'
+        ) AS line
+        WHERE teacher.teaching_class_id = course.id
+          AND NULLIF(BTRIM(line), '') IS NOT NULL
+          AND NOT EXISTS (
+            SELECT 1 FROM selection.parse_arrangement_line(line)
+          )
+      )
     ),
     updated_at = now();
+
+DO $validate_timeslot_limit$
+BEGIN
+  IF EXISTS (
+    SELECT 1
+    FROM selection.timeslots
+    GROUP BY course_id
+    HAVING COUNT(*) > 100
+  ) THEN
+    RAISE EXCEPTION
+      'selection materialization blocked: offering exceeds 100 timeslots'
+      USING ERRCODE = 'integrity_constraint_violation';
+  END IF;
+END
+$validate_timeslot_limit$;
 
 -- Raw fetch time is Unix seconds. `jcourse-db` is the canonical upstream
 -- producer label; backup transport provenance lives in selection.import_runs.

@@ -2,7 +2,7 @@
 
 use std::net::SocketAddr;
 
-use axum::extract::State;
+use axum::extract::{Request, State};
 use axum::http::header::{ACCEPT, AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE, PRAGMA};
 use axum::http::{HeaderName, HeaderValue, Method};
 use axum::routing::get;
@@ -19,6 +19,10 @@ use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
 static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("../../migrations");
 const SINGLE_ACTIVE_WALLET_KEY_MIGRATION: i64 = 67;
+
+fn request_log_path(request: &Request) -> &str {
+    request.uri().path()
+}
 
 #[derive(Debug, Default, PartialEq, Eq)]
 struct StartupOptions {
@@ -406,7 +410,13 @@ fn build_router(state: AppState) -> anyhow::Result<Router> {
         .merge(crate::onebox::routes(state.clone()))
         .layer(cors)
         .layer(request_id_layer)
-        .layer(TraceLayer::new_for_http())
+        .layer(TraceLayer::new_for_http().make_span_with(|request: &Request| {
+            tracing::debug_span!(
+                "request",
+                method = %request.method(),
+                path = request_log_path(request),
+            )
+        }))
         .layer(
             // Security headers: prevent clickjacking, MIME sniffing, and referrer leakage.
             tower::ServiceBuilder::new()
@@ -604,7 +614,9 @@ mod tests {
     use shared::AppState;
     use tower::ServiceExt as _;
 
-    use super::{build_router, legacy_marker_query, parse_startup_options, StartupOptions};
+    use super::{
+        build_router, legacy_marker_query, parse_startup_options, request_log_path, StartupOptions,
+    };
 
     fn test_state() -> AppState {
         AppState {
@@ -623,6 +635,16 @@ mod tests {
             captcha_verifier: None,
             sse_tx: None,
         }
+    }
+
+    #[test]
+    fn request_trace_path_excludes_query_string() {
+        let request = Request::builder()
+            .uri("/api/v2/selection/courses/search?calendarId=1&q=private-input")
+            .body(Body::empty())
+            .expect("request builds");
+
+        assert_eq!(request_log_path(&request), "/api/v2/selection/courses/search");
     }
 
     #[tokio::test]

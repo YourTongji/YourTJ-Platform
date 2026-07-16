@@ -3,11 +3,13 @@
 //! Every function takes `&PgPool` and returns `AppResult` so the caller
 //! (typically a handler) can use `?` and let Axum render errors.
 
+use std::collections::HashSet;
+
 use shared::pagination::Page;
 use shared::AppResult;
 use sqlx::{PgConnection, PgPool};
 
-use crate::dto::ReviewDto;
+use crate::dto::{ReviewDto, ReviewSort};
 use crate::error::ReviewsError;
 use crate::models::{ReviewReportRow, ReviewRow, ReviewWithAuthorRow};
 
@@ -134,7 +136,15 @@ async fn project_review_likes_for_visibility(
 ///
 /// Legacy reviewer names remain attribution-only fallback text. Legacy avatar URLs are never
 /// projected because they are arbitrary remote locations rather than platform-owned media.
-fn row_to_dto(row: &ReviewWithAuthorRow) -> ReviewDto {
+fn row_to_dto(
+    row: &ReviewWithAuthorRow,
+    viewer_account_id: Option<i64>,
+    viewer_can_write: bool,
+    viewer_liked: bool,
+    viewer_has_open_report: bool,
+) -> ReviewDto {
+    let can_edit =
+        viewer_can_write && viewer_account_id.is_some() && row.account_id == viewer_account_id;
     ReviewDto {
         id: row.id.to_string(),
         course_id: row.course_id.to_string(),
@@ -145,6 +155,12 @@ fn row_to_dto(row: &ReviewWithAuthorRow) -> ReviewDto {
         author_handle: row.handle.clone().or_else(|| row.reviewer_name.clone()).unwrap_or_default(),
         author_avatar: None,
         approve_count: row.approve_count,
+        viewer_liked,
+        can_edit,
+        can_report: viewer_can_write
+            && viewer_account_id.is_some()
+            && !can_edit
+            && !viewer_has_open_report,
         status: row.status.clone(),
         created_at: row.created_at.timestamp(),
     }
@@ -182,9 +198,68 @@ fn row_to_dto_with_author(row: &ReviewRow, handle: &str) -> ReviewDto {
         author_handle: effective_handle.to_string(),
         author_avatar: None,
         approve_count: row.approve_count,
+        viewer_liked: false,
+        can_edit: true,
+        can_report: false,
         status: row.status.clone(),
         created_at: row.created_at.timestamp(),
     }
+}
+
+async fn rows_to_dtos(
+    pool: &PgPool,
+    rows: &[ReviewWithAuthorRow],
+    viewer_account_id: Option<i64>,
+    viewer_can_write: bool,
+) -> AppResult<Vec<ReviewDto>> {
+    if rows.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let review_ids = rows.iter().map(|row| row.id).collect::<Vec<_>>();
+    let liked_review_ids = if let Some(viewer_account_id) = viewer_account_id {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT review_id FROM reviews.review_likes \
+             WHERE account_id = $1 AND review_id = ANY($2)",
+        )
+        .bind(viewer_account_id)
+        .bind(&review_ids)
+        .fetch_all(pool)
+        .await?
+        .into_iter()
+        .collect::<HashSet<_>>()
+    } else {
+        HashSet::new()
+    };
+
+    let reported_review_ids =
+        if let Some(viewer_account_id) = viewer_account_id.filter(|_| viewer_can_write) {
+            sqlx::query_scalar::<_, i64>(
+                "SELECT review_id FROM reviews.review_reports \
+             WHERE reporter_account_id = $1 AND status = 'open' AND review_id = ANY($2)",
+            )
+            .bind(viewer_account_id)
+            .bind(&review_ids)
+            .fetch_all(pool)
+            .await?
+            .into_iter()
+            .collect::<HashSet<_>>()
+        } else {
+            HashSet::new()
+        };
+
+    Ok(rows
+        .iter()
+        .map(|row| {
+            row_to_dto(
+                row,
+                viewer_account_id,
+                viewer_can_write,
+                liked_review_ids.contains(&row.id),
+                reported_review_ids.contains(&row.id),
+            )
+        })
+        .collect())
 }
 
 // ---------------------------------------------------------------------------
@@ -193,19 +268,19 @@ fn row_to_dto_with_author(row: &ReviewRow, handle: &str) -> ReviewDto {
 
 /// List reviews for a course with cursor pagination.
 ///
-/// `sort` = `"hot"` → order by `approve_count DESC, created_at DESC`.
-/// `sort` = `"new"` (default) → order by `created_at DESC`.
 /// Returns a `Page<ReviewDto>` with cursor-based continuation.
 pub async fn list_reviews(
     pool: &PgPool,
     course_id: i64,
-    sort: Option<&str>,
+    sort: ReviewSort,
     cursor: Option<i64>,
     limit: Option<i64>,
+    viewer_account_id: Option<i64>,
+    viewer_can_write: bool,
 ) -> AppResult<Page<ReviewDto>> {
     let fetch_limit = limit.unwrap_or(DEFAULT_LIMIT).min(100) + 1;
 
-    let rows = if sort == Some("hot") {
+    let rows = if matches!(sort, ReviewSort::Hot) {
         if let Some(c) = cursor {
             sqlx::query_as::<_, ReviewWithAuthorRow>(
                 "SELECT r.id, r.course_id, r.account_id, r.rating, r.comment, r.score, \
@@ -283,15 +358,41 @@ pub async fn list_reviews(
 
     let actual_limit = fetch_limit - 1;
     let has_more = rows.len() > actual_limit as usize;
-    let items: Vec<ReviewDto> = if has_more {
-        rows[..actual_limit as usize].iter().map(row_to_dto).collect()
+    let items = if has_more {
+        rows_to_dtos(pool, &rows[..actual_limit as usize], viewer_account_id, viewer_can_write)
+            .await?
     } else {
-        rows.iter().map(row_to_dto).collect()
+        rows_to_dtos(pool, &rows, viewer_account_id, viewer_can_write).await?
     };
     let next_cursor =
         if has_more { items.last().map(|r| r.id.parse::<i64>().unwrap_or(0)) } else { None };
 
     Ok(Page::new(items, next_cursor.map(|c| c.to_string())))
+}
+
+/// Return one visible review with viewer-specific like and action permissions.
+pub async fn get_visible_review(
+    pool: &PgPool,
+    review_id: i64,
+    viewer_account_id: Option<i64>,
+    viewer_can_write: bool,
+) -> AppResult<Option<ReviewDto>> {
+    let row = sqlx::query_as::<_, ReviewWithAuthorRow>(
+        "SELECT r.id, r.course_id, r.account_id, r.rating, r.comment, r.score, \
+                r.semester, r.approve_count, r.disapprove_count, \
+                r.status::text, r.created_at, r.updated_at, \
+                r.reviewer_name, r.reviewer_avatar, a.handle, a.avatar_url \
+         FROM reviews.reviews r \
+         LEFT JOIN identity.accounts a ON a.id = r.account_id \
+         WHERE r.id = $1 AND r.status = 'visible'",
+    )
+    .bind(review_id)
+    .fetch_optional(pool)
+    .await?;
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    Ok(rows_to_dtos(pool, &[row], viewer_account_id, viewer_can_write).await?.into_iter().next())
 }
 
 /// Create a new review and update the course aggregate stats in a transaction.
@@ -749,9 +850,12 @@ pub async fn admin_list_reviews(
     let actual_limit = fetch_limit - 1;
     let has_more = rows.len() > actual_limit as usize;
     let items: Vec<ReviewDto> = if has_more {
-        rows[..actual_limit as usize].iter().map(row_to_dto).collect()
+        rows[..actual_limit as usize]
+            .iter()
+            .map(|row| row_to_dto(row, None, false, false, false))
+            .collect()
     } else {
-        rows.iter().map(row_to_dto).collect()
+        rows.iter().map(|row| row_to_dto(row, None, false, false, false)).collect()
     };
     let next_cursor =
         if has_more { items.last().map(|r| r.id.parse::<i64>().unwrap_or(0)) } else { None };
@@ -1074,7 +1178,7 @@ mod tests {
             avatar_url: Some("https://tracker.example/account.png".into()),
         };
 
-        let dto = row_to_dto(&row);
+        let dto = row_to_dto(&row, None, false, false, false);
 
         assert_eq!(dto.author_handle, "legacy-reviewer");
         assert_eq!(dto.author_avatar, None);
