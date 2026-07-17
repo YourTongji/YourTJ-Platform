@@ -32,6 +32,7 @@ mod rate_limit_subject;
 mod repo;
 pub mod sanctions;
 mod security_events;
+pub mod wallet_keys;
 
 mod dto;
 mod error;

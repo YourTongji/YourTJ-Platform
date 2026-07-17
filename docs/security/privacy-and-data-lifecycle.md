@@ -6,7 +6,7 @@
 >
 > 负责人：Privacy owner、Security owner、Domain maintainers
 >
-> 最近核验：2026-07-16，migrations `0064`–`0069`、Selection 导入/同步运营元数据、HTTP query-string 日志最小化、DM 幂等与 ADMIN 媒体自审边界
+> 最近核验：2026-07-17，migrations `0064`–`0070`、Credit owner export/purge、Web wallet 本机凭据与 pending reconciliation
 
 本规范将数据最小化、可见性、导出、删除和保留作为产品前置条件。它不是法律意见；涉及 PIPL、
 未成年人、广告或跨境处理的最终政策需要合格法律与隐私负责人确认。
@@ -35,8 +35,9 @@
 - Identity 密码 set/change/reset 和 refresh replay 只写 account-scoped 安全事实类型、可选 session id 与时间，
   不写邮箱、IP、user-agent、password/code/token 或请求正文；普通登录失败不作 PII 事件流。Owner export
   只返回尚在保留期的 `eventType/createdAt`，不返回 subject session id。
-- HTTP request trace 只记录 method 和 URI path，不记录 query string；搜索词、filter、cursor 和其他 query
-  value 即使在 debug level 也不得进入通用 request span。业务错误日志同样不得另行记录原始搜索词。
+- HTTP request trace 只记录 method 和 Axum matched route template，未匹配路由只记固定 sentinel；不记录
+  原始 path parameter 或 query string。搜索词、filter、cursor、intent id 和其他请求关联值即使在
+  debug level 也不得进入通用 request span。业务错误日志同样不得另行记录原始搜索词。
 - 密码安全通知和管理员邀请的 durable job 只持久 account id、固定 template kind、lease/retry 和有界错误码；
   收件邮箱和正文在 worker 内存中解密/渲染，不进入 job、owner export 或日志。
 - Staff 无通用 DM 浏览接口，只能访问 participant 报告的最小证据。
@@ -49,6 +50,11 @@
   字段和 attachment asset id，不保留短期 Delivery URL、token、邮箱或设备标识。发布、登出、切号会按
   账号串行清除；任一本地草稿操作都会惰性清扫全部过期记录，读取也永不返回过期副本。云端 CAS 草稿
   仍是 canonical source。
+- Web wallet private key 以 non-extractable Ed25519 `CryptoKey` 保存到按 API environment + account
+  隔离的 IndexedDB；服务端 `/wallet` 只返回 owner-visible active public key 用于精确匹配。旧版 raw
+  `localStorage` seed 只有在派生公钥匹配当前 active key、且新 record 已 durable commit 后才删除；不匹配
+  时不自动归属、复制或覆盖。value-moving record 与 key 分库存储，只保留 operation digest、claim phase/id、
+  action、intent id/expiry，不保存请求正文、access/idempotency token、签名或 signing bytes。
 - Governance audit 和制裁保留 actor/reason 历史，credit ledger append-only。
 - Selection raw import 只保存 snapshot hash/bytes/counts、验证结果和不指向自然人的 lowercase
   role/service `imported_by` label；CLI 与数据库都拒绝姓名、邮箱格式和自由文本 operator label。Projection
@@ -139,11 +145,16 @@
 - Flutter 原生保存边界已有 Dart/native 编译与取消/切号自动化证据，但尚未在已签名 Android/iOS 真机上
   验证第三方 document provider、进程终止、磁盘满、文件保护锁屏和 orphan 冷启动清理，因此仍是发布 gate。
 - Flutter 为 value-moving 请求保存 environment+account 隔离的 Keychain/Keystore pending-reconciliation
-  记录，目的是在断网/5xx/App 重启后阻止盲重放。记录不含 seed、signature、signing bytes 或 idempotency
-  key 或原始请求事实；deterministic operation key 是规范请求的版本化 SHA-256 摘要，仍不得进入日志、
-  analytics 或普通 cache。已确认提交或 intent 到期且确认未提交时删除；canonical 状态仍不可确认时
-  有意继续保留并 fail closed。当前没有经过真机验证的“移除本机账号/账号 purge 后安全清理”流程，
-  该设备本地状态也不属于服务端 owner export，最终清理/恢复 UX 仍为 `Partial`。
+  记录，Web 则在 intent 前以 IndexedDB 原子 claim 同一规范 operation。两端记录都不含 seed、raw request、
+  signature、signing bytes 或 idempotency key；deterministic operation key、claim/intent id 仍不得进入日志、
+  analytics 或普通 cache。未知结果只使用与消费事务行锁互斥的 owner intent outcome：查询使用
+  固定 URL 的 POST body，不把 intent id 复制到 CDN/Nginx/access-log path。`committed`/`expired` 才能终结，
+  `pending`、超时或错误继续保留并 fail closed，不以 canonical read absence 猜测。尚无经过真机
+  验证的“移除本机账号/账号 purge 后安全清理”流程，离线设备状态也不属于服务端 owner export，最终本机
+  清理/恢复 UX 仍为 `Partial`。
+- Web non-extractable key 不能被标准 WebCrypto API 导出，但同源 XSS 仍可取得 `CryptoKey` 并请求签名；
+  它不是抵御已攻陷 origin 的硬件安全模块。账号 purge/其他设备操作也不能主动擦除离线浏览器站点数据，
+  因而本机 key、legacy mismatch 处置和 unresolved pending 的最终清理/恢复 UX 仍为 `Partial`。
 
 ## 数据分类
 
@@ -151,7 +162,10 @@
 |---|---|---|---|
 | 资格 PII | 校园邮箱、邮箱验证状态 | identity purpose only | 加密/盲索引、绝不公开、限制保留 |
 | 安全凭据 | password hash、code hash、refresh hash、keys/tokens | security code only | 不记录明文、最短保留、可撤销 |
-| 本机积分防重放状态 | environment/account、规范请求 SHA-256 operation key、action/target、expiry、ledger baseline | 同设备客户端安全代码；不上传为业务记录 | Keychain/Keystore only；canonical reconciliation 后删除，不进日志/analytics/owner export；摘要按敏感关联标识处理 |
+| 移动端积分防重放状态 | environment/account、规范请求 SHA-256 operation key、intent id、action/expiry | 同设备客户端安全代码；不上传为业务记录 | Keychain/Keystore only；lock-aware intent outcome 证明后删除，不进日志/analytics/owner export；摘要与 intent id 按敏感关联标识处理 |
+| Web 本机钱包密钥 | environment/account、active public key、non-extractable Ed25519 `CryptoKey`；迁移前可能存在 legacy raw seed | 同源 wallet 代码；不上传 private key | IndexedDB 按环境/账号隔离并与服务端 active public key 精确匹配；禁止 raw seed fallback/日志/导出；legacy 只在 durable 匹配迁移后删除 |
+| Web 积分防重放状态 | environment/account、规范请求 SHA-256 operation key、claim phase/id、intent id、action/expiry | 同源 wallet 代码；不上传为业务记录 | IndexedDB 严格字段白名单；intent 前原子 claim、发送前 durable transition、lock-aware outcome 后终结；不含 raw request/signature/signing bytes/idempotency key |
+| Legacy 钱包迁移 authority | 未认领 link 的 wallet hash/public key/balance/import metadata、未认领 review 的 wallet hash/edit token、短期 claim challenge | 仅 Identity/Reviews/Credit claim transaction；不公开、不进日志/分析/export | challenge 每账号 10 次/10 分钟且同账号只保留最新一条；claim attempt 受 account/network/global bucket 保护并统一 proof error，有效 challenge 首次 proof attempt 即消费；成功 claim 原子清空 review hash/edit token，purge 再兜底；未认领 authority 的迁移截止与最终删除仍需产品决策 |
 | 会话元数据 | bounded user-agent、创建/最近使用/到期时间、recent-auth 时间/方法、账号隔离的 installation 摘要 | 账号本人可见 label/时间；摘要仅安全代码 | 不收集精确 IP/原始 installation，不作画像；摘要不导出并随 session retention/账号 purge 删除 |
 | 公开身份 | handle、公开头像、display name、院校、bio | 资料按 profile visibility；公共内容保留最小作者署名 | 用户可控、handle history 防冒用；内容署名不携带资料正文或 PII |
 | 公共内容 | thread、comment、review、reaction | 按 board/content policy | revision、治理、导出/删除规则 |
@@ -165,9 +179,6 @@
 | 认证凭证 | type/grant、签发/撤销原因、opaque evidence reference | `verifications.manage`；允许时为最小公开投影 | 默认私密、可到期/撤销、公开不含证据/操作者 |
 | 运营数据 | job log、metrics、aggregated promo events | operators | 聚合、去标识、有限保留 |
 | Selection 运营元数据 | import snapshot hash/counts、role/service importer label；sync actor/reason/idempotency hash/lease/progress/count-only result | importer/worker；`operations.jobs` 只见 actor id 与安全 job projection | 不含学生课表、搜索词、邮箱、token；成功/取消 sync 90 天、dead 365 天；被替代 import evidence 365 天，最新 authority 始终保留 |
-
-邮箱维度的 Redis abuse-control key 只能使用 Identity 生成的 opaque blind index/HMAC subject；不得把规范化
-邮箱直接写入 Redis key 或限流错误日志。
 | Identity 安全事实 | password set/change/reset、refresh replay 类型与时间 | owner export、security code | 不含 PII/credential；365 天后由 retention worker 删除 |
 | Identity email job | account id、template kind、attempt/lease/error code | worker；无用户/staff payload API | 不含收件人/正文；succeeded 30 天、dead 90 天 |
 | Owner export artifact | 八域本人数据 JSON、job/下载时间 | 仅 owner + worker | recent-auth 创建、24 小时清除、5 分钟一次性下载 grant，不写日志 |
@@ -176,17 +187,22 @@
 | 外链预览缓存 | 无 query 的规范化 allowlisted HTTPS URL、公开 metadata、失败类别 | 服务端与页面请求者 | ready 最长 7 天、error 2 分钟；query URL/远程图片不持久化，日志只记 hash |
 | 公告 receipt | announcement/revision、seen/dismiss/ack time | 本人、汇总后的公告管理员 | 账号删除级联清除，不记录设备/IP；后台只返回聚合计数 |
 | 积分记录 | ledger、wallet projection | owner/verification policy | ledger 不改写，删除后 tombstone |
+| Credit signing intent | account/public key、action、request hash、snapshot、opaque idempotency key、exact signing bytes、可选 ledger canonical、expiry/consumed time | Credit 写路径与完整性验证；owner 只见本人 intent 的 bounded outcome，不返回 proof 正文；purchase snapshot 仅 buyer/seller 且先验证 action/state，非 party 与不存在订单统一 `NOT_FOUND` | 新建 task/product hold 的 ledger metadata 只存业务/id 关联，不再复制 title；切换前历史 title 按 `SYS-AUDIT-10` 盘点。未消费 intent 按 `SYS-AUDIT-01` 待补 quota/retention；已消费 proof 随其授权的 ledger/escrow 审计事实保留，不进普通 owner export，账号 purge 不改写；禁止日志/analytics 暴露正文或 key |
 | 积分完整性证据 | run reason、operator id、wallet account id、派生/缓存差额 | `credit.integrity` staff | 随 ledger/audit 完整性证据保留；不含邮箱、签名、key 或原始错误 |
 | 交易履约信息 | escrow product `deliveryInfo` | purchase buyer/seller | 不进入公开 listing/search/log；随订单保留与删除策略最小化 |
+
+邮箱维度的 Redis abuse-control key 只能使用 Identity 生成的 opaque blind index/HMAC subject；不得把规范化
+邮箱直接写入 Redis key 或限流错误日志。
 
 新 column/event/index 前必须在对应产品文档说明 data category、purpose、controller/processor、
 可见者、retention、export 和 deletion。没有答案时不得先“留着以后分析”。
 
 IndexedDB 不是安全保险库：同一操作系统账号、浏览器 profile 或成功执行的同源 XSS 都可能读取未发布
-草稿。实现不声称浏览器静态加密能抵御这些主体；边界依靠最小字段、短 TTL、账号隔离、清号和 CSP/XSS
-防护。其他设备上的账号 purge 无法主动擦除离线浏览器站点数据；记录满 7 天后不可恢复，并在该浏览器
-下次打开本站执行本地草稿操作时惰性物理删除，用户也可提前清除站点数据。因此本机副本不属于服务端
-owner export，也不能成为长期留存或治理证据来源。
+草稿和 pending metadata。non-extractable `CryptoKey` 能避免 raw private key 导出，却不能阻止同源恶意
+代码调用签名。实现不声称浏览器静态加密能抵御这些主体；边界依靠最小字段、短 TTL/明确 expiry、环境与
+账号隔离、清号和 CSP/XSS 防护。其他设备上的账号 purge 无法主动擦除离线浏览器站点数据；草稿满 7 天
+后不可恢复并在后续本地操作时惰性物理删除，wallet key/pending 则由明确清钥和 lock-aware intent outcome
+流程处理，用户也可清除站点数据。因此本机副本不属于服务端 owner export，也不能成为长期治理证据来源。
 
 ## 可见性与默认值
 
@@ -262,6 +278,24 @@ Profile 字段与社交关系不进入普通请求日志、metrics label 或 gov
 5. **Purged**：owner-domain mutable private projection 均幂等清理后，再清除 Identity PII/security
    credential 并写随机 tombstone。
 6. **Tombstoned**：保留无法合法改写的最小 ledger/audit/foreign-key identity，不可反查原邮箱。
+
+Credit 的 owner write 在业务 transaction 开头通过 Identity purpose-limited API 对 actor（以及需要时的
+counterparty）按 id 排序取得 `FOR SHARE`，再以锁后的单次数据库 wall-clock observation 复核
+active/no-effective-suspend；signing intent、task、product、purchase 和 tip 的持久化都在同一 transaction
+内完成。Lifecycle 的 account `FOR UPDATE` 必须等待
+这些 writer 提交，writer 若在 lifecycle 先取得锁后才到达则 fail closed，因此 owner cleanup 完成后不会再有
+迟到的 unconsumed intent、contact info 或 delivery instructions 越过 tombstone purge。
+
+Identity wallet writer 遵守同一门槛：bind 在同一 transaction 对 actor account 取得 `FOR UPDATE` 并复核
+active/no-effective-suspend，且不使用 transaction-start 时间判断制裁是否已生效；claim-challenge 先做每账号
+Redis bucket，再以 actor `FOR UPDATE` barrier 在同一
+transaction 替换旧 challenge；legacy claim 以 actor `FOR SHARE` barrier 作为第一组锁。因此 lifecycle 先赢时
+不会迟到写入 key/challenge、legacy owner assignment 或 claim mint；writer 先赢时 lifecycle 等待提交。
+Claim 先按 canonical UUID、64-char lowercase SHA-256 hash、canonical 64-byte Ed25519 signature 拒绝无界输入，
+并由 account 10 次/10 分钟与 opaque network/global bucket 限制尝试；有效 actor challenge 第一次进入 proof
+校验后即持久消费，link/proof 失败全部返回同一错误且缺 link/key 仍执行 dummy verify。成功 claim 在赋予
+review owner 时原子清空旧 wallet hash/edit token，最终 tombstone transaction 删除 challenge/
+已归属 legacy link、兜底清空已归属 review 的迁移凭据，并撤销而不删除 ledger verification 所需历史公钥。
 
 当前 worker 覆盖 identity、forum/DM private projection、reviews reactions/idempotency、media unfinished
 authority、activity、platform receipt/verification evidence 与 user search reconciliation；credit ledger、公共
@@ -406,6 +440,8 @@ release 和 audit retention；其他 domain（包括 DM）的 Planned legal-hold
 - Media operations 365 天 purge 是否批准，以及 governance actor audit 的独立期限；在决定和显式启用
   flag 前，不能声称 hold/retry/job/evidence 或 staff identity 已按期清除。
 - 毕业账号的校园资格、恢复和邮箱换绑。
+- 从未认领的 legacy wallet link/review claim authority 的迁移截止、用户通知和最终删除期限；决定前只保留
+  claim 所必需字段，不能公开、导出、记录或挪作画像。
 - 是否允许商业推广及其 consent/measurement 边界。
 
 ## 验收基线

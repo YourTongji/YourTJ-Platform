@@ -52,6 +52,13 @@ pub async fn snapshot(pool: &PgPool, account_id: i64) -> AppResult<ReviewsExport
 pub async fn purge_account_private_data(pool: &PgPool, account_id: i64) -> AppResult<()> {
     let mut tx = pool.begin().await?;
     sqlx::query(
+        "UPDATE reviews.reviews SET wallet_user_hash = NULL, edit_token = NULL \
+         WHERE account_id = $1 AND (wallet_user_hash IS NOT NULL OR edit_token IS NOT NULL)",
+    )
+    .bind(account_id)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
         "UPDATE reviews.reviews review \
          SET approve_count = GREATEST(review.approve_count - 1, 0) \
          WHERE review.id IN (SELECT review_id FROM reviews.review_likes WHERE account_id = $1)",

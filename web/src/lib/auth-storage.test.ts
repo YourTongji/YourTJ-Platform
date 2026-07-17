@@ -14,6 +14,7 @@ vi.mock("@/lib/local-forum-drafts", () => ({
 
 import {
   clearAuth,
+  readAuthContextVersion,
   readOrCreateClientInstallationId,
   writeAuth,
 } from "@/lib/auth-storage";
@@ -73,5 +74,15 @@ describe("client installation identity", () => {
 
     expect(localDraftMocks.clearForAccount).toHaveBeenCalledWith("1");
     expect(localDraftMocks.allowForAccount).toHaveBeenCalledWith("2");
+  });
+
+  it("keeps a monotonic generation across an A to B to A auth switch", () => {
+    const initialVersion = readAuthContextVersion();
+
+    writeAuth({ accessToken: "access-a", refreshToken: "refresh-a", account: account("1") });
+    writeAuth({ accessToken: "access-b", refreshToken: "refresh-b", account: account("2") });
+    writeAuth({ accessToken: "access-a", refreshToken: "refresh-a", account: account("1") });
+
+    expect(readAuthContextVersion()).toBe(initialVersion + 3);
   });
 });

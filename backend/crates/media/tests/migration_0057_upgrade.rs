@@ -207,7 +207,11 @@ async fn populated_0056_upgrade_backfills_triggers_and_redacts_historical_deleti
         .execute(&mut *old_writer)
         .await
         .expect("stage old-writer profile replacement");
-    let migration_started_at = chrono::Utc::now();
+    let migration_started_at: chrono::DateTime<chrono::Utc> =
+        sqlx::query_scalar("SELECT clock_timestamp()")
+            .fetch_one(&pool)
+            .await
+            .expect("read migration database clock");
     let migration_pool = pool.clone();
     let migration_task = tokio::spawn(async move {
         migrations_matching(|version| version == 57).run(&migration_pool).await

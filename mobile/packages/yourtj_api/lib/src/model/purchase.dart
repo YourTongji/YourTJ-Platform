@@ -16,52 +16,52 @@ part 'purchase.g.dart';
 class Purchase {
   /// Returns a new [Purchase] instance.
   Purchase({
-    this.id,
+    required this.id,
 
-    this.productId,
+    required this.productId,
 
-    this.buyerId,
+    required this.buyerId,
 
-    this.sellerId,
+    required this.sellerId,
 
-    this.amount,
+    required this.amount,
 
-    this.status,
+    required this.status,
 
-    this.deliveryInfo,
+    required this.deliveryInfo,
 
-    this.createdAt,
+    required this.createdAt,
   });
 
-  @JsonKey(name: r'id', required: false, includeIfNull: false)
-  final String? id;
+  @JsonKey(name: r'id', required: true, includeIfNull: false)
+  final String id;
 
-  @JsonKey(name: r'productId', required: false, includeIfNull: false)
-  final String? productId;
+  @JsonKey(name: r'productId', required: true, includeIfNull: false)
+  final String productId;
 
-  @JsonKey(name: r'buyerId', required: false, includeIfNull: false)
-  final String? buyerId;
+  @JsonKey(name: r'buyerId', required: true, includeIfNull: false)
+  final String buyerId;
 
-  @JsonKey(name: r'sellerId', required: false, includeIfNull: false)
-  final String? sellerId;
+  @JsonKey(name: r'sellerId', required: true, includeIfNull: false)
+  final String sellerId;
 
-  @JsonKey(name: r'amount', required: false, includeIfNull: false)
-  final int? amount;
+  @JsonKey(name: r'amount', required: true, includeIfNull: false)
+  final int amount;
 
   @JsonKey(
     name: r'status',
-    required: false,
+    required: true,
     includeIfNull: false,
     unknownEnumValue: PurchaseStatusEnum.unknownDefaultOpenApi,
   )
-  final PurchaseStatusEnum? status;
+  final PurchaseStatusEnum status;
 
   /// Visible only to the purchase buyer and seller
-  @JsonKey(name: r'deliveryInfo', required: false, includeIfNull: false)
+  @JsonKey(name: r'deliveryInfo', required: true, includeIfNull: true)
   final String? deliveryInfo;
 
-  @JsonKey(name: r'createdAt', required: false, includeIfNull: false)
-  final int? createdAt;
+  @JsonKey(name: r'createdAt', required: true, includeIfNull: false)
+  final int createdAt;
 
   @override
   bool operator ==(Object other) =>

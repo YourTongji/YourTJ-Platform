@@ -176,6 +176,8 @@ export interface WatchedWordInput {
 }
 export type Wallet = Schema["Wallet"];
 export type WalletClaimChallenge = Schema["WalletClaimChallenge"];
+export type SigningIntentOutcome = Schema["SigningIntentOutcome"];
+export type SigningIntentOutcomeInput = Schema["SigningIntentOutcomeInput"];
 
 export type Calendar = Schema["Calendar"];
 export type Campus = Schema["Campus"];

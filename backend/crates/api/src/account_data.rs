@@ -450,6 +450,17 @@ mod tests {
             .execute(&pool)
             .await
             .expect("insert ledger verification key");
+        sqlx::query(
+            "INSERT INTO identity.wallet_claim_challenges \
+             (id, account_id, nonce, expires_at) \
+             VALUES ($1, $2, $3, now() + interval '10 minutes')",
+        )
+        .bind(format!("purge-challenge-{suffix}"))
+        .bind(account_id)
+        .bind(format!("purge-nonce-{suffix}"))
+        .execute(&pool)
+        .await
+        .expect("insert wallet claim challenge");
 
         let mut config = shared::Config::from_env().expect("test config");
         config.database_url = database_url;
@@ -533,6 +544,14 @@ mod tests {
         .await
         .expect("retain ledger verification key");
         assert!(key_revoked);
+        let claim_challenge_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM identity.wallet_claim_challenges WHERE account_id = $1",
+        )
+        .bind(account_id)
+        .fetch_one(&state.db)
+        .await
+        .expect("count purged wallet claim challenges");
+        assert_eq!(claim_challenge_count, 0);
     }
 
     #[tokio::test]

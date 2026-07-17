@@ -1127,8 +1127,8 @@ pub async fn resolve_report(
 /// Claim legacy reviews by linking them to an account.
 ///
 /// Updates all reviews whose `wallet_user_hash` matches and whose `account_id`
-/// is still NULL, setting them to the provided `account_id`. Returns the number
-/// of reviews that were claimed.
+/// is still NULL, setting them to the provided `account_id` and retiring the
+/// legacy identifier/edit credential. Returns the number of reviews that were claimed.
 ///
 /// This is designed to be called after a successful `/wallet/claim` flow so
 /// legacy reviews originally associated with an anonymous wallet hash become
@@ -1140,7 +1140,8 @@ pub async fn claim_legacy_reviews_tx(
     account_id: i64,
 ) -> AppResult<u64> {
     let rows = sqlx::query(
-        "UPDATE reviews.reviews SET account_id = $1 \
+        "UPDATE reviews.reviews \
+         SET account_id = $1, wallet_user_hash = NULL, edit_token = NULL \
          WHERE wallet_user_hash = $2 AND account_id IS NULL",
     )
     .bind(account_id)

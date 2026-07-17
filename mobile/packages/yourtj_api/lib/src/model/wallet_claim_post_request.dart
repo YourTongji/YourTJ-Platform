@@ -23,12 +23,15 @@ class WalletClaimPostRequest {
     required this.signature,
   });
 
+  /// Canonical lowercase hexadecimal SHA-256 legacy user hash
   @JsonKey(name: r'legacyUserHash', required: true, includeIfNull: false)
   final String legacyUserHash;
 
+  /// Canonical lowercase UUID v4 returned by the latest claim-challenge request
   @JsonKey(name: r'challengeId', required: true, includeIfNull: false)
   final String challengeId;
 
+  /// Canonical standard-base64 encoding of a 64-byte Ed25519 signature
   @JsonKey(name: r'signature', required: true, includeIfNull: false)
   final String signature;
 

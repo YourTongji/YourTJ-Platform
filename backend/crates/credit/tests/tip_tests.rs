@@ -4,11 +4,12 @@ mod helpers;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
+use base64::Engine as _;
 use helpers::{
     create_test_account, create_test_app, create_tip_comment, create_tip_review, create_tip_thread,
     create_token, mint_to_account, read_json, signed_post_request,
 };
-use serde_json::json;
+use serde_json::{json, Value};
 use sqlx::PgPool;
 use tower::ServiceExt;
 
@@ -127,6 +128,108 @@ async fn tip_invalid_signature_rejected() {
 }
 
 #[tokio::test]
+async fn tip_rejects_intent_after_the_active_key_is_revoked_or_replaced() {
+    let (pool, app) = create_test_app().await;
+    let recipient =
+        create_test_account(&pool, "key-change-target@tongji.edu.cn", "key-change-target").await;
+    let target_id = create_tip_thread(&pool, recipient).await;
+
+    let revoked_sender =
+        create_test_account(&pool, "revoked-sender@tongji.edu.cn", "revoked-sender").await;
+    mint_to_account(&pool, revoked_sender, 50).await;
+    let revoked_token = create_token(&pool, "revoked-sender@tongji.edu.cn").await;
+    let revoked_body = json!({
+        "toAccountId": recipient.to_string(),
+        "amount": 10,
+        "targetType": "thread",
+        "targetId": target_id.to_string(),
+    });
+    let revoked_request = signed_post_request(
+        &app,
+        &pool,
+        &revoked_token,
+        revoked_sender,
+        "/api/v2/wallet/tip",
+        "credit.tip",
+        revoked_body.clone(),
+        Some(revoked_body),
+    )
+    .await;
+    sqlx::query(
+        "UPDATE identity.account_keys SET revoked_at = now() \
+         WHERE account_id = $1 AND revoked_at IS NULL",
+    )
+    .bind(revoked_sender)
+    .execute(&pool)
+    .await
+    .expect("revoke intent signing key");
+
+    let revoked_response =
+        app.clone().oneshot(revoked_request).await.expect("revoked-key tip response");
+    assert_eq!(revoked_response.status(), StatusCode::FORBIDDEN);
+
+    let replaced_sender =
+        create_test_account(&pool, "replaced-sender@tongji.edu.cn", "replaced-sender").await;
+    mint_to_account(&pool, replaced_sender, 50).await;
+    let replaced_token = create_token(&pool, "replaced-sender@tongji.edu.cn").await;
+    let replaced_body = json!({
+        "toAccountId": recipient.to_string(),
+        "amount": 10,
+        "targetType": "thread",
+        "targetId": target_id.to_string(),
+    });
+    let replaced_request = signed_post_request(
+        &app,
+        &pool,
+        &replaced_token,
+        replaced_sender,
+        "/api/v2/wallet/tip",
+        "credit.tip",
+        replaced_body.clone(),
+        Some(replaced_body),
+    )
+    .await;
+    sqlx::query(
+        "UPDATE identity.account_keys SET revoked_at = now() \
+         WHERE account_id = $1 AND revoked_at IS NULL",
+    )
+    .bind(replaced_sender)
+    .execute(&pool)
+    .await
+    .expect("revoke replaced intent key");
+    let replacement_public_key = base64::engine::general_purpose::STANDARD
+        .encode(credit::ledger::derive_public_key(&[91u8; 32]));
+    sqlx::query("INSERT INTO identity.account_keys (account_id, public_key) VALUES ($1, $2)")
+        .bind(replaced_sender)
+        .bind(replacement_public_key)
+        .execute(&pool)
+        .await
+        .expect("insert replacement active key");
+
+    let replaced_response =
+        app.clone().oneshot(replaced_request).await.expect("replaced-key tip response");
+    assert_eq!(replaced_response.status(), StatusCode::FORBIDDEN);
+
+    let consumed_intents: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM credit.signing_intents \
+         WHERE account_id = ANY($1) AND consumed_at IS NOT NULL",
+    )
+    .bind(&[revoked_sender, replaced_sender][..])
+    .fetch_one(&pool)
+    .await
+    .expect("count consumed key-change intents");
+    assert_eq!(consumed_intents, 0);
+    let tip_entries: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM credit.ledger WHERE type = 'tip' AND from_account = ANY($1)",
+    )
+    .bind(&[revoked_sender, replaced_sender][..])
+    .fetch_one(&pool)
+    .await
+    .expect("count rejected key-change tips");
+    assert_eq!(tip_entries, 0);
+}
+
+#[tokio::test]
 async fn tip_insufficient_balance() {
     let (pool, app) = create_test_app().await;
     let a = create_test_account(&pool, "poortipper@tongji.edu.cn", "poortipper").await;
@@ -195,6 +298,85 @@ async fn tip_signature_is_bound_to_exact_ledger_entry() {
         .await
         .unwrap();
     assert!(read_json(verify).await["ok"].as_bool().unwrap());
+}
+
+#[tokio::test]
+async fn tip_rejects_ledger_columns_changed_without_resigning_exact_bytes() {
+    let (pool, app) = create_test_app().await;
+    let sender =
+        create_test_account(&pool, "column-tamper-sender@tongji.edu.cn", "column-tamper-sender")
+            .await;
+    let recipient = create_test_account(
+        &pool,
+        "column-tamper-recipient@tongji.edu.cn",
+        "column-tamper-recipient",
+    )
+    .await;
+    let target_id = create_tip_thread(&pool, recipient).await;
+    mint_to_account(&pool, sender, 50).await;
+    let token = create_token(&pool, "column-tamper-sender@tongji.edu.cn").await;
+    let body = json!({
+        "toAccountId": recipient.to_string(),
+        "amount": 10,
+        "targetType": "thread",
+        "targetId": target_id.to_string(),
+    });
+    let request = signed_post_request(
+        &app,
+        &pool,
+        &token,
+        sender,
+        "/api/v2/wallet/tip",
+        "credit.tip",
+        body.clone(),
+        Some(body),
+    )
+    .await;
+    let intent_id = request
+        .headers()
+        .get("x-wallet-intent")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<uuid::Uuid>().ok())
+        .expect("signed request intent id");
+    let mut ledger_entry: Value =
+        sqlx::query_scalar("SELECT ledger_entry FROM credit.signing_intents WHERE id = $1")
+            .bind(intent_id)
+            .fetch_one(&pool)
+            .await
+            .expect("read prepared ledger entry");
+    ledger_entry["amount"] = json!(40);
+    let tampered_canonical = credit::ledger::canonicalize(&ledger_entry);
+    sqlx::query(
+        "UPDATE credit.signing_intents \
+         SET ledger_entry = $2, ledger_canonical = $3 WHERE id = $1",
+    )
+    .bind(intent_id)
+    .bind(&ledger_entry)
+    .bind(&tampered_canonical)
+    .execute(&pool)
+    .await
+    .expect("tamper prepared ledger columns without changing signing bytes");
+
+    let response = app.oneshot(request).await.expect("tampered tip response");
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    let state: (i64, i64, i64, Option<chrono::DateTime<chrono::Utc>>) = sqlx::query_as(
+        "SELECT \
+           COALESCE((SELECT balance FROM credit.wallets WHERE account_id = $1), 0), \
+           COALESCE((SELECT balance FROM credit.wallets WHERE account_id = $2), 0), \
+           (SELECT COUNT(*)::bigint FROM credit.ledger WHERE type = 'tip'), \
+           (SELECT consumed_at FROM credit.signing_intents WHERE id = $3)",
+    )
+    .bind(sender)
+    .bind(recipient)
+    .bind(intent_id)
+    .fetch_one(&pool)
+    .await
+    .expect("read rejected tip side effects");
+    assert_eq!(state.0, 50);
+    assert_eq!(state.1, 0);
+    assert_eq!(state.2, 0);
+    assert!(state.3.is_none());
 }
 
 #[tokio::test]

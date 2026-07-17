@@ -13,7 +13,8 @@ use shared::{AppResult, AppState, Page};
 use crate::dto::{
     LedgerEntryDto, LedgerVerify, ProductDto, ProductInput, PurchaseAction, PurchaseDto,
     ReconciliationRunDto, ReconciliationRunInput, ReconciliationStatsDto, ReconciliationWalletDto,
-    SigningIntentInput, SigningIntentOutput, TaskAction, TaskDto, TaskInput, TipInput, WalletDto,
+    SigningIntentInput, SigningIntentOutcomeDto, SigningIntentOutcomeInput, SigningIntentOutput,
+    TaskAction, TaskDto, TaskInput, TipInput, WalletDto,
 };
 use crate::error::CreditError;
 use crate::repo;
@@ -45,11 +46,43 @@ fn parse_pagination(cursor: Option<&str>, limit: i64) -> AppResult<(Option<i64>,
 
 /// Helper: convert the `Response` error from `authenticate` into `AppError`.
 fn map_auth_err(response: axum::response::Response) -> shared::AppError {
-    if response.status() == axum::http::StatusCode::UNAUTHORIZED {
-        shared::AppError::Unauthorized
-    } else {
-        shared::AppError::Forbidden
+    match response.status() {
+        axum::http::StatusCode::UNAUTHORIZED => shared::AppError::Unauthorized,
+        axum::http::StatusCode::FORBIDDEN => shared::AppError::Forbidden,
+        status => shared::AppError::Internal(anyhow::anyhow!(
+            "credit authentication failed with status {status}"
+        )),
     }
+}
+
+async fn lock_actor_for_write(
+    state: &CreditState,
+    conn: &mut sqlx::PgConnection,
+    account_id: i64,
+) -> AppResult<()> {
+    if !state.account_eligibility_resolver.are_eligible_on(conn, &[account_id]).await? {
+        return Err(shared::AppError::Forbidden);
+    }
+    Ok(())
+}
+
+async fn lock_actor_and_counterparty(
+    state: &CreditState,
+    conn: &mut sqlx::PgConnection,
+    actor_id: i64,
+    counterparty_id: i64,
+) -> AppResult<bool> {
+    if state
+        .account_eligibility_resolver
+        .are_eligible_on(conn, &[actor_id, counterparty_id])
+        .await?
+    {
+        return Ok(true);
+    }
+    if !state.account_eligibility_resolver.is_eligible_on(conn, actor_id).await? {
+        return Err(shared::AppError::Forbidden);
+    }
+    Ok(false)
 }
 
 async fn append_consumed_user_ledger(
@@ -122,12 +155,12 @@ async fn append_system_release(
 }
 
 /// POST /api/v2/credit/signing-intents — return exact bytes for wallet signing.
-pub async fn create_signing_intent(
-    State(state): State<AppState>,
+pub(crate) async fn create_signing_intent(
+    State(state): State<CreditState>,
     headers: HeaderMap,
     Json(body): Json<SigningIntentInput>,
 ) -> AppResult<Json<SigningIntentOutput>> {
-    let auth = crate::auth::authenticate(&headers, &state.db, &state.jwt_secret)
+    let auth = crate::auth::authenticate(&headers, &state.app.db, &state.app.jwt_secret)
         .await
         .map_err(map_auth_err)?;
     let idempotency_key = headers
@@ -135,7 +168,30 @@ pub async fn create_signing_intent(
         .and_then(|header| header.to_str().ok())
         .filter(|header| !header.is_empty())
         .ok_or(CreditError::IntentUnavailable)?;
-    Ok(Json(crate::signing::create_intent(&state.db, auth.id, &body, idempotency_key).await?))
+    Ok(Json(
+        crate::signing::create_intent(
+            &state.app.db,
+            state.account_eligibility_resolver.as_ref(),
+            state.wallet_key_resolver.as_ref(),
+            auth.id,
+            &body,
+            idempotency_key,
+        )
+        .await?,
+    ))
+}
+
+/// POST /api/v2/credit/signing-intent-outcome — owner-only lock-aware intent outcome.
+pub async fn get_signing_intent_outcome(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<SigningIntentOutcomeInput>,
+) -> AppResult<Json<SigningIntentOutcomeDto>> {
+    let auth = crate::auth::authenticate(&headers, &state.db, &state.jwt_secret)
+        .await
+        .map_err(map_auth_err)?;
+    let intent_id = body.intent_id.parse::<uuid::Uuid>().map_err(|_| shared::AppError::NotFound)?;
+    Ok(Json(crate::signing::intent_outcome(&state.db, auth.id, intent_id).await?))
 }
 
 // ---------------------------------------------------------------------------
@@ -143,14 +199,16 @@ pub async fn create_signing_intent(
 // ---------------------------------------------------------------------------
 
 /// GET /api/v2/wallet — authenticated wallet balance.
-pub async fn get_wallet(
-    State(state): State<AppState>,
+pub(crate) async fn get_wallet(
+    State(state): State<CreditState>,
     headers: HeaderMap,
 ) -> AppResult<Json<WalletDto>> {
-    let auth = crate::auth::authenticate(&headers, &state.db, &state.jwt_secret)
+    let auth = crate::auth::authenticate(&headers, &state.app.db, &state.app.jwt_secret)
         .await
         .map_err(map_auth_err)?;
-    let wallet = repo::get_wallet(&state.db, auth.id).await?;
+    let active_public_key =
+        state.wallet_key_resolver.active_public_key(&state.app.db, auth.id).await?;
+    let wallet = repo::get_wallet(&state.app.db, auth.id, active_public_key).await?;
     Ok(Json(wallet))
 }
 
@@ -182,8 +240,15 @@ pub async fn get_ledger(
 }
 
 /// GET /api/v2/wallet/ledger/verify — public verification result.
-pub async fn verify_ledger(State(state): State<AppState>) -> AppResult<Json<LedgerVerify>> {
-    let result = repo::verify_full_ledger(&state.db, &state.system_public_key_b64).await?;
+pub(crate) async fn verify_ledger(
+    State(state): State<CreditState>,
+) -> AppResult<Json<LedgerVerify>> {
+    let result = repo::verify_full_ledger(
+        &state.app.db,
+        &state.app.system_public_key_b64,
+        state.wallet_key_resolver.as_ref(),
+    )
+    .await?;
     Ok(Json(result))
 }
 
@@ -226,23 +291,24 @@ async fn authenticate_credit_integrity(
 }
 
 /// POST /api/v2/admin/credit/reconciliations — run a read-only integrity comparison.
-pub async fn request_reconciliation_run(
-    State(state): State<AppState>,
+pub(crate) async fn request_reconciliation_run(
+    State(state): State<CreditState>,
     headers: HeaderMap,
     Json(body): Json<ReconciliationRunInput>,
 ) -> AppResult<(StatusCode, Json<ReconciliationRunDto>)> {
-    let auth = authenticate_credit_integrity(&state, &headers).await?;
+    let auth = authenticate_credit_integrity(&state.app, &headers).await?;
     let idempotency_key = headers
         .get("idempotency-key")
         .and_then(|header| header.to_str().ok())
         .ok_or_else(|| shared::AppError::BadRequest("Idempotency-Key is required".into()))?;
     let actor = governance::AccountActor { account_id: auth.id, role: &auth.role };
     let (run, was_created) = crate::reconciliation::request_run(
-        &state.db,
+        &state.app.db,
         actor,
         &body.reason,
         idempotency_key,
-        &state.system_public_key_b64,
+        &state.app.system_public_key_b64,
+        state.wallet_key_resolver.as_ref(),
     )
     .await?;
     let status = if was_created { StatusCode::CREATED } else { StatusCode::OK };
@@ -272,21 +338,22 @@ pub async fn get_reconciliation_run(
 }
 
 /// POST /api/v2/admin/credit/reconciliations/{id}/resume — resume an interrupted run.
-pub async fn resume_reconciliation_run(
-    State(state): State<AppState>,
+pub(crate) async fn resume_reconciliation_run(
+    State(state): State<CreditState>,
     Path(id): Path<String>,
     headers: HeaderMap,
     Json(body): Json<ReconciliationRunInput>,
 ) -> AppResult<Json<ReconciliationRunDto>> {
-    let auth = authenticate_credit_integrity(&state, &headers).await?;
+    let auth = authenticate_credit_integrity(&state.app, &headers).await?;
     let actor = governance::AccountActor { account_id: auth.id, role: &auth.role };
     Ok(Json(
         crate::reconciliation::resume_run(
-            &state.db,
+            &state.app.db,
             actor,
             parse_reconciliation_id(&id)?,
             &body.reason,
-            &state.system_public_key_b64,
+            &state.app.system_public_key_b64,
+            state.wallet_key_resolver.as_ref(),
         )
         .await?,
     ))
@@ -373,9 +440,38 @@ pub(crate) async fn tip(
 
     let request = serde_json::to_value(&body)
         .map_err(|error| shared::AppError::Internal(anyhow::Error::new(error)))?;
+    let preview_target = {
+        let mut conn = state.app.db.acquire().await?;
+        state.tip_target_resolver.resolve(&mut conn, &body.target_type, target_id).await?
+    };
     let mut tx = state.app.db.begin().await?;
-    let consumed =
-        crate::signing::consume_intent(&mut tx, &headers, auth.id, "credit.tip", &request).await?;
+    let is_counterparty_eligible = if let Some(target) = preview_target.as_ref() {
+        lock_actor_and_counterparty(&state, &mut tx, auth.id, target.author_id).await?
+    } else {
+        lock_actor_for_write(&state, &mut tx, auth.id).await?;
+        false
+    };
+    let consumed = crate::signing::consume_intent(
+        &mut tx,
+        state.wallet_key_resolver.as_ref(),
+        &headers,
+        auth.id,
+        "credit.tip",
+        &request,
+    )
+    .await?;
+    let preview_target = preview_target.ok_or(shared::AppError::NotFound)?;
+    if !is_counterparty_eligible {
+        return Err(shared::AppError::NotFound);
+    }
+    if preview_target.canonical_type != body.target_type
+        || preview_target.canonical_id != target_id
+        || preview_target.author_id != to_account_id
+    {
+        return Err(
+            CreditError::InvalidAction("tip recipient must be the target author".into()).into()
+        );
+    }
     let target = state
         .tip_target_resolver
         .resolve(&mut tx, &body.target_type, target_id)
@@ -389,12 +485,7 @@ pub(crate) async fn tip(
             CreditError::InvalidAction("tip recipient must be the target author".into()).into()
         );
     }
-    let wallet_balance: i64 = sqlx::query_scalar(
-        "SELECT COALESCE((SELECT balance FROM credit.wallets WHERE account_id = $1 FOR UPDATE), 0)",
-    )
-    .bind(auth.id)
-    .fetch_one(&mut *tx)
-    .await?;
+    let wallet_balance = repo::lock_wallet_for_debit_tx(&mut tx, auth.id).await?;
     if wallet_balance < body.amount {
         return Err(CreditError::InsufficientBalance.into());
     }
@@ -473,17 +564,17 @@ pub async fn list_tasks(
 /// Atomic: wraps escrow_hold + insert_task in a single transaction.
 /// Requires `X-Wallet-Sig` header.
 #[tracing::instrument(skip(state, headers, body))]
-pub async fn create_task(
-    State(state): State<AppState>,
+pub(crate) async fn create_task(
+    State(state): State<CreditState>,
     headers: HeaderMap,
     Json(body): Json<TaskInput>,
 ) -> AppResult<(StatusCode, Json<TaskDto>)> {
-    let auth = crate::auth::authenticate(&headers, &state.db, &state.jwt_secret)
+    let auth = crate::auth::authenticate(&headers, &state.app.db, &state.app.jwt_secret)
         .await
         .map_err(map_auth_err)?;
 
     shared::ratelimit::check_token_bucket(
-        state.redis.as_ref(),
+        state.app.redis.as_ref(),
         "transfer",
         &auth.id.to_string(),
         20,
@@ -497,16 +588,18 @@ pub async fn create_task(
 
     let request = serde_json::to_value(&body)
         .map_err(|error| shared::AppError::Internal(anyhow::Error::new(error)))?;
-    let mut tx = state.db.begin().await?;
-    let consumed =
-        crate::signing::consume_intent(&mut tx, &headers, auth.id, "credit.task.create", &request)
-            .await?;
-    let wallet_balance: i64 = sqlx::query_scalar(
-        "SELECT COALESCE((SELECT balance FROM credit.wallets WHERE account_id = $1 FOR UPDATE), 0)",
+    let mut tx = state.app.db.begin().await?;
+    lock_actor_for_write(&state, &mut tx, auth.id).await?;
+    let consumed = crate::signing::consume_intent(
+        &mut tx,
+        state.wallet_key_resolver.as_ref(),
+        &headers,
+        auth.id,
+        "credit.task.create",
+        &request,
     )
-    .bind(auth.id)
-    .fetch_one(&mut *tx)
     .await?;
+    let wallet_balance = repo::lock_wallet_for_debit_tx(&mut tx, auth.id).await?;
     if wallet_balance < body.reward_amount {
         return Err(CreditError::InsufficientBalance.into());
     }
@@ -544,25 +637,31 @@ pub async fn create_task(
 }
 
 /// POST /api/v2/credit/tasks/{id}/accept — acceptor claims a task.
-pub async fn accept_task(
-    State(state): State<AppState>,
+pub(crate) async fn accept_task(
+    State(state): State<CreditState>,
     Path(id): Path<i64>,
     headers: HeaderMap,
 ) -> AppResult<StatusCode> {
-    let auth = crate::auth::authenticate(&headers, &state.db, &state.jwt_secret)
+    let auth = crate::auth::authenticate(&headers, &state.app.db, &state.app.jwt_secret)
         .await
         .map_err(map_auth_err)?;
 
-    let mut tx = state.db.begin().await?;
+    let preview = repo::find_task(&state.app.db, id).await?.ok_or(CreditError::TaskNotFound)?;
+    let mut tx = state.app.db.begin().await?;
+    if !lock_actor_and_counterparty(&state, &mut tx, auth.id, preview.creator_id).await? {
+        return Err(CreditError::TaskNotFound.into());
+    }
     let task =
         repo::find_task_for_update_tx(&mut tx, id).await?.ok_or(CreditError::TaskNotFound)?;
+    if task.creator_id != preview.creator_id {
+        return Err(CreditError::TaskNotFound.into());
+    }
     if task.creator_id == auth.id {
         return Err(CreditError::InvalidAction("cannot accept your own task".into()).into());
     }
     if task.status != "open" {
         return Err(CreditError::StateConflict.into());
     }
-
     repo::accept_task_tx(&mut tx, id, auth.id).await?;
     tx.commit().await?;
     Ok(StatusCode::NO_CONTENT)
@@ -572,17 +671,18 @@ pub async fn accept_task(
 ///
 /// Every transition locks the task and uses a compare-and-set write. Value
 /// transitions append their release and consume the hold in the same transaction.
-pub async fn action_task(
-    State(state): State<AppState>,
+pub(crate) async fn action_task(
+    State(state): State<CreditState>,
     Path(id): Path<i64>,
     headers: HeaderMap,
     Json(body): Json<TaskAction>,
 ) -> AppResult<StatusCode> {
-    let auth = crate::auth::authenticate(&headers, &state.db, &state.jwt_secret)
+    let auth = crate::auth::authenticate(&headers, &state.app.db, &state.app.jwt_secret)
         .await
         .map_err(map_auth_err)?;
 
-    let mut tx = state.db.begin().await?;
+    let mut tx = state.app.db.begin().await?;
+    lock_actor_for_write(&state, &mut tx, auth.id).await?;
     let task =
         repo::find_task_for_update_tx(&mut tx, id).await?.ok_or(CreditError::TaskNotFound)?;
 
@@ -607,6 +707,7 @@ pub async fn action_task(
             let request = serde_json::json!({ "id": id.to_string(), "action": body.action });
             crate::signing::consume_intent(
                 &mut tx,
+                state.wallet_key_resolver.as_ref(),
                 &headers,
                 auth.id,
                 "credit.task.action",
@@ -616,13 +717,16 @@ pub async fn action_task(
             let hold_tx = task.hold_tx_id.as_deref().ok_or(CreditError::StateConflict)?;
             let acceptor_id = task.acceptor_id.ok_or(CreditError::StateConflict)?;
             let metadata = serde_json::json!({ "task_id": id.to_string(), "hold_tx": hold_tx });
-            append_system_release(&mut tx, &state, acceptor_id, task.reward_amount, &metadata)
+            append_system_release(&mut tx, &state.app, acceptor_id, task.reward_amount, &metadata)
                 .await?;
             repo::transition_task_status_tx(&mut tx, id, "submitted", "completed", true).await?;
         }
         "cancel" | "reject" => {
-            let allowed = auth.id == task.creator_id
-                || (body.action == "reject" && auth.id == task.acceptor_id.unwrap_or(-1));
+            let allowed = if body.action == "cancel" {
+                auth.id == task.creator_id
+            } else {
+                auth.id == task.acceptor_id.unwrap_or(-1)
+            };
             if !allowed {
                 return Err(CreditError::InvalidAction("unauthorized action".into()).into());
             }
@@ -633,6 +737,7 @@ pub async fn action_task(
             let request = serde_json::json!({ "id": id.to_string(), "action": body.action });
             crate::signing::consume_intent(
                 &mut tx,
+                state.wallet_key_resolver.as_ref(),
                 &headers,
                 auth.id,
                 "credit.task.action",
@@ -643,8 +748,14 @@ pub async fn action_task(
             let metadata = serde_json::json!(
                 { "task_id": id.to_string(), "hold_tx": hold_tx, "reason": &body.action }
             );
-            append_system_release(&mut tx, &state, task.creator_id, task.reward_amount, &metadata)
-                .await?;
+            append_system_release(
+                &mut tx,
+                &state.app,
+                task.creator_id,
+                task.reward_amount,
+                &metadata,
+            )
+            .await?;
             repo::transition_task_status_tx(&mut tx, id, &task.status, "cancelled", true).await?;
         }
         "delete" => {
@@ -658,30 +769,31 @@ pub async fn action_task(
                 .into());
             }
 
-            if task.hold_tx_id.is_some() {
+            if task.status == "open" {
                 let request = serde_json::json!({ "id": id.to_string(), "action": body.action });
                 crate::signing::consume_intent(
                     &mut tx,
+                    state.wallet_key_resolver.as_ref(),
                     &headers,
                     auth.id,
                     "credit.task.action",
                     &request,
                 )
                 .await?;
-            }
-
-            if let Some(hold_tx) = &task.hold_tx_id {
+                let hold_tx = task.hold_tx_id.as_deref().ok_or(CreditError::StateConflict)?;
                 let metadata = serde_json::json!(
                     { "task_id": id.to_string(), "hold_tx": hold_tx, "reason": "delete" }
                 );
                 append_system_release(
                     &mut tx,
-                    &state,
+                    &state.app,
                     task.creator_id,
                     task.reward_amount,
                     &metadata,
                 )
                 .await?;
+            } else if task.hold_tx_id.is_some() {
+                return Err(CreditError::StateConflict.into());
             }
 
             repo::delete_task_tx(&mut tx, id, &task.status).await?;
@@ -753,17 +865,17 @@ pub async fn list_products(
 }
 
 /// POST /api/v2/credit/products — list a new product.
-pub async fn create_product(
-    State(state): State<AppState>,
+pub(crate) async fn create_product(
+    State(state): State<CreditState>,
     headers: HeaderMap,
     Json(body): Json<ProductInput>,
 ) -> AppResult<(StatusCode, Json<ProductDto>)> {
-    let auth = crate::auth::authenticate(&headers, &state.db, &state.jwt_secret)
+    let auth = crate::auth::authenticate(&headers, &state.app.db, &state.app.jwt_secret)
         .await
         .map_err(map_auth_err)?;
 
     shared::ratelimit::check_token_bucket(
-        state.redis.as_ref(),
+        state.app.redis.as_ref(),
         "transfer",
         &auth.id.to_string(),
         20,
@@ -777,8 +889,10 @@ pub async fn create_product(
         return Err(shared::AppError::BadRequest("stock must be nonnegative".into()));
     }
 
-    let product = repo::insert_product(
-        &state.db,
+    let mut tx = state.app.db.begin().await?;
+    lock_actor_for_write(&state, &mut tx, auth.id).await?;
+    let product = repo::insert_product_tx(
+        &mut tx,
         auth.id,
         &body.title,
         body.description.as_deref(),
@@ -787,6 +901,7 @@ pub async fn create_product(
         body.delivery_info.as_deref(),
     )
     .await?;
+    tx.commit().await?;
 
     Ok((
         StatusCode::CREATED,
@@ -808,17 +923,17 @@ pub async fn create_product(
 /// Atomic: escrow_hold + decrement_stock + status update + insert_purchase
 /// in a single transaction. Requires `X-Wallet-Sig`.
 #[tracing::instrument(skip(state, headers))]
-pub async fn purchase_product(
-    State(state): State<AppState>,
+pub(crate) async fn purchase_product(
+    State(state): State<CreditState>,
     Path(id): Path<i64>,
     headers: HeaderMap,
 ) -> AppResult<(StatusCode, Json<PurchaseDto>)> {
-    let auth = crate::auth::authenticate(&headers, &state.db, &state.jwt_secret)
+    let auth = crate::auth::authenticate(&headers, &state.app.db, &state.app.jwt_secret)
         .await
         .map_err(map_auth_err)?;
 
     shared::ratelimit::check_token_bucket(
-        state.redis.as_ref(),
+        state.app.redis.as_ref(),
         "transfer",
         &auth.id.to_string(),
         20,
@@ -827,17 +942,17 @@ pub async fn purchase_product(
     .await?;
 
     let request = serde_json::json!({ "productId": id.to_string() });
-    let mut tx = state.db.begin().await?;
-    let consumed = crate::signing::consume_intent(
-        &mut tx,
-        &headers,
-        auth.id,
-        "credit.product.purchase",
-        &request,
-    )
-    .await?;
+    let preview =
+        repo::find_product(&state.app.db, id).await?.ok_or(CreditError::ProductNotFound)?;
+    let mut tx = state.app.db.begin().await?;
+    if !lock_actor_and_counterparty(&state, &mut tx, auth.id, preview.seller_id).await? {
+        return Err(CreditError::ProductNotFound.into());
+    }
     let product =
         repo::find_product_for_update_tx(&mut tx, id).await?.ok_or(CreditError::ProductNotFound)?;
+    if product.seller_id != preview.seller_id {
+        return Err(CreditError::ProductNotFound.into());
+    }
     if product.status != "on_sale" {
         return Err(CreditError::InvalidAction("product is not on_sale".into()).into());
     }
@@ -847,12 +962,16 @@ pub async fn purchase_product(
     if product.seller_id == auth.id {
         return Err(CreditError::InvalidAction("cannot purchase your own product".into()).into());
     }
-    let wallet_balance: i64 = sqlx::query_scalar(
-        "SELECT COALESCE((SELECT balance FROM credit.wallets WHERE account_id = $1 FOR UPDATE), 0)",
+    let consumed = crate::signing::consume_intent(
+        &mut tx,
+        state.wallet_key_resolver.as_ref(),
+        &headers,
+        auth.id,
+        "credit.product.purchase",
+        &request,
     )
-    .bind(auth.id)
-    .fetch_one(&mut *tx)
     .await?;
+    let wallet_balance = repo::lock_wallet_for_debit_tx(&mut tx, auth.id).await?;
     if wallet_balance < product.price {
         return Err(CreditError::InsufficientBalance.into());
     }
@@ -934,20 +1053,24 @@ pub async fn list_purchases(
 ///
 /// Every transition locks the purchase and uses a compare-and-set write.
 /// confirm/cancel append the release and consume the hold atomically.
-pub async fn action_purchase(
-    State(state): State<AppState>,
+pub(crate) async fn action_purchase(
+    State(state): State<CreditState>,
     Path(id): Path<i64>,
     headers: HeaderMap,
     Json(body): Json<PurchaseAction>,
 ) -> AppResult<StatusCode> {
-    let auth = crate::auth::authenticate(&headers, &state.db, &state.jwt_secret)
+    let auth = crate::auth::authenticate(&headers, &state.app.db, &state.app.jwt_secret)
         .await
         .map_err(map_auth_err)?;
 
-    let mut tx = state.db.begin().await?;
+    let mut tx = state.app.db.begin().await?;
+    lock_actor_for_write(&state, &mut tx, auth.id).await?;
     let purchase = repo::find_purchase_for_update_tx(&mut tx, id)
         .await?
         .ok_or(CreditError::PurchaseNotFound)?;
+    if auth.id != purchase.buyer_id && auth.id != purchase.seller_id {
+        return Err(CreditError::PurchaseNotFound.into());
+    }
 
     match body.action.as_str() {
         "accept" => {
@@ -980,6 +1103,7 @@ pub async fn action_purchase(
             let request = serde_json::json!({ "id": id.to_string(), "action": body.action });
             crate::signing::consume_intent(
                 &mut tx,
+                state.wallet_key_resolver.as_ref(),
                 &headers,
                 auth.id,
                 "credit.purchase.action",
@@ -988,8 +1112,14 @@ pub async fn action_purchase(
             .await?;
             let hold_tx = purchase.hold_tx_id.as_deref().ok_or(CreditError::StateConflict)?;
             let metadata = serde_json::json!({ "purchase_id": id.to_string(), "hold_tx": hold_tx });
-            append_system_release(&mut tx, &state, purchase.seller_id, purchase.amount, &metadata)
-                .await?;
+            append_system_release(
+                &mut tx,
+                &state.app,
+                purchase.seller_id,
+                purchase.amount,
+                &metadata,
+            )
+            .await?;
             repo::transition_purchase_status_tx(&mut tx, id, "delivered", "completed", true)
                 .await?;
         }
@@ -1006,6 +1136,7 @@ pub async fn action_purchase(
             let request = serde_json::json!({ "id": id.to_string(), "action": body.action });
             crate::signing::consume_intent(
                 &mut tx,
+                state.wallet_key_resolver.as_ref(),
                 &headers,
                 auth.id,
                 "credit.purchase.action",
@@ -1016,10 +1147,17 @@ pub async fn action_purchase(
             let metadata = serde_json::json!(
                 { "purchase_id": id.to_string(), "hold_tx": hold_tx, "reason": "cancelled" }
             );
-            append_system_release(&mut tx, &state, purchase.buyer_id, purchase.amount, &metadata)
-                .await?;
             repo::transition_purchase_status_tx(&mut tx, id, &purchase.status, "cancelled", true)
                 .await?;
+            repo::restore_cancelled_purchase_stock_tx(&mut tx, purchase.product_id).await?;
+            append_system_release(
+                &mut tx,
+                &state.app,
+                purchase.buyer_id,
+                purchase.amount,
+                &metadata,
+            )
+            .await?;
         }
         _ => {
             return Err(
@@ -1030,4 +1168,23 @@ pub async fn action_purchase(
 
     tx.commit().await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::response::IntoResponse;
+
+    use super::map_auth_err;
+
+    #[test]
+    fn preserves_authentication_error_classification() {
+        let unauthorized = map_auth_err(axum::http::StatusCode::UNAUTHORIZED.into_response());
+        assert!(matches!(unauthorized, shared::AppError::Unauthorized));
+
+        let forbidden = map_auth_err(axum::http::StatusCode::FORBIDDEN.into_response());
+        assert!(matches!(forbidden, shared::AppError::Forbidden));
+
+        let internal = map_auth_err(axum::http::StatusCode::INTERNAL_SERVER_ERROR.into_response());
+        assert!(matches!(internal, shared::AppError::Internal(_)));
+    }
 }

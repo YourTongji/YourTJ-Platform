@@ -14,6 +14,22 @@ const UUID_V4_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}
 export const AUTH_CLEARED_EVENT = "yourtj:auth-cleared";
 
 let inMemoryClientInstallationId: string | null = null;
+let authContextVersion = 0;
+
+function advanceAuthContextVersion() {
+  authContextVersion += 1;
+}
+
+if (typeof window !== "undefined") {
+  window.addEventListener("storage", (event) => {
+    if (event.key === ACCESS_TOKEN_KEY
+      || event.key === REFRESH_TOKEN_KEY
+      || event.key === ACCOUNT_KEY
+      || event.key === null) {
+      advanceAuthContextVersion();
+    }
+  });
+}
 
 export interface StoredAuth {
   accessToken: string;
@@ -23,6 +39,11 @@ export interface StoredAuth {
 
 export function readAccessToken() {
   return localStorage.getItem(ACCESS_TOKEN_KEY);
+}
+
+/** Monotonically identifies the current page's observed login context. */
+export function readAuthContextVersion() {
+  return authContextVersion;
 }
 
 export function readRefreshToken() {
@@ -73,10 +94,12 @@ export function writeAuth(auth: StoredAuth) {
   localStorage.setItem(ACCESS_TOKEN_KEY, auth.accessToken);
   localStorage.setItem(REFRESH_TOKEN_KEY, auth.refreshToken);
   localStorage.setItem(ACCOUNT_KEY, JSON.stringify(auth.account));
+  advanceAuthContextVersion();
 }
 
 export function writeAccount(account: Account) {
   localStorage.setItem(ACCOUNT_KEY, JSON.stringify(account));
+  advanceAuthContextVersion();
 }
 
 export function clearAuth() {
@@ -85,6 +108,7 @@ export function clearAuth() {
   localStorage.removeItem(ACCESS_TOKEN_KEY);
   localStorage.removeItem(REFRESH_TOKEN_KEY);
   localStorage.removeItem(ACCOUNT_KEY);
+  advanceAuthContextVersion();
   if (previousAccountId) void clearLocalForumDraftsForAccount(previousAccountId);
   window.dispatchEvent(new Event(AUTH_CLEARED_EVENT));
 }

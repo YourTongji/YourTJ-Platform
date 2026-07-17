@@ -22,7 +22,7 @@ class WalletApi {
   const WalletApi(this._dio);
 
   /// Enroll the first client-generated Ed25519 public key
-  /// Requires fresh session-bound authentication. Repeating the canonical active key is idempotent; enrolling a different key while one is active is rejected because key rotation requires a separately designed old-key proof or audited recovery flow.
+  /// Requires fresh session-bound authentication. Initial enrollment requires an accountId that exactly matches the authenticated account. During the client cutover, a legacy body without accountId is accepted only when it repeats the already-active canonical key; it can never enroll a first or different key. Key rotation requires a separately designed old-key proof or audited recovery flow.
   ///
   /// Parameters:
   /// * [walletBindPostRequest]
@@ -84,7 +84,7 @@ class WalletApi {
   }
 
   /// Get a one-time claim challenge
-  ///
+  /// Replaces any prior challenge for the authenticated account. Issuance is account-rate-limited and the returned challenge becomes permanently unusable after the first well-formed proof attempt, whether that proof succeeds or fails.
   ///
   /// Parameters:
   /// * [cancelToken] - A [CancelToken] that can be used to cancel the operation
@@ -159,7 +159,7 @@ class WalletApi {
   }
 
   /// Claim a legacy wallet by signing the challenge (re-derive userHash from 学号+PIN)
-  ///
+  /// The request is bounded by account, opaque client-network, and global abuse-control buckets. A valid account-owned challenge is consumed by the first well-formed legacy proof attempt even when the link is missing, already claimed, lacks a key, or the signature is invalid. Canonical-field, challenge, link, and proof failures handled by the endpoint return the same generic bad-request error; clients must request and sign a new challenge after any unsuccessful attempt.
   ///
   /// Parameters:
   /// * [walletClaimPostRequest]

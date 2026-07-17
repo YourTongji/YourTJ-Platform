@@ -22,12 +22,38 @@ pub struct SigningIntentOutput {
     pub expires_at: i64,
 }
 
+/// Owner request for one signing intent's bounded outcome.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SigningIntentOutcomeInput {
+    pub intent_id: String,
+}
+
+/// Owner-visible state of a one-time signing intent.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SigningIntentOutcomeDto {
+    pub intent_id: String,
+    pub status: SigningIntentStatus,
+    pub expires_at: i64,
+}
+
+/// Stable outcome states exposed without returning signing material.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SigningIntentStatus {
+    Pending,
+    Committed,
+    Expired,
+}
+
 /// GET /wallet
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WalletDto {
     pub account_id: String,
     pub balance: i64,
+    pub active_public_key: Option<String>,
 }
 
 /// A single entry in the public ledger view.

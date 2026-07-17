@@ -273,6 +273,8 @@ export 'package:yourtj_api/src/model/setting.dart';
 export 'package:yourtj_api/src/model/setting_update_input.dart';
 export 'package:yourtj_api/src/model/signing_intent.dart';
 export 'package:yourtj_api/src/model/signing_intent_input.dart';
+export 'package:yourtj_api/src/model/signing_intent_outcome.dart';
+export 'package:yourtj_api/src/model/signing_intent_outcome_input.dart';
 export 'package:yourtj_api/src/model/startup_verify_post_request.dart';
 export 'package:yourtj_api/src/model/submit_appeal_input.dart';
 export 'package:yourtj_api/src/model/subscription.dart';

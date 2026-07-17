@@ -16,51 +16,51 @@ part 'product.g.dart';
 class Product {
   /// Returns a new [Product] instance.
   Product({
-    this.id,
+    required this.id,
 
-    this.sellerId,
+    required this.sellerId,
 
-    this.title,
+    required this.title,
 
-    this.description,
+    required this.description,
 
-    this.price,
+    required this.price,
 
-    this.stock,
+    required this.stock,
 
-    this.status,
+    required this.status,
 
-    this.createdAt,
+    required this.createdAt,
   });
 
-  @JsonKey(name: r'id', required: false, includeIfNull: false)
-  final String? id;
+  @JsonKey(name: r'id', required: true, includeIfNull: false)
+  final String id;
 
-  @JsonKey(name: r'sellerId', required: false, includeIfNull: false)
-  final String? sellerId;
+  @JsonKey(name: r'sellerId', required: true, includeIfNull: false)
+  final String sellerId;
 
-  @JsonKey(name: r'title', required: false, includeIfNull: false)
-  final String? title;
+  @JsonKey(name: r'title', required: true, includeIfNull: false)
+  final String title;
 
-  @JsonKey(name: r'description', required: false, includeIfNull: false)
+  @JsonKey(name: r'description', required: true, includeIfNull: true)
   final String? description;
 
-  @JsonKey(name: r'price', required: false, includeIfNull: false)
-  final int? price;
+  @JsonKey(name: r'price', required: true, includeIfNull: false)
+  final int price;
 
-  @JsonKey(name: r'stock', required: false, includeIfNull: false)
-  final int? stock;
+  @JsonKey(name: r'stock', required: true, includeIfNull: false)
+  final int stock;
 
   @JsonKey(
     name: r'status',
-    required: false,
+    required: true,
     includeIfNull: false,
     unknownEnumValue: ProductStatusEnum.unknownDefaultOpenApi,
   )
-  final ProductStatusEnum? status;
+  final ProductStatusEnum status;
 
-  @JsonKey(name: r'createdAt', required: false, includeIfNull: false)
-  final int? createdAt;
+  @JsonKey(name: r'createdAt', required: true, includeIfNull: false)
+  final int createdAt;
 
   @override
   bool operator ==(Object other) =>

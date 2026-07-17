@@ -40,21 +40,29 @@ class WalletSigner {
     if (seed.length != 32) {
       throw const WalletKeyUnavailable('无法生成标准 Ed25519 钱包密钥');
     }
+    final List<int> persistedSeed;
     try {
-      await _store.write(accountId, seed);
+      persistedSeed = await _store.writeIfAbsent(accountId, seed);
     } on Object {
       throw const WalletKeyUnavailable('系统安全存储不可用，已停止创建钱包密钥');
     }
-    final SimplePublicKey publicKey = await keyPair.extractPublicKey();
-    return LocalWalletKey(publicKeyBase64: base64Encode(publicKey.bytes));
+    return _derivePublicKey(persistedSeed);
   }
 
-  Future<String> signExactBytes(String accountId, String signingBytes) async {
+  Future<String> signExactBytes(
+    String accountId,
+    String expectedPublicKey,
+    String signingBytes,
+  ) async {
     final List<int>? seed = await _readSeed(accountId);
     if (seed == null) {
       throw const WalletKeyUnavailable('本机没有该账号的钱包密钥');
     }
     final SimpleKeyPair keyPair = await _algorithm.newKeyPairFromSeed(seed);
+    final SimplePublicKey publicKey = await keyPair.extractPublicKey();
+    if (base64Encode(publicKey.bytes) != expectedPublicKey) {
+      throw const WalletKeyUnavailable('本机钱包私钥与服务端公钥不一致，已停止签名');
+    }
     final Signature signature = await _algorithm.sign(
       utf8.encode(signingBytes),
       keyPair: keyPair,

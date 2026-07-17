@@ -6,7 +6,7 @@
 >
 > 负责人：Mobile maintainers、Platform maintainers、Security maintainers
 >
-> 最近核验：2026-07-14，Flutter 3.44、当前目录/生成链路、secure pending reconciliation 与 Web/API 边界
+> 最近核验：2026-07-17，wallet owner-key/outcome 契约、exact signing 与 session generation
 
 本文说明 monorepo 内 `mobile/` 如何消费平台能力。产品旅程、布局和 parity 门槛见
 [Flutter 移动端产品规范](../product/mobile-client.md)；本文只定义代码边界、生成链路、状态所有权和
@@ -192,19 +192,29 @@ Media domain 处理。
 普通 repository 只能请求“对这段服务端 exact signing bytes 签名”，不能读取 seed。
 
 首次登记 public key 前，客户端调用 Identity recent-auth flow；服务器按当前 revocable session freshness
-授权，并只接受数据库唯一 active key 的首次写入或同 key 幂等确认。不同 key 不在客户端自动覆盖，
-也不因 secure storage 中缺 key 而生成“替代恢复”请求；old-key proof/审计恢复协议交付前直接 fail closed。
+授权，并只接受数据库唯一 active key 的首次写入或同 key 幂等确认。生成前与每次 intent 前都读取 required
+owner `/wallet.activePublicKey`：只有明确 null 才生成，已有 key 必须与本机 signer 精确匹配。字段缺失、错号、
+非规范 key 或 secure storage 缺 key 都不生成“替代恢复”；old-key proof/审计恢复协议交付前直接 fail closed。
 
-1. 从 `credit/signing-intents` 取得 `intentId`、`signingBytes` 与 expiry。
-2. 验证 intent 未过期、当前账号与待执行 action 未变化。
-3. 以 UTF-8 exact bytes 计算 Ed25519 signature，base64 编码；不 parse/re-serialize signing bytes。
-4. 同一请求携带 intent、`X-Wallet-Sig` 与同一 idempotency key。
-5. 发出 value-moving 请求前，把 environment+account 隔离的待核验记录写入系统安全存储；记录包含
-   规范请求的 deterministic SHA-256 operation key、action、canonical target、intent expiry 与必要 ledger baseline，不保存 seed、
-   signature、signing bytes 或 idempotency key。
-6. 成功响应或明确未提交的客户端错误删除记录；收到无响应/5xx 等不确定结果时，先查询 canonical
-   ledger/task/purchase state。同一 operation 在确认 committed 或 intent 到期且确定未提交前禁止创建
-   新 intent；App 重启和切回同一账号时继续 reconciliation，不盲重放。
+1. 原子捕获当前 account id + access token + session generation；首次绑 key 的 generated request 同时把
+   account id 写入 body，并固定同一 bearer/generation，Dio interceptor 不得在 dispatch 前切号时替换为
+   新账号凭证。读取 required owner active key 并与本机 signer 精确匹配。
+2. 从 `credit/signing-intents` 取得 `intentId`、`signingBytes` 与 expiry；验证 exact 10-field canonical
+   envelope、规范请求 SHA-256、account/action/key/intent/idempotency/expiry、同次 owner wallet 余额、
+   页面已展示 snapshot（包括 action-specific actor/status/party 与允许的状态转换）以及
+   ledger 金额/收方/metadata；账号和实体 id 必须是规范正 i64 字符串，金额/余额/库存必须在
+   客户端安全整数范围内，self-tip 和余额不足均在使用私钥前 fail closed。
+3. signer 从本次实际 seed 派生 public key，与 expected key 再比较后，以 UTF-8 exact bytes 计算 Ed25519
+   signature 并 base64 编码；只解析验证，不 re-serialize signing bytes。
+4. 发出 value-moving 请求前，把 environment+account 隔离的待核验记录写入系统安全存储；记录只含
+   deterministic SHA-256 operation key、action、intent id/expiry，不保存 seed、raw request、signature、
+   signing bytes 或 idempotency key。同一请求携带该 intent、`X-Wallet-Sig` 与同一 idempotency key。
+5. 成功响应或明确 4xx rejection 终结记录；2xx 响应 DTO 反序列化失败、3xx、无响应、5xx、App 重启或
+   切回同一账号时用
+   固定 URL POST body 查询 owner intent outcome，不把 intent id 放入 access-log path。该读取以
+   `FOR SHARE` 与消费事务的 `FOR UPDATE` 互斥：`committed` 证明业务事务已提交，
+   `expired` 证明锁等待结束后仍未消费，`pending`/超时/错误继续保留并阻止新 intent，不能用 canonical
+   ledger/task/purchase 的瞬时 absence 猜测未提交。
 
 生成、签名、清除和 public-key derivation 使用跨端黄金向量测试。日志、Crash report、clipboard、deep link、
 analytics 和普通 cache 永远不包含 seed、signature credential 或 signing bytes。Android backup rules 与 iOS
@@ -213,6 +223,9 @@ Keychain accessibility 必须接受真机验证；插件异常、pending record 
 记录；摘要仍按敏感关联标识只用于同账号 reconciliation。iOS seed 使用
 `WhenPasscodeSetThisDeviceOnly`，pending 使用 `WhenUnlockedThisDeviceOnly`：后者必须在设备密码被移除时
 继续保留，否则一次响应不确定的写入可能失去唯一防重放证据；两者都关闭 synchronizable 且不跨设备迁移。
+pending v2 只接受上述四个精确字段并拒绝 unknown/duplicate records。带 intent id 的 v1 记录必须先完整写入
+v2、证明覆盖后才能删除 v1；旧版无 intent id 的 submitted 记录无法查询 canonical outcome，必须保留原记录
+并 fail closed，不能在 schema bump 时当作空状态清除。
 
 ## Route 与状态恢复
 

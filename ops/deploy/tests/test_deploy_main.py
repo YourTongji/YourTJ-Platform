@@ -224,6 +224,11 @@ class DeployMainTests(unittest.TestCase):
         self.wallet_cutover_marker = self.root / "wallet-cutover.complete"
         self.wallet_cutover_marker.write_text("migration=0067\nrevision=previous\n")
         os.chmod(self.wallet_cutover_marker, 0o600)
+        self.wallet_bind_account_scope_marker = self.root / "wallet-bind-account-scope.complete"
+        self.wallet_bind_account_scope_marker.write_text(
+            f"cutover=wallet-bind-account-scope\nrevision={'b' * 40}\n"
+        )
+        os.chmod(self.wallet_bind_account_scope_marker, 0o600)
         self.deploy_lock = self.root / "deploy-main.lock"
 
         image = tempfile.NamedTemporaryFile(prefix="api-image-main-", suffix=".tar", dir="/tmp", delete=False)
@@ -273,6 +278,8 @@ class DeployMainTests(unittest.TestCase):
         fail_backend_start: bool = False,
         signal_during_sleep: str | None = None,
         cutover_approval: str = "not-approved",
+        wallet_bind_account_scope_approval: str = "not-approved",
+        wallet_bind_account_scope_mobile_status: str = "unknown",
     ) -> subprocess.CompletedProcess[str]:
         environment = os.environ.copy()
         environment.update(
@@ -282,6 +289,9 @@ class DeployMainTests(unittest.TestCase):
                 "MAIN_RUNTIME_ENV_FILE": str(self.runtime_env),
                 "MAIN_EMAIL_ENV_FILE": str(self.email_env),
                 "WALLET_KEY_CUTOVER_MARKER": str(self.wallet_cutover_marker),
+                "WALLET_BIND_ACCOUNT_SCOPE_MARKER": str(
+                    self.wallet_bind_account_scope_marker
+                ),
                 "DEPLOY_LOCK_FILE": str(self.deploy_lock),
                 "DEPLOY_HEALTH_ATTEMPTS": "2",
                 "DEPLOY_HEALTH_DELAY_SECONDS": "0",
@@ -307,6 +317,8 @@ class DeployMainTests(unittest.TestCase):
                 str(self.verifier),
                 str(self.nginx),
                 cutover_approval,
+                wallet_bind_account_scope_approval,
+                wallet_bind_account_scope_mobile_status,
             ],
             env=environment,
             capture_output=True,
@@ -371,6 +383,134 @@ class DeployMainTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertNotIn("draining signing intents", result.stdout)
+
+    def test_first_wallet_bind_account_scope_cutover_activates_frontend_first(self):
+        self.seed_current_containers()
+        self.wallet_bind_account_scope_marker.unlink()
+
+        result = self.run_deploy(
+            wallet_bind_account_scope_approval=REVISION,
+            wallet_bind_account_scope_mobile_status="not-distributed",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("frontend revision verified", result.stdout)
+        self.assertIn("strict backend ready and marker recorded", result.stdout)
+        docker_calls = (self.state / "docker-calls").read_text().splitlines()
+        self.assertLess(docker_calls.index("stop main-fe"), docker_calls.index("stop main-be"))
+        marker = self.wallet_bind_account_scope_marker.read_text()
+        self.assertIn("cutover=wallet-bind-account-scope", marker)
+        self.assertIn(f"revision={REVISION}", marker)
+        self.assertEqual(self.wallet_bind_account_scope_marker.stat().st_mode & 0o777, 0o600)
+
+    def test_completed_wallet_bind_account_scope_cutover_accepts_sentinels(self):
+        result = self.run_deploy()
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("account-scope cutover: activating", result.stdout)
+
+    def test_missing_account_scope_marker_rejects_before_stopping_containers(self):
+        self.seed_current_containers()
+        self.wallet_bind_account_scope_marker.unlink()
+
+        result = self.run_deploy()
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("requires approval for the exact deployment revision", result.stderr)
+        self.assertFalse((self.state / "stopped-main-fe").exists())
+        self.assertFalse((self.state / "stopped-main-be").exists())
+
+    def test_account_scope_cutover_requires_mobile_not_distributed_confirmation(self):
+        self.seed_current_containers()
+        self.wallet_bind_account_scope_marker.unlink()
+
+        result = self.run_deploy(wallet_bind_account_scope_approval=REVISION)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("requires confirmation that mobile is not distributed", result.stderr)
+        self.assertFalse((self.state / "stopped-main-fe").exists())
+        self.assertFalse((self.state / "stopped-main-be").exists())
+
+    def test_rejects_malformed_account_scope_cutover_inputs(self):
+        approval_result = self.run_deploy(
+            wallet_bind_account_scope_approval="not-approved; uname"
+        )
+        status_result = self.run_deploy(
+            wallet_bind_account_scope_mobile_status="distributed"
+        )
+
+        self.assertNotEqual(approval_result.returncode, 0)
+        self.assertIn(
+            "account-scope approval must be not-approved or a full lowercase commit SHA",
+            approval_result.stderr,
+        )
+        self.assertNotEqual(status_result.returncode, 0)
+        self.assertIn(
+            "account-scope mobile status must be unknown or not-distributed",
+            status_result.stderr,
+        )
+
+    def test_rejects_malformed_account_scope_marker_before_stopping_containers(self):
+        self.seed_current_containers()
+        self.wallet_bind_account_scope_marker.write_text("revision=not-a-sha\n")
+
+        result = self.run_deploy()
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("account-scope cutover marker is malformed", result.stderr)
+        self.assertFalse((self.state / "stopped-main-fe").exists())
+        self.assertFalse((self.state / "stopped-main-be").exists())
+
+    def test_account_scope_frontend_verification_failure_keeps_old_backend(self):
+        self.seed_current_containers()
+        self.wallet_bind_account_scope_marker.unlink()
+
+        result = self.run_deploy(
+            fake_revision="b" * 40,
+            wallet_bind_account_scope_approval=REVISION,
+            wallet_bind_account_scope_mobile_status="not-distributed",
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse((self.state / "stopped-main-be").exists())
+        self.assertTrue((self.state / "container-main-fe").exists())
+        self.assertFalse((self.state / "stopped-main-fe").exists())
+        self.assertFalse(list(self.state.glob("container-main-fe-rollback-*")))
+        self.assertFalse(self.wallet_bind_account_scope_marker.exists())
+
+    def test_account_scope_backend_start_failure_restores_previous_frontend(self):
+        self.seed_current_containers()
+        self.wallet_bind_account_scope_marker.unlink()
+
+        result = self.run_deploy(
+            fail_backend_start=True,
+            wallet_bind_account_scope_approval=REVISION,
+            wallet_bind_account_scope_mobile_status="not-distributed",
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertTrue((self.state / "container-main-fe").exists())
+        self.assertFalse((self.state / "stopped-main-fe").exists())
+        self.assertFalse(list(self.state.glob("container-main-fe-rollback-*")))
+        self.assertFalse(self.wallet_bind_account_scope_marker.exists())
+
+    def test_account_scope_post_readiness_failure_preserves_strict_pair(self):
+        self.seed_current_containers()
+        self.wallet_bind_account_scope_marker.unlink()
+
+        result = self.run_deploy(
+            fail_after=7,
+            wallet_bind_account_scope_approval=REVISION,
+            wallet_bind_account_scope_mobile_status="not-distributed",
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertTrue((self.state / "container-main-fe").exists())
+        self.assertFalse((self.state / "stopped-main-fe").exists())
+        self.assertTrue((self.state / "container-main-be").exists())
+        self.assertFalse((self.state / "stopped-main-be").exists())
+        self.assertTrue(self.wallet_bind_account_scope_marker.exists())
+        self.assertIn("preserving the verified account-scoped frontend", result.stderr)
 
     def test_rejects_concurrent_deploy_before_stopping_backend(self):
         self.seed_current_containers()

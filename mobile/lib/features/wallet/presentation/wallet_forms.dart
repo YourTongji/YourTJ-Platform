@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:yourtj_api/yourtj_api.dart';
 
 import '../../../core/network/api_failure.dart';
@@ -410,6 +411,12 @@ class _LegacyClaimDialogState extends State<_LegacyClaimDialog> {
                 const SizedBox(height: 12),
                 TextField(
                   controller: _legacyHash,
+                  maxLength: 64,
+                  keyboardType: TextInputType.visiblePassword,
+                  inputFormatters: <TextInputFormatter>[
+                    FilteringTextInputFormatter.allow(RegExp('[0-9a-f]')),
+                    LengthLimitingTextInputFormatter(64),
+                  ],
                   decoration: const InputDecoration(
                     labelText: 'legacyUserHash',
                   ),
@@ -419,6 +426,14 @@ class _LegacyClaimDialogState extends State<_LegacyClaimDialog> {
                   controller: _signature,
                   minLines: 2,
                   maxLines: 4,
+                  maxLength: 88,
+                  keyboardType: TextInputType.visiblePassword,
+                  inputFormatters: <TextInputFormatter>[
+                    FilteringTextInputFormatter.allow(
+                      RegExp(r'[A-Za-z0-9+/=]'),
+                    ),
+                    LengthLimitingTextInputFormatter(88),
+                  ],
                   decoration: const InputDecoration(labelText: '旧钱包签名'),
                 ),
               ],
@@ -455,7 +470,10 @@ class _LegacyClaimDialogState extends State<_LegacyClaimDialog> {
       final WalletClaimChallenge challenge = await widget.repository
           .createClaimChallenge();
       if (mounted) {
-        setState(() => _challenge = challenge);
+        setState(() {
+          _challenge = challenge;
+          _signature.clear();
+        });
       }
     } on ApiFailure catch (failure) {
       if (mounted) {
@@ -469,8 +487,11 @@ class _LegacyClaimDialogState extends State<_LegacyClaimDialog> {
   }
 
   Future<void> _submitClaim() async {
-    if (_legacyHash.text.trim().isEmpty || _signature.text.trim().isEmpty) {
-      setState(() => _error = '请填写旧钱包标识和签名');
+    final String legacyHash = _legacyHash.text.trim();
+    final String signature = _signature.text.trim();
+    if (!RegExp(r'^[0-9a-f]{64}$').hasMatch(legacyHash) ||
+        !RegExp(r'^[A-Za-z0-9+/]{86}==$').hasMatch(signature)) {
+      setState(() => _error = '旧钱包标识或签名格式无效');
       return;
     }
     setState(() {
@@ -479,16 +500,20 @@ class _LegacyClaimDialogState extends State<_LegacyClaimDialog> {
     });
     try {
       await widget.repository.claimLegacyWallet(
-        legacyUserHash: _legacyHash.text,
+        legacyUserHash: legacyHash,
         challengeId: _challenge!.challengeId,
-        signature: _signature.text,
+        signature: signature,
       );
       if (mounted) {
         Navigator.pop(context, true);
       }
-    } on ApiFailure catch (failure) {
+    } on ApiFailure {
       if (mounted) {
-        setState(() => _error = failure.message);
+        setState(() {
+          _challenge = null;
+          _signature.clear();
+          _error = '认领未完成；本次挑战已失效，请重新获取并签名';
+        });
       }
     } finally {
       if (mounted) {

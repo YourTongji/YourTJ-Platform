@@ -10,6 +10,7 @@ use sha2::Digest as _;
 use axum::extract::{Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
+use base64::Engine as _;
 use chrono::Utc;
 use shared::{AppResult, AppState, Page};
 
@@ -40,6 +41,15 @@ pub struct SessionQuery {
 
 // Rate limiting is handled by shared::ratelimit::check_token_bucket (Redis-backed).
 // A configured Redis outage returns a stable 503 so abuse controls cannot be bypassed.
+const WALLET_CLAIM_CHALLENGE_RATE_LIMIT: u64 = 10;
+const WALLET_CLAIM_CHALLENGE_RATE_WINDOW_SECONDS: u64 = 600;
+const WALLET_CLAIM_ACCOUNT_RATE_LIMIT: u64 = 10;
+const WALLET_CLAIM_ACCOUNT_RATE_WINDOW_SECONDS: u64 = 600;
+const WALLET_CLAIM_NETWORK_RATE_LIMIT: u64 = 30;
+const WALLET_CLAIM_GLOBAL_RATE_LIMIT: u64 = 300;
+const LEGACY_USER_HASH_LENGTH: usize = 64;
+const ED25519_SIGNATURE_LENGTH: usize = 64;
+const DUMMY_ED25519_PUBLIC_KEY_B64: &str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -324,6 +334,40 @@ async fn check_unauthenticated_credential_limits(
         60,
     )
     .await
+}
+
+fn validate_wallet_claim_input(body: &ClaimInput) -> AppResult<()> {
+    let challenge_id = uuid::Uuid::parse_str(&body.challenge_id)
+        .ok()
+        .filter(|value| value.get_version() == Some(uuid::Version::Random))
+        .filter(|value| value.to_string() == body.challenge_id);
+    let has_canonical_legacy_hash = body.legacy_user_hash.len() == LEGACY_USER_HASH_LENGTH
+        && body
+            .legacy_user_hash
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte));
+    let has_canonical_signature = base64::engine::general_purpose::STANDARD
+        .decode(&body.signature)
+        .ok()
+        .filter(|bytes| bytes.len() == ED25519_SIGNATURE_LENGTH)
+        .is_some_and(|bytes| {
+            base64::engine::general_purpose::STANDARD.encode(bytes) == body.signature
+        });
+
+    if challenge_id.is_none() || !has_canonical_legacy_hash || !has_canonical_signature {
+        tracing::warn!(reason = "invalid_canonical_fields", "wallet claim input rejected");
+        return Err(IdentityError::InvalidWalletClaimProof.into());
+    }
+    Ok(())
+}
+
+async fn reject_consumed_wallet_claim(
+    tx: sqlx::Transaction<'_, sqlx::Postgres>,
+    account_id: i64,
+) -> AppResult<Json<WalletDto>> {
+    tx.commit().await?;
+    tracing::warn!(account_id, "wallet claim proof rejected");
+    Err(IdentityError::InvalidWalletClaimProof.into())
 }
 
 async fn issue_tokens(
@@ -1207,12 +1251,23 @@ pub async fn claim_challenge(
     )
     .await
     .map_err(|_r| shared::AppError::Unauthorized)?;
+    shared::ratelimit::check_token_bucket(
+        state.redis.as_ref(),
+        "wallet_claim_challenge",
+        &auth.id.to_string(),
+        WALLET_CLAIM_CHALLENGE_RATE_LIMIT,
+        WALLET_CLAIM_CHALLENGE_RATE_WINDOW_SECONDS,
+    )
+    .await?;
 
     let challenge_id = uuid::Uuid::new_v4().to_string();
     let nonce = uuid::Uuid::new_v4().to_string();
     let expires_at = Utc::now() + chrono::Duration::minutes(10);
 
-    repo::insert_claim_challenge(&state.db, &challenge_id, auth.id, &nonce, expires_at).await?;
+    let mut tx = state.db.begin().await?;
+    crate::public_accounts::lock_active_account_for_owned_mutation(&mut tx, auth.id).await?;
+    repo::replace_claim_challenge_tx(&mut tx, &challenge_id, auth.id, &nonce, expires_at).await?;
+    tx.commit().await?;
 
     Ok(Json(ClaimChallengeOutput { challenge_id, nonce }))
 }
@@ -1233,6 +1288,15 @@ pub async fn claim_wallet(
     Json(body): Json<ClaimInput>,
 ) -> AppResult<Json<WalletDto>> {
     let state = &identity_state.app;
+    check_unauthenticated_credential_limits(
+        state,
+        &headers,
+        "wallet_claim",
+        WALLET_CLAIM_NETWORK_RATE_LIMIT,
+        WALLET_CLAIM_GLOBAL_RATE_LIMIT,
+    )
+    .await?;
+    validate_wallet_claim_input(&body)?;
     let auth = crate::auth_middleware::authenticate(
         &headers,
         &state.db,
@@ -1241,8 +1305,19 @@ pub async fn claim_wallet(
     )
     .await
     .map_err(|_r| shared::AppError::Unauthorized)?;
+    shared::ratelimit::check_token_bucket(
+        state.redis.as_ref(),
+        "wallet_claim_account",
+        &auth.id.to_string(),
+        WALLET_CLAIM_ACCOUNT_RATE_LIMIT,
+        WALLET_CLAIM_ACCOUNT_RATE_WINDOW_SECONDS,
+    )
+    .await?;
 
     let mut tx = state.db.begin().await?;
+    if !crate::public_accounts::lock_active_interaction_accounts(&mut tx, &[auth.id]).await? {
+        return Err(shared::AppError::Forbidden);
+    }
 
     // Lock the challenge row.
     let challenge = sqlx::query_as::<_, crate::models::WalletClaimChallengeRow>(
@@ -1252,19 +1327,27 @@ pub async fn claim_wallet(
     )
     .bind(&body.challenge_id)
     .fetch_optional(&mut *tx)
-    .await?
-    .ok_or(IdentityError::ChallengeNotFound)?;
+    .await?;
+
+    let Some(challenge) = challenge else {
+        tracing::warn!(account_id = auth.id, "wallet claim challenge rejected");
+        return Err(IdentityError::InvalidWalletClaimProof.into());
+    };
 
     // Validate challenge conditions.
-    if challenge.account_id != auth.id {
-        return Err(IdentityError::ChallengeWrongAccount.into());
+    if challenge.account_id != auth.id
+        || challenge.used_at.is_some()
+        || challenge.expires_at < Utc::now()
+    {
+        tracing::warn!(account_id = auth.id, "wallet claim challenge rejected");
+        return Err(IdentityError::InvalidWalletClaimProof.into());
     }
-    if challenge.used_at.is_some() {
-        return Err(IdentityError::ChallengeAlreadyUsed.into());
-    }
-    if challenge.expires_at < Utc::now() {
-        return Err(IdentityError::ChallengeExpired.into());
-    }
+
+    // A valid account-owned challenge is one-shot even when the legacy proof fails.
+    sqlx::query("UPDATE identity.wallet_claim_challenges SET used_at = now() WHERE id = $1")
+        .bind(&body.challenge_id)
+        .execute(&mut *tx)
+        .await?;
 
     // Lock the legacy wallet link row.
     let link = sqlx::query_as::<_, crate::models::LegacyWalletLinkRow>(
@@ -1275,15 +1358,7 @@ pub async fn claim_wallet(
     )
     .bind(&body.legacy_user_hash)
     .fetch_optional(&mut *tx)
-    .await?
-    .ok_or(IdentityError::LegacyLinkNotFound)?;
-
-    // Validate link conditions.
-    if link.account_id.is_some() {
-        return Err(IdentityError::LegacyLinkAlreadyClaimed.into());
-    }
-
-    let legacy_pk = link.legacy_public_key.as_deref().ok_or(IdentityError::LegacyNoPublicKey)?;
+    .await?;
 
     // Reconstruct the canonical payload that the legacy wallet signed.
     let payload = serde_json::json!({
@@ -1296,16 +1371,22 @@ pub async fn claim_wallet(
         shared::AppError::Internal(anyhow::anyhow!("failed to serialize canonical claim payload"))
     })?;
 
-    // Verify the signature.
-    if !crate::ledger::verify_signature(&canonical, &body.signature, legacy_pk) {
-        return Err(IdentityError::InvalidSignature.into());
+    // Always perform one Ed25519 verification after the link lookup so missing,
+    // claimed, keyless, and bad-signature proofs have the same public result and
+    // avoid an obvious crypto/no-crypto timing split.
+    let verification_key = link
+        .as_ref()
+        .filter(|candidate| candidate.account_id.is_none())
+        .and_then(|candidate| candidate.legacy_public_key.as_deref())
+        .unwrap_or(DUMMY_ED25519_PUBLIC_KEY_B64);
+    let has_valid_signature =
+        crate::ledger::verify_signature(&canonical, &body.signature, verification_key);
+    let Some(link) = link else {
+        return reject_consumed_wallet_claim(tx, auth.id).await;
+    };
+    if link.account_id.is_some() || link.legacy_public_key.is_none() || !has_valid_signature {
+        return reject_consumed_wallet_claim(tx, auth.id).await;
     }
-
-    // Mark challenge used.
-    sqlx::query("UPDATE identity.wallet_claim_challenges SET used_at = now() WHERE id = $1")
-        .bind(&body.challenge_id)
-        .execute(&mut *tx)
-        .await?;
 
     // Claim the link.
     sqlx::query(
@@ -1358,9 +1439,14 @@ pub async fn claim_wallet(
 
     tx.commit().await?;
 
-    let wallet = credit::repo::get_wallet(&state.db, auth.id).await?;
+    let active_public_key = crate::wallet_keys::active_public_key(&state.db, auth.id).await?;
+    let wallet = credit::repo::get_wallet(&state.db, auth.id, active_public_key).await?;
 
-    Ok(Json(WalletDto { account_id: wallet.account_id, balance: wallet.balance }))
+    Ok(Json(WalletDto {
+        account_id: wallet.account_id,
+        balance: wallet.balance,
+        active_public_key: wallet.active_public_key,
+    }))
 }
 
 /// POST /wallet/bind
@@ -1380,6 +1466,12 @@ pub async fn bind_key(
     .await
     .map_err(|_r| shared::AppError::Unauthorized)?;
 
+    if let Some(account_id) = body.account_id.as_deref() {
+        if account_id != auth.account.id.to_string() {
+            return Err(shared::AppError::Forbidden);
+        }
+    }
+
     // Decode base64 and validate exactly 32 bytes.
     let key_bytes =
         base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &body.public_key)
@@ -1391,7 +1483,13 @@ pub async fn bind_key(
 
     let canonical_public_key =
         base64::Engine::encode(&base64::engine::general_purpose::STANDARD, key_bytes);
-    repo::bind_initial_account_key(&state.db, &auth, &canonical_public_key).await?;
+    repo::bind_initial_account_key(
+        &state.db,
+        &auth,
+        &canonical_public_key,
+        body.account_id.is_some(),
+    )
+    .await?;
 
     Ok(StatusCode::NO_CONTENT)
 }

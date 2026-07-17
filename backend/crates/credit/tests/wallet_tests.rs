@@ -31,6 +31,14 @@ async fn appeal_scoped_token_is_rejected_by_every_credit_surface() {
     let requests = [
         Request::builder().uri("/api/v2/wallet").body(Body::empty()).expect("wallet request"),
         Request::builder()
+            .method("POST")
+            .uri("/api/v2/credit/signing-intent-outcome")
+            .header("Content-Type", "application/json")
+            .body(Body::from(
+                json!({ "intentId": "00000000-0000-0000-0000-000000000001" }).to_string(),
+            ))
+            .expect("signing intent outcome request"),
+        Request::builder()
             .uri("/api/v2/wallet/ledger")
             .body(Body::empty())
             .expect("ledger request"),
@@ -93,6 +101,43 @@ async fn wallet_returns_zero_for_new_account() {
     assert_eq!(resp.status(), StatusCode::OK);
     let json = read_json(resp).await;
     assert_eq!(json["balance"].as_i64().unwrap(), 0);
+    assert!(json["activePublicKey"].is_null());
+}
+
+#[tokio::test]
+async fn wallet_returns_the_identity_owned_active_public_key() {
+    let (pool, app) = create_test_app().await;
+    let account_id = create_test_account(&pool, "wallet-key@tongji.edu.cn", "wallet-key").await;
+    let historical_public_key = base64::engine::general_purpose::STANDARD
+        .encode(credit::ledger::derive_public_key(&[7u8; 32]));
+    let active_public_key = base64::engine::general_purpose::STANDARD
+        .encode(credit::ledger::derive_public_key(&[8u8; 32]));
+    sqlx::query(
+        "INSERT INTO identity.account_keys (account_id, public_key, revoked_at) \
+         VALUES ($1, $2, now()), ($1, $3, NULL)",
+    )
+    .bind(account_id)
+    .bind(historical_public_key)
+    .bind(&active_public_key)
+    .execute(&pool)
+    .await
+    .expect("insert wallet key history");
+
+    let token = create_token(&pool, "wallet-key@tongji.edu.cn").await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v2/wallet")
+                .header("Authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .expect("wallet request"),
+        )
+        .await
+        .expect("wallet response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = read_json(response).await;
+    assert_eq!(body["activePublicKey"], active_public_key);
 }
 
 #[tokio::test]
@@ -188,6 +233,54 @@ async fn signing_intent_uses_the_only_active_wallet_key() {
             .expect("parse signing bytes");
     assert_eq!(signing_bytes["publicKey"], canonical_public_key);
     assert_ne!(signing_bytes["publicKey"], historical_public_key);
+}
+
+#[tokio::test]
+async fn signing_intent_rejects_idempotency_key_longer_than_contract_limit() {
+    let (pool, app) = create_test_app().await;
+    let account_id =
+        create_test_account(&pool, "long-intent-key@tongji.edu.cn", "long-intent-key").await;
+    let public_key = base64::engine::general_purpose::STANDARD
+        .encode(credit::ledger::derive_public_key(&[11u8; 32]));
+    sqlx::query("INSERT INTO identity.account_keys (account_id, public_key) VALUES ($1, $2)")
+        .bind(account_id)
+        .bind(public_key)
+        .execute(&pool)
+        .await
+        .expect("bind wallet key");
+    let token = create_token(&pool, "long-intent-key@tongji.edu.cn").await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v2/credit/signing-intents")
+                .method("POST")
+                .header("Authorization", format!("Bearer {token}"))
+                .header("Idempotency-Key", "x".repeat(129))
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "action": "credit.tip",
+                        "request": {
+                            "toAccountId": "1",
+                            "amount": 1,
+                            "targetType": "thread",
+                            "targetId": "1"
+                        }
+                    })
+                    .to_string(),
+                ))
+                .expect("build oversized idempotency request"),
+        )
+        .await
+        .expect("oversized idempotency response");
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let intent_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*)::bigint FROM credit.signing_intents")
+            .fetch_one(&pool)
+            .await
+            .expect("count signing intents");
+    assert_eq!(intent_count, 0);
 }
 
 #[tokio::test]

@@ -208,29 +208,22 @@ class _WalletPageState extends ConsumerState<WalletPage> {
                         repository.acceptTask(taskId),
                     '已接单',
                   ),
-                  onTaskAction:
-                      (
-                        String taskId,
-                        TaskActionActionEnum action,
-                        TaskStatusEnum status,
-                      ) => _mutate(
-                        (WalletRepository repository) => repository.updateTask(
-                          taskId: taskId,
-                          action: action,
-                          currentStatus: status,
-                        ),
+                  onTaskAction: (Task task, TaskActionActionEnum action) =>
+                      _mutate(
+                        (WalletRepository repository) =>
+                            repository.updateTask(task: task, action: action),
                         '任务状态已更新',
                       ),
-                  onPurchase: (String productId) =>
+                  onPurchase: (Product product) =>
                       _mutate((WalletRepository repository) async {
-                        await repository.purchaseProduct(productId);
+                        await repository.purchaseProduct(product);
                       }, '已创建托管订单'),
                   onPurchaseAction:
-                      (String purchaseId, PurchaseActionActionEnum action) =>
+                      (Purchase purchase, PurchaseActionActionEnum action) =>
                           _mutate(
                             (WalletRepository repository) =>
                                 repository.updatePurchase(
-                                  purchaseId: purchaseId,
+                                  purchase: purchase,
                                   action: action,
                                 ),
                             '订单状态已更新',
@@ -272,14 +265,9 @@ class _WalletContent extends StatelessWidget {
   final VoidCallback onClaimWallet;
   final ValueChanged<TipInput> onTip;
   final ValueChanged<String> onAcceptTask;
-  final void Function(
-    String taskId,
-    TaskActionActionEnum action,
-    TaskStatusEnum status,
-  )
-  onTaskAction;
-  final ValueChanged<String> onPurchase;
-  final void Function(String purchaseId, PurchaseActionActionEnum action)
+  final void Function(Task task, TaskActionActionEnum action) onTaskAction;
+  final ValueChanged<Product> onPurchase;
+  final void Function(Purchase purchase, PurchaseActionActionEnum action)
   onPurchaseAction;
 
   @override
@@ -417,7 +405,7 @@ class _WalletSummary extends StatelessWidget {
       _SummaryCard(
         icon: Icons.account_balance_wallet_outlined,
         label: '当前余额',
-        value: '${snapshot.wallet.balance ?? 0}',
+        value: '${snapshot.wallet.balance}',
         detail: '平台闭环积分',
       ),
       _SummaryCard(

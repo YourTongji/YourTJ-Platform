@@ -311,8 +311,9 @@ pub struct ProfilePrivacyUpdateInput {
 
 /// POST /wallet/bind
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BindKeyInput {
+    pub account_id: Option<String>,
     pub public_key: String,
 }
 
@@ -339,6 +340,7 @@ pub struct ClaimInput {
 pub struct WalletDto {
     pub account_id: String,
     pub balance: i64,
+    pub active_public_key: Option<String>,
 }
 
 /// A privacy-safe account record for the staff user directory.

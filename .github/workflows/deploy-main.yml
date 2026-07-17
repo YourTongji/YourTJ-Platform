@@ -220,6 +220,8 @@ jobs:
       - name: deploy and verify main staging
         env:
           WALLET_KEY_CUTOVER_APPROVED_REVISION: ${{ vars.WALLET_KEY_CUTOVER_APPROVED_REVISION }}
+          WALLET_BIND_ACCOUNT_SCOPE_APPROVED_REVISION: ${{ vars.WALLET_BIND_ACCOUNT_SCOPE_APPROVED_REVISION }}
+          WALLET_BIND_ACCOUNT_SCOPE_MOBILE_STATUS: ${{ vars.WALLET_BIND_ACCOUNT_SCOPE_MOBILE_STATUS }}
         run: |
           set -Eeuo pipefail
           remote_script="/tmp/deploy-main-${GITHUB_RUN_ID}.sh"
@@ -347,6 +349,18 @@ jobs:
             echo "WALLET_KEY_CUTOVER_APPROVED_REVISION must be empty or a full lowercase commit SHA" >&2
             exit 64
           fi
+          wallet_bind_account_scope_approval="${WALLET_BIND_ACCOUNT_SCOPE_APPROVED_REVISION:-not-approved}"
+          if [[ "$wallet_bind_account_scope_approval" != "not-approved" \
+            && ! "$wallet_bind_account_scope_approval" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "WALLET_BIND_ACCOUNT_SCOPE_APPROVED_REVISION must be empty or a full lowercase commit SHA" >&2
+            exit 64
+          fi
+          wallet_bind_account_scope_mobile_status="${WALLET_BIND_ACCOUNT_SCOPE_MOBILE_STATUS:-unknown}"
+          if [[ "$wallet_bind_account_scope_mobile_status" != "unknown" \
+            && "$wallet_bind_account_scope_mobile_status" != "not-distributed" ]]; then
+            echo "WALLET_BIND_ACCOUNT_SCOPE_MOBILE_STATUS must be empty, unknown, or not-distributed" >&2
+            exit 64
+          fi
           ssh preview timeout --signal=TERM --kill-after=30s 45m bash "${remote_script}" \
             "${release_dir}" \
             "${remote_image}" \
@@ -354,7 +368,9 @@ jobs:
             "${GITHUB_SHA}" \
             "${remote_verifier}" \
             "${remote_frontend_nginx}" \
-            "${wallet_cutover_approval}"
+            "${wallet_cutover_approval}" \
+            "${wallet_bind_account_scope_approval}" \
+            "${wallet_bind_account_scope_mobile_status}"
           deployed=1
 
       - name: verify canonical public HTTPS routes

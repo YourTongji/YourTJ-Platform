@@ -2337,7 +2337,7 @@ export interface paths {
         put?: never;
         /**
          * Enroll the first client-generated Ed25519 public key
-         * @description Requires fresh session-bound authentication. Repeating the canonical active key is idempotent; enrolling a different key while one is active is rejected because key rotation requires a separately designed old-key proof or audited recovery flow.
+         * @description Requires fresh session-bound authentication. Initial enrollment requires an accountId that exactly matches the authenticated account. During the client cutover, a legacy body without accountId is accepted only when it repeats the already-active canonical key; it can never enroll a first or different key. Key rotation requires a separately designed old-key proof or audited recovery flow.
          */
         post: {
             parameters: {
@@ -2349,6 +2349,8 @@ export interface paths {
             requestBody: {
                 content: {
                     "application/json": {
+                        /** @description Canonical account identifier captured with the authenticated session; required for initial enrollment and optional only for legacy idempotent confirmation of the exact active key */
+                        accountId?: string;
                         /** @description Standard base64 encoding of a 32-byte Ed25519 public key */
                         publicKey: string;
                     };
@@ -2364,6 +2366,7 @@ export interface paths {
                 };
                 400: components["responses"]["BadRequest"];
                 401: components["responses"]["Unauthorized"];
+                403: components["responses"]["Forbidden"];
                 409: components["responses"]["Conflict"];
                 428: components["responses"]["RecentAuthRequired"];
             };
@@ -2381,7 +2384,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Get a one-time claim challenge */
+        /**
+         * Get a one-time claim challenge
+         * @description Replaces any prior challenge for the authenticated account. Issuance is account-rate-limited and the returned challenge becomes permanently unusable after the first well-formed proof attempt, whether that proof succeeds or fails.
+         */
         get: {
             parameters: {
                 query?: never;
@@ -2400,6 +2406,10 @@ export interface paths {
                         "application/json": components["schemas"]["WalletClaimChallenge"];
                     };
                 };
+                401: components["responses"]["Unauthorized"];
+                403: components["responses"]["Forbidden"];
+                429: components["responses"]["RateLimited"];
+                503: components["responses"]["ServiceUnavailable"];
             };
         };
         put?: never;
@@ -2419,7 +2429,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Claim a legacy wallet by signing the challenge (re-derive userHash from 学号+PIN) */
+        /**
+         * Claim a legacy wallet by signing the challenge (re-derive userHash from 学号+PIN)
+         * @description The request is bounded by account, opaque client-network, and global abuse-control buckets. A valid account-owned challenge is consumed by the first well-formed legacy proof attempt even when the link is missing, already claimed, lacks a key, or the signature is invalid. Canonical-field, challenge, link, and proof failures handled by the endpoint return the same generic bad-request error; clients must request and sign a new challenge after any unsuccessful attempt.
+         */
         post: {
             parameters: {
                 query?: never;
@@ -2430,8 +2443,14 @@ export interface paths {
             requestBody: {
                 content: {
                     "application/json": {
+                        /** @description Canonical lowercase hexadecimal SHA-256 legacy user hash */
                         legacyUserHash: string;
+                        /**
+                         * Format: uuid
+                         * @description Canonical lowercase UUID v4 returned by the latest claim-challenge request
+                         */
                         challengeId: string;
+                        /** @description Canonical standard-base64 encoding of a 64-byte Ed25519 signature */
                         signature: string;
                     };
                 };
@@ -2446,7 +2465,11 @@ export interface paths {
                         "application/json": components["schemas"]["Wallet"];
                     };
                 };
-                409: components["responses"]["Conflict"];
+                400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
+                403: components["responses"]["Forbidden"];
+                429: components["responses"]["RateLimited"];
+                503: components["responses"]["ServiceUnavailable"];
             };
         };
         delete?: never;
@@ -2566,6 +2589,56 @@ export interface paths {
                     };
                 };
                 400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+                409: components["responses"]["Conflict"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/credit/signing-intent-outcome": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Read the authenticated owner's lock-aware signing intent outcome
+         * @description Uses a fixed URL so the sensitive intent correlation identifier is not copied into intermediary access-log paths.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["SigningIntentOutcomeInput"];
+                };
+            };
+            responses: {
+                /** @description bounded intent outcome without signing material */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["SigningIntentOutcome"];
+                    };
+                };
+                401: components["responses"]["Unauthorized"];
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
             };
         };
         delete?: never;
@@ -3006,6 +3079,7 @@ export interface paths {
                     content?: never;
                 };
                 400: components["responses"]["BadRequest"];
+                404: components["responses"]["NotFound"];
                 409: components["responses"]["Conflict"];
             };
         };
@@ -3117,6 +3191,7 @@ export interface paths {
                     };
                 };
                 400: components["responses"]["BadRequest"];
+                404: components["responses"]["NotFound"];
             };
         };
         delete?: never;
@@ -3176,7 +3251,7 @@ export interface paths {
         put?: never;
         /**
          * Escrow steps — accept / deliver / confirm(release) / cancel(refund)
-         * @description confirm and cancel require wallet intent, signature and idempotency headers; accept and deliver are non-value seller transitions.
+         * @description confirm and cancel require wallet intent, signature and idempotency headers; accept and deliver are non-value seller transitions. A successful pending/accepted cancellation atomically refunds escrow and restores exactly one product unit; sold_out returns to on_sale, while off_sale remains unchanged.
          */
         post: {
             parameters: {
@@ -3207,6 +3282,7 @@ export interface paths {
                     content?: never;
                 };
                 400: components["responses"]["BadRequest"];
+                404: components["responses"]["NotFound"];
                 409: components["responses"]["Conflict"];
             };
         };
@@ -11825,8 +11901,10 @@ export interface components {
             note: string;
         };
         Wallet: {
-            accountId?: string;
-            balance?: number;
+            accountId: string;
+            balance: number;
+            /** @description Standard base64 encoding of the account's active 32-byte Ed25519 public key; null until the first key is enrolled. */
+            activePublicKey: string | null;
         };
         WalletClaimChallenge: {
             challengeId: string;
@@ -11910,7 +11988,10 @@ export interface components {
         SigningIntentInput: {
             /** @enum {string} */
             action: "credit.tip" | "credit.task.create" | "credit.task.action" | "credit.product.purchase" | "credit.purchase.action";
-            request: Record<string, never>;
+            /** @description Action-specific JSON object whose exact normalized content is bound into requestHash. */
+            request: {
+                [key: string]: unknown;
+            };
         };
         SigningIntent: {
             /** Format: uuid */
@@ -11918,6 +11999,21 @@ export interface components {
             signingBytes: string;
             /** Format: int64 */
             expiresAt: number;
+        };
+        SigningIntentOutcome: {
+            /** Format: uuid */
+            intentId: string;
+            /**
+             * @description Committed is visible only after the consuming business transaction commits; expired means no consumer holds the intent row lock and the intent was not consumed before expiry.
+             * @enum {string}
+             */
+            status: "pending" | "committed" | "expired";
+            /** Format: int64 */
+            expiresAt: number;
+        };
+        SigningIntentOutcomeInput: {
+            /** Format: uuid */
+            intentId: string;
         };
         /** @description The recipient must be the active author of the visible target; self-tips are rejected. */
         TipInput: {
@@ -11928,17 +12024,17 @@ export interface components {
             targetId: string;
         };
         Task: {
-            id?: string;
-            creatorId?: string;
-            acceptorId?: string | null;
-            title?: string;
-            description?: string | null;
-            rewardAmount?: number;
+            id: string;
+            creatorId: string;
+            acceptorId: string | null;
+            title: string;
+            description: string | null;
+            rewardAmount: number;
             /** @description Visible only to controlled parties */
-            contactInfo?: string | null;
+            contactInfo: string | null;
             /** @enum {string} */
-            status?: "open" | "in_progress" | "submitted" | "completed" | "cancelled";
-            createdAt?: number;
+            status: "open" | "in_progress" | "submitted" | "completed" | "cancelled";
+            createdAt: number;
         };
         TaskInput: {
             title: string;
@@ -11952,15 +12048,15 @@ export interface components {
         };
         /** @description Public listing data. Private delivery instructions are never exposed here. */
         Product: {
-            id?: string;
-            sellerId?: string;
-            title?: string;
-            description?: string | null;
-            price?: number;
-            stock?: number;
+            id: string;
+            sellerId: string;
+            title: string;
+            description: string | null;
+            price: number;
+            stock: number;
             /** @enum {string} */
-            status?: "on_sale" | "off_sale" | "sold_out";
-            createdAt?: number;
+            status: "on_sale" | "off_sale" | "sold_out";
+            createdAt: number;
         };
         ProductInput: {
             title: string;
@@ -11970,16 +12066,16 @@ export interface components {
             deliveryInfo?: string;
         };
         Purchase: {
-            id?: string;
-            productId?: string;
-            buyerId?: string;
-            sellerId?: string;
-            amount?: number;
+            id: string;
+            productId: string;
+            buyerId: string;
+            sellerId: string;
+            amount: number;
             /** @enum {string} */
-            status?: "pending" | "accepted" | "delivered" | "completed" | "cancelled";
+            status: "pending" | "accepted" | "delivered" | "completed" | "cancelled";
             /** @description Visible only to the purchase buyer and seller */
-            deliveryInfo?: string | null;
-            createdAt?: number;
+            deliveryInfo: string | null;
+            createdAt: number;
         };
         PurchaseAction: {
             /** @enum {string} */

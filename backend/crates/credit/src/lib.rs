@@ -12,6 +12,7 @@
 //! the account key for tip/bounty/escrow). Balance is a derived cache, never the
 //! source of truth. Appends are serialized (advisory lock) to keep the chain linear.
 
+pub mod account_eligibility;
 pub mod auth;
 pub mod data_export;
 pub mod dto;
@@ -23,6 +24,7 @@ pub mod reconciliation;
 pub mod repo;
 pub mod signing;
 pub mod tip_targets;
+pub mod wallet_keys;
 
 use std::sync::Arc;
 
@@ -32,11 +34,13 @@ use axum::Router;
 use shared::AppState;
 use sqlx::PgPool;
 
-/// Router state that keeps cross-domain content resolution at the application boundary.
+/// Router state that keeps cross-domain owner APIs at the application boundary.
 #[derive(Clone)]
 pub(crate) struct CreditState {
     app: AppState,
+    account_eligibility_resolver: Arc<dyn account_eligibility::AccountEligibilityResolver>,
     tip_target_resolver: Arc<dyn tip_targets::TipTargetResolver>,
+    wallet_key_resolver: Arc<dyn wallet_keys::WalletKeyResolver>,
 }
 
 impl FromRef<CreditState> for AppState {
@@ -86,12 +90,15 @@ pub async fn mint_for_contribution(
 /// All routes owned by the credit domain.
 pub fn routes(
     state: AppState,
+    account_eligibility_resolver: Arc<dyn account_eligibility::AccountEligibilityResolver>,
     tip_target_resolver: Arc<dyn tip_targets::TipTargetResolver>,
+    wallet_key_resolver: Arc<dyn wallet_keys::WalletKeyResolver>,
 ) -> Router {
     Router::new()
         // Wallet
         .route("/api/v2/wallet", get(handlers::get_wallet))
         .route("/api/v2/credit/signing-intents", post(handlers::create_signing_intent))
+        .route("/api/v2/credit/signing-intent-outcome", post(handlers::get_signing_intent_outcome))
         // Canonical: POST /api/v2/credit/tip — alias: POST /api/v2/wallet/tip
         .route("/api/v2/credit/tip", post(handlers::tip))
         .route("/api/v2/wallet/tip", post(handlers::tip))
@@ -124,5 +131,10 @@ pub fn routes(
         // Purchases
         .route("/api/v2/credit/purchases", get(handlers::list_purchases))
         .route("/api/v2/credit/purchases/{id}/action", post(handlers::action_purchase))
-        .with_state(CreditState { app: state, tip_target_resolver })
+        .with_state(CreditState {
+            app: state,
+            account_eligibility_resolver,
+            tip_target_resolver,
+            wallet_key_resolver,
+        })
 }

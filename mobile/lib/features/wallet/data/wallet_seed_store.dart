@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -5,7 +6,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 abstract interface class WalletSeedStore {
   Future<List<int>?> read(String accountId);
 
-  Future<void> write(String accountId, List<int> seed);
+  Future<List<int>> writeIfAbsent(String accountId, List<int> seed);
 
   Future<void> delete(String accountId);
 }
@@ -37,6 +38,7 @@ class KeychainKeystoreWalletSeedStore implements WalletSeedStore {
   static final RegExp _accountId = RegExp(r'^[A-Za-z0-9-]{1,128}$');
   final String _environmentNamespace;
   final FlutterSecureStorage _storage;
+  Future<void> _mutationTail = Future<void>.value();
 
   String _key(String accountId) {
     if (!_accountId.hasMatch(accountId)) {
@@ -53,11 +55,35 @@ class KeychainKeystoreWalletSeedStore implements WalletSeedStore {
   }
 
   @override
-  Future<List<int>?> read(String accountId) async {
-    final String? encoded = await _storage.read(key: _key(accountId));
-    if (encoded == null) {
-      return null;
+  Future<List<int>?> read(String accountId) {
+    return _serialize(() async {
+      final String? encoded = await _storage.read(key: _key(accountId));
+      return encoded == null ? null : _decodeSeed(encoded);
+    });
+  }
+
+  @override
+  Future<List<int>> writeIfAbsent(String accountId, List<int> seed) {
+    if (seed.length != 32) {
+      throw const FormatException('钱包密钥长度无效');
     }
+    return _serialize(() async {
+      final String key = _key(accountId);
+      final String? existing = await _storage.read(key: key);
+      if (existing != null) {
+        return _decodeSeed(existing);
+      }
+      await _storage.write(key: key, value: base64Encode(seed));
+      return List<int>.from(seed);
+    });
+  }
+
+  @override
+  Future<void> delete(String accountId) {
+    return _serialize(() => _storage.delete(key: _key(accountId)));
+  }
+
+  List<int> _decodeSeed(String encoded) {
     try {
       final List<int> seed = base64Decode(encoded);
       if (seed.length != 32) {
@@ -69,15 +95,15 @@ class KeychainKeystoreWalletSeedStore implements WalletSeedStore {
     }
   }
 
-  @override
-  Future<void> write(String accountId, List<int> seed) async {
-    if (seed.length != 32) {
-      throw const FormatException('钱包密钥长度无效');
+  Future<T> _serialize<T>(Future<T> Function() action) async {
+    final Completer<void> completion = Completer<void>();
+    final Future<void> previous = _mutationTail;
+    _mutationTail = completion.future;
+    await previous;
+    try {
+      return await action();
+    } finally {
+      completion.complete();
     }
-    await _storage.write(key: _key(accountId), value: base64Encode(seed));
   }
-
-  @override
-  Future<void> delete(String accountId) =>
-      _storage.delete(key: _key(accountId));
 }

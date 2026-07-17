@@ -40,6 +40,44 @@ class WorkflowBoundaryTests(unittest.TestCase):
         )
         self.assertIn('"$wallet_cutover_approval" =~ ^[0-9a-f]{40}$', workflow)
         self.assertIn('"${wallet_cutover_approval}"', workflow)
+        self.assertIn("WALLET_BIND_ACCOUNT_SCOPE_APPROVED_REVISION", workflow)
+        self.assertIn("WALLET_BIND_ACCOUNT_SCOPE_MOBILE_STATUS", workflow)
+        self.assertIn(
+            'wallet_bind_account_scope_approval="${WALLET_BIND_ACCOUNT_SCOPE_APPROVED_REVISION:-not-approved}"',
+            workflow,
+        )
+        self.assertIn(
+            'wallet_bind_account_scope_mobile_status="${WALLET_BIND_ACCOUNT_SCOPE_MOBILE_STATUS:-unknown}"',
+            workflow,
+        )
+        self.assertIn('"$wallet_bind_account_scope_approval" =~ ^[0-9a-f]{40}$', workflow)
+        self.assertIn(
+            '"$wallet_bind_account_scope_mobile_status" != "not-distributed"', workflow
+        )
+        self.assertIn('"${wallet_bind_account_scope_approval}"', workflow)
+        self.assertIn('"${wallet_bind_account_scope_mobile_status}"', workflow)
+        self.assertIn("wallet-bind-account-scope-cutover.complete", deploy)
+        self.assertIn("cutover=wallet-bind-account-scope", deploy)
+
+        deployment_started = deploy.index("DEPLOYMENT_STARTED=1")
+        first_gate = deploy.index(
+            "if ((WALLET_BIND_ACCOUNT_SCOPE_CUTOVER_REQUIRED == 1)); then",
+            deployment_started,
+        )
+        frontend_activation = deploy.index("activate_frontend_release", first_gate)
+        frontend_verification = deploy.index("verify_frontend_release", first_gate)
+        backend_stop = deploy.index('if container_exists "$BACKEND_CONTAINER"; then', first_gate)
+        self.assertLess(frontend_activation, backend_stop)
+        self.assertLess(frontend_verification, backend_stop)
+
+        backend_readiness = deploy.index('wait_for_url "backend direct readiness"')
+        backend_revision = deploy.index(
+            'verify_container_revision "$BACKEND_CONTAINER"', backend_readiness
+        )
+        account_scope_marker = deploy.index(
+            'mv "$WALLET_BIND_ACCOUNT_SCOPE_MARKER_TEMP"', backend_revision
+        )
+        self.assertLess(backend_revision, account_scope_marker)
 
     def test_main_deployment_keeps_the_ssh_session_alive(self):
         workflow = (ROOT / ".github/workflows/deploy-main.yml").read_text()

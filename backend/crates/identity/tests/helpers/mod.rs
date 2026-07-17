@@ -39,6 +39,18 @@ pub async fn create_test_app_without_redis() -> (PgPool, axum::Router) {
     create_test_app_with_config_and_redis(test_config, None).await
 }
 
+#[allow(dead_code)] // reason: Redis-specific integration coverage skips cleanly when Redis is absent
+pub async fn create_test_app_with_redis_if_available(
+) -> Option<(PgPool, axum::Router, deadpool_redis::Pool)> {
+    let redis = test_redis_pool()?;
+    let connection = redis.get().await.ok()?;
+    drop(connection);
+    let test_config = shared::Config::from_env().expect("test Config::from_env");
+    let (pool, router) =
+        create_test_app_with_config_and_redis(test_config, Some(redis.clone())).await;
+    Some((pool, router, redis))
+}
+
 async fn create_test_app_with_config_and_redis(
     test_config: shared::Config,
     redis: Option<deadpool_redis::Pool>,
@@ -400,6 +412,21 @@ async fn run_migrations(pool: &PgPool) {
             .expect("migration 0067 failed");
     }
 
+    let has_bounded_wallet_claim_challenge: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM pg_indexes \
+         WHERE schemaname = 'identity' \
+           AND indexname = 'wallet_claim_challenges_one_per_account_idx')",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or(false);
+    if !has_bounded_wallet_claim_challenge {
+        sqlx::raw_sql(include_str!("../../../../migrations/0070_wallet_claim_privacy.sql"))
+            .execute(pool)
+            .await
+            .expect("migration 0070 failed");
+    }
+
     let database_name: String = sqlx::query_scalar("SELECT current_database()")
         .fetch_one(pool)
         .await
@@ -415,6 +442,7 @@ async fn run_migrations(pool: &PgPool) {
     sqlx::query("DELETE FROM identity.account_recovery_credentials").execute(pool).await.ok();
     sqlx::query("DELETE FROM identity.account_lifecycle_jobs").execute(pool).await.ok();
     sqlx::query("DELETE FROM identity.account_keys").execute(pool).await.ok();
+    sqlx::query("DELETE FROM identity.wallet_claim_challenges").execute(pool).await.ok();
     sqlx::query("DELETE FROM credit.wallets").execute(pool).await.ok();
     sqlx::query("DELETE FROM credit.ledger").execute(pool).await.ok();
     retire_test_accounts(pool).await;

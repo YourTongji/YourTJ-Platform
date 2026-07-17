@@ -8,35 +8,48 @@ part of 'product.dart';
 
 Product _$ProductFromJson(Map<String, dynamic> json) =>
     $checkedCreate('Product', json, ($checkedConvert) {
+      $checkKeys(
+        json,
+        requiredKeys: const [
+          'id',
+          'sellerId',
+          'title',
+          'description',
+          'price',
+          'stock',
+          'status',
+          'createdAt',
+        ],
+      );
       final val = Product(
-        id: $checkedConvert('id', (v) => v as String?),
-        sellerId: $checkedConvert('sellerId', (v) => v as String?),
-        title: $checkedConvert('title', (v) => v as String?),
+        id: $checkedConvert('id', (v) => v as String),
+        sellerId: $checkedConvert('sellerId', (v) => v as String),
+        title: $checkedConvert('title', (v) => v as String),
         description: $checkedConvert('description', (v) => v as String?),
-        price: $checkedConvert('price', (v) => (v as num?)?.toInt()),
-        stock: $checkedConvert('stock', (v) => (v as num?)?.toInt()),
+        price: $checkedConvert('price', (v) => (v as num).toInt()),
+        stock: $checkedConvert('stock', (v) => (v as num).toInt()),
         status: $checkedConvert(
           'status',
-          (v) => $enumDecodeNullable(
+          (v) => $enumDecode(
             _$ProductStatusEnumEnumMap,
             v,
             unknownValue: ProductStatusEnum.unknownDefaultOpenApi,
           ),
         ),
-        createdAt: $checkedConvert('createdAt', (v) => (v as num?)?.toInt()),
+        createdAt: $checkedConvert('createdAt', (v) => (v as num).toInt()),
       );
       return val;
     });
 
 Map<String, dynamic> _$ProductToJson(Product instance) => <String, dynamic>{
-  'id': ?instance.id,
-  'sellerId': ?instance.sellerId,
-  'title': ?instance.title,
-  'description': ?instance.description,
-  'price': ?instance.price,
-  'stock': ?instance.stock,
-  'status': ?_$ProductStatusEnumEnumMap[instance.status],
-  'createdAt': ?instance.createdAt,
+  'id': instance.id,
+  'sellerId': instance.sellerId,
+  'title': instance.title,
+  'description': instance.description,
+  'price': instance.price,
+  'stock': instance.stock,
+  'status': _$ProductStatusEnumEnumMap[instance.status]!,
+  'createdAt': instance.createdAt,
 };
 
 const _$ProductStatusEnumEnumMap = {
