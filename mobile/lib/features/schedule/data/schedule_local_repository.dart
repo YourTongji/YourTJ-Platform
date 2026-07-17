@@ -223,6 +223,7 @@ class ScheduleLocalRepository {
           offering.code.isEmpty ||
           offering.name.isEmpty ||
           offering.calendarId != calendarId ||
+          !_hasValidReview(offering) ||
           !_hasValidOfferingWeeks(offering)) {
         return null;
       }
