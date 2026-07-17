@@ -25,6 +25,9 @@ void main() {
         'scheduleUnknown': true,
         'status': 'unknown',
         'catalogueCourseId': null,
+        'reviewCount': 0,
+        'reviewAvg': null,
+        'reviewScope': 'none',
       });
 
       expect(course.offeringId, 'offering-1');
@@ -57,6 +60,9 @@ void main() {
         'scheduleUnknown': true,
         'status': 'unknown',
         'catalogueCourseId': null,
+        'reviewCount': 0,
+        'reviewAvg': null,
+        'reviewScope': 'none',
       };
 
       expect(

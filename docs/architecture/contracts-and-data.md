@@ -6,7 +6,7 @@
 >
 > 负责人：Platform maintainers、Domain maintainers
 >
-> 最近核验：2026-07-17，migrations `0067`–`0070`、Credit wallet key projection、owner lifecycle 与 Web pending reconciliation
+> 最近核验：2026-07-17，migrations `0067`–`0071`、Courses/Selection projection readiness、Credit wallet key projection 与 owner lifecycle
 
 本规范说明产品规则如何落实为 HTTP 契约、migration、domain API、事务和可重建投影。它不复制
 完整 OpenAPI 或 DDL。
@@ -121,17 +121,23 @@ Migration `0069` 将选课公开身份从课程代码收紧为具体教学班。
 路由唯一可用的身份。`id` 只作为同值 deprecated alias 保留，`teachingClassCode` 只是可空展示字段，
 `code` 则是 catalogue course code，二者都不能替代 `offeringId`。
 
-- `SelectionOffering` 必须携带 calendar、教师数组、起止周、`weeksUnknown`、`scheduleUnknown`、状态和
-  可空 catalogue 关联；当前上游没有可靠停开状态，所以 `status=unknown` 是事实，不得猜成 active。
+- `SelectionOffering` 必须携带 calendar、教师数组、起止周、`weeksUnknown`、`scheduleUnknown`、状态、
+  可空 catalogue 关联和历史 `reviewCount/reviewAvg/reviewScope`。零样本的 average 必须为 null；teacher
+  精确匹配与 course fallback 是不同的公开事实，客户端不得合并口径。当前上游没有可靠停开状态，所以
+  `status=unknown` 是事实，不得猜成 active。
 - `selection.courses.calendar_id` 是非空分区事实。升级只从相同 teaching-class id 的可信 raw row 回填；
   无法证明的历史 NULL 让 migration fail closed，不能用“当前学期”或最大 calendar 猜测。
 - `TimeSlot.weekNumbers` 是冲突计算的规范周集合。解析失败用 `weeksUnknown=true` 和空数组表达；地点缺失
   独立使用 `locationUnknown=true`。同一完整排课文本被多个教师 raw row 重复时按排课事实折叠，只有恰好
   一位教师拥有该事实才填 `teacherName`。
-- Catalogue/selection 全量物化先对所有 raw 表取共享锁，并由数据库 guard 比较最新 validated import run 的
-  source/target/live counts、非空教学班基线和关键 calendar/timeslot 关联。任何不一致都发生在首个 projection
-  写入之前；不能由 admin job、手工 SQL 或“结果看起来合理”绕过。Catalogue 投影只 upsert，snapshot 缺失
-  不能触发跨域读取 Reviews 私表或自动删除长期课程/alias。
+- Migration `0071` 将同一 D1 快照中的旧 teachers/courses/course-aliases 保存到 Courses-owned raw tables，
+  并以绑定同一 snapshot hash 的第二份 import audit 校验三表 source/target/live counts、非空门禁和下降审批。
+  Catalogue/selection 全量物化先对 16 张 raw 表取共享锁，并分别验证 selection 与 legacy-course audit；任何
+  不一致都发生在首个 projection 写入之前，不能由 admin job、手工 SQL 或“结果看起来合理”绕过。
+  Catalogue 投影只 upsert，snapshot 缺失不能触发跨域读取 Reviews 私表或自动删除长期课程/alias。
+- 历史公开 aggregate 只接纳能唯一映射到 catalogue owner 的 legacy course；它和物化后新增的 community
+  count/points 分开记账，重复物化替换 legacy 部分而不重复累加 community 部分。无法唯一映射的旧样本留在
+  raw 层，旧正文、作者和互动也不由 Courses 读取或迁移。
 - `/selection/offerings` 使用有界、query-fingerprint 绑定的 opaque cursor；weekday、startSlot、endSlot
   必须同时出现且范围有序，`week` 与 `includeUnknownSchedule=false` 也只能随该完整三元组出现。时间筛选
   默认保留 `scheduleUnknown` 或 `weeksUnknown`；显式传 false 时，两类未知事实都必须在 PostgreSQL 与
@@ -208,6 +214,11 @@ versioned index 的原子切换。worker 仍随 API 进程启动，所以独立 
   `course-<id>` / `review-<id>` / `board-<id>` / `tag-<id>`；用户索引使用公开 account id。HTTP DTO
   始终去掉内部前缀。改变前缀必须配套 full reindex。
 - Full reindex 等待 clear task 成功后再 add，并观察 add 结果。
+- Courses/Selection 的 search projection 在 PostgreSQL 记录 source/indexed generation、row count 与
+  `stale|rebuilding|ready`。数据物化先推进 source generation 并置 stale；全量 index 只有在 generation 与
+  source row count 都未变化时才能 CAS 为 ready。应用启动和每分钟 reconciliation 还比较 Meilisearch live
+  document count，能恢复全新/外部清空的索引；未 ready 的课程或选课关键词查询返回 503，不能返回误导性的
+  空数组。该 readiness fence 不把 clear→add 变成原子切换。
 - Hot/search counter 使用增量/投影，读路径避免全表聚合；定期 reconciliation 纠偏。
 - `forum.comments.reply_count` 是仍可见直接子回复的写入维护投影：migration `0065` 先回填，再由 child
   insert/delete、parent 变化以及 hidden/deleted 状态变化触发校正。公开 Profile/read DTO 只读取该列；

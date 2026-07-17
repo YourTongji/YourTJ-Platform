@@ -1,8 +1,9 @@
 //! Meilisearch integration for courses search, index setup, and document sync.
 //!
-//! Selection search reads degrade to an empty result when Meilisearch is
-//! unreachable. Index setup and synchronization propagate failures so an
-//! operator cannot mistake an enqueued or failed reindex for completion.
+//! Search reads fail as unavailable when Meilisearch or the corresponding
+//! PostgreSQL-tracked projection is not ready. Index setup and synchronization
+//! propagate failures so an operator cannot mistake an empty or failed reindex
+//! for a valid zero-result search.
 //! Federated candidate reads return an error so callers can distinguish an
 //! unavailable section from a genuine empty result.
 
@@ -20,6 +21,16 @@ use uuid::Uuid;
 
 const TASK_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const TASK_TIMEOUT: Duration = Duration::from_secs(120);
+const PROJECTION_RECONCILE_INTERVAL: Duration = Duration::from_secs(60);
+
+#[derive(Debug, FromRow)]
+struct SearchProjectionState {
+    source_generation: i64,
+    indexed_generation: Option<i64>,
+    source_rows: i64,
+    indexed_rows: Option<i64>,
+    status: String,
+}
 
 /// Database-backed generation fence for a durable selection sync worker.
 pub(crate) struct SelectionSyncFence<'a> {
@@ -59,6 +70,88 @@ async fn assert_sync_fence(fence: Option<&SelectionSyncFence<'_>>) -> AppResult<
     Ok(())
 }
 
+async fn projection_state(pool: &PgPool, projection: &str) -> AppResult<SearchProjectionState> {
+    Ok(sqlx::query_as::<_, SearchProjectionState>(
+        "SELECT source_generation, indexed_generation, source_rows, indexed_rows, status \
+         FROM courses.search_projection_state WHERE projection = $1",
+    )
+    .bind(projection)
+    .fetch_one(pool)
+    .await?)
+}
+
+async fn reconcile_projection_source_rows(pool: &PgPool, projection: &str) -> AppResult<()> {
+    let source_rows: i64 = match projection {
+        "catalogue" => {
+            sqlx::query_scalar("SELECT COUNT(*) FROM courses.courses").fetch_one(pool).await?
+        }
+        "selection" => {
+            sqlx::query_scalar("SELECT COUNT(*) FROM selection.courses").fetch_one(pool).await?
+        }
+        _ => return Err(AppError::NotFound),
+    };
+    sqlx::query(
+        "UPDATE courses.search_projection_state \
+         SET source_generation = source_generation + 1, source_rows = $2, \
+             indexed_generation = NULL, indexed_rows = NULL, status = 'stale', \
+             updated_at = now() \
+         WHERE projection = $1 AND source_rows <> $2",
+    )
+    .bind(projection)
+    .bind(source_rows)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+async fn mark_projection_rebuilding(pool: &PgPool, projection: &str) -> AppResult<i64> {
+    Ok(sqlx::query_scalar(
+        "UPDATE courses.search_projection_state \
+         SET status = 'rebuilding', indexed_generation = NULL, indexed_rows = NULL, \
+             updated_at = now() \
+         WHERE projection = $1 RETURNING source_generation",
+    )
+    .bind(projection)
+    .fetch_one(pool)
+    .await?)
+}
+
+async fn mark_projection_ready(
+    pool: &PgPool,
+    projection: &str,
+    source_generation: i64,
+    indexed_rows: usize,
+) -> AppResult<()> {
+    let indexed_rows = i64::try_from(indexed_rows)
+        .map_err(|error| AppError::Internal(anyhow::Error::new(error)))?;
+    let affected = sqlx::query(
+        "UPDATE courses.search_projection_state \
+         SET indexed_generation = $3, indexed_rows = $2, status = 'ready', \
+             updated_at = now() \
+         WHERE projection = $1 AND source_rows = $2 AND source_generation = $3",
+    )
+    .bind(projection)
+    .bind(indexed_rows)
+    .bind(source_generation)
+    .execute(pool)
+    .await?
+    .rows_affected();
+    if affected != 1 {
+        return Err(AppError::Conflict(format!(
+            "{projection} search source changed during reindex"
+        )));
+    }
+    Ok(())
+}
+
+/// Returns whether a PostgreSQL source generation has a complete search projection.
+pub async fn projection_is_ready(pool: &PgPool, projection: &str) -> AppResult<bool> {
+    let state = projection_state(pool, projection).await?;
+    Ok(state.status == "ready"
+        && state.indexed_generation == Some(state.source_generation)
+        && state.indexed_rows == Some(state.source_rows))
+}
+
 fn meili_api_key(api_key: &str) -> Option<&str> {
     let api_key = api_key.trim();
     (!api_key.is_empty()).then_some(api_key)
@@ -95,7 +188,7 @@ fn meili_app_failure(operation: &'static str, error: impl std::fmt::Display) -> 
 }
 
 fn meili_read_unavailable(operation: &'static str, error: impl std::fmt::Display) -> AppError {
-    tracing::warn!(%error, operation, "selection meilisearch read is unavailable");
+    tracing::warn!(%error, operation, "course meilisearch read is unavailable");
     AppError::ServiceUnavailable
 }
 
@@ -256,6 +349,8 @@ async fn reindex_course_documents_inner(
     api_key: &str,
     fence: Option<&SelectionSyncFence<'_>>,
 ) -> AppResult<usize> {
+    reconcile_projection_source_rows(pool, "catalogue").await?;
+    let source_generation = mark_projection_rebuilding(pool, "catalogue").await?;
     let course_ids: Vec<i64> =
         sqlx::query_scalar("SELECT id FROM courses.courses ORDER BY id").fetch_all(pool).await?;
     let mut documents = Vec::with_capacity(course_ids.len());
@@ -291,6 +386,7 @@ async fn reindex_course_documents_inner(
             .map_err(|error| meili_app_failure("course index addition", error))?;
         assert_sync_fence(fence).await?;
     }
+    mark_projection_ready(pool, "catalogue", source_generation, documents.len()).await?;
     Ok(documents.len())
 }
 
@@ -323,7 +419,7 @@ pub async fn search_document_ids(
         return Ok(Vec::new());
     }
     let client = Client::new(url, meili_api_key(api_key))
-        .map_err(|error| meili_app_failure("search client creation", error))?;
+        .map_err(|error| meili_read_unavailable("catalogue search client creation", error))?;
 
     let filter = format!("kind = {}", kind.value());
     let candidate_limit = limit.saturating_mul(4).min(1_000);
@@ -335,7 +431,7 @@ pub async fn search_document_ids(
         .with_limit(candidate_limit)
         .execute::<SearchCandidate>()
         .await
-        .map_err(|error| meili_app_failure("candidate search", error))?;
+        .map_err(|error| meili_read_unavailable("catalogue candidate search", error))?;
     Ok(ranked_candidate_ids(results.hits.into_iter().map(|hit| hit.result), kind))
 }
 
@@ -394,6 +490,101 @@ pub async fn setup_selection_index(url: &str, api_key: &str) -> Result<(), Strin
     wait_for_task(&client, filterable_task, "selection filterable attributes").await?;
 
     Ok(())
+}
+
+async fn course_index_document_count(url: &str, api_key: &str) -> AppResult<usize> {
+    let client = Client::new(url, meili_api_key(api_key))
+        .map_err(|error| meili_read_unavailable("catalogue readiness client", error))?;
+    let index = client.index("courses");
+    let mut search = index.search();
+    search.with_query("").with_filter("kind = course").with_limit(1);
+    let result = search
+        .execute::<SearchCandidate>()
+        .await
+        .map_err(|error| meili_read_unavailable("catalogue readiness count", error))?;
+    Ok(result.estimated_total_hits.or(result.total_hits).unwrap_or(result.hits.len()))
+}
+
+async fn selection_index_document_count(url: &str, api_key: &str) -> AppResult<usize> {
+    let client = Client::new(url, meili_api_key(api_key))
+        .map_err(|error| meili_read_unavailable("selection readiness client", error))?;
+    let stats = client
+        .index("selection_courses")
+        .get_stats()
+        .await
+        .map_err(|error| meili_read_unavailable("selection readiness count", error))?;
+    Ok(stats.number_of_documents)
+}
+
+/// Rebuilds configured indexes when their stored generation or live document count is stale.
+pub async fn reconcile_search_projections(
+    pool: &PgPool,
+    url: &str,
+    api_key: &str,
+) -> AppResult<()> {
+    setup_course_index(url, api_key)
+        .await
+        .map_err(|error| AppError::Internal(anyhow::anyhow!(error)))?;
+    setup_selection_index(url, api_key)
+        .await
+        .map_err(|error| AppError::Internal(anyhow::anyhow!(error)))?;
+
+    reconcile_projection_source_rows(pool, "catalogue").await?;
+    let catalogue = projection_state(pool, "catalogue").await?;
+    let indexed_catalogue = course_index_document_count(url, api_key).await?;
+    let indexed_catalogue = i64::try_from(indexed_catalogue)
+        .map_err(|error| AppError::Internal(anyhow::Error::new(error)))?;
+    let catalogue_ready = catalogue.status == "ready"
+        && catalogue.indexed_generation == Some(catalogue.source_generation)
+        && catalogue.indexed_rows == Some(catalogue.source_rows)
+        && indexed_catalogue == catalogue.source_rows;
+    if !catalogue_ready {
+        reindex_course_documents(pool, url, api_key).await?;
+    }
+
+    reconcile_projection_source_rows(pool, "selection").await?;
+    let selection = projection_state(pool, "selection").await?;
+    let indexed_selection = selection_index_document_count(url, api_key).await?;
+    let indexed_selection = i64::try_from(indexed_selection)
+        .map_err(|error| AppError::Internal(anyhow::Error::new(error)))?;
+    let selection_ready = selection.status == "ready"
+        && selection.indexed_generation == Some(selection.source_generation)
+        && selection.indexed_rows == Some(selection.source_rows)
+        && indexed_selection == selection.source_rows;
+    if !selection_ready {
+        sync_selection_courses_to_meili(url, api_key, pool).await?;
+    }
+    Ok(())
+}
+
+/// Periodically detects external index loss and reconciles from PostgreSQL.
+pub async fn run_search_projection_reconciler(state: AppState) {
+    loop {
+        let has_active_sync: Result<bool, sqlx::Error> = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM selection.sync_jobs \
+             WHERE status IN ('queued', 'running'))",
+        )
+        .fetch_one(&state.db)
+        .await;
+        match has_active_sync {
+            Ok(false) => {
+                if let Err(error) = reconcile_search_projections(
+                    &state.db,
+                    &state.meili_url,
+                    &state.meili_master_key,
+                )
+                .await
+                {
+                    tracing::warn!(?error, "course search projection reconciliation failed");
+                }
+            }
+            Ok(true) => {}
+            Err(error) => {
+                tracing::warn!(?error, "course search projection readiness check failed");
+            }
+        }
+        tokio::time::sleep(PROJECTION_RECONCILE_INTERVAL).await;
+    }
 }
 
 /// Document shape for a selection course in Meilisearch.
@@ -610,6 +801,8 @@ async fn sync_selection_courses_to_meili_inner(
     pool: &PgPool,
     fence: Option<&SelectionSyncFence<'_>>,
 ) -> AppResult<usize> {
+    reconcile_projection_source_rows(pool, "selection").await?;
+    let source_generation = mark_projection_rebuilding(pool, "selection").await?;
     let rows = sqlx::query_as::<_, SelectionCourseRow>(
         "SELECT course.id, course.code, course.teaching_class_code, course.name, course.credit, \
                 course.nature_id, course.calendar_id, course.campus_id, course.teacher_name, \
@@ -688,6 +881,7 @@ async fn sync_selection_courses_to_meili_inner(
             .map_err(|error| meili_app_failure("selection index addition", error))?;
         assert_sync_fence(fence).await?;
     }
+    mark_projection_ready(pool, "selection", source_generation, documents.len()).await?;
     Ok(documents.len())
 }
 
@@ -716,7 +910,8 @@ async fn build_course_document(
 ) -> Result<Option<CourseDocument>, sqlx::Error> {
     let row = sqlx::query_as::<_, CourseSyncRow>(
         "SELECT c.id, c.code, c.name, c.credit, c.department, \
-         c.review_count, c.review_avg, c.name_pinyin, c.name_initials, \
+         c.review_count, CASE WHEN c.review_count > 0 THEN c.review_avg END AS review_avg, \
+         c.name_pinyin, c.name_initials, \
          t.name AS teacher_name \
          FROM courses.courses c \
          LEFT JOIN courses.teachers t ON c.teacher_id = t.id \
@@ -813,9 +1008,9 @@ pub async fn sync_review_document_to_meili(
 #[cfg(test)]
 mod tests {
     use super::{
-        ranked_candidate_ids, ranked_selection_candidate_ids, search_selection_offering_ids,
-        selection_filter_expression, slot_keys, SearchCandidate, SearchDocumentKind,
-        SelectionTimeslotIndexRow,
+        ranked_candidate_ids, ranked_selection_candidate_ids, search_document_ids,
+        search_selection_offering_ids, selection_filter_expression, slot_keys, SearchCandidate,
+        SearchDocumentKind, SelectionTimeslotIndexRow,
     };
     use crate::selection_repo::OfferingFilter;
     use shared::AppError;
@@ -913,6 +1108,15 @@ mod tests {
             20,
         )
         .await;
+
+        assert!(matches!(result, Err(AppError::ServiceUnavailable)));
+    }
+
+    #[tokio::test]
+    async fn catalogue_search_maps_configured_backend_failures_to_unavailable() {
+        let result =
+            search_document_ids("not a valid URL", "", "course", SearchDocumentKind::Course, 20)
+                .await;
 
         assert!(matches!(result, Err(AppError::ServiceUnavailable)));
     }

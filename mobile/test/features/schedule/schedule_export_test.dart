@@ -43,6 +43,11 @@ void main() {
         'offering-a',
       );
       expect(
+        exportedOffering['course'],
+        containsPair('reviewScope', 'teacher'),
+      );
+      expect(exportedOffering['course'], containsPair('reviewAvg', 4.5));
+      expect(
         ((exportedOffering['timeslots'] as List<dynamic>).single
             as Map<String, dynamic>)['weekNumbers'],
         <int>[1, 2, 3, 4],
@@ -134,6 +139,9 @@ ScheduledCourse _scheduled() {
       scheduleUnknown: false,
       status: SelectionOfferingStatusEnum.unknown,
       catalogueCourseId: null,
+      reviewCount: 12,
+      reviewAvg: 4.5,
+      reviewScope: SelectionOfferingReviewScopeEnum.teacher,
     ),
     timeslots: <TimeSlot>[
       TimeSlot(

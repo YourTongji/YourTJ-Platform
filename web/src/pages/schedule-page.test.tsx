@@ -69,6 +69,9 @@ function course(id: string, code = "CS101"): SelectionCourse {
     scheduleUnknown: false,
     status: "unknown",
     catalogueCourseId: null,
+    reviewCount: 12,
+    reviewAvg: 4.6,
+    reviewScope: "teacher",
   };
 }
 
@@ -128,6 +131,7 @@ describe("SchedulePage", () => {
   it("opens a course-code deep link at offering level and stores the teaching class locally", async () => {
     const user = userEvent.setup();
     const view = renderPage();
+    expect(await screen.findByText("4.6 分 · 12 条历史评课 · 当前教师")).toBeVisible();
     await user.click(await screen.findByRole("button", { name: "加入数据结构教学班CS101.01" }));
 
     await waitFor(() => expect(apiMocks.timeslots).toHaveBeenCalledWith("9001", expect.any(AbortSignal)));

@@ -130,7 +130,7 @@ void main() {
     final Object? rewritten = jsonDecode(
       storage.values[namespace.storageKey('2026-spring')]!,
     );
-    expect((rewritten! as Map<String, dynamic>)['schemaVersion'], 3);
+    expect((rewritten! as Map<String, dynamic>)['schemaVersion'], 4);
     expect(
       storage.values[namespace.legacyStorageKey('2026-spring')],
       currentMain,
@@ -161,7 +161,7 @@ void main() {
         storage.values[namespace.storageKey('2026-spring')]!,
       );
       expect(rewritten, isA<Map<String, dynamic>>());
-      expect((rewritten! as Map<String, dynamic>)['schemaVersion'], 3);
+      expect((rewritten! as Map<String, dynamic>)['schemaVersion'], 4);
     },
   );
 
@@ -191,6 +191,46 @@ void main() {
     expect(loaded, isEmpty);
     expect(storage.values[namespace.storageKey('2026-spring')], current);
   });
+
+  test(
+    'loads a schema v3 current schedule with safe review defaults',
+    () async {
+      final _MemoryScheduleStorage storage = _MemoryScheduleStorage();
+      const ScheduleNamespace namespace = ScheduleNamespace(
+        environment: 'https://api.example/api/v2',
+        principal: 'account-a',
+      );
+      final ScheduledCourse source = _scheduled();
+      final Map<String, dynamic> legacyOffering = source.offering.toJson()
+        ..remove('reviewCount')
+        ..remove('reviewAvg')
+        ..remove('reviewScope');
+      await storage.write(
+        namespace.storageKey('2026-spring'),
+        jsonEncode(<String, Object>{
+          'schemaVersion': 3,
+          'items': <Object>[
+            <String, Object>{
+              'offering': legacyOffering,
+              'timeslots': <Object>[source.timeslots.single.toJson()],
+              'colorIndex': 0,
+            },
+          ],
+        }),
+      );
+
+      final List<ScheduledCourse> loaded = await ScheduleLocalRepository(
+        storage,
+      ).load(namespace: namespace, calendarId: '2026-spring');
+
+      expect(loaded.single.offering.reviewCount, 0);
+      expect(loaded.single.offering.reviewAvg, isNull);
+      expect(
+        loaded.single.offering.reviewScope,
+        SelectionOfferingReviewScopeEnum.none,
+      );
+    },
+  );
 
   test('clear removes current and rollback-safe legacy schedules', () async {
     final _MemoryScheduleStorage storage = _MemoryScheduleStorage();
@@ -250,6 +290,9 @@ void main() {
                 scheduleUnknown: false,
                 status: SelectionOfferingStatusEnum.unknown,
                 catalogueCourseId: null,
+                reviewCount: 0,
+                reviewAvg: null,
+                reviewScope: SelectionOfferingReviewScopeEnum.none,
               ).toJson(),
               'timeslots': <Object>[mismatchedTimeslot],
               'colorIndex': 1,
@@ -342,6 +385,41 @@ void main() {
 
     expect(loaded, isEmpty);
   });
+
+  test(
+    'rejects contradictory historical rating facts in current storage',
+    () async {
+      final _MemoryScheduleStorage storage = _MemoryScheduleStorage();
+      const ScheduleNamespace namespace = ScheduleNamespace(
+        environment: 'https://api.example/api/v2',
+        principal: 'account-a',
+      );
+      final ScheduledCourse source = _scheduled();
+      final Map<String, dynamic> offering = source.offering.toJson()
+        ..['reviewCount'] = 2
+        ..['reviewAvg'] = null
+        ..['reviewScope'] = 'teacher';
+      await storage.write(
+        namespace.storageKey('2026-spring'),
+        jsonEncode(<String, Object>{
+          'schemaVersion': 4,
+          'items': <Object>[
+            <String, Object>{
+              'offering': offering,
+              'timeslots': <Object>[source.timeslots.single.toJson()],
+              'colorIndex': 0,
+            },
+          ],
+        }),
+      );
+
+      final List<ScheduledCourse> loaded = await ScheduleLocalRepository(
+        storage,
+      ).load(namespace: namespace, calendarId: '2026-spring');
+
+      expect(loaded, isEmpty);
+    },
+  );
 
   test(
     'rejects contradictory aggregate week facts in current storage',
@@ -486,6 +564,9 @@ ScheduledCourse _scheduled() {
       scheduleUnknown: false,
       status: SelectionOfferingStatusEnum.unknown,
       catalogueCourseId: null,
+      reviewCount: 0,
+      reviewAvg: null,
+      reviewScope: SelectionOfferingReviewScopeEnum.none,
     ),
     timeslots: <TimeSlot>[
       TimeSlot(

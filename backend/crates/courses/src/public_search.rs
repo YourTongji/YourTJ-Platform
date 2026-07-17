@@ -61,7 +61,8 @@ pub async fn load_course_hits(
 
     let rows = sqlx::query_as::<_, CourseSearchRow>(
         "SELECT course.id, course.code, course.name, course.credit, course.department, \
-                teacher.name AS teacher_name, course.review_count, course.review_avg \
+                teacher.name AS teacher_name, course.review_count, \
+                CASE WHEN course.review_count > 0 THEN course.review_avg END AS review_avg \
          FROM courses.courses course \
          LEFT JOIN courses.teachers teacher ON teacher.id = course.teacher_id \
          WHERE course.id = ANY($1)",
@@ -83,6 +84,9 @@ pub async fn search_courses(
     query: &str,
     limit: usize,
 ) -> AppResult<Vec<CourseSearchHit>> {
+    if !meili::projection_is_ready(pool, "catalogue").await? {
+        return Err(shared::AppError::ServiceUnavailable);
+    }
     let candidate_ids =
         meili::search_document_ids(meili_url, meili_key, query, SearchDocumentKind::Course, limit)
             .await?;

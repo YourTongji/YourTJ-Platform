@@ -12231,6 +12231,15 @@ export interface components {
             status: "unknown" | "active" | "cancelled";
             /** @description Optional deep-link target in the community course catalogue. */
             catalogueCourseId: string | null;
+            /** @description Public historical rating sample count associated with this teaching class. */
+            reviewCount: number;
+            /** @description Weighted historical rating, or null when reviewCount is zero. */
+            reviewAvg: number | null;
+            /**
+             * @description Whether the historical aggregate matched the current teacher identity, fell back to a course-level alias, or has no data.
+             * @enum {string}
+             */
+            reviewScope: "none" | "course" | "teacher";
         };
         /** @description Canonical teaching-class offering returned by `/selection/offerings`. */
         SelectionOffering: components["schemas"]["SelectionCourse"];

@@ -30,6 +30,9 @@ SelectionCourse _$SelectionCourseFromJson(Map<String, dynamic> json) =>
           'scheduleUnknown',
           'status',
           'catalogueCourseId',
+          'reviewCount',
+          'reviewAvg',
+          'reviewScope',
         ],
       );
       final val = SelectionCourse(
@@ -71,36 +74,58 @@ SelectionCourse _$SelectionCourseFromJson(Map<String, dynamic> json) =>
           'catalogueCourseId',
           (v) => v as String?,
         ),
+        reviewCount: $checkedConvert('reviewCount', (v) => (v as num).toInt()),
+        reviewAvg: $checkedConvert('reviewAvg', (v) => v as num?),
+        reviewScope: $checkedConvert(
+          'reviewScope',
+          (v) => $enumDecode(
+            _$SelectionCourseReviewScopeEnumEnumMap,
+            v,
+            unknownValue: SelectionCourseReviewScopeEnum.unknownDefaultOpenApi,
+          ),
+        ),
       );
       return val;
     });
 
-Map<String, dynamic> _$SelectionCourseToJson(SelectionCourse instance) =>
-    <String, dynamic>{
-      'id': instance.id,
-      'offeringId': instance.offeringId,
-      'code': instance.code,
-      'teachingClassCode': instance.teachingClassCode,
-      'name': instance.name,
-      'credit': instance.credit,
-      'natureId': instance.natureId,
-      'calendarId': instance.calendarId,
-      'campusId': instance.campusId,
-      'facultyName': instance.facultyName,
-      'teachingLanguage': instance.teachingLanguage,
-      'teacherName': instance.teacherName,
-      'teacherNames': instance.teacherNames,
-      'startWeek': instance.startWeek,
-      'endWeek': instance.endWeek,
-      'weeksUnknown': instance.weeksUnknown,
-      'scheduleUnknown': instance.scheduleUnknown,
-      'status': _$SelectionCourseStatusEnumEnumMap[instance.status]!,
-      'catalogueCourseId': instance.catalogueCourseId,
-    };
+Map<String, dynamic> _$SelectionCourseToJson(
+  SelectionCourse instance,
+) => <String, dynamic>{
+  'id': instance.id,
+  'offeringId': instance.offeringId,
+  'code': instance.code,
+  'teachingClassCode': instance.teachingClassCode,
+  'name': instance.name,
+  'credit': instance.credit,
+  'natureId': instance.natureId,
+  'calendarId': instance.calendarId,
+  'campusId': instance.campusId,
+  'facultyName': instance.facultyName,
+  'teachingLanguage': instance.teachingLanguage,
+  'teacherName': instance.teacherName,
+  'teacherNames': instance.teacherNames,
+  'startWeek': instance.startWeek,
+  'endWeek': instance.endWeek,
+  'weeksUnknown': instance.weeksUnknown,
+  'scheduleUnknown': instance.scheduleUnknown,
+  'status': _$SelectionCourseStatusEnumEnumMap[instance.status]!,
+  'catalogueCourseId': instance.catalogueCourseId,
+  'reviewCount': instance.reviewCount,
+  'reviewAvg': instance.reviewAvg,
+  'reviewScope': _$SelectionCourseReviewScopeEnumEnumMap[instance.reviewScope]!,
+};
 
 const _$SelectionCourseStatusEnumEnumMap = {
   SelectionCourseStatusEnum.unknown: 'unknown',
   SelectionCourseStatusEnum.active: 'active',
   SelectionCourseStatusEnum.cancelled: 'cancelled',
   SelectionCourseStatusEnum.unknownDefaultOpenApi: 'unknown_default_open_api',
+};
+
+const _$SelectionCourseReviewScopeEnumEnumMap = {
+  SelectionCourseReviewScopeEnum.none: 'none',
+  SelectionCourseReviewScopeEnum.course: 'course',
+  SelectionCourseReviewScopeEnum.teacher: 'teacher',
+  SelectionCourseReviewScopeEnum.unknownDefaultOpenApi:
+      'unknown_default_open_api',
 };

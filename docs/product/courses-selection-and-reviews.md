@@ -6,7 +6,7 @@
 >
 > 负责人：Courses/Reviews/Web/Mobile maintainers、Product owner
 >
-> 最近核验：2026-07-16，selection teaching-class contract、materialization 与 Web/Flutter 课表
+> 最近核验：2026-07-17，真实 D1 快照物化、历史评分聚合、搜索 readiness 与 Web/Flutter 课表
 
 本规范定义课程目录、教学班镜像、本机课表和评课之间的事实边界。四者服务同一个校园旅程，
 但不是同一张表或同一种标识；客户端不得用名称、数组位置或非唯一课程代码把它们静默拼接。
@@ -23,8 +23,12 @@
 - 年级、专业下教学班、课程性质下教学班和教学班搜索都由明确的 `calendarId` 限定。返回项携带
   `calendarId`，客户端切换学期后重新查询，不把另一学期结果留在当前选择器中。
 - 节次使用 1-based、两端包含的 `startSlot..endSlot`；`TimeSlot.courseId` 与教学班标识一致。
-- 物化会从严格完整匹配的安排文本保留周次集合和地点；无法解析、单边周次或混合成功/失败的安排均保留
-  `weeksUnknown/locationUnknown/scheduleUnknown`，不能用已解析的一部分冒充完整课表。
+- 物化会从完整匹配的安排文本保留周次集合和地点，并识别无前缀、`教师名(工号)`、`(工号)` 以及
+  多身份前缀。无法唯一归属的多身份前缀只保留时段而不猜教师；无法解析、单边周次或混合成功/失败的安排
+  均保留 `weeksUnknown/locationUnknown/scheduleUnknown`，不能用已解析的一部分冒充完整课表。
+- 教学班携带历史公开评分聚合。优先匹配当前教师工号/姓名，无法精确匹配时才使用课程别名级参考，并通过
+  `reviewScope=teacher|course|none` 明示口径；零样本必须返回 `reviewAvg=null`，Web/Flutter 不显示伪造的
+  `0.0` 分。D1 旧评课正文、作者、点赞和举报不在该公开聚合迁移内。
 - Web 与 Flutter 的本机课表按 API environment、账号（匿名使用独立 principal）和学期分区。
   登入、登出或切换学期不会自动合并另一 scope 的本地选择。
 - Web 与 Flutter 都先按星期和 inclusive 节次区间找冲突候选。双方周次可解析且有交集时是
@@ -41,14 +45,16 @@
 
 ### Partial
 
-- 当前严格解析器只覆盖已确认的上游安排格式；新增或畸形格式会保守标记 unknown。统一 contract 仍未提供
+- 当前解析器只覆盖已由真实快照证明的上游安排格式；新增或畸形格式会保守标记 unknown。统一 contract 仍未提供
   容量、可信停开课状态和变更序列，因此 possible conflict 与 unknown 提示仍是正常状态，不能推断无冲突。
 - 课程目录 id 与教学班 id 已在客户端分开使用，但 wire contract 尚无明确的
   `canonicalCourseId ↔ teachingClassId` bridge。因此“课程详情直接加入某教学班课表”、从课表进入准确
   课程/评课，以及换班/变更检测仍为 `Partial`；客户端不得按 course code 猜唯一关系。
 - 选课搜索在 Meilisearch 候选阶段按 calendar 过滤，随后由 `courses` owner 按同一 calendar 批量回表，
-  丢弃过期、已删、非法 id 或跨学期候选并保持候选相关性顺序；全量 rebuild 已由持久 job、心跳和 lease
-  generation fence 保护，但 Meili 的 clear→add 仍有短暂空窗，尚不是版本化索引原子切换。
+  丢弃过期、已删、非法 id 或跨学期候选并保持候选相关性顺序。PostgreSQL 持久记录 catalogue/selection
+  source generation、document count 和 readiness；进程启动及周期 reconciliation 会从空索引或外部丢失中
+  全量恢复，未 ready 时搜索返回 unavailable 而不是伪装成零结果。全量 rebuild 仍是 clear→add，有短暂
+  空窗，尚不是版本化索引原子切换。
 - 评课仍缺 Reviews→Identity/Media 的 typed reviewer avatar；历史身份映射、课程合并/归档后的 deep-link
   保留政策和真实 Android/iOS device journey 也未闭环。
 - 本机课表没有 server owner、跨设备同步、服务端删除编排或 canonical enrollment 事实；本机 JSON
@@ -105,11 +111,16 @@
 - 课程目录与教学班的 authoritative bridge、上游重编号处理和跨学期 lineage。
 - 正式课表是否有 server owner、跨设备同步、服务端导出/删除、容量/停开课和变更通知；在此之前保持本机数据。
 - 上游周次和教室字段的 authoritative 来源、格式清单、异常格式监控与回填/重物化策略。
-- 历史评课与旧课程/匿名身份的映射、review deep-link 保留期，以及课程被合并/归档后的显示语义。
+- 历史评课正文、旧作者/匿名身份与互动的隐私迁移，review deep-link 保留期，以及课程被合并/归档后的
+  显示语义；公开 aggregate 已恢复不代表这些 identity-bearing 记录获准迁移。
 
 ## 验收基线
 
 - 同一 course code 下至少两个教学班、至少两个 calendar 的测试证明详情、节次、专业/性质和搜索不串数据。
+- 真实安排 fixture 覆盖 `教师名(工号)`、`(工号)`、多身份前缀和无法解析行；前两者保留可证明教师，
+  多身份只保留时段且不任意归属。真实快照重物化后 unknown 数量和时段总数稳定。
+- 历史评分同时覆盖教师精确匹配、课程 fallback、无评分和重复物化；公开课程聚合只纳入唯一可证明的课程
+  映射，未映射样本不猜归属。清空 Meilisearch document 后 reconciliation 能重建，未 ready 请求返回 503。
 - Web/Flutter 切账号和切学期后只看到对应本机课表；匿名 scope 不自动并入账号。
 - Web JSON 恢复拒绝错误 schema、其他学期/scope、重复教学班及越界节次；Flutter 导出不包含账号标识或 token。
 - 可解析且有交集、可解析但无交集、周次缺失、两侧相同但无法解析都有 Web/Flutter 回归；

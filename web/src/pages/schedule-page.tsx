@@ -78,6 +78,12 @@ function weekLabel(course: SelectionCourse) {
   return `${course.startWeek}-${course.endWeek} 周`;
 }
 
+function reviewLabel(course: SelectionCourse) {
+  if (course.reviewCount === 0 || course.reviewAvg === null) return "暂无历史评分";
+  const scope = course.reviewScope === "teacher" ? "当前教师" : "课程参考";
+  return `${course.reviewAvg.toFixed(1)} 分 · ${course.reviewCount} 条历史评课 · ${scope}`;
+}
+
 function slotLabel(slot: TimeSlot) {
   const week = slot.weeksUnknown
     ? "周次待确认"
@@ -123,6 +129,7 @@ function CourseRow({
           <p className="mt-1 text-sm text-muted-foreground">
             {teachers(course)} · {weekLabel(course)}
           </p>
+          <p className="mt-1 text-xs text-muted-foreground">{reviewLabel(course)}</p>
         </div>
         <Button
           size="sm"

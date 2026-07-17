@@ -90,12 +90,36 @@ async fn record_validated_import_run(pool: &PgPool, snapshot_sha256: String) -> 
          ) VALUES ($1, 1, 'jcourse-db-backup', 'selection-test', $2, $2, $3) \
          RETURNING id",
     )
-    .bind(snapshot_sha256)
+    .bind(&snapshot_sha256)
     .bind(counts)
     .bind(&validation)
     .fetch_one(pool)
     .await
     .expect("record validated selection import fixture");
+    let legacy_counts: Value = sqlx::query_scalar(
+        "SELECT jsonb_build_object(\
+           'teachers', (SELECT COUNT(*) FROM courses.pk_legacy_teachers), \
+           'courses', (SELECT COUNT(*) FROM courses.pk_legacy_courses), \
+           'course_aliases', (SELECT COUNT(*) FROM courses.pk_legacy_course_aliases)\
+         )",
+    )
+    .fetch_one(pool)
+    .await
+    .expect("count raw legacy course import fixture");
+    let mut legacy_validation = validation.clone();
+    legacy_validation["legacyCourseApprovalMode"] = json!("unbaselined");
+    legacy_validation["approvedLegacyCourseCounts"] = legacy_counts.clone();
+    sqlx::query(
+        "INSERT INTO courses.legacy_import_runs (\
+           snapshot_sha256, source_database, source_table_counts, target_table_counts, validation\
+         ) VALUES ($1, 'jcourse-db-backup', $2, $2, $3)",
+    )
+    .bind(&snapshot_sha256)
+    .bind(legacy_counts)
+    .bind(&legacy_validation)
+    .execute(pool)
+    .await
+    .expect("record validated legacy course import fixture");
     (import_run_id, validation)
 }
 
@@ -577,7 +601,10 @@ async fn handlers_return_the_selection_wire_contract() {
             "weeksUnknown": true,
             "scheduleUnknown": true,
             "status": "unknown",
-            "catalogueCourseId": null
+            "catalogueCourseId": null,
+            "reviewCount": 0,
+            "reviewAvg": null,
+            "reviewScope": "none"
         })
     );
     assert_eq!(
@@ -778,8 +805,9 @@ async fn materialization_preserves_uncertainty_and_is_idempotent() {
     .expect("insert retained catalogue alias fixture");
 
     sqlx::query(
-        "INSERT INTO courses.courses (code, name, is_legacy) \
-         VALUES ('C100', '门禁前目录名称', 1)",
+        "INSERT INTO courses.courses (\
+           code, name, is_legacy, review_count, review_avg\
+         ) VALUES ('C100', '门禁前目录名称', 1, 2, 5)",
     )
     .execute(&pool)
     .await
@@ -825,10 +853,10 @@ async fn materialization_preserves_uncertainty_and_is_idempotent() {
          INSERT INTO selection.pk_teachers_raw (\
            id, teaching_class_id, teacher_code, teacher_name, arrange_info_text) \
          VALUES \
-           (1, 1001, 'T1', '甲老师', '星期二5-6节 [1-3] A101'), \
-           (2, 1001, 'T2', '乙老师', '星期二5-6节 [1-3] A101'), \
+           (1, 1001, 'T1', '甲老师', '甲老师(T1) 星期二5-6节 [1-3] A101'), \
+           (2, 1001, 'T2', '乙老师', '甲老师(T1) 星期二5-6节 [1-3] A101'), \
            (3, 1002, 'T3', '丙老师', '无法解析的时段'), \
-           (4, 1003, 'T4', '丁老师', E'星期一1-2节 [1-3] C301\\n新版未知格式'); \
+           (4, 1003, 'T4', '丁老师', E'丁老师(T4) 星期一1-2节 [1-3] C301\\n新版未知格式'); \
          INSERT INTO selection.pk_teacher_timeslots (\
            calendar_id, teaching_class_id, occupy_day, occupy_section, \
            teacher_code, teacher_name) \
@@ -838,7 +866,14 @@ async fn materialization_preserves_uncertainty_and_is_idempotent() {
          INSERT INTO selection.pk_major_courses (major_id, course_id) \
          VALUES (1, 1001); \
          INSERT INTO selection.pk_fetch_logs (fetch_time, msg) \
-         VALUES (extract(epoch from now())::bigint, 'integration fixture')",
+         VALUES (extract(epoch from now())::bigint, 'integration fixture'); \
+         INSERT INTO courses.pk_legacy_teachers (id, tid, name, department) \
+         VALUES (10, 'T1', '甲老师', '计算机学院'); \
+         INSERT INTO courses.pk_legacy_courses (\
+           id, code, name, credit, department, teacher_id, review_count, review_avg\
+         ) VALUES (50, 'C100', '测试课程', 2, '计算机学院', 10, 4, 4.5); \
+         INSERT INTO courses.pk_legacy_course_aliases (system, alias, course_id, created_at) \
+         VALUES ('onesystem', 'C100.01', 50, extract(epoch from now())::bigint)",
     )
     .execute(&pool)
     .await
@@ -989,6 +1024,17 @@ async fn materialization_preserves_uncertainty_and_is_idempotent() {
             .await
             .expect("read deterministic catalogue course");
     assert_eq!(canonical_course, ("下一学期课程名称".into(), Some(3.0)));
+    let catalogue_rating: (i32, f64, i32, f64) = sqlx::query_as(
+        "SELECT review_count, review_avg, legacy_review_count, legacy_review_avg \
+         FROM courses.courses WHERE code = 'C100'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("read idempotent legacy and community rating aggregate");
+    assert_eq!(catalogue_rating.0, 6);
+    assert!((catalogue_rating.1 - 14.0 / 3.0).abs() < 1e-12);
+    assert_eq!(catalogue_rating.2, 4);
+    assert_eq!(catalogue_rating.3, 4.5);
 
     let fact: (i64, Option<String>, Vec<i32>, bool, Option<String>, bool) = sqlx::query_as(
         "SELECT course_id, teacher_name, week_numbers, weeks_unknown, location, location_unknown \
@@ -998,11 +1044,21 @@ async fn materialization_preserves_uncertainty_and_is_idempotent() {
     .await
     .expect("read collapsed schedule fact");
     assert_eq!(fact.0, 1001);
-    assert_eq!(fact.1, None, "a schedule repeated by multiple teachers is not teacher-owned");
+    assert_eq!(fact.1.as_deref(), Some("甲老师"));
     assert_eq!(fact.2, vec![1, 2, 3]);
     assert!(!fact.3);
     assert_eq!(fact.4.as_deref(), Some("A101"));
     assert!(!fact.5);
+    let rating: (i32, Option<f64>, String) = sqlx::query_as(
+        "SELECT review_count, review_avg, review_scope \
+         FROM selection.courses WHERE id = 1001",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("read teacher-matched legacy rating");
+    assert_eq!(rating.0, 4);
+    assert_eq!(rating.1, Some(4.5));
+    assert_eq!(rating.2, "teacher");
     let fact_count: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM selection.timeslots WHERE course_id = 1001")
             .fetch_one(&pool)
@@ -1113,6 +1169,44 @@ async fn materialization_preserves_uncertainty_and_is_idempotent() {
     .await
     .expect("verify conservative catalogue retention");
     assert!(retained_catalogue, "selection snapshots cannot retire catalogue rows or aliases");
+}
+
+#[tokio::test]
+async fn arrangement_parser_accepts_real_identity_prefix_variants() {
+    let Some(pool) = isolated_database_pool("yourtj_arrangement_parser").await else {
+        return;
+    };
+
+    let named: (Option<String>, Option<String>, i32, Vec<i32>) = sqlx::query_as(
+        "SELECT teacher_name, teacher_code, weekday, week_numbers \
+         FROM selection.parse_arrangement_line(\
+           '张老师(T100) 星期二3-4节 [1-5单] 教学楼 A101'\
+         )",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("parse named teacher prefix");
+    assert_eq!(named, (Some("张老师".into()), Some("T100".into()), 2, vec![1, 3, 5]));
+
+    let code_only: (Option<String>, Option<String>, i32, Option<String>) = sqlx::query_as(
+        "SELECT teacher_name, teacher_code, start_slot, location \
+         FROM selection.parse_arrangement_line('(2500036) 星期三7-8节 [2-8双]')",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("parse code-only teacher prefix");
+    assert_eq!(code_only, (None, Some("2500036".into()), 7, None));
+
+    let ambiguous: (Option<String>, Option<String>, i32) = sqlx::query_as(
+        "SELECT teacher_name, teacher_code, weekday \
+         FROM selection.parse_arrangement_line(\
+           '朱静宇(05072),(2401015) 星期一1-2节 [1-16] A101'\
+         )",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("parse ambiguous multi-identity prefix");
+    assert_eq!(ambiguous, (None, None, 1));
 }
 
 #[tokio::test]

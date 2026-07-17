@@ -72,6 +72,9 @@ pub struct SelectionCourseDto {
     pub schedule_unknown: bool,
     pub status: String,
     pub catalogue_course_id: Option<String>,
+    pub review_count: i32,
+    pub review_avg: Option<f64>,
+    pub review_scope: String,
 }
 
 /// A time-slot for a selection course.
@@ -129,6 +132,9 @@ mod tests {
             schedule_unknown: true,
             status: "unknown".into(),
             catalogue_course_id: None,
+            review_count: 0,
+            review_avg: None,
+            review_scope: "none".into(),
         };
         assert_eq!(
             serde_json::to_value(course).expect("serialize selection course"),
@@ -151,7 +157,10 @@ mod tests {
                 "weeksUnknown": true,
                 "scheduleUnknown": true,
                 "status": "unknown",
-                "catalogueCourseId": null
+                "catalogueCourseId": null,
+                "reviewCount": 0,
+                "reviewAvg": null,
+                "reviewScope": "none"
             })
         );
 

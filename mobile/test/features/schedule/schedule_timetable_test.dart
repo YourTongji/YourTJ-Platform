@@ -70,6 +70,9 @@ List<ScheduledCourse> _courses() {
         scheduleUnknown: false,
         status: SelectionOfferingStatusEnum.unknown,
         catalogueCourseId: null,
+        reviewCount: 0,
+        reviewAvg: null,
+        reviewScope: SelectionOfferingReviewScopeEnum.none,
       ),
       timeslots: <TimeSlot>[
         TimeSlot(

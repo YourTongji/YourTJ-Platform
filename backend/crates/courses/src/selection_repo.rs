@@ -17,7 +17,8 @@ use crate::selection::models::{
 const OFFERING_COLUMNS: &str = "c.id, c.code, c.teaching_class_code, c.name, c.credit, \
     c.nature_id, c.calendar_id, c.campus_id, c.faculty_name, c.teaching_language, \
     c.teacher_name, c.teacher_names, c.start_week, c.end_week, c.weeks_unknown, \
-    c.schedule_unknown, c.status, c.catalogue_course_id";
+    c.schedule_unknown, c.status, c.catalogue_course_id, c.review_count, c.review_avg, \
+    c.review_scope";
 
 /// Canonical browse/search filters. Time fields are either all present or all
 /// absent after handler validation.

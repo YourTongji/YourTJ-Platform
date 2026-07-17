@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Import a D1 SQLite snapshot into empty ``selection.pk_*`` tables.
+"""Import a D1 SQLite snapshot into empty Selection and Courses raw tables.
 
 The D1 schema uses camelCase while PostgreSQL uses snake_case. This tool owns
 that explicit mapping and fails before writing when a source column is missing
@@ -44,6 +44,7 @@ ESSENTIAL_TABLES = (
     "majorandcourse",
     "fetchlog",
 )
+LEGACY_COURSE_TABLES = ("teachers", "courses", "course_aliases")
 
 
 @dataclass(frozen=True)
@@ -53,7 +54,7 @@ class TableSpec:
     columns: tuple[tuple[str, str], ...]
 
 
-TABLES = (
+SELECTION_TABLES = (
     TableSpec(
         "calendar",
         "selection.pk_calendars",
@@ -185,10 +186,54 @@ TABLES = (
     ),
 )
 
+LEGACY_COURSE_SPECS = (
+    TableSpec(
+        "teachers",
+        "courses.pk_legacy_teachers",
+        (
+            ("id", "id"),
+            ("tid", "tid"),
+            ("name", "name"),
+            ("title", "title"),
+            ("department", "department"),
+        ),
+    ),
+    TableSpec(
+        "courses",
+        "courses.pk_legacy_courses",
+        (
+            ("id", "id"),
+            ("code", "code"),
+            ("name", "name"),
+            ("credit", "credit"),
+            ("department", "department"),
+            ("teacher_id", "teacher_id"),
+            ("review_count", "review_count"),
+            ("review_avg", "review_avg"),
+            ("search_keywords", "search_keywords"),
+            ("is_legacy", "is_legacy"),
+            ("is_icu", "is_icu"),
+        ),
+    ),
+    TableSpec(
+        "course_aliases",
+        "courses.pk_legacy_course_aliases",
+        (
+            ("system", "system"),
+            ("alias", "alias"),
+            ("course_id", "course_id"),
+            ("created_at", "created_at"),
+        ),
+    ),
+)
+
+TABLES = SELECTION_TABLES + LEGACY_COURSE_SPECS
+
 NULL_MARKER = "__YOURTJ_D1_NULL_20260711__"
 
 NUMERIC_TARGET_COLUMNS = {
     "calendar_id",
+    "created_at",
     "course_label_id",
     "credit",
     "elc_number",
@@ -196,14 +241,19 @@ NUMERIC_TARGET_COLUMNS = {
     "fetch_time",
     "grade",
     "id",
+    "is_icu",
+    "is_legacy",
     "major_id",
     "number",
     "occupy_day",
     "occupy_section",
     "period",
+    "review_avg",
+    "review_count",
     "course_id",
     "start_week",
     "teaching_class_id",
+    "teacher_id",
     "week_hour",
 }
 
@@ -323,7 +373,9 @@ def write_manifest(path: Path, manifest: dict[str, Any]) -> None:
 def validated_table_counts(value: object, surface: str) -> dict[str, int]:
     expected = {spec.source for spec in TABLES}
     if not isinstance(value, dict) or set(value) != expected:
-        raise ValueError(f"{surface} must contain exactly the 13 supported table counts")
+        raise ValueError(
+            f"{surface} must contain exactly the {len(TABLES)} supported table counts"
+        )
     counts: dict[str, int] = {}
     for table, count in value.items():
         if isinstance(count, bool) or not isinstance(count, int) or count < 0:
@@ -391,9 +443,11 @@ def validate_snapshot_completeness(
         manifest.get("sourceTableCounts"), "current sourceTableCounts"
     )
     empty_essential = [table for table in ESSENTIAL_TABLES if current_counts[table] == 0]
-    if empty_essential:
+    empty_legacy = [table for table in LEGACY_COURSE_TABLES if current_counts[table] == 0]
+    if empty_essential or empty_legacy:
         raise ValueError(
-            "essential source tables must be non-empty: " + ", ".join(empty_essential)
+            "essential source tables must be non-empty: "
+            + ", ".join(empty_essential + empty_legacy)
         )
 
     approves_unbaselined = bool(args.approve_unbaselined_snapshot)
@@ -413,6 +467,10 @@ def validate_snapshot_completeness(
             "approvedCoreCounts": {
                 table: current_counts[table] for table in ESSENTIAL_TABLES
             },
+            "legacyCourseApprovalMode": "unbaselined",
+            "approvedLegacyCourseCounts": {
+                table: current_counts[table] for table in LEGACY_COURSE_TABLES
+            },
         }
 
     if approves_unbaselined:
@@ -425,12 +483,18 @@ def validate_snapshot_completeness(
         for table in ESSENTIAL_TABLES
         if current_counts[table] < previous_counts[table]
     }
-    if decreases and not approves_decrease:
+    legacy_decreases = {
+        table: {"before": previous_counts[table], "after": current_counts[table]}
+        for table in LEGACY_COURSE_TABLES
+        if current_counts[table] < previous_counts[table]
+    }
+    all_decreases = {**decreases, **legacy_decreases}
+    if all_decreases and not approves_decrease:
         raise ValueError(
             "essential table counts decreased; inspect the diff and explicitly approve: "
-            + ", ".join(decreases)
+            + ", ".join(all_decreases)
         )
-    if approves_decrease and not decreases:
+    if approves_decrease and not all_decreases:
         raise ValueError("--approve-count-decrease was supplied but no essential count decreased")
     if args.approval_reason and not approves_decrease:
         raise ValueError("--approval-reason is only valid for an explicit approval mode")
@@ -442,10 +506,19 @@ def validate_snapshot_completeness(
         "baselineCoreCounts": {
             table: previous_counts[table] for table in ESSENTIAL_TABLES
         },
+        "legacyCourseApprovalMode": (
+            "countDecreaseOverride" if legacy_decreases else "baselineCompared"
+        ),
+        "baselineLegacyCourseCounts": {
+            table: previous_counts[table] for table in LEGACY_COURSE_TABLES
+        },
     }
-    if decreases:
+    if all_decreases:
         validation["approvalReason"] = bounded_approval_reason(args)
+    if decreases:
         validation["countDecreases"] = decreases
+    if legacy_decreases:
+        validation["legacyCourseCountDecreases"] = legacy_decreases
     return validation
 
 
@@ -488,6 +561,12 @@ def target_count_guard(counts: dict[str, int]) -> str:
     return "DO $validate$\nBEGIN\n" + "\n".join(checks) + "\nEND\n$validate$;"
 
 
+def counts_for_specs(
+    counts: dict[str, int], specs: tuple[TableSpec, ...]
+) -> dict[str, int]:
+    return {spec.source: counts[spec.source] for spec in specs}
+
+
 def import_run_insert(
     manifest: dict[str, Any], imported_by: str, validation_result: dict[str, Any]
 ) -> str:
@@ -497,7 +576,10 @@ def import_run_insert(
         if exported_at is None
         else f"{sql_literal(exported_at)}::timestamptz"
     )
-    counts = json.dumps(manifest["sourceTableCounts"], separators=(",", ":"), sort_keys=True)
+    selection_counts = counts_for_specs(
+        manifest["sourceTableCounts"], SELECTION_TABLES
+    )
+    counts = json.dumps(selection_counts, separators=(",", ":"), sort_keys=True)
     validation = json.dumps(validation_result, separators=(",", ":"), sort_keys=True)
     return (
         "INSERT INTO selection.import_runs ("
@@ -508,6 +590,27 @@ def import_run_insert(
         f"{sql_literal(manifest['sourceDatabase'])}, {exported_sql}, "
         f"{sql_literal(imported_by)}, {sql_literal(counts)}::jsonb, "
         f"{sql_literal(counts)}::jsonb, {sql_literal(validation)}::jsonb"
+        ");"
+    )
+
+
+def legacy_import_run_insert(
+    manifest: dict[str, Any], validation_result: dict[str, Any]
+) -> str:
+    legacy_counts = counts_for_specs(
+        manifest["sourceTableCounts"], LEGACY_COURSE_SPECS
+    )
+    counts = json.dumps(legacy_counts, separators=(",", ":"), sort_keys=True)
+    validation = json.dumps(validation_result, separators=(",", ":"), sort_keys=True)
+    return (
+        "INSERT INTO courses.legacy_import_runs ("
+        "snapshot_sha256, source_database, source_table_counts, "
+        "target_table_counts, validation"
+        ") VALUES ("
+        f"{sql_literal(manifest['snapshotSha256'])}, "
+        f"{sql_literal(manifest['sourceDatabase'])}, "
+        f"{sql_literal(counts)}::jsonb, {sql_literal(counts)}::jsonb, "
+        f"{sql_literal(validation)}::jsonb"
         ");"
     )
 
@@ -540,7 +643,7 @@ def target_empty_guard() -> str:
     return (
         "DO $guard$\nBEGIN\n"
         f"  IF {checks} THEN\n"
-        "    RAISE EXCEPTION 'selection raw tables must be empty before D1 import';\n"
+        "    RAISE EXCEPTION 'target raw tables must be empty before D1 import';\n"
         "  END IF;\nEND\n$guard$;"
     )
 
@@ -566,6 +669,7 @@ def emit_copy_stream(
         total += count
     print(target_count_guard(manifest["sourceTableCounts"]), file=output)
     print(import_run_insert(manifest, imported_by, validation_result), file=output)
+    print(legacy_import_run_insert(manifest, validation_result), file=output)
     print("COMMIT;", file=output)
     return total
 
@@ -613,8 +717,37 @@ def import_direct(
                     manifest["sourceDatabase"],
                     manifest["snapshotExportedAt"],
                     imported_by,
-                    json.dumps(manifest["sourceTableCounts"], sort_keys=True),
-                    json.dumps(target_counts, sort_keys=True),
+                    json.dumps(
+                        counts_for_specs(
+                            manifest["sourceTableCounts"], SELECTION_TABLES
+                        ),
+                        sort_keys=True,
+                    ),
+                    json.dumps(
+                        counts_for_specs(target_counts, SELECTION_TABLES),
+                        sort_keys=True,
+                    ),
+                    json.dumps(validation_result, sort_keys=True),
+                ),
+            )
+            cursor.execute(
+                "INSERT INTO courses.legacy_import_runs ("
+                "snapshot_sha256, source_database, source_table_counts, "
+                "target_table_counts, validation"
+                ") VALUES (%s, %s, %s::jsonb, %s::jsonb, %s::jsonb)",
+                (
+                    manifest["snapshotSha256"],
+                    manifest["sourceDatabase"],
+                    json.dumps(
+                        counts_for_specs(
+                            manifest["sourceTableCounts"], LEGACY_COURSE_SPECS
+                        ),
+                        sort_keys=True,
+                    ),
+                    json.dumps(
+                        counts_for_specs(target_counts, LEGACY_COURSE_SPECS),
+                        sort_keys=True,
+                    ),
                     json.dumps(validation_result, sort_keys=True),
                 ),
             )

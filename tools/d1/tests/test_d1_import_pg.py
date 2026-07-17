@@ -127,6 +127,10 @@ class ManifestSafetyTests(unittest.TestCase):
         self.assertEqual(
             set(validation["approvedCoreCounts"]), set(D1_IMPORT.ESSENTIAL_TABLES)
         )
+        self.assertEqual(
+            set(validation["approvedLegacyCourseCounts"]),
+            set(D1_IMPORT.LEGACY_COURSE_TABLES),
+        )
 
     def test_snapshot_completeness_never_approves_empty_essential_tables(self) -> None:
         counts = self._counts()
@@ -141,10 +145,22 @@ class ManifestSafetyTests(unittest.TestCase):
                 None,
             )
 
+        counts = self._counts()
+        counts["course_aliases"] = 0
+        with self.assertRaisesRegex(ValueError, "course_aliases"):
+            D1_IMPORT.validate_snapshot_completeness(
+                self._approval_args(
+                    approve_unbaselined_snapshot=True,
+                    approval_reason="Reviewed first trusted backup snapshot",
+                ),
+                {"sourceTableCounts": counts},
+                None,
+            )
+
     def test_table_count_validation_rejects_missing_keys(self) -> None:
         counts = self._counts()
         counts.pop("teacher")
-        with self.assertRaisesRegex(ValueError, "exactly the 13"):
+        with self.assertRaisesRegex(ValueError, f"exactly the {len(D1_IMPORT.TABLES)}"):
             D1_IMPORT.validated_table_counts(counts, "fixture")
 
     def test_import_operator_label_is_bounded_and_excludes_direct_identifiers(self) -> None:
@@ -194,6 +210,26 @@ class ManifestSafetyTests(unittest.TestCase):
             {"before": 11, "after": 10},
         )
 
+        current_counts = self._counts(10)
+        previous_counts = self._counts(10)
+        previous_counts["courses"] = 11
+        validation = D1_IMPORT.validate_snapshot_completeness(
+            self._approval_args(
+                approve_count_decrease=True,
+                approval_reason="Reviewed expected legacy course count decrease",
+            ),
+            {"sourceTableCounts": current_counts},
+            {
+                "snapshotSha256": "b" * 64,
+                "sourceTableCounts": previous_counts,
+            },
+        )
+        self.assertEqual(validation["approvalMode"], "baselineCompared")
+        self.assertEqual(
+            validation["legacyCourseCountDecreases"]["courses"],
+            {"before": 11, "after": 10},
+        )
+
     def test_comparison_manifest_requires_schema_source_hash_and_all_counts(self) -> None:
         current = {"sourceDatabase": D1_IMPORT.BACKUP_DATABASE_NAME}
         with tempfile.TemporaryDirectory() as directory:
@@ -209,7 +245,9 @@ class ManifestSafetyTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            with self.assertRaisesRegex(ValueError, "exactly the 13"):
+            with self.assertRaisesRegex(
+                ValueError, f"exactly the {len(D1_IMPORT.TABLES)}"
+            ):
                 D1_IMPORT.load_comparison_manifest(path, current)
 
 

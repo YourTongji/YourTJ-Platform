@@ -141,7 +141,18 @@ function isSelectionCourse(value: unknown, calendarId: string): value is Selecti
     && typeof value.scheduleUnknown === "boolean"
     && typeof value.status === "string"
     && ["unknown", "active", "cancelled"].includes(value.status)
-    && isNullableString(value.catalogueCourseId);
+    && isNullableString(value.catalogueCourseId)
+    && Number.isInteger(value.reviewCount)
+    && Number(value.reviewCount) >= 0
+    && isNullableNumber(value.reviewAvg)
+    && (
+      Number(value.reviewCount) === 0
+        ? value.reviewAvg === null && value.reviewScope === "none"
+        : value.reviewAvg !== null
+          && Number(value.reviewAvg) >= 0
+          && Number(value.reviewAvg) <= 5
+          && ["course", "teacher"].includes(String(value.reviewScope))
+    );
 }
 
 function isTimeSlot(value: unknown, offeringId: string): value is TimeSlot {
@@ -304,6 +315,9 @@ function upgradeLegacyCourse(
     scheduleUnknown: timeslots.length === 0,
     status: "unknown",
     catalogueCourseId: null,
+    reviewCount: 0,
+    reviewAvg: null,
+    reviewScope: "none",
   };
 }
 

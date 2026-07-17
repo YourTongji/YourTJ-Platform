@@ -165,6 +165,9 @@ SelectionOffering _offering(String offeringId, {bool scheduleUnknown = false}) {
     scheduleUnknown: scheduleUnknown,
     status: SelectionOfferingStatusEnum.unknown,
     catalogueCourseId: null,
+    reviewCount: 0,
+    reviewAvg: null,
+    reviewScope: SelectionOfferingReviewScopeEnum.none,
   );
 }
 

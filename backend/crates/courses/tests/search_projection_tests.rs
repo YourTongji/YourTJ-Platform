@@ -2,6 +2,10 @@
 
 mod common;
 
+use std::time::Duration;
+
+use meilisearch_sdk::client::Client;
+
 #[tokio::test]
 async fn course_projection_preserves_candidate_rank_and_uses_numeric_ids() {
     let Some(pool) = common::try_connect().await else {
@@ -71,7 +75,7 @@ async fn course_projection_preserves_candidate_rank_and_uses_numeric_ids() {
 }
 
 #[tokio::test]
-async fn selection_reindex_supports_code_teacher_pinyin_and_time_filters() {
+async fn projection_reconciliation_recovers_index_loss_and_supports_selection_filters() {
     let Some(pool) = common::try_connect().await else {
         return;
     };
@@ -82,15 +86,38 @@ async fn selection_reindex_supports_code_teacher_pinyin_and_time_filters() {
         return;
     }
     let meili_key = std::env::var("MEILI_MASTER_KEY").unwrap_or_default();
+    common::seed_courses_data(&pool).await;
     common::seed_selection_data(&pool).await;
 
-    courses::meili::setup_selection_index(&meili_url, &meili_key)
+    courses::meili::reconcile_search_projections(&pool, &meili_url, &meili_key)
         .await
-        .expect("setup selection index");
-    let indexed = courses::meili::sync_selection_courses_to_meili(&meili_url, &meili_key, &pool)
+        .expect("reconcile stale search projections");
+    assert!(courses::meili::projection_is_ready(&pool, "catalogue")
         .await
-        .expect("reindex selection offerings");
-    assert!(indexed >= 1);
+        .expect("read catalogue readiness"));
+    assert!(courses::meili::projection_is_ready(&pool, "selection")
+        .await
+        .expect("read selection readiness"));
+
+    let api_key = (!meili_key.is_empty()).then_some(meili_key.as_str());
+    let client = Client::new(&meili_url, api_key).expect("create Meilisearch test client");
+    let deletion = client
+        .index("selection_courses")
+        .delete_all_documents()
+        .await
+        .expect("enqueue simulated selection index loss")
+        .wait_for_completion(
+            &client,
+            Some(Duration::from_millis(20)),
+            Some(Duration::from_secs(30)),
+        )
+        .await
+        .expect("wait for simulated selection index loss");
+    assert!(deletion.is_success());
+
+    courses::meili::reconcile_search_projections(&pool, &meili_url, &meili_key)
+        .await
+        .expect("rebuild externally cleared selection index");
 
     let filter = courses::selection_repo::OfferingFilter {
         calendar_id: Some(1),
@@ -112,4 +139,44 @@ async fn selection_reindex_supports_code_teacher_pinyin_and_time_filters() {
         assert!(result.ids.contains(&1), "query {query} should find the seeded offering");
         assert!(result.consumed >= 1);
     }
+
+    let course_hits =
+        courses::public_search::search_courses(&pool, &meili_url, &meili_key, "数据结构", 20)
+            .await
+            .expect("search reconciled catalogue index");
+    assert!(course_hits.iter().any(|course| course.code == "CS101"));
+
+    let new_course_id = (uuid::Uuid::new_v4().as_u128() & ((1_u128 << 62) - 1)) as i64 + 1;
+    let new_course_code = format!("RECONCILE-{}", uuid::Uuid::new_v4().simple());
+    sqlx::query(
+        "INSERT INTO courses.courses (id, code, name) OVERRIDING SYSTEM VALUE \
+         VALUES ($1, $2, '投影行数恢复')",
+    )
+    .bind(new_course_id)
+    .bind(&new_course_code)
+    .execute(&pool)
+    .await
+    .expect("seed catalogue source row drift");
+    courses::meili::reconcile_search_projections(&pool, &meili_url, &meili_key)
+        .await
+        .expect("rebuild catalogue after source row addition");
+    let added_hits =
+        courses::public_search::search_courses(&pool, &meili_url, &meili_key, &new_course_code, 20)
+            .await
+            .expect("search catalogue after source row addition");
+    assert!(added_hits.iter().any(|course| course.id == new_course_id.to_string()));
+
+    sqlx::query("DELETE FROM courses.courses WHERE id = $1")
+        .bind(new_course_id)
+        .execute(&pool)
+        .await
+        .expect("remove catalogue source row");
+    courses::meili::reconcile_search_projections(&pool, &meili_url, &meili_key)
+        .await
+        .expect("rebuild catalogue after source row removal");
+    let removed_hits =
+        courses::public_search::search_courses(&pool, &meili_url, &meili_key, &new_course_code, 20)
+            .await
+            .expect("search catalogue after source row removal");
+    assert!(removed_hits.is_empty());
 }

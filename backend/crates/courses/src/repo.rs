@@ -27,7 +27,8 @@ pub struct CourseWithTeacherRow {
 // Reusable column list for CourseWithTeacherRow queries (avoids column mismatch
 // with `SELECT c.*` which would pick up `is_legacy` / `is_icu`).
 const COURSE_COLS: &str = "c.id, c.code, c.name, c.credit, c.department, c.teacher_id, \
-     c.review_count, c.review_avg, c.name_pinyin, c.name_initials, c.search_keywords";
+     c.review_count, CASE WHEN c.review_count > 0 THEN c.review_avg END AS review_avg, \
+     c.name_pinyin, c.name_initials, c.search_keywords";
 
 const LIST_COURSE_SQL_BASE: &str = " \
      SELECT {course_cols}, t.name AS teacher_name \
