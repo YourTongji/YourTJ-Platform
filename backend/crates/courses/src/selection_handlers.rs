@@ -73,6 +73,9 @@ fn row_to_course_dto(row: SelectionCourseRow) -> SelectionCourseDto {
         schedule_unknown: row.schedule_unknown,
         status: row.status,
         catalogue_course_id: row.catalogue_course_id.map(|value| value.to_string()),
+        review_count: row.review_count,
+        review_avg: row.review_avg,
+        review_scope: row.review_scope,
     }
 }
 
@@ -429,6 +432,9 @@ async fn fetch_offering_page(
     let fingerprint = filter_fingerprint(params);
     if let Some(query) = normalized_query(params) {
         if state.meili_url.trim().is_empty() {
+            return Err(AppError::ServiceUnavailable);
+        }
+        if !crate::meili::projection_is_ready(&state.db, "selection").await? {
             return Err(AppError::ServiceUnavailable);
         }
         let offset = match params.cursor.as_deref() {

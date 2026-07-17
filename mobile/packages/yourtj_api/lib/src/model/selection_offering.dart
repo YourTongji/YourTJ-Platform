@@ -53,6 +53,12 @@ class SelectionOffering {
     required this.status,
 
     required this.catalogueCourseId,
+
+    required this.reviewCount,
+
+    required this.reviewAvg,
+
+    required this.reviewScope,
   });
 
   /// Compatibility alias for offeringId.
@@ -127,6 +133,26 @@ class SelectionOffering {
   @JsonKey(name: r'catalogueCourseId', required: true, includeIfNull: true)
   final String? catalogueCourseId;
 
+  /// Public historical rating sample count associated with this teaching class.
+  // minimum: 0
+  @JsonKey(name: r'reviewCount', required: true, includeIfNull: false)
+  final int reviewCount;
+
+  /// Weighted historical rating, or null when reviewCount is zero.
+  // minimum: 0
+  // maximum: 5
+  @JsonKey(name: r'reviewAvg', required: true, includeIfNull: true)
+  final num? reviewAvg;
+
+  /// Whether the historical aggregate matched the current teacher identity, fell back to a course-level alias, or has no data.
+  @JsonKey(
+    name: r'reviewScope',
+    required: true,
+    includeIfNull: false,
+    unknownEnumValue: SelectionOfferingReviewScopeEnum.unknownDefaultOpenApi,
+  )
+  final SelectionOfferingReviewScopeEnum reviewScope;
+
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
@@ -149,7 +175,10 @@ class SelectionOffering {
           other.weeksUnknown == weeksUnknown &&
           other.scheduleUnknown == scheduleUnknown &&
           other.status == status &&
-          other.catalogueCourseId == catalogueCourseId;
+          other.catalogueCourseId == catalogueCourseId &&
+          other.reviewCount == reviewCount &&
+          other.reviewAvg == reviewAvg &&
+          other.reviewScope == reviewScope;
 
   @override
   int get hashCode =>
@@ -171,7 +200,10 @@ class SelectionOffering {
       weeksUnknown.hashCode +
       scheduleUnknown.hashCode +
       status.hashCode +
-      (catalogueCourseId == null ? 0 : catalogueCourseId.hashCode);
+      (catalogueCourseId == null ? 0 : catalogueCourseId.hashCode) +
+      reviewCount.hashCode +
+      (reviewAvg == null ? 0 : reviewAvg.hashCode) +
+      reviewScope.hashCode;
 
   factory SelectionOffering.fromJson(Map<String, dynamic> json) =>
       _$SelectionOfferingFromJson(json);
@@ -203,6 +235,32 @@ enum SelectionOfferingStatusEnum {
   unknownDefaultOpenApi(r'unknown_default_open_api');
 
   const SelectionOfferingStatusEnum(this.value);
+
+  final String value;
+
+  @override
+  String toString() => value;
+}
+
+/// Whether the historical aggregate matched the current teacher identity, fell back to a course-level alias, or has no data.
+enum SelectionOfferingReviewScopeEnum {
+  /// Whether the historical aggregate matched the current teacher identity, fell back to a course-level alias, or has no data.
+  @JsonValue(r'none')
+  none(r'none'),
+
+  /// Whether the historical aggregate matched the current teacher identity, fell back to a course-level alias, or has no data.
+  @JsonValue(r'course')
+  course(r'course'),
+
+  /// Whether the historical aggregate matched the current teacher identity, fell back to a course-level alias, or has no data.
+  @JsonValue(r'teacher')
+  teacher(r'teacher'),
+
+  /// Whether the historical aggregate matched the current teacher identity, fell back to a course-level alias, or has no data.
+  @JsonValue(r'unknown_default_open_api')
+  unknownDefaultOpenApi(r'unknown_default_open_api');
+
+  const SelectionOfferingReviewScopeEnum(this.value);
 
   final String value;
 

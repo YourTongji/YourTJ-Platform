@@ -63,6 +63,9 @@ pub struct SelectionCourseRow {
     pub schedule_unknown: bool,
     pub status: String,
     pub catalogue_course_id: Option<i64>,
+    pub review_count: i32,
+    pub review_avg: Option<f64>,
+    pub review_scope: String,
 }
 
 /// A row from `selection.timeslots`.

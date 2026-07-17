@@ -86,6 +86,14 @@ Map<String, Object?> _encodeOffering(SelectionOffering offering) {
       SelectionOfferingStatusEnum.unknownDefaultOpenApi => 'unknown',
     },
     'catalogueCourseId': offering.catalogueCourseId,
+    'reviewCount': offering.reviewCount,
+    'reviewAvg': offering.reviewAvg,
+    'reviewScope': switch (offering.reviewScope) {
+      SelectionOfferingReviewScopeEnum.none => 'none',
+      SelectionOfferingReviewScopeEnum.course => 'course',
+      SelectionOfferingReviewScopeEnum.teacher => 'teacher',
+      SelectionOfferingReviewScopeEnum.unknownDefaultOpenApi => 'none',
+    },
   };
 }
 
@@ -116,11 +124,22 @@ bool _isValidCourse(ScheduledCourse course, {required String calendarId}) {
             startWeek >= 1 &&
             endWeek >= startWeek &&
             endWeek <= 30;
+  final bool hasValidReview = offering.reviewCount == 0
+      ? offering.reviewAvg == null &&
+            offering.reviewScope == SelectionOfferingReviewScopeEnum.none
+      : offering.reviewCount > 0 &&
+            offering.reviewAvg != null &&
+            offering.reviewAvg! >= 0 &&
+            offering.reviewAvg! <= 5 &&
+            offering.reviewScope != SelectionOfferingReviewScopeEnum.none &&
+            offering.reviewScope !=
+                SelectionOfferingReviewScopeEnum.unknownDefaultOpenApi;
   return offering.offeringId.isNotEmpty &&
       offering.code.isNotEmpty &&
       offering.name.isNotEmpty &&
       offering.calendarId == calendarId &&
       hasValidWeeks &&
+      hasValidReview &&
       course.timeslots.length <= 100 &&
       course.timeslots.every(
         (TimeSlot timeslot) =>

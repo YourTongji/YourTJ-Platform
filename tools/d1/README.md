@@ -1,7 +1,8 @@
 # tools/d1 — D1 selection snapshot import toolchain
 
-Scripts for importing the Cloudflare D1 selection snapshot into isolated PostgreSQL Raw PK tables.
-This is not a complete production-data migration. Read the canonical
+Scripts for importing the Cloudflare D1 selection snapshot into isolated PostgreSQL raw tables.
+The pipeline loads 13 selection tables plus the legacy teachers/courses/course-aliases used to
+restore public rating aggregates. It is not a complete production-data migration. Read the canonical
 [`docs/operations/data-import.md`](../../docs/operations/data-import.md) before running it.
 
 ## Prerequisites
@@ -19,7 +20,7 @@ export DATABASE_URL=postgres://yourtj:yourtj@localhost:5432/yourtj
 | Script | Purpose |
 |--------|---------|
 | `d1_export.py` | Verify `jcourse-db-backup`, then atomically export to a fresh mode-0600 SQLite file |
-| `d1_import_pg.py` | First-load `selection.pk_*` with explicit D1→PG column mapping |
+| `d1_import_pg.py` | First-load `selection.pk_*` and `courses.pk_legacy_*` with explicit D1→PG mapping |
 | `gen_reviews_sql.py` | Generate `OVERRIDING SYSTEM VALUE` INSERTs for `reviews.*` |
 
 ## Full import workflow (manual)
@@ -45,8 +46,9 @@ psql "$DATABASE_URL" -f ../../backend/ops/materialize_selection.sql
 
 ```
 
-`d1_import_pg.py` requires every target Raw table to be empty and imports all 13 tables in one
-transaction. For a database reachable only through an operational shell, emit an atomic psql stream:
+`d1_import_pg.py` requires every target raw table to be empty and imports all 16 tables plus both
+snapshot-bound audit rows in one transaction. For a database reachable only through an operational
+shell, emit an atomic psql stream:
 
 ```bash
 python3 d1_import_pg.py \
@@ -62,19 +64,19 @@ The required `--source-database` value is an explicit operator attestation, not 
 SQLite file came from that D1 database. Trust it only when the file is produced immediately by the
 name-verifying exporter in the same controlled workflow. The importer accepts only
 `jcourse-db-backup`, hashes the SQLite snapshot, validates the source schema, and records source/target
-counts in `selection.import_runs`. The optional `--manifest-out` is written atomically with mode `0600`
+counts in `selection.import_runs` and `courses.legacy_import_runs`. The optional `--manifest-out` is written atomically with mode `0600`
 as a pre-import source manifest and refuses to replace an existing path. `--source`, `--manifest-out`,
 and `--compare-manifest` must resolve to three different files, including through symlinks/hard links.
-The approved comparison manifest must have the same schema/source and all 13 exact count keys. Every
-essential table must remain non-empty, and any count decrease fails closed. A reviewed legitimate decrease
+The approved comparison manifest must have the same schema/source and all 16 exact count keys. Every
+essential selection and legacy-course table must remain non-empty, and any count decrease fails closed. A reviewed legitimate decrease
 requires `--approve-count-decrease --approval-reason '<10-500 chars>'`. Only the first trusted snapshot may
 omit a baseline, using `--approve-unbaselined-snapshot --approval-reason '<10-500 chars>'`; this does not
 bypass the non-empty guard. Validation and comparison happen before a new manifest is created or any target
-write begins. The transactional `selection.import_runs` row records the approval mode, baseline evidence,
-and import success; import time and the upstream `selection.fetchlog` clock are intentionally separate.
+write begins. The two transactional audit rows record the approval mode, baseline evidence, and shared
+snapshot hash; import time and the upstream `selection.fetchlog` clock are intentionally separate.
 
-Both materializers compare every live raw table count, required teaching-class relationship, non-empty
-essential set, and completeness approval metadata with the latest validated `selection.import_runs` row
+Both materializers lock all raw tables and compare each live table count, required teaching-class
+relationship, non-empty essential set, and completeness approval metadata with both validated audit rows
 before writing. A legacy raw snapshot without that evidence must be re-established through the approved
 importer/recovery flow, not blessed with a hand-written row.
 
@@ -84,8 +86,9 @@ Run the importer safety tests from the repository root:
 python3 -m unittest discover -s tools/d1/tests
 ```
 
-Historical reviews, likes, reports, wallet hashes, and anonymous edit tokens are not part of the
-selection first-load. Do not run `gen_reviews_sql.py` against a shared environment without the
+Only uniquely mapped public historical count/average values are materialized. Historical review bodies,
+authors, likes, reports, wallet hashes, and anonymous edit tokens are not part of this first-load. Do not
+run `gen_reviews_sql.py` against a shared environment without the
 identity, course-mapping, moderation, privacy, idempotency, and rollback decisions in the operations
 runbook.
 

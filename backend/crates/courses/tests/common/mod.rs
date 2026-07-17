@@ -70,6 +70,17 @@ pub async fn seed_courses_data(pool: &PgPool) {
     .execute(pool)
     .await
     .ok();
+
+    sqlx::query(
+        "UPDATE courses.search_projection_state \
+         SET source_generation = source_generation + 1, \
+             source_rows = (SELECT COUNT(*) FROM courses.courses), \
+             indexed_generation = NULL, indexed_rows = NULL, status = 'stale' \
+         WHERE projection = 'catalogue'",
+    )
+    .execute(pool)
+    .await
+    .ok();
 }
 
 /// Seed minimal test data into the selection schema.
@@ -171,6 +182,17 @@ pub async fn seed_selection_data(pool: &PgPool) {
         )
         ON CONFLICT DO NOTHING
         "#,
+    )
+    .execute(pool)
+    .await
+    .ok();
+
+    sqlx::query(
+        "UPDATE courses.search_projection_state \
+         SET source_generation = source_generation + 1, \
+             source_rows = (SELECT COUNT(*) FROM selection.courses), \
+             indexed_generation = NULL, indexed_rows = NULL, status = 'stale' \
+         WHERE projection = 'selection'",
     )
     .execute(pool)
     .await

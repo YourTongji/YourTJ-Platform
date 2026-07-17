@@ -138,24 +138,29 @@ pub async fn run() -> anyhow::Result<()> {
     };
     media::validate_delivery_runtime(&state.config)?;
     tracing::info!("media Delivery runtime configuration validated");
-    // Meilisearch index setup and readiness check on startup.
+    // Reconcile configured search projections before serving so an empty index
+    // is reported as unavailable instead of masquerading as a valid empty result.
     {
-        let meili_url = state.meili_url.clone();
-        let meili_key = state.meili_master_key.clone();
-        if !meili_url.is_empty() {
-            tokio::spawn(async move {
-                if let Err(e) = courses::meili::setup_course_index(&meili_url, &meili_key).await {
-                    tracing::warn!(error = %e, "meilisearch course index setup failed");
-                } else {
-                    tracing::info!("meilisearch course index ready");
+        if !state.meili_url.is_empty() {
+            match courses::meili::reconcile_search_projections(
+                &state.db,
+                &state.meili_url,
+                &state.meili_master_key,
+            )
+            .await
+            {
+                Ok(()) => tracing::info!("course search projections ready"),
+                Err(error) => {
+                    tracing::warn!(
+                        ?error,
+                        "course search projection startup reconciliation failed"
+                    );
                 }
-                if let Err(e) = courses::meili::setup_selection_index(&meili_url, &meili_key).await
-                {
-                    tracing::warn!(error = %e, "meilisearch selection index setup failed");
-                }
-            });
+            }
+            let reconciler_state = state.clone();
+            tokio::spawn(courses::meili::run_search_projection_reconciler(reconciler_state));
         } else {
-            tracing::warn!("MEILI_URL is empty — meilisearch is not configured; search will return empty results");
+            tracing::warn!("MEILI_URL is empty — course search is unavailable");
         }
     }
 

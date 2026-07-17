@@ -567,6 +567,9 @@ SelectionOffering _offering(
     scheduleUnknown: scheduleUnknown,
     status: SelectionOfferingStatusEnum.unknown,
     catalogueCourseId: null,
+    reviewCount: 0,
+    reviewAvg: null,
+    reviewScope: SelectionOfferingReviewScopeEnum.none,
   );
 }
 

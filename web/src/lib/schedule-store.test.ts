@@ -40,6 +40,9 @@ function course(id: string, scheduleUnknown = false): SelectionCourse {
     scheduleUnknown,
     status: "unknown",
     catalogueCourseId: null,
+    reviewCount: 0,
+    reviewAvg: null,
+    reviewScope: "none",
   };
 }
 
@@ -220,6 +223,16 @@ describe("schedule store", () => {
     oversized.course.facultyName = "x".repeat(2 * 1024 * 1024);
     expect(() => serializeScheduleExport([oversized], scope))
       .toThrow("课表 JSON 不能超过 2 MB");
+  });
+
+  it("rejects contradictory historical rating facts", () => {
+    const payload = JSON.parse(serializeScheduleExport([scheduled("1")], scope));
+    payload.offerings[0].course.reviewCount = 2;
+    payload.offerings[0].course.reviewAvg = null;
+    payload.offerings[0].course.reviewScope = "teacher";
+
+    expect(() => parseScheduleImport(JSON.stringify(payload), scope))
+      .toThrow("文件中的教学班或时段数据无效");
   });
 
   it("renders observed slots through 20 without exceeding the contract maximum", () => {

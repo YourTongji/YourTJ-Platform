@@ -1011,7 +1011,7 @@ components:
     SelectionCourse:
       type: object
       description: One concrete teaching-class offering. `id` remains only as a rolling compatibility alias for `offeringId`.
-      required: [id, offeringId, code, teachingClassCode, name, credit, natureId, calendarId, campusId, facultyName, teachingLanguage, teacherName, teacherNames, startWeek, endWeek, weeksUnknown, scheduleUnknown, status, catalogueCourseId]
+      required: [id, offeringId, code, teachingClassCode, name, credit, natureId, calendarId, campusId, facultyName, teachingLanguage, teacherName, teacherNames, startWeek, endWeek, weeksUnknown, scheduleUnknown, status, catalogueCourseId, reviewCount, reviewAvg, reviewScope]
       properties:
         id: { type: string, deprecated: true, description: Compatibility alias for offeringId. }
         offeringId: { type: string, description: Stable teachingClassId-backed identity used by schedules and detail routes. }
@@ -1032,6 +1032,9 @@ components:
         scheduleUnknown: { type: boolean, description: "True when a complete trustworthy schedule could not be materialized, including mixed parseable and unparseable arrangement input even if partial slots are available." }
         status: { type: string, enum: [unknown, active, cancelled], description: "Upstream currently supplies no lifecycle status, so unknown is expected." }
         catalogueCourseId: { type: string, nullable: true, description: Optional deep-link target in the community course catalogue. }
+        reviewCount: { type: integer, minimum: 0, description: "Public historical rating sample count associated with this teaching class." }
+        reviewAvg: { type: number, minimum: 0, maximum: 5, nullable: true, description: "Weighted historical rating, or null when reviewCount is zero." }
+        reviewScope: { type: string, enum: [none, course, teacher], description: "Whether the historical aggregate matched the current teacher identity, fell back to a course-level alias, or has no data." }
     SelectionOffering:
       allOf:
         - $ref: "#/components/schemas/SelectionCourse"

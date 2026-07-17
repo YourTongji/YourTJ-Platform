@@ -17,10 +17,14 @@ LOCK TABLE
   selection.pk_teachers_raw,
   selection.pk_teacher_timeslots,
   selection.pk_major_courses,
-  selection.pk_fetch_logs
+  selection.pk_fetch_logs,
+  courses.pk_legacy_teachers,
+  courses.pk_legacy_courses,
+  courses.pk_legacy_course_aliases
 IN SHARE MODE;
 
 SELECT selection.assert_materialization_source();
+SELECT courses.assert_legacy_materialization_source();
 
 -- Teachers have no natural-key constraint in the legacy schema, so explicitly
 -- insert only names that are not already represented.
@@ -138,5 +142,75 @@ SELECT course_id, alias
 FROM aliases
 WHERE alias IS NOT NULL
 ON CONFLICT (course_id, alias) DO NOTHING;
+
+-- Reconcile the historical public aggregate without overwriting community
+-- reviews created after the previous import. Only a legacy course that resolves
+-- to exactly one catalogue owner contributes; ambiguous aliases fail closed by
+-- remaining unmapped instead of contaminating two courses.
+WITH legacy_identifiers AS (
+  SELECT legacy.id AS legacy_course_id, NULLIF(BTRIM(legacy.code), '') AS identifier
+  FROM courses.pk_legacy_courses AS legacy
+  UNION
+  SELECT alias.course_id, NULLIF(BTRIM(alias.alias), '')
+  FROM courses.pk_legacy_course_aliases AS alias
+  WHERE alias.system = 'onesystem'
+), candidate_mappings AS (
+  SELECT DISTINCT identifier.legacy_course_id, current_alias.course_id
+  FROM legacy_identifiers AS identifier
+  JOIN courses.course_aliases AS current_alias
+    ON current_alias.alias = identifier.identifier
+  WHERE identifier.identifier IS NOT NULL
+), unique_mappings AS (
+  SELECT legacy_course_id, MIN(course_id) AS course_id
+  FROM candidate_mappings
+  GROUP BY legacy_course_id
+  HAVING COUNT(DISTINCT course_id) = 1
+), legacy_aggregates AS (
+  SELECT mapping.course_id,
+         SUM(legacy.review_count)::INTEGER AS review_count,
+         CASE WHEN SUM(legacy.review_count) > 0
+           THEN SUM(legacy.review_avg * legacy.review_count) / SUM(legacy.review_count)
+           ELSE 0
+         END AS review_avg
+  FROM unique_mappings AS mapping
+  JOIN courses.pk_legacy_courses AS legacy ON legacy.id = mapping.legacy_course_id
+  GROUP BY mapping.course_id
+), reconciled AS (
+  SELECT course.id,
+         GREATEST(course.review_count - course.legacy_review_count, 0) AS community_count,
+         LEAST(
+           GREATEST(
+             course.review_avg * course.review_count
+               - course.legacy_review_avg * course.legacy_review_count,
+             0
+           ),
+           GREATEST(course.review_count - course.legacy_review_count, 0) * 5.0
+         ) AS community_points,
+         COALESCE(legacy.review_count, 0) AS legacy_count,
+         COALESCE(legacy.review_avg, 0) AS legacy_avg
+  FROM courses.courses AS course
+  LEFT JOIN legacy_aggregates AS legacy ON legacy.course_id = course.id
+)
+UPDATE courses.courses AS course
+SET review_count = reconciled.community_count + reconciled.legacy_count,
+    review_avg = CASE
+      WHEN reconciled.community_count + reconciled.legacy_count = 0 THEN 0
+      ELSE (
+        reconciled.community_points + reconciled.legacy_avg * reconciled.legacy_count
+      ) / (reconciled.community_count + reconciled.legacy_count)
+    END,
+    legacy_review_count = reconciled.legacy_count,
+    legacy_review_avg = reconciled.legacy_avg
+FROM reconciled
+WHERE reconciled.id = course.id;
+
+UPDATE courses.search_projection_state
+SET source_generation = source_generation + 1,
+    source_rows = (SELECT COUNT(*) FROM courses.courses),
+    indexed_generation = NULL,
+    indexed_rows = NULL,
+    status = 'stale',
+    updated_at = now()
+WHERE projection = 'catalogue';
 
 COMMIT;

@@ -973,6 +973,13 @@ class _SelectionOfferingRow extends StatelessWidget {
                     overflow: TextOverflow.ellipsis,
                     style: Theme.of(context).textTheme.bodySmall,
                   ),
+                  const SizedBox(height: 3),
+                  Text(
+                    _reviewLabel(offering),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
                 ],
               ),
             ),
@@ -1378,6 +1385,23 @@ String _weeksLabel(SelectionOffering offering) {
     return '${offering.startWeek}–${offering.endWeek} 周';
   }
   return '周次见时段';
+}
+
+String _reviewLabel(SelectionOffering offering) {
+  if (offering.reviewCount == 0) {
+    return '暂无历史评分';
+  }
+  final num? reviewAvg = offering.reviewAvg;
+  if (reviewAvg == null) {
+    return '历史评分数据待同步';
+  }
+  final String scope = switch (offering.reviewScope) {
+    SelectionOfferingReviewScopeEnum.teacher => '当前教师',
+    SelectionOfferingReviewScopeEnum.course => '课程参考',
+    SelectionOfferingReviewScopeEnum.none ||
+    SelectionOfferingReviewScopeEnum.unknownDefaultOpenApi => '评分口径待更新',
+  };
+  return '${reviewAvg.toStringAsFixed(1)} 分 · ${offering.reviewCount} 条历史评课 · $scope';
 }
 
 String _timeslotWeeks(TimeSlot timeslot) {

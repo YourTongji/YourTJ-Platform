@@ -6,74 +6,85 @@ part of 'selection_offering.dart';
 // JsonSerializableGenerator
 // **************************************************************************
 
-SelectionOffering _$SelectionOfferingFromJson(Map<String, dynamic> json) =>
-    $checkedCreate('SelectionOffering', json, ($checkedConvert) {
-      $checkKeys(
-        json,
-        requiredKeys: const [
-          'id',
-          'offeringId',
-          'code',
-          'teachingClassCode',
-          'name',
-          'credit',
-          'natureId',
-          'calendarId',
-          'campusId',
-          'facultyName',
-          'teachingLanguage',
-          'teacherName',
-          'teacherNames',
-          'startWeek',
-          'endWeek',
-          'weeksUnknown',
-          'scheduleUnknown',
-          'status',
-          'catalogueCourseId',
-        ],
-      );
-      final val = SelectionOffering(
-        id: $checkedConvert('id', (v) => v as String),
-        offeringId: $checkedConvert('offeringId', (v) => v as String),
-        code: $checkedConvert('code', (v) => v as String),
-        teachingClassCode: $checkedConvert(
-          'teachingClassCode',
-          (v) => v as String?,
-        ),
-        name: $checkedConvert('name', (v) => v as String),
-        credit: $checkedConvert('credit', (v) => v as num?),
-        natureId: $checkedConvert('natureId', (v) => v as String?),
-        calendarId: $checkedConvert('calendarId', (v) => v as String),
-        campusId: $checkedConvert('campusId', (v) => v as String?),
-        facultyName: $checkedConvert('facultyName', (v) => v as String?),
-        teachingLanguage: $checkedConvert(
-          'teachingLanguage',
-          (v) => v as String?,
-        ),
-        teacherName: $checkedConvert('teacherName', (v) => v as String?),
-        teacherNames: $checkedConvert(
-          'teacherNames',
-          (v) => (v as List<dynamic>).map((e) => e as String).toList(),
-        ),
-        startWeek: $checkedConvert('startWeek', (v) => (v as num?)?.toInt()),
-        endWeek: $checkedConvert('endWeek', (v) => (v as num?)?.toInt()),
-        weeksUnknown: $checkedConvert('weeksUnknown', (v) => v as bool),
-        scheduleUnknown: $checkedConvert('scheduleUnknown', (v) => v as bool),
-        status: $checkedConvert(
-          'status',
-          (v) => $enumDecode(
-            _$SelectionOfferingStatusEnumEnumMap,
-            v,
-            unknownValue: SelectionOfferingStatusEnum.unknownDefaultOpenApi,
-          ),
-        ),
-        catalogueCourseId: $checkedConvert(
-          'catalogueCourseId',
-          (v) => v as String?,
-        ),
-      );
-      return val;
-    });
+SelectionOffering _$SelectionOfferingFromJson(
+  Map<String, dynamic> json,
+) => $checkedCreate('SelectionOffering', json, ($checkedConvert) {
+  $checkKeys(
+    json,
+    requiredKeys: const [
+      'id',
+      'offeringId',
+      'code',
+      'teachingClassCode',
+      'name',
+      'credit',
+      'natureId',
+      'calendarId',
+      'campusId',
+      'facultyName',
+      'teachingLanguage',
+      'teacherName',
+      'teacherNames',
+      'startWeek',
+      'endWeek',
+      'weeksUnknown',
+      'scheduleUnknown',
+      'status',
+      'catalogueCourseId',
+      'reviewCount',
+      'reviewAvg',
+      'reviewScope',
+    ],
+  );
+  final val = SelectionOffering(
+    id: $checkedConvert('id', (v) => v as String),
+    offeringId: $checkedConvert('offeringId', (v) => v as String),
+    code: $checkedConvert('code', (v) => v as String),
+    teachingClassCode: $checkedConvert(
+      'teachingClassCode',
+      (v) => v as String?,
+    ),
+    name: $checkedConvert('name', (v) => v as String),
+    credit: $checkedConvert('credit', (v) => v as num?),
+    natureId: $checkedConvert('natureId', (v) => v as String?),
+    calendarId: $checkedConvert('calendarId', (v) => v as String),
+    campusId: $checkedConvert('campusId', (v) => v as String?),
+    facultyName: $checkedConvert('facultyName', (v) => v as String?),
+    teachingLanguage: $checkedConvert('teachingLanguage', (v) => v as String?),
+    teacherName: $checkedConvert('teacherName', (v) => v as String?),
+    teacherNames: $checkedConvert(
+      'teacherNames',
+      (v) => (v as List<dynamic>).map((e) => e as String).toList(),
+    ),
+    startWeek: $checkedConvert('startWeek', (v) => (v as num?)?.toInt()),
+    endWeek: $checkedConvert('endWeek', (v) => (v as num?)?.toInt()),
+    weeksUnknown: $checkedConvert('weeksUnknown', (v) => v as bool),
+    scheduleUnknown: $checkedConvert('scheduleUnknown', (v) => v as bool),
+    status: $checkedConvert(
+      'status',
+      (v) => $enumDecode(
+        _$SelectionOfferingStatusEnumEnumMap,
+        v,
+        unknownValue: SelectionOfferingStatusEnum.unknownDefaultOpenApi,
+      ),
+    ),
+    catalogueCourseId: $checkedConvert(
+      'catalogueCourseId',
+      (v) => v as String?,
+    ),
+    reviewCount: $checkedConvert('reviewCount', (v) => (v as num).toInt()),
+    reviewAvg: $checkedConvert('reviewAvg', (v) => v as num?),
+    reviewScope: $checkedConvert(
+      'reviewScope',
+      (v) => $enumDecode(
+        _$SelectionOfferingReviewScopeEnumEnumMap,
+        v,
+        unknownValue: SelectionOfferingReviewScopeEnum.unknownDefaultOpenApi,
+      ),
+    ),
+  );
+  return val;
+});
 
 Map<String, dynamic> _$SelectionOfferingToJson(SelectionOffering instance) =>
     <String, dynamic>{
@@ -96,6 +107,10 @@ Map<String, dynamic> _$SelectionOfferingToJson(SelectionOffering instance) =>
       'scheduleUnknown': instance.scheduleUnknown,
       'status': _$SelectionOfferingStatusEnumEnumMap[instance.status]!,
       'catalogueCourseId': instance.catalogueCourseId,
+      'reviewCount': instance.reviewCount,
+      'reviewAvg': instance.reviewAvg,
+      'reviewScope':
+          _$SelectionOfferingReviewScopeEnumEnumMap[instance.reviewScope]!,
     };
 
 const _$SelectionOfferingStatusEnumEnumMap = {
@@ -103,4 +118,12 @@ const _$SelectionOfferingStatusEnumEnumMap = {
   SelectionOfferingStatusEnum.active: 'active',
   SelectionOfferingStatusEnum.cancelled: 'cancelled',
   SelectionOfferingStatusEnum.unknownDefaultOpenApi: 'unknown_default_open_api',
+};
+
+const _$SelectionOfferingReviewScopeEnumEnumMap = {
+  SelectionOfferingReviewScopeEnum.none: 'none',
+  SelectionOfferingReviewScopeEnum.course: 'course',
+  SelectionOfferingReviewScopeEnum.teacher: 'teacher',
+  SelectionOfferingReviewScopeEnum.unknownDefaultOpenApi:
+      'unknown_default_open_api',
 };

@@ -35,7 +35,8 @@ class SharedPreferencesScheduleStorage implements ScheduleStorage {
 class ScheduleLocalRepository {
   const ScheduleLocalRepository(this._storage);
 
-  static const int _schemaVersion = 3;
+  static const int _schemaVersion = 4;
+  static const Set<int> _currentSchemaVersions = <int>{3, _schemaVersion};
   static const Set<int> _legacySchemaVersions = <int>{2, 3};
   static const int _maxTimeslotsPerOffering = 100;
   final ScheduleStorage _storage;
@@ -52,6 +53,7 @@ class ScheduleLocalRepository {
         final List<ScheduledCourse>? decoded = _tryDecodeEnvelope(
           current,
           calendarId: calendarId,
+          expectedSchemaVersions: _currentSchemaVersions,
         );
         if (decoded != null) {
           return decoded;
@@ -165,10 +167,15 @@ class ScheduleLocalRepository {
         return null;
       }
       final List<ScheduledCourse> items = <ScheduledCourse>[];
+      final int schemaVersion = decoded['schemaVersion'] as int;
       for (final Object? rawItem in rawItems) {
         final ScheduledCourse? item = decodeLegacyItems
             ? _decodeLegacyItem(rawItem, calendarId: calendarId)
-            : _decodeItem(rawItem, calendarId: calendarId);
+            : _decodeItem(
+                rawItem,
+                calendarId: calendarId,
+                fillsMissingReviewFields: schemaVersion == 3,
+              );
         if (item == null ||
             items.any(
               (ScheduledCourse existing) =>
@@ -184,7 +191,11 @@ class ScheduleLocalRepository {
     }
   }
 
-  ScheduledCourse? _decodeItem(Object? rawItem, {required String calendarId}) {
+  ScheduledCourse? _decodeItem(
+    Object? rawItem, {
+    required String calendarId,
+    required bool fillsMissingReviewFields,
+  }) {
     if (rawItem is! Map<Object?, Object?>) {
       return null;
     }
@@ -197,8 +208,16 @@ class ScheduleLocalRepository {
       return null;
     }
     try {
+      final Map<String, dynamic> offeringJson = Map<String, dynamic>.from(
+        rawOffering,
+      );
+      if (fillsMissingReviewFields) {
+        offeringJson.putIfAbsent('reviewCount', () => 0);
+        offeringJson.putIfAbsent('reviewAvg', () => null);
+        offeringJson.putIfAbsent('reviewScope', () => 'none');
+      }
       final SelectionOffering offering = SelectionOffering.fromJson(
-        Map<String, dynamic>.from(rawOffering),
+        offeringJson,
       );
       if (offering.offeringId.isEmpty ||
           offering.code.isEmpty ||
@@ -305,6 +324,9 @@ class ScheduleLocalRepository {
         scheduleUnknown: timeslots.isEmpty,
         status: SelectionOfferingStatusEnum.unknown,
         catalogueCourseId: null,
+        reviewCount: 0,
+        reviewAvg: null,
+        reviewScope: SelectionOfferingReviewScopeEnum.none,
       );
       return ScheduledCourse(
         offering: offering,
@@ -374,6 +396,7 @@ class ScheduleLocalRepository {
         offering.code.isNotEmpty &&
         offering.name.isNotEmpty &&
         offering.calendarId == calendarId &&
+        _hasValidReview(offering) &&
         _hasValidOfferingWeeks(offering) &&
         course.timeslots.length <= _maxTimeslotsPerOffering &&
         course.timeslots.every(
@@ -381,6 +404,20 @@ class ScheduleLocalRepository {
               _matchesOffering(timeslot, offering.offeringId) &&
               _isValidTimeslot(timeslot),
         );
+  }
+
+  bool _hasValidReview(SelectionOffering offering) {
+    if (offering.reviewCount == 0) {
+      return offering.reviewAvg == null &&
+          offering.reviewScope == SelectionOfferingReviewScopeEnum.none;
+    }
+    return offering.reviewCount > 0 &&
+        offering.reviewAvg != null &&
+        offering.reviewAvg! >= 0 &&
+        offering.reviewAvg! <= 5 &&
+        offering.reviewScope != SelectionOfferingReviewScopeEnum.none &&
+        offering.reviewScope !=
+            SelectionOfferingReviewScopeEnum.unknownDefaultOpenApi;
   }
 
   bool _hasValidOfferingWeeks(SelectionOffering offering) {
